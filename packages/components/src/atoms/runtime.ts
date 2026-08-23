@@ -65,6 +65,8 @@ import type {
   CodeCollabV2SaveTextResponse,
   FilePreviewV3Request,
   FilePreviewV3Response,
+  WorkspaceMcpConnectionAction,
+  WorkspaceMcpConnectionResult,
 } from '@lody/shared';
 import type { LocalProjectGitStateRpcResponse } from '@lody/loro-streams-rpc';
 import type { WorkspaceWriter } from '../providers/workspace-writer';
@@ -454,6 +456,11 @@ export type WorkspaceRuntime = {
     args: { description: string; reporterUserId: string; requestToken: string },
     options?: { timeoutMs?: number }
   ) => Promise<MachineBugReportResponse | null>;
+  requestWorkspaceMcpConnection?: (
+    machineId: MachineId,
+    action: WorkspaceMcpConnectionAction,
+    options?: { timeoutMs?: number }
+  ) => Promise<WorkspaceMcpConnectionResult>;
   dispose: () => Promise<void>;
 };
 

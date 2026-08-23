@@ -58,6 +58,8 @@ import {
   type SessionEditAndResendSpec,
   type SessionTurnInputConfig,
   type WorkspaceId,
+  type WorkspaceMcpConnectionAction,
+  type WorkspaceMcpConnectionResult,
   sessionForkFailure,
   sessionEditAndResendFailure,
 } from '@lody/shared';
@@ -1116,6 +1118,43 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     }
   };
 
+  const requestWorkspaceMcpConnection = async (
+    machineId: MachineId,
+    action: WorkspaceMcpConnectionAction,
+    options?: { timeoutMs?: number }
+  ): Promise<WorkspaceMcpConnectionResult> => {
+    try {
+      if (!(await canUseLocalMachineRpc(machineId))) {
+        return {
+          type: 'workspace-mcp/connection-error',
+          mcpServerId: action.mcpServerId,
+          code: 'remote_authorization_unsupported',
+          message: 'Open Lody on the target Machine to authorize this connector.',
+          retryable: false,
+        };
+      }
+      const sender = getLocalMachineRpcSender();
+      if (!sender) throw new Error('Local Machine RPC is not available.');
+      const response = await sender({
+        machineId,
+        workspaceId,
+        method: 'workspace-mcp/connection',
+        params: action,
+        timeoutMs: options?.timeoutMs ?? 30_000,
+      });
+      if (!response.ok) throw new Error(response.error);
+      return response.result as WorkspaceMcpConnectionResult;
+    } catch (error) {
+      return {
+        type: 'workspace-mcp/connection-error',
+        mcpServerId: action.mcpServerId,
+        code: 'internal_error',
+        message: error instanceof Error ? error.message : String(error),
+        retryable: true,
+      };
+    }
+  };
+
   return {
     requestSessionCancel,
     requestSessionSteer,
@@ -1144,5 +1183,6 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     requestLocalProjectGitState,
     requestLocalProjectControl,
     requestMachineBugReport,
+    requestWorkspaceMcpConnection,
   };
 }

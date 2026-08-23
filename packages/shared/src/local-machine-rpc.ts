@@ -22,6 +22,10 @@ import {
 } from './code-collab';
 import { FilePreviewV3RequestSchema, FilePreviewV3ResponseSchema } from './file-preview';
 import {
+  WorkspaceMcpConnectionActionSchema,
+  WorkspaceMcpConnectionResultSchema,
+} from './workspace-mcp-auth';
+import {
   SessionCancelResponseSchema,
   SessionDispatchTurnResponseSchema,
   SessionEditAndResendResponseSchema,
@@ -151,6 +155,10 @@ export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
     params: FilePreviewV3RequestSchema,
   }).strict(),
   BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('workspace-mcp/connection'),
+    params: WorkspaceMcpConnectionActionSchema,
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
     method: z.literal('session/cancel'),
     params: z
       .object({
@@ -249,6 +257,7 @@ export const LocalMachineRpcResultSchema = z.union([
   CodeCollabV2ErrorSchema,
   FilePreviewV3ResponseSchema,
   LocalFileResolutionSchema,
+  WorkspaceMcpConnectionResultSchema,
   SessionCancelResponseSchema,
   SessionDispatchTurnResponseSchema,
   SessionEditAndResendResponseSchema,
