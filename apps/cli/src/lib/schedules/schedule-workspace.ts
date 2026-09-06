@@ -27,7 +27,11 @@ import type { WorkspaceSummary } from '../workspace';
 import type { LoroDocumentManager } from '../loro/doc';
 import type { Logger } from '@/utils/logger';
 import { streamsRoomBinding } from '../loro/streams-room-binding';
-import { buildProjectOptions } from '../task-automation/task-automation-start';
+import {
+  buildScheduleRunTarget,
+  buildScheduleSessionCreateOptions,
+  scheduleRequiredLocalProjectId,
+} from './schedule-run-preparation';
 import { readTaskIndexRowsForWorkspace } from '../task-automation/task-automation-scheduler';
 import { hasPendingUserTurnActivation } from '@/session/session-dispatch-logic';
 import { AgentExecutionSlots } from '../agent-execution-slots';
@@ -92,14 +96,15 @@ export async function createScheduleWorkspace(args: {
     // A schedule without a project is a plain chat run; there is no working
     // directory to validate, and no local ledger entry to require.
     const project = run.definition.project;
-    if (project?.kind === 'local') {
+    const requiredLocalProjectId = scheduleRequiredLocalProjectId(project);
+    if (requiredLocalProjectId !== undefined) {
       const flock = await manager.repo.openFlockDoc(
         getMachineFlockDocId(workspaceId, auth.machineId)
       );
       const projects = getMachineFlockLocalProjects(
         readMachineFlockRowsFromFlock(flock.flock, { families: ['localProject'] })
       );
-      if (!projects[project.localProjectId])
+      if (!projects[requiredLocalProjectId])
         throw new ScheduleConfigurationError('PROJECT_UNAVAILABLE');
     }
     const capability = await readAgentAcpCapability({
@@ -111,11 +116,11 @@ export async function createScheduleWorkspace(args: {
     });
     if (!hasExplicitSchedulePermission(agent, capability))
       throw new ScheduleConfigurationError('PERMISSION_UNAVAILABLE');
-    return {
+    return buildScheduleRunTarget({
       targetMachine: machine,
       agentConfig: agentConfig.config,
-      ...(project ? { project } : {}),
-    };
+      project,
+    });
   };
   const engine = new ScheduleEngine<PreparedSessionInput>({
     workspaceId,
@@ -144,14 +149,13 @@ export async function createScheduleWorkspace(args: {
         workspace,
         manager,
         run.prompt,
-        {
-          agentConfig: agent.agentConfigId,
+        buildScheduleSessionCreateOptions({
           sessionId: run.sessionId as SessionId,
           userTurnId: run.userTurnId,
+          agentConfigId: agent.agentConfigId,
           title: run.definition.title,
-          workspaceMetaPrewriteSatisfied: true,
-          ...buildProjectOptions(run.definition.project),
-        },
+          project: run.definition.project,
+        }),
         {
           ...resolveTurnDispatchConfig({}),
           ...agent,

@@ -2,22 +2,27 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronDown, Globe } from 'lucide-react';
 import {
+  CRON_FIELD_ORDER,
   SCHEDULE_INTERVAL_UNITS,
   SCHEDULE_RECURRENCE_KINDS,
   SCHEDULE_WEEKDAYS,
   changeScheduleRecurrenceKind,
   getDeviceTimeZone,
   normalizeScheduleWeekdays,
+  parseCronExpression,
+  withCronField,
   type ScheduleIntervalUnitId,
   type ScheduleRecurrence,
   type ScheduleRecurrenceKind,
   type ScheduleWeekday,
 } from '@lody/shared';
+import { Button } from '@/ui/button';
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/ui/command';
 import { Input } from '@/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
 import { cn } from '@/lib/utils';
+import { CronFieldRow } from './schedule-cron-field-editor';
 import { weekdayNames } from './schedule-format';
 import { PropertyRow, ghostSelectTriggerClass, ghostValueClass } from './schedule-property-row';
 
@@ -135,6 +140,100 @@ function WeekdayPicker({
 }
 
 /**
+ * "Custom" as pickers, with an explicit text escape hatch.
+ *
+ * The rule stays a five-field cron expression — that is what the protocol
+ * persists — but a person edits it one field at a time. Text mode is opt-in and
+ * never the default, and any field the pickers cannot model already appears in
+ * its own per-field text box, so nothing an existing schedule contains is
+ * hidden, approximated or lost.
+ */
+function CustomRuleEditor({
+  expression,
+  onChange,
+  disabled,
+  textMode,
+}: {
+  expression: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+  textMode: boolean;
+}) {
+  const { t } = useTranslation();
+  const fields = parseCronExpression(expression);
+  // Only a rule that is not five fields cannot be shown as rows at all; that is
+  // unreachable for a stored schedule, but it can happen while someone is
+  // typing in text mode, so the rows stay hidden until it parses again.
+  const showText = textMode || fields === null;
+  return (
+    <>
+      {fields && !textMode
+        ? CRON_FIELD_ORDER.map((id) => (
+            <CronFieldRow
+              key={id}
+              id={id}
+              field={fields[id]}
+              disabled={disabled}
+              onChange={(next) => {
+                const updated = withCronField(expression, id, next);
+                if (updated !== null) onChange(updated);
+              }}
+            />
+          ))
+        : null}
+      {showText ? (
+        <PropertyRow
+          label={t('schedules.repeat.expression', 'Expression')}
+          hint={t('schedules.cronHint', 'Standard five-field cron: minute hour day month weekday.')}
+        >
+          <Input
+            required
+            spellCheck={false}
+            disabled={disabled}
+            aria-label={t('schedules.expression', 'Five-field cron expression')}
+            className="h-8 w-full max-w-56 font-mono text-[13px]"
+            value={expression}
+            onChange={(event) => onChange(event.target.value)}
+          />
+        </PropertyRow>
+      ) : null}
+    </>
+  );
+}
+
+function CustomEditingToggleRow({
+  expression,
+  textMode,
+  onTextModeChange,
+  disabled,
+}: {
+  expression: string;
+  textMode: boolean;
+  onTextModeChange: (next: boolean) => void;
+  disabled?: boolean;
+}) {
+  const { t } = useTranslation();
+  const parses = parseCronExpression(expression) !== null;
+  return (
+    <PropertyRow label={t('schedules.cron.editing', 'Editing')}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        // Returning to the pickers needs a rule they can show.
+        disabled={disabled || (textMode && !parses)}
+        className="h-8 px-2 text-xs font-normal text-muted-foreground"
+        onClick={() => onTextModeChange(!textMode)}
+      >
+        {textMode || !parses
+          ? t('schedules.cron.usePickers', 'Use pickers')
+          : t('schedules.cron.editAsText', 'Edit as text')}
+      </Button>
+    </PropertyRow>
+  );
+}
+
+/**
  * The time rule, as rows that appear only once they apply.
  *
  * Everything a person can pick is a named rule; the persisted trigger is
@@ -168,6 +267,7 @@ export function ScheduleRecurrenceEditor({
   const timeValue = hasWallClock
     ? `${String(value.hour).padStart(2, '0')}:${String(value.minute).padStart(2, '0')}`
     : '';
+  const [customTextMode, setCustomTextMode] = useState(false);
   const intervalValue = value.kind === 'interval' ? value : null;
   const interval = intervalValue ? splitInterval(intervalValue.everyMs) : null;
 
@@ -324,20 +424,12 @@ export function ScheduleRecurrenceEditor({
       ) : null}
 
       {value.kind === 'custom' ? (
-        <PropertyRow
-          label={t('schedules.repeat.expression', 'Expression')}
-          hint={t('schedules.cronHint', 'Standard five-field cron: minute hour day month weekday.')}
-        >
-          <Input
-            required
-            spellCheck={false}
-            disabled={disabled}
-            aria-label={t('schedules.expression', 'Five-field cron expression')}
-            className="h-8 w-full max-w-56 font-mono text-[13px]"
-            value={value.expression}
-            onChange={(event) => onChange({ ...value, expression: event.target.value })}
-          />
-        </PropertyRow>
+        <CustomRuleEditor
+          expression={value.expression}
+          textMode={customTextMode}
+          disabled={disabled}
+          onChange={(expression) => onChange({ ...value, expression })}
+        />
       ) : null}
 
       {value.kind !== 'once' && value.kind !== 'interval' ? (
@@ -349,6 +441,15 @@ export function ScheduleRecurrenceEditor({
             onChange={(timeZone) => onChange({ ...value, timeZone })}
           />
         </PropertyRow>
+      ) : null}
+
+      {value.kind === 'custom' ? (
+        <CustomEditingToggleRow
+          expression={value.expression}
+          textMode={customTextMode}
+          onTextModeChange={setCustomTextMode}
+          disabled={disabled}
+        />
       ) : null}
     </>
   );

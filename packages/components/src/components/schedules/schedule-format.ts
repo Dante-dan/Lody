@@ -1,9 +1,13 @@
 import type { TFunction } from 'i18next';
 import {
+  CRON_FIELD_ORDER,
   getDeviceTimeZone,
   normalizeScheduleWeekdays,
+  parseCronExpression,
   scheduleRecurrenceTimeZone,
   triggerToRecurrence,
+  type CronField,
+  type CronFieldId,
   type ScheduleRecurrence,
   type ScheduleTrigger,
   type ScheduleWeekday,
@@ -25,6 +29,14 @@ export function weekdayNames(
   const format = new Intl.DateTimeFormat(locale, { weekday: width, timeZone: 'UTC' });
   // 2023-01-01 was a Sunday, which is index 0 in the cron convention.
   return Array.from({ length: 7 }, (_, day) => format.format(new Date(Date.UTC(2023, 0, 1 + day))));
+}
+
+/** Locale month names, indexed from January. */
+export function monthNames(locale: string | undefined, width: 'short' | 'long'): string[] {
+  const format = new Intl.DateTimeFormat(locale, { month: width, timeZone: 'UTC' });
+  return Array.from({ length: 12 }, (_, month) =>
+    format.format(new Date(Date.UTC(2023, month, 1)))
+  );
 }
 
 export function formatTimeOfDay(hour: number, minute: number, locale?: string): string {
@@ -87,10 +99,83 @@ export function describeRecurrence(
         time: formatInstant(Date.parse(recurrence.at), getDeviceTimeZone(), locale),
       });
     case 'custom':
-      return t('schedules.summary.custom', 'Custom rule ({{expression}})', {
-        expression: recurrence.expression,
-      });
+      return describeCronExpression(recurrence.expression, t, locale);
   }
+}
+
+/** i18n suffix for the unit a cron field counts. */
+const cronUnitKey = (id: CronFieldId): string =>
+  ({
+    minute: 'minutes',
+    hour: 'hours',
+    dayOfMonth: 'days',
+    month: 'months',
+    weekday: 'weekdays',
+  })[id];
+
+/**
+ * A custom rule in words.
+ *
+ * Only the fields that actually constrain anything are mentioned, so
+ * `*​/20 9-17 * * 1-5` reads as three clauses rather than five. A field this
+ * build cannot name is quoted as-is instead of being guessed at, and an
+ * expression that is not five fields falls back to the raw text — the list must
+ * never claim a rule means something it does not.
+ */
+export function describeCronExpression(expression: string, t: TFunction, locale?: string): string {
+  const fields = parseCronExpression(expression);
+  if (!fields) return expression;
+  const list = (id: CronFieldId, values: number[]): string => {
+    const names =
+      id === 'weekday'
+        ? weekdayNames(locale, 'short')
+        : id === 'month'
+          ? monthNames(locale, 'short')
+          : null;
+    const label = (value: number) =>
+      names ? (names[id === 'month' ? value - 1 : value] ?? String(value)) : String(value);
+    return new Intl.ListFormat(locale, { style: 'short', type: 'conjunction' }).format(
+      values.map(label)
+    );
+  };
+  const clause = (id: CronFieldId, field: CronField): string | null => {
+    const unit = t(`schedules.cron.unit.${cronUnitKey(id)}`, cronUnitKey(id));
+    switch (field.mode) {
+      case 'every':
+        return null;
+      case 'step':
+        return field.from !== undefined && field.to !== undefined
+          ? t(
+              'schedules.cron.clause.stepInRange',
+              'every {{step}} {{unit}} from {{from}} to {{to}}',
+              {
+                step: field.step,
+                unit,
+                from: field.from,
+                to: field.to,
+              }
+            )
+          : t('schedules.cron.clause.step', 'every {{step}} {{unit}}', { step: field.step, unit });
+      case 'range':
+        return t('schedules.cron.clause.range', '{{unit}} {{from}} to {{to}}', {
+          unit,
+          from: field.from,
+          to: field.to,
+        });
+      case 'list':
+        return t('schedules.cron.clause.list', '{{unit}} {{values}}', {
+          unit,
+          values: list(id, field.values),
+        });
+      case 'raw':
+        return t('schedules.cron.clause.raw', '{{unit}} “{{text}}”', { unit, text: field.text });
+    }
+  };
+  const clauses = CRON_FIELD_ORDER.map((id) => clause(id, fields[id])).filter(
+    (entry): entry is string => entry !== null
+  );
+  if (!clauses.length) return t('schedules.cron.clause.everyMinute', 'Every minute');
+  return clauses.join(t('schedules.cron.clauseSeparator', ', '));
 }
 
 export function describeTrigger(trigger: ScheduleTrigger, t: TFunction, locale?: string): string {

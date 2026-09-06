@@ -29,11 +29,17 @@
   still gate save, resume and run.
   Run now confirms saved configuration and may overlap existing work. Pause does
   not cancel an already submitted Session.
-- Frequency is edited as a named recurrence, never as raw cron. The persisted
-  trigger union is unchanged; `@lody/shared`'s `schedule-recurrence.ts` maps both
-  ways. A rule it cannot name opens as `custom` with the expression verbatim, and
-  an untouched rule is re-emitted byte for byte so saving cannot silently rewrite
-  an existing plan or invalidate its fingerprint.
+- Frequency is always edited through pickers, never by typing cron. The persisted
+  trigger union is unchanged; `schedule-recurrence.ts` maps the named rules
+  (daily/weekdays/weekly/monthly/interval/once) both ways, and `Custom` is edited
+  field by field through `schedule-cron-fields.ts` + `CronFieldRow`. A whole-
+  expression text box exists but is opt-in and never the default.
+- Two things keep that from narrowing what a person can express: every field
+  offers every mode (a trimmed menu would blank a stored mode it does not list),
+  and a field whose spelling the pickers cannot reproduce stays `raw`, verbatim,
+  in its own text box. So `parse`/`format` round-trip byte for byte, and an
+  untouched rule is re-emitted unchanged — saving can never silently rewrite an
+  existing plan or invalidate its fingerprint.
 - Owner-only reduction of authority (pause/delete) remains possible when the
   machine is gone or outdated. Creating/editing/resuming/running requires the
   target Machine protocol capability. Never fall back to a different Agent.

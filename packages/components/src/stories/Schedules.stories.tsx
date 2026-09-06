@@ -238,12 +238,35 @@ export const EditorInterval: Story = editor({
     overlap: 'skip',
   },
 });
-/** An expression the picker cannot name stays visible and editable as Custom. */
-export const EditorAdvancedCron: Story = editor({
+/** A rule the named picker cannot express opens as Custom — as field pickers. */
+export const EditorCustomRule: Story = editor({
   initial: {
     title: 'Business-hours sweep',
     prompt: 'Check the build every twenty minutes during business hours.',
     trigger: { kind: 'cron', expression: '*/20 9-17 * * 1-5', timeZone: 'Asia/Shanghai' },
+    misfire: 'skip',
+    overlap: 'skip',
+  },
+});
+/** Discrete times and months, all through pickers. */
+export const EditorCustomLists: Story = editor({
+  initial: {
+    title: 'Half-year check-in',
+    prompt: 'Summarise the last six months.',
+    trigger: { kind: 'cron', expression: '0,30 8 1,15 1,7 *', timeZone: 'Asia/Shanghai' },
+    misfire: 'skip',
+    overlap: 'skip',
+  },
+});
+/**
+ * Syntax this build does not model (`MON#2`) stays in its own field, verbatim
+ * and editable, while its neighbours keep their pickers.
+ */
+export const EditorCustomUnmodelled: Story = editor({
+  initial: {
+    title: 'Second Monday review',
+    prompt: 'Review on the second Monday of the month.',
+    trigger: { kind: 'cron', expression: '0 9 * * MON#2', timeZone: 'Asia/Shanghai' },
     misfire: 'skip',
     overlap: 'skip',
   },

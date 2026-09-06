@@ -41,6 +41,7 @@ export * from './schema';
 export * from './schedule-types';
 export * from './schedule-time';
 export * from './schedule-recurrence';
+export * from './schedule-cron-fields';
 export * from './schedule-registry';
 export * from './schedule-schema';
 export * from './schedule-repository';
