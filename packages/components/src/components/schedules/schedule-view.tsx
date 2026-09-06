@@ -28,7 +28,7 @@ import { Input } from '@/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
 import { Skeleton } from '@/ui/skeleton';
 import { Textarea } from '@/ui/textarea';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/ui/tooltip';
 import { cn } from '@/lib/utils';
 import {
   describeStatus,
@@ -178,24 +178,35 @@ function ScheduleListRow({
         </span>
       </div>
 
-      <div className={cn(cell.target, 'flex min-w-0 items-center gap-1.5 text-muted-foreground')}>
-        {context?.agent ? (
-          <>
-            <span className="truncate">{context.agent}</span>
-            <span className="shrink-0 opacity-40">·</span>
-          </>
-        ) : null}
-        <span className="truncate">{project}</span>
-        {offline ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <CloudOff className="size-3.5 shrink-0 text-status-warning" />
-            </TooltipTrigger>
-            <TooltipContent>
-              {t('schedules.machineOfflineHint', 'The target machine is not connected right now.')}
-            </TooltipContent>
-          </Tooltip>
-        ) : null}
+      <div className={cn(cell.target, 'flex min-w-0 flex-col justify-center gap-px')}>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-muted-foreground">
+            {context?.agent ?? row.agentConfigId}
+          </span>
+          {offline ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <CloudOff className="size-3.5 shrink-0 text-status-warning" />
+              </TooltipTrigger>
+              <TooltipContent>
+                {t(
+                  'schedules.machineOfflineHint',
+                  'The target machine is not connected right now.'
+                )}
+              </TooltipContent>
+            </Tooltip>
+          ) : null}
+        </span>
+        {/* The machine is what separates two same-named Agents, and two
+            chat-only schedules that would otherwise read identically. */}
+        <span
+          className="truncate text-[11px] text-muted-foreground/70"
+          title={`${context?.machine ?? row.machineId} · ${project}`}
+        >
+          {context?.machine ?? row.machineId}
+          <span className="px-1 opacity-50">·</span>
+          {project}
+        </span>
       </div>
 
       <div className={cn(cell.actions, 'relative flex items-center justify-end gap-0.5')}>
@@ -205,7 +216,9 @@ function ScheduleListRow({
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-7 shrink-0 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+                // Visible by default; only a device that actually has hover is
+                // allowed to hide it until the row is hovered or focused.
+                className="size-7 shrink-0 text-muted-foreground [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:focus-visible:opacity-100 [@media(hover:hover)]:group-hover:opacity-100"
                 onClick={() => onOpenSession(runtime.lastDispatch!.sessionId)}
                 aria-label={t('schedules.lastRun', 'Last run')}
               >
@@ -264,98 +277,109 @@ export function ScheduleListView({
     row.title.toLowerCase().includes(query.trim().toLowerCase())
   );
   return (
-    <section className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-2 px-4 py-3">
-        <h1 className="mr-auto text-sm font-medium">{t('schedules.title', 'Schedules')}</h1>
-        <div className="relative w-40 sm:w-56">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            aria-label={t('schedules.search', 'Search schedules')}
-            placeholder={t('schedules.search', 'Search schedules')}
-            className="h-8 pl-8 text-[13px]"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </div>
-        <Button size="sm" className="h-8 shrink-0" onClick={onNew}>
-          <Plus className="size-3.5" />
-          <span className="hidden sm:inline">{t('schedules.new', 'New schedule')}</span>
-        </Button>
-      </header>
-
-      {ready && !error && filtered.length > 0 ? (
-        <div
-          className={cn(
-            listGridClass,
-            'hidden shrink-0 border-y bg-muted/20 px-4 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground sm:grid'
-          )}
-        >
-          <span>{t('schedules.column.name', 'Name')}</span>
-          <span>{t('schedules.column.frequency', 'Frequency')}</span>
-          <span>{t('schedules.column.next', 'Next run')}</span>
-          <span>{t('schedules.column.target', 'Runs with')}</span>
-          <span />
-        </div>
-      ) : null}
-
-      <div className="min-h-0 flex-1 overflow-auto">
-        {!ready ? (
-          <div className="space-y-px" aria-busy="true">
-            <span className="sr-only">{t('schedules.loading', 'Loading schedules…')}</span>
-            {[0, 1, 2].map((index) => (
-              <div
-                key={index}
-                className="flex items-center gap-3 border-b border-border/60 px-4 py-3"
-              >
-                <Skeleton className="h-3.5 w-48" />
-                <Skeleton className="ml-auto h-3.5 w-24" />
-                <Skeleton className="h-3.5 w-20" />
-              </div>
-            ))}
-          </div>
-        ) : error ? (
-          <p className="px-4 py-8 text-sm text-destructive" role="alert">
-            {t('schedules.loadError', 'Schedules could not be loaded.')}
-          </p>
-        ) : filtered.length === 0 ? (
-          <div className="mx-auto flex max-w-sm flex-col items-center gap-2 px-6 py-16 text-center">
-            <CalendarClock className="size-5 text-muted-foreground" aria-hidden="true" />
-            <p className="text-sm font-medium">
-              {query
-                ? t('schedules.noMatches', 'No schedules match your search')
-                : t('schedules.empty', 'No schedules yet')}
-            </p>
-            {query ? null : (
-              <>
-                <p className="text-[13px] text-muted-foreground">
-                  {t(
-                    'schedules.emptyHelp',
-                    'Choose a prompt and a time. Your machine will start a new chat for each run.'
-                  )}
-                </p>
-                <Button size="sm" variant="outline" className="mt-2 h-8" onClick={onNew}>
-                  <Plus className="size-3.5" />
-                  {t('schedules.new', 'New schedule')}
-                </Button>
-              </>
-            )}
-          </div>
-        ) : (
-          filtered.map((row) => (
-            <ScheduleListRow
-              key={row.scheduleId}
-              row={row}
-              now={now}
-              runtime={matchingScheduleRuntime(row, runtimes)}
-              context={contextForRow?.(row)}
-              onOpen={() => onOpen(row.scheduleId)}
-              onToggle={onToggle ? () => onToggle(row) : undefined}
-              onOpenSession={onOpenSession}
+    // Own the tooltip context rather than depending on an ancestor: the row
+    // tooltips carry the exact next-run instant and the offline reason, which
+    // must not be what makes this list crash where it is mounted.
+    <TooltipProvider>
+      <section className="flex h-full min-h-0 flex-col">
+        <header className="flex shrink-0 items-center gap-2 px-4 py-3">
+          <h1 className="mr-auto text-sm font-medium">{t('schedules.title', 'Schedules')}</h1>
+          <div className="relative w-40 sm:w-56">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              aria-label={t('schedules.search', 'Search schedules')}
+              placeholder={t('schedules.search', 'Search schedules')}
+              className="h-8 pl-8 text-[13px]"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
             />
-          ))
-        )}
-      </div>
-    </section>
+          </div>
+          <Button
+            size="sm"
+            className="h-8 shrink-0"
+            onClick={onNew}
+            // The label is the only text and it is hidden on narrow screens.
+            aria-label={t('schedules.new', 'New schedule')}
+          >
+            <Plus className="size-3.5" />
+            <span className="hidden sm:inline">{t('schedules.new', 'New schedule')}</span>
+          </Button>
+        </header>
+
+        {ready && !error && filtered.length > 0 ? (
+          <div
+            className={cn(
+              listGridClass,
+              'hidden shrink-0 border-y bg-muted/20 px-4 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground sm:grid'
+            )}
+          >
+            <span>{t('schedules.column.name', 'Name')}</span>
+            <span>{t('schedules.column.frequency', 'Frequency')}</span>
+            <span>{t('schedules.column.next', 'Next run')}</span>
+            <span>{t('schedules.column.target', 'Runs with')}</span>
+            <span />
+          </div>
+        ) : null}
+
+        <div className="min-h-0 flex-1 overflow-auto">
+          {!ready ? (
+            <div className="space-y-px" aria-busy="true">
+              <span className="sr-only">{t('schedules.loading', 'Loading schedules…')}</span>
+              {[0, 1, 2].map((index) => (
+                <div
+                  key={index}
+                  className="flex items-center gap-3 border-b border-border/60 px-4 py-3"
+                >
+                  <Skeleton className="h-3.5 w-48" />
+                  <Skeleton className="ml-auto h-3.5 w-24" />
+                  <Skeleton className="h-3.5 w-20" />
+                </div>
+              ))}
+            </div>
+          ) : error ? (
+            <p className="px-4 py-8 text-sm text-destructive" role="alert">
+              {t('schedules.loadError', 'Schedules could not be loaded.')}
+            </p>
+          ) : filtered.length === 0 ? (
+            <div className="mx-auto flex max-w-sm flex-col items-center gap-2 px-6 py-16 text-center">
+              <CalendarClock className="size-5 text-muted-foreground" aria-hidden="true" />
+              <p className="text-sm font-medium">
+                {query
+                  ? t('schedules.noMatches', 'No schedules match your search')
+                  : t('schedules.empty', 'No schedules yet')}
+              </p>
+              {query ? null : (
+                <>
+                  <p className="text-[13px] text-muted-foreground">
+                    {t(
+                      'schedules.emptyHelp',
+                      'Choose a prompt and a time. Your machine will start a new chat for each run.'
+                    )}
+                  </p>
+                  <Button size="sm" variant="outline" className="mt-2 h-8" onClick={onNew}>
+                    <Plus className="size-3.5" />
+                    {t('schedules.new', 'New schedule')}
+                  </Button>
+                </>
+              )}
+            </div>
+          ) : (
+            filtered.map((row) => (
+              <ScheduleListRow
+                key={row.scheduleId}
+                row={row}
+                now={now}
+                runtime={matchingScheduleRuntime(row, runtimes)}
+                context={contextForRow?.(row)}
+                onOpen={() => onOpen(row.scheduleId)}
+                onToggle={onToggle ? () => onToggle(row) : undefined}
+                onOpenSession={onOpenSession}
+              />
+            ))
+          )}
+        </div>
+      </section>
+    </TooltipProvider>
   );
 }
 
@@ -419,6 +443,14 @@ export function ScheduleForm({
     }
   }, [initial.trigger, now, recurrence, t]);
 
+  const misfireLabels: Record<ScheduleFormValue['misfire'], string> = {
+    skip: t('schedules.skipMissed', 'Skip old runs'),
+    run_once: t('schedules.runLatest', 'Run the latest missed time'),
+  };
+  const overlapLabels: Record<ScheduleFormValue['overlap'], string> = {
+    skip: t('schedules.skipOverlap', 'Skip the new run'),
+    queue_one: t('schedules.queueLatest', 'Keep the latest waiting run'),
+  };
   const requirementsId = useId();
   const blockers = [
     ...(!value.title.trim() ? [t('schedules.requireName', 'Enter a schedule name.')] : []),
@@ -512,7 +544,7 @@ export function ScheduleForm({
         </CollapsibleTrigger>
         <CollapsibleContent className="pt-1.5">
           <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/40">
-            <PropertyRow label={t('schedules.misfire', 'When the machine misses a run')}>
+            <PropertyRow label={t('schedules.misfire', 'If a run is missed')}>
               <Select
                 value={value.misfire}
                 onValueChange={(next) =>
@@ -520,20 +552,21 @@ export function ScheduleForm({
                 }
               >
                 <SelectTrigger
-                  aria-label={t('schedules.misfire', 'When the machine misses a run')}
+                  aria-label={t('schedules.misfire', 'If a run is missed')}
+                  // A narrow panel truncates the value; the full text stays
+                  // reachable without opening the menu.
+                  title={misfireLabels[value.misfire]}
                   className={ghostSelectTriggerClass}
                 >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="skip">{t('schedules.skipMissed', 'Skip old runs')}</SelectItem>
-                  <SelectItem value="run_once">
-                    {t('schedules.runLatest', 'Run the latest missed time once')}
-                  </SelectItem>
+                  <SelectItem value="skip">{misfireLabels.skip}</SelectItem>
+                  <SelectItem value="run_once">{misfireLabels.run_once}</SelectItem>
                 </SelectContent>
               </Select>
             </PropertyRow>
-            <PropertyRow label={t('schedules.overlap', 'When a previous run is still active')}>
+            <PropertyRow label={t('schedules.overlap', 'If the previous run is active')}>
               <Select
                 value={value.overlap}
                 onValueChange={(next) =>
@@ -541,18 +574,15 @@ export function ScheduleForm({
                 }
               >
                 <SelectTrigger
-                  aria-label={t('schedules.overlap', 'When a previous run is still active')}
+                  aria-label={t('schedules.overlap', 'If the previous run is active')}
+                  title={overlapLabels[value.overlap]}
                   className={ghostSelectTriggerClass}
                 >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="skip">
-                    {t('schedules.skipOverlap', 'Skip the new run')}
-                  </SelectItem>
-                  <SelectItem value="queue_one">
-                    {t('schedules.queueLatest', 'Keep only the latest waiting run')}
-                  </SelectItem>
+                  <SelectItem value="skip">{overlapLabels.skip}</SelectItem>
+                  <SelectItem value="queue_one">{overlapLabels.queue_one}</SelectItem>
                 </SelectContent>
               </Select>
             </PropertyRow>

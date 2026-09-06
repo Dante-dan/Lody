@@ -204,6 +204,32 @@ const editor = (
 });
 
 export const Editor: Story = editor();
+/**
+ * A DESKTOP viewport with a narrow panel — the case a `sm:` breakpoint cannot
+ * see. Every row must keep its control inside the panel rather than clipping it.
+ */
+export const EditorInNarrowPanel: Story = {
+  render: () => (
+    <div className="flex h-dvh">
+      <div className="w-[360px] shrink-0 overflow-auto border-r">
+        <ScheduleForm
+          now={NOW}
+          saving={false}
+          onSave={() => {}}
+          runConfig={<RunConfigFixture />}
+          initial={{
+            title: 'Review the latest changes',
+            prompt: 'Review changes since the previous working day.',
+            trigger: { kind: 'cron', expression: '*/20 9-17 * * 1-5', timeZone: 'Asia/Shanghai' },
+            misfire: 'run_once',
+            overlap: 'queue_one',
+          }}
+        />
+      </div>
+      <div className="min-w-0 flex-1 bg-muted/10" />
+    </div>
+  ),
+};
 export const EditorNarrow: Story = {
   ...editor(),
   parameters: { viewport: { defaultViewport: 'mobile1' } },

@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next';
+import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import {
   CRON_FIELD_ORDER,
   getDeviceTimeZone,
@@ -19,28 +20,35 @@ import {
  * The list, the editor summary and the run history all describe the same rule,
  * so they read it through the same functions. Nothing here formats a raw cron
  * expression at a person: an expression only appears when they chose Custom.
+ *
+ * Every entry point normalizes its `locale` argument first. Callers pass the
+ * PRODUCT language (`i18n.language`), and Lody spells Chinese `zh_CN` — a value
+ * every `Intl` constructor rejects with a RangeError. Normalizing here rather
+ * than at each call site is deliberate: these are the only functions that
+ * construct an `Intl` formatter, so one missed caller cannot crash a page.
  */
+const intl = toIntlLocaleOrEn;
 
 /** Locale weekday names, narrow for toggles and short for summaries. */
 export function weekdayNames(
   locale: string | undefined,
   width: 'narrow' | 'short' | 'long'
 ): string[] {
-  const format = new Intl.DateTimeFormat(locale, { weekday: width, timeZone: 'UTC' });
+  const format = new Intl.DateTimeFormat(intl(locale), { weekday: width, timeZone: 'UTC' });
   // 2023-01-01 was a Sunday, which is index 0 in the cron convention.
   return Array.from({ length: 7 }, (_, day) => format.format(new Date(Date.UTC(2023, 0, 1 + day))));
 }
 
 /** Locale month names, indexed from January. */
 export function monthNames(locale: string | undefined, width: 'short' | 'long'): string[] {
-  const format = new Intl.DateTimeFormat(locale, { month: width, timeZone: 'UTC' });
+  const format = new Intl.DateTimeFormat(intl(locale), { month: width, timeZone: 'UTC' });
   return Array.from({ length: 12 }, (_, month) =>
     format.format(new Date(Date.UTC(2023, month, 1)))
   );
 }
 
 export function formatTimeOfDay(hour: number, minute: number, locale?: string): string {
-  return new Intl.DateTimeFormat(locale, {
+  return new Intl.DateTimeFormat(intl(locale), {
     hour: 'numeric',
     minute: '2-digit',
     timeZone: 'UTC',
@@ -59,7 +67,7 @@ function formatDuration(t: TFunction, everyMs: number): string {
 function formatWeekdayList(weekdays: readonly ScheduleWeekday[], locale?: string): string {
   const names = weekdayNames(locale, 'short');
   const list = normalizeScheduleWeekdays(weekdays).map((day) => names[day] ?? String(day));
-  const conjunction = new Intl.ListFormat(locale, { style: 'short', type: 'conjunction' });
+  const conjunction = new Intl.ListFormat(intl(locale), { style: 'short', type: 'conjunction' });
   return conjunction.format(list);
 }
 
@@ -134,7 +142,7 @@ export function describeCronExpression(expression: string, t: TFunction, locale?
           : null;
     const label = (value: number) =>
       names ? (names[id === 'month' ? value - 1 : value] ?? String(value)) : String(value);
-    return new Intl.ListFormat(locale, { style: 'short', type: 'conjunction' }).format(
+    return new Intl.ListFormat(intl(locale), { style: 'short', type: 'conjunction' }).format(
       values.map(label)
     );
   };
@@ -188,7 +196,7 @@ export function triggerTimeZone(trigger: ScheduleTrigger): string {
 }
 
 export function formatInstant(at: number, timeZone: string, locale?: string): string {
-  return new Intl.DateTimeFormat(locale, {
+  return new Intl.DateTimeFormat(intl(locale), {
     dateStyle: 'medium',
     timeStyle: 'short',
     timeZone,
@@ -197,9 +205,11 @@ export function formatInstant(at: number, timeZone: string, locale?: string): st
 
 /** Short calendar-relative form for a next run: "Today 09:00", "Tue 09:00". */
 export function formatUpcoming(at: number, timeZone: string, now: number, locale?: string): string {
+  const language = intl(locale);
+  // `en-CA` is a fixed ISO-shaped calendar key for comparing days, never shown.
   const day = (value: number) =>
     new Intl.DateTimeFormat('en-CA', { timeZone, dateStyle: 'short' }).format(new Date(value));
-  const time = new Intl.DateTimeFormat(locale, {
+  const time = new Intl.DateTimeFormat(language, {
     timeZone,
     hour: 'numeric',
     minute: '2-digit',
@@ -208,7 +218,7 @@ export function formatUpcoming(at: number, timeZone: string, now: number, locale
   const target = day(at);
   if (target === today) return time;
   const tomorrow = day(now + 86_400_000);
-  const relative = new Intl.DateTimeFormat(locale, {
+  const relative = new Intl.DateTimeFormat(language, {
     timeZone,
     ...(target === tomorrow
       ? {}
@@ -218,7 +228,7 @@ export function formatUpcoming(at: number, timeZone: string, now: number, locale
   });
   const prefix =
     target === tomorrow
-      ? new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(1, 'day')
+      ? new Intl.RelativeTimeFormat(language, { numeric: 'auto' }).format(1, 'day')
       : relative.format(new Date(at));
   return `${prefix} ${time}`;
 }

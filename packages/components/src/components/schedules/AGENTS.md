@@ -51,4 +51,22 @@
   fingerprint.
 - The list is one column template shared by its header and every row. The actions
   column is a fixed width, never `auto`: content-sized it redistributed the `fr`
-  columns per row and left Frequency and Next run visibly unaligned.
+  columns per row and left Frequency and Next run visibly unaligned. The target
+  column names the MACHINE as well as the agent and project — without it two
+  same-named agents, and two chat-only rows, read identically.
+- `schedule-format.ts` normalizes its `locale` argument with `toIntlLocaleOrEn`
+  at every entry point, and is the only place here that constructs an `Intl`
+  formatter. Callers pass the PRODUCT language, and Lody spells Chinese `zh_CN`,
+  which every `Intl` constructor rejects with a RangeError — normalizing per call
+  site means one missed caller crashes a page. Cover new formatters with the
+  `zh_CN` render tests, not only pure-function tests: the formatters were already
+  individually correct while the pages they back crashed.
+- A row action must not be hover-only. Default it visible and hide it behind
+  `[@media(hover:hover)]` so a touch device can still find it, and give any
+  control whose only label is `hidden sm:inline` an explicit `aria-label`.
+- `PropertyRow` sizes both tracks from content (`minmax(0,auto)` label,
+  `minmax(0,1fr)` control), never from a `sm:` width. A viewport breakpoint
+  cannot see the panel a schedule renders in, a hugging control track let the
+  weekday toggles truncate the label away, and a hugging label track let a long
+  translated label eat the row. `EditorInNarrowPanel` is the story that catches
+  all three.

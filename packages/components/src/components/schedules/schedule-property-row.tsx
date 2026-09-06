@@ -43,6 +43,22 @@ export function ScheduleSection({
   );
 }
 
+/**
+ * Label left, control right.
+ *
+ * Both tracks are content-driven and both may shrink, the same contract as
+ * `settings/compact-layout.tsx`. A schedule editor renders inside a panel far
+ * narrower than the window, and a viewport breakpoint cannot see that panel — a
+ * column sized from `sm:` would keep its desktop width in a narrow side panel
+ * and push the control past the clipped edge. The row stacks below `sm` only to
+ * switch layout, never to size a column.
+ *
+ * The label track is `minmax(0,auto)` and the control track `minmax(0,1fr)`,
+ * which is load-bearing in both directions: a hugging control track let the
+ * seven weekday toggles take the whole row and truncate the label away, while a
+ * hugging label track lets a long translated label ("上一次运行仍在进行时")
+ * take the row instead. Wide controls wrap inside their own track.
+ */
 export function PropertyRow({
   label,
   hint,
@@ -58,26 +74,38 @@ export function PropertyRow({
   return (
     <div
       className={cn(
-        'grid grid-cols-[minmax(5.5rem,auto)_minmax(0,1fr)] gap-3 px-3 py-1.5 sm:grid-cols-[8rem_minmax(0,1fr)]',
-        align === 'center' ? 'items-center' : 'items-start'
+        'flex flex-col gap-1 px-3 py-1.5 sm:grid sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)] sm:gap-3',
+        align === 'center' ? 'sm:items-center' : 'sm:items-start'
       )}
     >
-      <span className={cn('text-[13px] text-muted-foreground', align === 'start' && 'pt-2')}>
+      <span
+        className={cn(
+          'min-w-0 truncate text-[13px] text-muted-foreground',
+          align === 'start' && 'sm:pt-2'
+        )}
+      >
         {label}
       </span>
       <div className="flex min-w-0 flex-col items-end gap-0.5">
-        <div className="flex min-w-0 max-w-full items-center justify-end">{children}</div>
+        <div className="flex min-w-0 max-w-full flex-wrap items-center justify-end">{children}</div>
         {hint ? <p className="text-right text-xs text-muted-foreground/80">{hint}</p> : null}
       </div>
     </div>
   );
 }
 
-/** Full-bleed row for controls that own the whole width (Agent, Project). */
+/**
+ * Row for a control that owns the remaining width (Agent, Project).
+ *
+ * Here the LABEL hugs and the control absorbs the rest, because those two
+ * controls are the shared composer menus: they are `w-full` and truncate their
+ * own value, so giving them the slack is what keeps a long agent or repository
+ * name readable instead of clipped.
+ */
 export function PropertyRowWide({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[minmax(5.5rem,auto)_minmax(0,1fr)] items-center gap-3 py-1.5 pl-3 pr-1 sm:grid-cols-[8rem_minmax(0,1fr)]">
-      <span className="text-[13px] text-muted-foreground">{label}</span>
+    <div className="flex flex-col gap-1 py-1.5 pl-3 pr-1 sm:grid sm:grid-cols-[minmax(0,auto)_minmax(0,1fr)] sm:items-center sm:gap-3">
+      <span className="min-w-0 truncate text-[13px] text-muted-foreground">{label}</span>
       <div className="flex min-w-0 justify-end [&>*]:min-w-0 [&>*]:max-w-full">{children}</div>
     </div>
   );
