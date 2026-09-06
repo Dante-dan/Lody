@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
 import {
   buildPendingUserHistoryEntry,
   buildSessionPreparationRunConfig,
@@ -202,6 +202,10 @@ import {
   arePersistedMentionRangesEqual,
   toPersistedMentionRanges,
 } from '@/components/mentions/mention-persistence';
+import {
+  buildChatLandingDraftKey,
+  chatLandingAppliedResetKeyAtomFamily,
+} from '@/atoms/chat-landing-draft';
 import { useChatLandingImageDraft } from '@/hooks/use-chat-landing-image-draft';
 import { useChatLandingFileDraft } from '@/hooks/use-chat-landing-file-draft';
 import { useChatLandingDraftSession } from '@/hooks/use-chat-landing-draft-session';
@@ -956,6 +960,12 @@ function WorkspaceChatLanding({
   const [sessionState, setSessionState] = useAtom(
     chatLandingSessionStateAtomFamily(chatLandingStateKey)
   );
+  /**
+   * Scope for the attachment draft and the reserved session id. Unlike the
+   * prompt text this is workspace-scoped, because an uploaded image/file is
+   * addressable only inside the workspace it was uploaded to.
+   */
+  const chatLandingDraftKey = buildChatLandingDraftKey(chatLandingStateKey, workspaceSlug);
   const prompt = sessionState.prompt;
   const [draftActivityRevision, setDraftActivityRevision] = useState(0);
   const pastedTextDrafts = useMemo(
@@ -1280,7 +1290,7 @@ function WorkspaceChatLanding({
     sessionId: draftSessionId,
     ensureSessionId: ensureDraftSessionId,
     resetSessionId: resetDraftSessionId,
-  } = useChatLandingDraftSession();
+  } = useChatLandingDraftSession(chatLandingDraftKey);
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const {
     imageItems,
@@ -1294,6 +1304,7 @@ function WorkspaceChatLanding({
     clearPendingImages,
     buildInputBlocks,
   } = useChatLandingImageDraft({
+    draftKey: chatLandingDraftKey,
     workspaceId: (workspaceId as WorkspaceId | null) ?? null,
     authToken,
     isMobile,
@@ -1312,13 +1323,15 @@ function WorkspaceChatLanding({
     clearPendingFiles,
     buildFileInputBlocks,
   } = useChatLandingFileDraft({
+    draftKey: chatLandingDraftKey,
     workspaceId: (workspaceId as WorkspaceId | null) ?? null,
     authToken,
     machineId: selectedMachineId,
     sessionId: draftSessionId,
     ensureSessionId: ensureDraftSessionId,
   });
-  const lastAppliedResetDraftKeyRef = useRef<string | null>(null);
+  const draftStore = useStore();
+  const appliedResetKeyAtom = chatLandingAppliedResetKeyAtomFamily(chatLandingDraftKey);
 
   useEffect(() => {
     if (!resetDraftKey) {
@@ -1326,10 +1339,10 @@ function WorkspaceChatLanding({
     }
 
     const scopedResetKey = `${chatLandingStateKey ?? 'anonymous'}:${resetDraftKey}`;
-    if (lastAppliedResetDraftKeyRef.current === scopedResetKey) {
+    if (draftStore.get(appliedResetKeyAtom) === scopedResetKey) {
       return;
     }
-    lastAppliedResetDraftKeyRef.current = scopedResetKey;
+    draftStore.set(appliedResetKeyAtom, scopedResetKey);
     if (resetDraftOnKeyChange) {
       setSessionState({ prompt: '', pastedTextDrafts: [] });
     }
@@ -1338,9 +1351,11 @@ function WorkspaceChatLanding({
     clearPendingFiles();
     resetDraftSessionId();
   }, [
+    appliedResetKeyAtom,
     chatLandingStateKey,
     clearPendingFiles,
     clearPendingImages,
+    draftStore,
     resetDraftSessionId,
     resetDraftKey,
     resetDraftOnKeyChange,
