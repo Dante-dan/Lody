@@ -310,8 +310,121 @@ const parseRepo = (raw, defaultHost) => {
   return /^[\\w.-]+\\/[\\w.-]+$/.test(repo) ? { host: host.toLowerCase(), repo } : null;
 };
 
+// Command-scoped option arity from cli.github.com/manual. Each descriptor is
+// long-name[:short-name]; a short name is not necessarily boolean elsewhere.
+const viewFlags = ['comments:c web:w', 'json jq:q template:t'];
+const commentFlags = ['edit-last create-if-none delete-last editor:e web:w yes', 'body:b body-file:F attach'];
+const editValues = 'add-assignee add-label add-project body:b body-file:F milestone:m remove-assignee remove-label remove-project title:t';
+const createValues = 'assignee:a attach body:b body-file:F label:l milestone:m project:p recover template:T title:t';
+const listValues = 'app assignee:a author:A json jq:q label:l limit:L search:S state:s template:t';
+const prIssueCommandFlags = {
+  pr: {
+    checkout: ['detach force:f recurse-submodules', 'branch:b worktree'],
+    checks: ['fail-fast required watch web:w', 'interval:i json jq:q template:t'],
+    close: ['delete-branch:d', 'comment:c'],
+    comment: commentFlags,
+    create: ['draft:d dry-run editor:e fill:f fill-first fill-verbose no-maintainer-edit web:w', createValues + ' base:B head:H reviewer:r'],
+    diff: ['name-only patch web:w', 'color'],
+    edit: ['remove-milestone', editValues + ' add-reviewer base:B remove-reviewer'],
+    list: ['draft:d web:w', listValues + ' base:B head:H'],
+    lock: ['', 'reason:r'],
+    merge: ['admin auto delete-branch:d disable-auto merge:m rebase:r squash:s', 'author-email:A body:b body-file:F match-head-commit subject:t'],
+    ready: ['undo', ''],
+    reopen: ['', 'comment:c'],
+    revert: ['draft:d', 'body:b body-file:F title:t'],
+    review: ['approve:a comment:c request-changes:r', 'body:b body-file:F'],
+    status: ['conflict-status:c', 'json jq:q template:t'],
+    unlock: ['', ''],
+    'update-branch': ['rebase', ''],
+    view: viewFlags,
+  },
+  issue: {
+    close: ['', 'comment:c reason:r'],
+    comment: commentFlags,
+    create: ['editor:e web:w', createValues + ' blocked-by blocking parent type'],
+    delete: ['yes', ''],
+    develop: ['checkout:c list:l', 'base:b branch-repo name:n'],
+    edit: ['remove-milestone', editValues],
+    list: ['web:w', listValues + ' mention milestone:m type'],
+    lock: ['', 'reason:r'],
+    pin: ['', ''],
+    reopen: ['', 'comment:c'],
+    status: ['', 'json jq:q template:t'],
+    transfer: ['', ''],
+    unlock: ['', ''],
+    unpin: ['', ''],
+    view: viewFlags,
+  },
+};
+
+// null means ambiguous: local gh may handle it, but managed auth must not guess.
+const readPrIssueArgs = (args) => {
+  const isUrl = (value) => /^https?:/i.test(value || '');
+  const arity = new Map([['--repo', true], ['-R', true], ['--help', false]]);
+  const positionals = [];
+  let command;
+  let repo;
+  let options = true;
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (options && arg === '--') { options = false; continue; }
+    if (!options || !arg.startsWith('-') || arg === '-') {
+      if (command) { positionals.push(arg); continue; }
+      if (!options) return null;
+      command = { new: 'create', ls: 'list', co: 'checkout' }[arg] || arg;
+      const flags = prIssueCommandFlags[args[0]]?.[command];
+      if (!Array.isArray(flags)) return null;
+      for (const [takesValue, descriptors] of [[false, flags[0]], [true, flags[1]]]) {
+        for (const descriptor of descriptors.split(' ').filter(Boolean)) {
+          const [long, short] = descriptor.split(':');
+          arity.set('--' + long, takesValue);
+          if (short) arity.set('-' + short, takesValue);
+        }
+      }
+      continue;
+    }
+    const long = arg.startsWith('--');
+    const names = long ? [arg.split('=')[0]] : [...arg.slice(1)].map((letter) => '-' + letter);
+    for (let j = 0; j < names.length; j++) {
+      const name = names[j];
+      if (!arity.has(name)) return null;
+      const attached = long ? arg.indexOf('=') : j + 2 < arg.length ? j + 1 : -1;
+      if (arity.get(name)) {
+        let value = attached >= 0 ? arg.slice(attached + 1) : args[++i];
+        if (!long && attached >= 0 && value.startsWith('=')) value = value.slice(1);
+        // Consume known values once; only --repo selects the repository.
+        if (value === undefined) return null;
+        if (name === '--repo' || name === '-R') repo = value;
+        break;
+      }
+      if (long && attached >= 0) {
+        if (!/^(true|false|1|0|t|f)$/i.test(arg.slice(attached + 1))) return null;
+      } else if (!long && arg[j + 2] === '=') {
+        if (!/^(true|false|1|0|t|f)$/i.test(arg.slice(j + 3))) return null;
+        break;
+      }
+    }
+  }
+  if (!command || (['create', 'list', 'status'].includes(command) && positionals.length)) return null;
+  if (positionals.slice(1).some(isUrl)) return null;
+  return { subject: positionals[0], repo };
+};
+
 const readGitHubTarget = async (args) => {
-  const host = String(readFlag(args, '--hostname') || process.env.GH_HOST || 'github.com').toLowerCase();
+  // gh also accepts inherited repo flags before the pr/issue command group.
+  let groupIndex = 0;
+  while (groupIndex < args.length) {
+    const arg = args[groupIndex];
+    if (arg === '--repo' || arg === '-R') { groupIndex += 2; continue; }
+    if (arg.startsWith('--repo=') || (arg.startsWith('-R') && arg.length > 2)) { groupIndex++; continue; }
+    break;
+  }
+  if (groupIndex && (args[groupIndex] === 'pr' || args[groupIndex] === 'issue')) {
+    args = [args[groupIndex], ...args.slice(0, groupIndex), ...args.slice(groupIndex + 1)];
+  }
+  const subjectCommand = args[0] === 'pr' || args[0] === 'issue';
+  const hostFlag = subjectCommand ? null : readFlag(args, '--hostname');
+  const host = String(hostFlag || process.env.GH_HOST || 'github.com').toLowerCase();
   if (args[0] === 'api') {
     const endpoint = args.find((arg) => /^(\\/?repos\\/|https?:\\/\\/)/.test(arg));
     if (endpoint) {
@@ -331,20 +444,10 @@ const readGitHubTarget = async (args) => {
     // API calls honor GH_HOST/--hostname, not a git remote's hostname.
     return { host, repo: process.env.LODY_GITHUB_REPO_FULL_NAME || null };
   }
-  // gh pr/issue commands accept a URL that overrides the current repository.
-  const subjectUrls = args.filter((arg) => /^https?:\\/\\/[^/]+\\/[^/]+\\/[^/]+\\/(pull|issues)\\//i.test(arg));
-  // Only known zero-arity flags can precede a subject URL. Keep this scoped to
-  // the command: short options can take values in other subcommands.
-  const isViewBooleanFlag = (flag) =>
-    (args[0] === 'pr' || args[0] === 'issue') && args[1] === 'view' &&
-    (['--comments', '--web', '--help'].includes(flag.split('=')[0]) || /^-[cw]+$/.test(flag));
-  // A URL-valued --body/--template is not necessarily the command's target.
-  // Unknown option arity and multiple URLs remain ambiguous; never guess auth.
-  if (subjectUrls.length > 1 || subjectUrls.some((url) => {
-    const previous = args[args.indexOf(url) - 1];
-    return previous && previous !== '--' && previous.startsWith('-') && !isViewBooleanFlag(previous);
-  })) return { host: null, repo: null };
-  const subject = subjectUrls[0] || args[2];
+  // PR/Issue subjects override ambient repositories; option values do not.
+  const parsed = subjectCommand ? readPrIssueArgs(args) : undefined;
+  if (parsed === null) return { host: null, repo: null };
+  const subject = subjectCommand ? parsed?.subject : args[2];
   if (subject && /^https?:\\/\\//i.test(subject)) {
     try {
       const url = new URL(subject);
@@ -352,7 +455,8 @@ const readGitHubTarget = async (args) => {
       return parseRepo(repoPath, url.hostname) || { host: url.hostname, repo: null };
     } catch { return { host, repo: null }; }
   }
-  const explicitRepo = readFlag(args, '--repo', '-R') || process.env.GH_REPO;
+  // Never rescan option values (e.g. a template containing '-Rowner/repo').
+  const explicitRepo = (subjectCommand ? parsed.repo : readFlag(args, '--repo', '-R')) || process.env.GH_REPO;
   if (explicitRepo) return parseRepo(explicitRepo, host) || { host, repo: null };
   return parseRepo(await readGitRemoteOrigin(), host) ||
     parseRepo(process.env.LODY_GITHUB_REPO_FULL_NAME || process.env.GITHUB_REPOSITORY, host) ||

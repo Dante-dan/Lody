@@ -122,7 +122,7 @@ describe('ensureGhShimScript', () => {
 
     expect(getGhShimHostPath(firstState)).not.toBe(getGhShimHostPath(secondState));
     const result = await runShim({ FAKE_GH_AUTHED: '1' }, ['print-token'], secondState);
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe('GH_TOKEN=\nGITHUB_TOKEN=\nMARKER=\n');
   });
 
@@ -283,7 +283,7 @@ describe('ensureGhShimScript', () => {
       LODY_GIT_CRED_BROKER_TOKEN: broker.authToken,
       LODY_GITHUB_REPO_FULL_NAME: 'loro-dev/lody',
     });
-    expect(result.status).toBe(0);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe('GH_TOKEN=\nGITHUB_TOKEN=\nMARKER=\n');
     expect(brokerRequestCount).toBe(0);
   });
@@ -559,13 +559,160 @@ describe('ensureGhShimScript', () => {
     SHIM_INTEGRATION_TIMEOUT_MS
   );
 
+  it.each([
+    ['pr', 'checkout', '--force'],
+    ['pr', 'co', '--force'],
+    ['pr', 'checkout', '-f', '--detach', '--recurse-submodules'],
+    ['pr', 'checks', '--watch', '--required', '--fail-fast'],
+    ['pr', 'diff', '--name-only', '--patch'],
+    ['pr', 'close', '--delete-branch'],
+    ['pr', 'comment', '--edit-last', '--create-if-none', '--editor'],
+    ['pr', 'edit', '--remove-milestone'],
+    ['pr', 'merge', '--auto', '--squash', '--delete-branch'],
+    ['pr', 'merge', '-md', '--admin=false'],
+    ['pr', 'ready', '--undo'],
+    ['pr', 'review', '--approve'],
+    ['pr', 'review', '-c'],
+    ['pr', 'revert', '--draft'],
+    ['pr', 'update-branch', '--rebase'],
+    ['issue', 'comment', '--delete-last', '--yes'],
+    ['issue', 'delete', '--yes'],
+    ['issue', 'develop', '--checkout'],
+    ['issue', 'develop', '-l'],
+    ['issue', 'edit', '--remove-milestone'],
+    ['pr', 'view', '--json=title', '--template={{.title}}'],
+    ['pr', 'view', '-ct{{.title}}'],
+    ['pr', 'view', '-ct={{.title}}'],
+    ['pr', 'view', '-c=false'],
+    ['pr', 'checkout', '--branch', 'feature', '-f'],
+    ['pr', 'view', '--'],
+  ])(
+    'resolves a teammate subject URL with command-specific options: %j',
+    async (...prefix) => {
+      await startTokenBroker('app-token');
+      ensureGhShimScript();
+      const subjectPath = prefix[0] === 'pr' ? 'pull' : 'issues';
+      const args = [...prefix, `https://github.com/owner/target/${subjectPath}/1`];
+      const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(args.join(' ') + '\n');
+      expect(brokerRequests).toEqual([
+        { repoFullName: 'owner/target', contextToken: 'test-context' },
+      ]);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
+
+  it.each([
+    ['--template', '-Rgithub.com/owner/repo', '1'],
+    ['--template', '--repo=github.com/owner/repo', '1'],
+    ['--template', '--hostname=github.com', '1'],
+    ['-cRother.ghe.com/owner/repo', '1'],
+  ])('keeps consumed option values out of host/repo resolution: %j', async (...options) => {
+    await startTokenBroker('app-token');
+    ensureGhShimScript();
+    const result = await runShim({ GH_HOST: 'other.ghe.com', GH_REPO: 'owner/repo' }, [
+      'pr',
+      'view',
+      ...options,
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('No managed GitHub credential');
+    expect(brokerRequests).toEqual([]);
+  });
+
+  it.each([
+    ['pr', 'create', '--draft', '--body', 'text'],
+    ['pr', 'list', '--draft=false', '--search', 'label:bug'],
+    ['pr', 'status', '--conflict-status', '--json=number'],
+    ['issue', 'create', '--editor', '--title', 'Bug'],
+    ['issue', 'list', '--state', 'all'],
+    ['issue', 'status', '--json=number'],
+    ['pr', 'new', '--fill'],
+    ['issue', 'ls', '--web'],
+  ])(
+    'resolves repository-only PR/Issue commands without scanning values: %j',
+    async (...prefix) => {
+      await startTokenBroker('app-token');
+      ensureGhShimScript();
+      const args = [...prefix, '--repo=github.com/owner/target'];
+      const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(args.join(' ') + '\n');
+      expect(brokerRequests).toEqual([
+        { repoFullName: 'owner/target', contextToken: 'test-context' },
+      ]);
+    }
+  );
+
+  it.each([
+    ['-R', 'github.com/owner/target', 'pr', 'view', '1'],
+    ['--repo=https://github.com/owner/target', 'issue', 'list'],
+    ['pr', '-R', 'github.com/owner/target', 'view', '1'],
+    ['issue', '--repo', 'github.com/owner/target', 'list'],
+    ['pr', '--repo=https://github.com/owner/target', 'view', '1'],
+    ['pr', 'view', '1', '-R', 'https://github.com/owner/target'],
+    ['pr', 'comment', '1', '--body', 'https://example.com', '-Rowner/target'],
+    ['pr', 'create', '--body', 'https://example.com', '--title', 'Link', '-Rowner/target'],
+  ])('consumes inherited flags and URL option values without ambiguity: %j', async (...args) => {
+    await startTokenBroker('app-token');
+    ensureGhShimScript();
+    const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(args.join(' ') + '\n');
+    expect(brokerRequests).toEqual([
+      { repoFullName: 'owner/target', contextToken: 'test-context' },
+    ]);
+  });
+
+  it.each([
+    ['-Rgithub.com/ambient/repo', 'pr', 'view', 'https://other.ghe.com/owner/repo/pull/1'],
+    ['pr', '-R', 'https://other.ghe.com/owner/repo', 'view', '1'],
+    ['issue', 'view', '1', '--repo=https://other.ghe.com/owner/repo'],
+    ['pr', '--repo', '--comments', 'view', 'https://other.ghe.com/owner/repo/pull/1'],
+  ])(
+    'keeps inherited and URL-form Enterprise repo flags out of managed auth: %j',
+    async (...args) => {
+      await startTokenBroker('app-token');
+      ensureGhShimScript();
+      const result = await runShim({ GH_REPO: 'github.com/ambient/repo' }, args);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('No managed GitHub credential');
+      expect(brokerRequests).toEqual([]);
+    }
+  );
+
+  it.each([
+    ['pr', 'create', '--body', '-Rgithub.com/owner/repo'],
+    ['pr', 'list', '--search', '--repo=github.com/owner/repo'],
+    ['pr', 'status', '--template', '--repo=github.com/owner/repo'],
+    ['issue', 'create', '--body', '--repo=github.com/owner/repo'],
+    ['issue', 'list', '--search', '-Rgithub.com/owner/repo'],
+    ['issue', 'status', '--template', '--repo=github.com/owner/repo'],
+  ])(
+    'preserves the enterprise repo when a repository-only option value resembles a repo flag: %j',
+    async (...args) => {
+      await startTokenBroker('app-token');
+      ensureGhShimScript();
+      const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('No managed GitHub credential');
+      expect(brokerRequests).toEqual([]);
+    }
+  );
+
   it('keeps an enterprise URL after a boolean flag out of managed auth', async () => {
     await startTokenBroker('app-token');
     ensureGhShimScript();
-    const result = await runShim(
-      { GH_REPO: 'github.com/loro-dev/lody' },
-      ['pr', 'view', '--comments', 'https://other.ghe.com/owner/repo/pull/1']
-    );
+    const result = await runShim({ GH_REPO: 'github.com/loro-dev/lody' }, [
+      'pr',
+      'view',
+      '--comments',
+      'https://other.ghe.com/owner/repo/pull/1',
+    ]);
     expect(result.status).toBe(1);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('No managed GitHub credential');
@@ -603,6 +750,20 @@ describe('ensureGhShimScript', () => {
     ['pr', 'view', '--template', 'https://github.com/loro-dev/lody/pull/1', '2'],
     ['pr', 'view', '-ct', 'https://github.com/loro-dev/lody/pull/1', '2'],
     ['pr', 'view', '--unknown', 'https://github.com/loro-dev/lody/pull/1'],
+    ['pr', 'close', '-c', 'https://github.com/loro-dev/lody/pull/1', '2'],
+    ['pr', 'close', '-dc', 'https://github.com/loro-dev/lody/pull/1', '2'],
+    ['pr', 'edit', '-m', 'https://github.com/loro-dev/lody/pull/1', '2'],
+    ['pr', 'lock', '-r', 'https://github.com/loro-dev/lody/pull/1', '2'],
+    ['issue', 'close', '-c', 'https://github.com/loro-dev/lody/issues/1', '2'],
+    ['pr', 'view', '--comments', '--unknown', 'value', 'https://github.com/loro-dev/lody/pull/1'],
+    ['pr', 'view', '--comments=invalid', 'https://github.com/loro-dev/lody/pull/1'],
+    ['pr', 'view', '--template=https://github.com/loro-dev/lody/pull/1', '2'],
+    ['pr', 'comment', '-bhttps://github.com/loro-dev/lody/pull/1', '2'],
+    ['pr', 'view', '-ct=https://github.com/loro-dev/lody/pull/1', '2'],
+    ['pr', 'unknown', '--repo=github.com/owner/repo'],
+    ['issue', 'unknown', '--repo=github.com/owner/repo'],
+    ['pr', 'list', 'https://github.com/loro-dev/lody/pull/1'],
+    ['issue', 'create', 'https://github.com/loro-dev/lody/issues/1'],
   ])('does not mistake a body URL for the target in a teammate session: %j', async (...args) => {
     const broker = await startTokenBroker('app-token');
     ensureGhShimScript();
@@ -619,14 +780,16 @@ describe('ensureGhShimScript', () => {
     );
     expect(result.status).toBe(1);
     expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('Cannot determine the GitHub target');
+    expect(result.stderr).toMatch(
+      /Cannot determine the GitHub target|No managed GitHub credential/
+    );
     expect(brokerRequestCount).toBe(0);
   });
 
   it('lets native gh resolve ambiguous owner command arguments without an App token', async () => {
     const broker = await startTokenBroker('app-token', { allowLocalAuth: true });
     ensureGhShimScript();
-    const args = ['pr', 'comment', '--body', 'https://github.com/loro-dev/lody/pull/1', '2'];
+    const args = ['pr', 'comment', '--unknown', 'https://github.com/loro-dev/lody/pull/1', '2'];
     const result = await runShim(
       {
         LODY_GIT_CRED_CONTEXT_TOKEN: 'owner-context',

@@ -1,6 +1,8 @@
-import { delimiter } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SessionId, WorkspaceId } from '@lody/shared';
 
 // Control the login-shell overlay so we can simulate a `~/.zshrc` that exports
@@ -47,9 +49,16 @@ const createConfig = (overrides: Partial<SessionConfig> = {}): SessionConfig => 
 });
 
 describe('Session buildShellEnv', () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'lody-session-env-'));
+    vi.stubEnv('LODY_DATA_DIR', dataDir);
+  });
   afterEach(() => {
     loginShellOverlay.value = {};
     resolvedLoginShellOverlay.value = {};
+    vi.unstubAllEnvs();
+    rmSync(dataDir, { recursive: true, force: true });
   });
 
   it('exposes the workspace owner session id for child sessions', () => {

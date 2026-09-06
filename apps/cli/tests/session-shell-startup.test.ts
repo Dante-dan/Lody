@@ -74,7 +74,8 @@ function createSession(requesterUserId: string, machineOwnerUserId: string | und
     logger,
     homeDir,
     undefined,
-    machineOwnerUserId
+    machineOwnerUserId,
+    startupEnv.LODY_GIT_CRED_BROKER_STATE_FILE
   );
 }
 

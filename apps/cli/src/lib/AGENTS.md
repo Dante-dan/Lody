@@ -38,7 +38,7 @@ control plane.
 
 - `gh-shim-script.ts` checks `/github-auth-context` before credentials; missing/stale contexts
   fail closed. Local auth is owner-only. Embed the absolute broker path, never from child env.
-  Keep wrappers in workspace-bound `gh-session-bin`.
+  Use workspace-bound `gh-session-bin` even without a repository/broker; never fall through to native gh for non-owners.
 - Owner tokens/login precede requester-bound managed fallback on missing credentials/401 only.
   Never replay commands. API hosts/PR URLs override ambient repos; managed tokens are github.com-only.
 - PR/Issue URLs may follow command-specific boolean flags. Body/template URL values and unknown

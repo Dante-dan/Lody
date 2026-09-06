@@ -126,7 +126,8 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
     logger: Logger,
     workdir?: string,
     sandbox: SessionSandbox = createNoopSessionSandbox(),
-    private readonly machineOwnerUserId?: string
+    private readonly machineOwnerUserId?: string,
+    private readonly gitCredentialBrokerStateFilePath?: string
   ) {
     super();
     this.config = config;
@@ -456,17 +457,18 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
     const agentEnv = shouldScrubClaudeAuthEnv(this.config.agentCliType, this.config.agentType)
       ? scrubInheritedClaudeAuthEnv(withLoginShell, { ...configEnv, ...extraEnv })
       : withLoginShell;
+    const shellEnv = withDefaultAcpPathEntries(agentEnv, this.config.agentType);
     // Launch config and tool-provided overrides have no verified token ownership.
     // Only the trusted machine owner may inherit GitHub credentials from any source.
     if (!this.machineOwnerUserId || this.gitIdentity.id !== this.machineOwnerUserId) {
-      clearGitHubTokenEnv(agentEnv);
-      applyNonOwnerShellEnv(agentEnv, configEnv.LODY_GIT_CRED_BROKER_STATE_FILE);
+      clearGitHubTokenEnv(shellEnv);
+      applyNonOwnerShellEnv(shellEnv, this.gitCredentialBrokerStateFilePath);
     }
     // The child talks to Lody's own loopback services (MCP HTTP host, preview
     // gateway); a proxy inherited from the host process or the login shell
     // must never intercept those. Runs last so a proxy contributed by the
     // login shell is covered too.
-    return withLoopbackNoProxy(withDefaultAcpPathEntries(agentEnv, this.config.agentType));
+    return withLoopbackNoProxy(shellEnv);
   }
 
   async createAgent(callbacks: CreateAgentConfig): Promise<string> {
@@ -650,6 +652,7 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
         acpCapabilities = normalizeAcpSessionCapabilities(started.sessionResponse, {
           sessionFork: started.client.supportsSessionFork(),
           acknowledgedSteer: started.client.supportsAcknowledgedSteer(),
+          agent: { cliType: this.config.agentCliType, agentType: this.config.agentType },
         });
       } catch (error) {
         // The agent process died before startup completed (the startup monitor

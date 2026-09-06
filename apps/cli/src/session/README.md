@@ -162,8 +162,11 @@ managed token. `../lib/github-token-manager.ts` fetches/caches managed tokens;
 Git HTTPS remains separate in `../lib/git-credential-helper-script.ts`; host-side rules live in
 [worktree/AGENTS.md](worktree/AGENTS.md).
 
-`Session` receives machine-owner identity from the daemon and scrubs GitHub tokens after all
-environment overlays for non-owners. `../lib/non-owner-shell-env.ts` supplies separate startup
+`Session` receives machine-owner identity and an immutable broker path from the manager,
+independently of caller-provided environment variables. It scrubs GitHub tokens and restores
+shim priority after every environment and default PATH overlay for non-owners. Blank and
+local-project sessions also get requester-bound broker contexts; when no broker is available,
+a dedicated unavailable-state wrapper rejects plain gh calls instead of exposing native login. `../lib/non-owner-shell-env.ts` supplies separate startup
 files that source no owner dotfiles and restore the managed gh PATH priority after system zsh
 profiles. These non-owner files are installed at the final Session boundary, not again during
 preparation. Owner-file generation still checks ownership first: merely replacing BASH_ENV or

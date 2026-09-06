@@ -29,22 +29,19 @@ Reasoning: [components-sidebar-session-tree.md](../../../../.agents/docs/compone
 - It is presentation only and is NOT `parentSessionId`: opened Sessions keep their own
   workspace/lifecycle and stay first-class rows, while `parentSessionId` children never
   reach the sidebar at all (`sessionListAtom`).
-- TWO fields, never merged: `openedBySessionId` is the PRECISE opener and drives
-  navigation; `openedByRowSessionId` is the sidebar ROW to indent under. They differ when
-  an agent inside a child Tab creates a Session, so `buildSidebarOpenerRowResolver`
-  (`sessions/session-list-rows.ts`) walks `parentSessionId` up to the root row. Never
-  "simplify" that by rewriting `openedBySessionId` to the root: "Go to Opener Session"
-  and the conversation's "Opened by" entry must land on the exact Tab that created it.
-- The opener and unrelated top-level rows keep the exact flat-list alignment. The shared
-  leading slot owns the node-centre affordance: an idle opener shows its disclosure at
-  rest and swaps it for ⋯ on row hover; an idle child shows ├/└ and swaps those for ⋯ in
-  the SAME 7px-centred position. STATUS OUTRANKS THE TREE on both sides: an active
-  (working / unread / waiting) child drops the trunk and elbow, and an active opener
-  drops its disclosure — never both. Gate the opener on the whole activity set, not just
-  `isWorking`, and keep the context menu's expand/collapse item wired to the same toggle
-  callback so a busy opener stays foldable. Only a child widens that slot from 14px to
-  26px, producing the 12px title indent without shifting the row background. Keep
-  connector geometry in `sidebar-row-shared.tsx`.
+- Keep `openedBySessionId` (exact opener for navigation) separate from `openedByRowSessionId`
+  (sidebar indentation target). `buildSidebarOpenerRowResolver` in `sessions/session-list-rows.ts`
+  follows a child Tab's `parentSessionId` to its root row; never rewrite the exact opener.
+  "Go to Opener Session" and "Opened by" must reach the Tab that created the Session.
+- Openers and unrelated top-level rows retain flat-list alignment. The leading slot always
+  shows nesting, including working/unread/waiting rows: opener disclosure or child ├/└,
+  replaced by ⋯ on hover at the same 7px centre. Only children widen the slot from 14px
+  to 26px (12px title indent); row backgrounds do not shift. Geometry stays in
+  `sidebar-row-shared.tsx`; the context-menu toggle and disclosure share a callback.
+- Desktop working/waiting/unread status belongs only in `SessionRowStatusIndicator` inside
+  `SidebarRowEndSlot`, replacing its line diff, Mergeable, worktree glyph, PR icon or mobile
+  time with one 14px mark. Metrics remain in the desktop hover card. Pass status flags to
+  the end slot, never the leading slot; mobile chat rows follow [mobile/AGENTS.md](mobile/AGENTS.md).
 - The resolver needs `allActiveSessions`, so any new list must take it from the sidebar
   rather than re-deriving it from rows.
 - The tree never hides a Session: a missing, cross-section, cross-group, cycling, or

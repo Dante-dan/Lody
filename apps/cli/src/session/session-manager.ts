@@ -933,7 +933,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       config.configOptionValues,
       config.taskToolsEnabled
     );
-    await this.prepareGitHubRepoSessionConfig(config);
+    await this.prepareGitHubSessionConfig(config);
     signal.throwIfAborted();
     const launch = await resolveACPProcessLaunchAsync({
       cliType: config.agentCliType,
@@ -1037,7 +1037,8 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         this.logger,
         provisionalWorkdir,
         sandbox,
-        this.cloudPort.identity.userId
+        this.cloudPort.identity.userId,
+        this.gitCredentialBroker?.getStateFilePath()
       );
       sandbox = null;
       this.preparationSessions.set(sessionId, session);
@@ -1311,7 +1312,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     config: SessionConfig,
     agentStart?: AgentStartConfig
   ): Promise<ISession> {
-    await this.prepareGitHubRepoSessionConfig(config);
+    await this.prepareGitHubSessionConfig(config);
     const requestedResumeSessionId = agentStart?.resumeSessionId;
     const requestedForkSessionId = agentStart?.forkSessionId;
     const requestedForkSessionTurnId = agentStart?.forkSessionTurnId;
@@ -1463,24 +1464,29 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     return session;
   }
 
-  private async prepareGitHubRepoSessionConfig(config: SessionConfig): Promise<void> {
+  private async prepareGitHubSessionConfig(config: SessionConfig): Promise<void> {
+    // Session launch env is caller-controlled. Only this manager may bind the
+    // broker authority, including when no broker is available to replace it.
+    config.env = { ...config.env };
+    for (const key of [
+      'LODY_GIT_CRED_BROKER_URL',
+      'LODY_GIT_CRED_BROKER_TOKEN',
+      LODY_GIT_CRED_BROKER_STATE_FILE_ENV,
+      LODY_GIT_CRED_CONTEXT_TOKEN_ENV,
+    ]) {
+      delete config.env[key];
+    }
     const githubRepo = config.githubRepo ?? tryDeriveGitHubRepoFromUrl(config.githubRepoUrl);
     if (!config.githubRepo && githubRepo) {
       config.githubRepo = githubRepo;
     }
-    if (!githubRepo) {
-      return;
-    }
-
-    const repoId = deriveRepoIdFromGitHubRepo(githubRepo);
-    const githubRepoUrl = buildGitHubCloneUrl(githubRepo);
-    if (config.project?.kind === 'github' || !config.project) {
-      config.repoId = repoId;
-      config.githubRepoUrl = githubRepoUrl;
+    if (githubRepo && (config.project?.kind === 'github' || !config.project)) {
+      config.repoId = deriveRepoIdFromGitHubRepo(githubRepo);
+      config.githubRepoUrl = buildGitHubCloneUrl(githubRepo);
     }
     const tokenManager = this.getGitHubTokenManager();
-    tokenManager?.retainRepoOwner(githubRepo);
-    if (tokenManager) {
+    if (githubRepo) tokenManager?.retainRepoOwner(githubRepo);
+    if (githubRepo && tokenManager) {
       // Prefetch token BEFORE git operations to avoid race conditions.
       // Previously this was fire-and-forget (void), which caused the first git clone
       // to fail because the token wasn't ready when credential helper was invoked.
@@ -1517,8 +1523,6 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       allowLocalAuth,
     });
 
-    ensureCredentialHelperScript(repoId);
-
     const isDev = isDevEnv();
     const debugEnv: Record<string, string> = {};
     const env = config.env;
@@ -1543,16 +1547,22 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     }
     this.ensureGhShimSessionEnv(sessionEnv, brokerStateFilePath, allowLocalAuth);
 
-    const credentialHelperValue = buildCredentialHelperValueForHost(repoId);
-    const brokerUrl = brokerEnv.url;
-
     config.env = {
       ...sessionEnv,
-      LODY_GIT_CRED_BROKER_URL: brokerUrl,
+      LODY_GIT_CRED_BROKER_URL: brokerEnv.url,
       LODY_GIT_CRED_BROKER_TOKEN: brokerEnv.token,
       // Keeps the helper's connection-refused fallback inside this workspace instead
       // of landing on the shared, last-writer-wins broker.json.
       [LODY_GIT_CRED_BROKER_STATE_FILE_ENV]: brokerStateFilePath,
+    };
+
+    // Blank/local projects still need a requester-bound gh shim, but do not
+    // change native git configuration until a GitHub repository is known.
+    if (!githubRepo) return;
+    const repoId = deriveRepoIdFromGitHubRepo(githubRepo);
+    ensureCredentialHelperScript(repoId);
+    config.env = {
+      ...config.env,
       LODY_GITHUB_REPO_FULL_NAME: githubRepo,
       GIT_TERMINAL_PROMPT: '0',
       // Use credential helper for all git invocations inside the ACP process tree.
@@ -1562,7 +1572,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       GIT_CONFIG_KEY_0: 'credential.helper',
       GIT_CONFIG_VALUE_0: '',
       GIT_CONFIG_KEY_1: 'credential.helper',
-      GIT_CONFIG_VALUE_1: credentialHelperValue,
+      GIT_CONFIG_VALUE_1: buildCredentialHelperValueForHost(repoId),
       GIT_CONFIG_KEY_2: 'credential.useHttpPath',
       GIT_CONFIG_VALUE_2: 'true',
     };
@@ -2012,7 +2022,14 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     } else {
       const sandbox = await this.sessionSandboxFactory(config.sessionId!);
       this.logger.debug(`[${config.sessionId}] Session sandbox: ${sandbox.description}`);
-      session = new Session(config, this.logger, workdir, sandbox, this.cloudPort.identity.userId);
+      session = new Session(
+        config,
+        this.logger,
+        workdir,
+        sandbox,
+        this.cloudPort.identity.userId,
+        this.gitCredentialBroker?.getStateFilePath()
+      );
     }
     this.registerSessionEvents(session);
     this.sessions.set(config.sessionId!, session);
@@ -2131,7 +2148,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
 
   async cleanupForkWorktree(config: SessionConfig): Promise<void> {
     if (config.project?.kind === 'github' && !config.repoId) {
-      await this.prepareGitHubRepoSessionConfig(config);
+      await this.prepareGitHubSessionConfig(config);
     }
     const target = this.resolveSessionWorktreeTarget(config);
     if (!target || !config.sessionId) return;
