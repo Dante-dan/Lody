@@ -1,5 +1,34 @@
 import type { Meta, StoryObj } from '@storybook/react';
+import type { PromptShortcut } from '@lody/shared/prompt-shortcuts';
 import { PromptShortcutForm } from '@/components/settings/prompt-shortcut-form';
+import { ShortcutPromptField } from '@/components/settings/prompt-shortcuts-setting';
+import { SettingsStoryProviders } from './settings-story-shell';
+
+/**
+ * Settings → Prompt Shortcuts → editor.
+ *
+ * Framed exactly as the settings dialog frames it — header, scrolling body,
+ * footer — so a screenshot here is what ships rather than a form floating on a
+ * card.
+ */
+const base: PromptShortcut = {
+  v: 1,
+  id: 'example',
+  workspaceId: 'workspace',
+  ownerUserId: 'user',
+  visibility: 'private',
+  name: 'Review changes',
+  slug: 'review-changes',
+  description: 'Review a change against its requirements.',
+  prompt:
+    'Review !{topic}.\n\nFocus on correctness, security and missing tests.\nReport concrete findings with file references.',
+  scope: {},
+  mentions: [],
+  variables: [{ name: 'topic' }],
+  revision: 'r1',
+  createdAt: 1,
+  updatedAt: 1,
+};
 
 const meta = {
   title: 'Settings/Prompt Shortcuts/Editor',
@@ -7,33 +36,27 @@ const meta = {
   parameters: { layout: 'centered' },
   decorators: [
     (Story) => (
-      <div className="max-h-[calc(100dvh-32px)] w-[min(640px,calc(100vw-32px))] overflow-y-auto rounded-lg border bg-background p-5">
+      <div className="flex max-h-[min(680px,88dvh)] w-[min(620px,96dvw)] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+        <header className="shrink-0 border-b border-border/60 px-5 py-3 pr-12">
+          <h2 className="text-sm font-semibold">Edit Prompt Shortcut</h2>
+          <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
+            Saved to this workspace and sent as one message.
+          </p>
+        </header>
         <Story />
       </div>
     ),
   ],
   args: {
-    initial: {
-      v: 1,
-      id: 'example',
-      workspaceId: 'workspace',
-      ownerUserId: 'user',
-      visibility: 'private',
-      name: 'Review changes',
-      slug: 'review',
-      description: 'Review a change against its requirements.',
-      prompt:
-        'Review !{topic}.\n\nFocus on correctness, security and missing tests.\nReport concrete findings with file references.',
-      scope: {},
-      mentions: [],
-      variables: [{ name: 'topic' }],
-      revision: 'r1',
-      createdAt: 1,
-      updatedAt: 1,
-    },
+    initial: base,
+    className: 'min-h-0 flex-1',
     options: {
       projects: [
         { value: { kind: 'github', repository: 'example/project' }, label: 'example/project' },
+        {
+          value: { kind: 'local', id: 'local-1', machineId: 'laptop' },
+          label: 'lody · Development laptop',
+        },
       ],
       machines: [{ value: 'laptop', label: 'Development laptop' }],
       providers: [{ value: 'builtin:codex', label: 'Codex' }],
@@ -46,11 +69,21 @@ const meta = {
 } satisfies Meta<typeof PromptShortcutForm>;
 export default meta;
 type Story = StoryObj<typeof meta>;
+
+/** The default a new Shortcut starts from: private, no scope, no variables. */
+export const NewShortcut: Story = {
+  args: {
+    isNew: true,
+    initial: { ...base, name: '', slug: '', description: undefined, prompt: '', variables: [] },
+  },
+};
+
 export const Private: Story = {};
+
 export const SharedWithScope: Story = {
   args: {
     initial: {
-      ...meta.args.initial,
+      ...base,
       visibility: 'workspace',
       scope: {
         project: { kind: 'github', repository: 'example/project' },
@@ -59,12 +92,28 @@ export const SharedWithScope: Story = {
     },
   },
 };
-export const LocalOnly: Story = { args: { canShare: false, allowMachineSelection: false } };
-export const Saving: Story = { args: { saving: true } };
-export const InvalidMentionScope: Story = {
+
+/** Several variables, including a multi-line default. */
+export const Variables: Story = {
   args: {
     initial: {
-      ...meta.args.initial,
+      ...base,
+      prompt:
+        'Review !{topic} in !{area}.\n\nAcceptance criteria:\n!{criteria}\n\nMention !{topic} again to reuse the same value.',
+      variables: [
+        { name: 'topic' },
+        { name: 'area', defaultValue: 'the changed files' },
+        { name: 'criteria', defaultValue: '- Tests cover the new branch\n- No secret is logged' },
+      ],
+    },
+  },
+};
+
+/** A reference the declared scope cannot satisfy: named, and Save is blocked. */
+export const OutOfScopeMention: Story = {
+  args: {
+    initial: {
+      ...base,
       prompt: 'Review @src/app.ts',
       variables: [],
       mentions: [
@@ -79,6 +128,34 @@ export const InvalidMentionScope: Story = {
           },
         },
       ],
+    },
+  },
+};
+
+/** Local-only platform: no cloud sharing, and Machine is a single toggle. */
+export const LocalOnly: Story = { args: { canShare: false, allowMachineSelection: false } };
+
+export const Saving: Story = { args: { saving: true } };
+
+/**
+ * The real prompt field — the composer's mention textarea in template mode —
+ * rather than the plain fallback textarea the other stories render.
+ */
+export const RealPromptField: Story = {
+  // The mention textarea reads the platform for its candidate sources.
+  decorators: [
+    (Story) => (
+      <SettingsStoryProviders>
+        <Story />
+      </SettingsStoryProviders>
+    ),
+  ],
+  args: {
+    renderPrompt: (editor) => <ShortcutPromptField editor={editor} disabled={false} />,
+    initial: {
+      ...base,
+      prompt: 'Review !{topic} in @src/app.ts before merging.',
+      variables: [{ name: 'topic' }],
     },
   },
 };

@@ -325,9 +325,9 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
     await render({ value: '', templateScope: {}, skillAgent: { machineId: 'machine-1' } });
     await typeInto('@skill:');
     expect(skillScanEnabled).not.toContain(true);
-    expect(document.body.textContent).toContain(
-      'Select the required Project, Machine and Agent scope first.'
-    );
+    // The disabled entry names the axes a skill reference still needs, so the
+    // author can act on it without guessing which scope is missing.
+    expect(document.body.textContent).toContain('Set Project + Agent in “Applies to” first.');
   });
 
   it('does not hydrate or fetch typed template skill tokens on mount', async () => {

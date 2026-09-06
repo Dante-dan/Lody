@@ -11,6 +11,7 @@ import { createLoroStreamUrl, LORO_STREAMS_BUCKET_ID } from '../index';
 import { getShortcutBodyStreamId, getShortcutIndexStreamId } from './access';
 import { PromptShortcutError } from './model';
 import type { ShortcutResource } from './access';
+import { ShortcutLifetime } from './lifetime';
 
 export type ShortcutStreamGrant = {
   token: string;
@@ -52,6 +53,7 @@ export type ShortcutSyncLease = Pick<ShortcutSyncRoom, 'sync' | 'join'> & {
  * Each live room has one CRDT/transport/lease, independent of React consumers.
  */
 export class PromptShortcutSync {
+  private readonly lifetime = new ShortcutLifetime();
   private rooms = new Map<
     string,
     { refs: number; write: boolean; opening: Promise<ShortcutSyncRoom> }
@@ -124,14 +126,14 @@ export class PromptShortcutSync {
       resource.kind === 'index'
         ? getShortcutIndexStreamId(resource.domain)
         : getShortcutBodyStreamId(resource.bodyDocId);
-    let grant = await this.options.grant(resource, write);
+    let grant = await this.lifetime.wait(this.options.grant(resource, write));
     if (grant.streamId !== streamId)
       throw new PromptShortcutError('forbidden', 'Grant does not match the requested stream');
     const gatewayBaseUrl = grant.gatewayBaseUrl;
     let expiresAt = this.options.now() + grant.expiresIn * 1000;
     const auth = async (force: boolean) => {
       if (force || this.options.now() >= expiresAt - 5000) {
-        grant = await this.options.grant(resource, write);
+        grant = await this.lifetime.wait(this.options.grant(resource, write));
         if (grant.streamId !== streamId || grant.gatewayBaseUrl !== gatewayBaseUrl) {
           throw new PromptShortcutError('forbidden', 'Stream grant changed its resource');
         }
@@ -206,6 +208,7 @@ export class PromptShortcutSync {
 
   async dispose(): Promise<void> {
     this.disposed = true;
+    this.lifetime.dispose();
     const entries = [...this.rooms.values()];
     this.rooms.clear();
     await Promise.all(

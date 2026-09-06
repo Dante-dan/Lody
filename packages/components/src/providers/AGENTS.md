@@ -48,4 +48,8 @@ again. Contract test: `packages/shared/tests/session-doc-forward-compat.test.ts`
   waits for its previous writer to close. Save resolves on local durability.
 - The reactive authorization directory contains body/revision pointers, not labels or
   Prompt text. Directory membership owns live catalog rooms; bodies load only on selection
-  or outbox recovery. Cached shared content still requires an actual body grant.
+  or outbox recovery. The last directory and discovered index persist locally;
+  cold-start readiness and cached reads never depend on a fresh cloud grant.
+  Learned revocations hide cached shared content; offline revocation is not instantaneous.
+  The cloud port stages/activates immutable snapshots and atomically settles superseded
+  jobs. It never uploads the mutable working body or gates subsequent local saves.

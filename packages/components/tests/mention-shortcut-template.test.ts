@@ -30,7 +30,7 @@ describe('Shortcut template mention policy', () => {
       scope: {},
       skills: [],
       allowedDirs: null,
-      disabledReason: 'Select scope',
+      disabledReason: (missing) => `Set ${missing.join('+')}`,
     });
     expect(result.map((category) => [category.id, category.status])).toEqual([
       ['file', 'disabled'],
@@ -38,6 +38,16 @@ describe('Shortcut template mention policy', () => {
       ['pr', 'disabled'],
       ['skill', 'disabled'],
       ['agent_role', 'ready'],
+    ]);
+    // Each disabled kind names the axes IT needs, not one shared sentence: a
+    // file needs a Project, a skill also needs an Agent. Skills have two
+    // sources, so the shortest remaining requirement is the one reported.
+    expect(result.map((category) => [category.id, category.message])).toEqual([
+      ['file', 'Set project'],
+      ['issue', 'Set project'],
+      ['pr', 'Set project'],
+      ['skill', 'Set project+providerKey'],
+      ['agent_role', undefined],
     ]);
     for (const category of result.filter((item) => item.status === 'disabled')) {
       expect(category.activation).toBeUndefined();
@@ -67,7 +77,7 @@ describe('Shortcut template mention policy', () => {
       scope: { project: { kind: 'github', repository: 'org/original' } },
       skills: [],
       allowedDirs: null,
-      disabledReason: '',
+      disabledReason: () => '',
     })[0]!;
     const candidate = category.getCandidates('')[0]!;
     const mention = shortcutTemplateMentions('@src/app.ts', [

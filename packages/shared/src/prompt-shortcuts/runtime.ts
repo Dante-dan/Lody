@@ -4,21 +4,23 @@ import {
   type ShortcutResource,
 } from './access';
 import { PromptShortcutCatalog, type PromptShortcutIndexEntry } from './catalog';
-import { LocalShortcutStore, type ShortcutLocalRecord } from './local-store';
+import {
+  LocalShortcutStore,
+  type ShortcutLocalRecord,
+  type ShortcutDirectoryEntry,
+} from './local-store';
 import { PromptShortcutError, type PromptShortcut } from './model';
 import type { ShortcutSyncLease } from './sync';
+import { ShortcutLifetime } from './lifetime';
 
-export type ShortcutDirectoryEntry = {
-  shortcutId: string;
-  bodyDocId: string;
-  ownerUserId: string;
-  visibility: 'private' | 'workspace';
-  revision: string | null;
-};
+export type { ShortcutDirectoryEntry } from './local-store';
 export type ShortcutPublicationPort = {
   acquire(resource: ShortcutResource, write: boolean): Promise<ShortcutSyncLease>;
-  stage(record: ShortcutLocalRecord): Promise<void>;
+  stage(record: ShortcutLocalRecord): Promise<'staged' | 'active'>;
   activate(record: ShortcutLocalRecord): Promise<void>;
+  /** Atomically fence an obsolete staged job, or report that activation won.
+   * A lost response is retried with exactly the same immutable identity. */
+  settle(record: ShortcutLocalRecord): Promise<'active' | 'cancelled'>;
   revoke(entry: PromptShortcutIndexEntry): Promise<void>;
   dispose(): Promise<void>;
 };
@@ -31,6 +33,7 @@ export type ShortcutRuntimeSnapshot = {
 
 /** One account/workspace service. Components never own sync or outbox recovery. */
 export class PromptShortcutRuntime {
+  private readonly lifetime = new ShortcutLifetime();
   private disposed = false;
   private listeners = new Set<() => void>();
   private remoteEntries: PromptShortcutIndexEntry[] = [];
@@ -51,7 +54,10 @@ export class PromptShortcutRuntime {
     readonly store: LocalShortcutStore,
     private readonly remote?: ShortcutPublicationPort
   ) {
-    this.loading = !!remote;
+    const cached = store.discovery();
+    this.directory = cached.directory;
+    this.remoteEntries = cached.entries;
+    this.loading = false; // Local readiness never waits for the cloud directory.
     this.snapshot = { entries: [], pendingIds: [], errors: {}, loading: this.loading };
     this.publish();
   }
@@ -85,6 +91,7 @@ export class PromptShortcutRuntime {
       this.directory.some(
         (row) =>
           row.shortcutId === entry.id &&
+          !row.deleted &&
           row.bodyDocId === entry.bodyDocId &&
           row.ownerUserId === entry.ownerUserId &&
           row.visibility === entry.visibility &&
@@ -99,8 +106,18 @@ export class PromptShortcutRuntime {
     );
     const records = this.store.list();
     for (const row of records) {
-      if (row.deleted) entries.delete(row.entry.id);
-      else if (!this.remote || row.operation) entries.set(row.entry.id, row.entry);
+      if (
+        row.deleted ||
+        (!row.operation &&
+          this.directory.some((item) => item.shortcutId === row.entry.id && item.deleted))
+      )
+        entries.delete(row.entry.id);
+      else if (
+        !entries.has(row.entry.id) ||
+        row.operation ||
+        entries.get(row.entry.id)?.revision === row.entry.revision
+      )
+        entries.set(row.entry.id, row.entry);
     }
     this.snapshot = {
       entries: [...entries.values()].sort((a, b) => a.name.localeCompare(b.name)),
@@ -115,7 +132,10 @@ export class PromptShortcutRuntime {
     return (
       !this.disposed &&
       this.directory.some(
-        (row) => row.ownerUserId === domain.ownerUserId && row.visibility === domain.visibility
+        (row) =>
+          !row.deleted &&
+          row.ownerUserId === domain.ownerUserId &&
+          row.visibility === domain.visibility
       )
     );
   }
@@ -123,7 +143,7 @@ export class PromptShortcutRuntime {
   private refreshIndexes() {
     if (this.disposed) return;
     try {
-      this.remoteEntries = [...this.indexes.values()].flatMap(({ domain, catalog }) =>
+      const live = [...this.indexes.values()].flatMap(({ domain, catalog }) =>
         catalog
           .list()
           .filter(
@@ -133,11 +153,42 @@ export class PromptShortcutRuntime {
               entry.visibility === domain.visibility
           )
       );
+      // Keep cached domains while their remote room is unavailable. An explicit
+      // directory revocation, not a failed network request, removes access.
+      this.remoteEntries = [
+        ...new Map(
+          [...this.remoteEntries, ...live]
+            .filter((entry) => this.authorized(entry))
+            .map((entry) => [entry.id, entry])
+        ).values(),
+      ];
+      void this.cacheDiscovery().catch(() => undefined);
       this.publish();
     } catch (error) {
       this.errors.directory = error;
       this.publish();
     }
+  }
+
+  private cacheDiscovery(): Promise<void> {
+    return this.track(
+      this.store
+        .cacheDiscovery({
+          directory: [...this.directory],
+          entries: this.remoteEntries.filter((entry) => this.authorized(entry)),
+        })
+        .then(() => {
+          if (this.errors.storage) {
+            delete this.errors.storage;
+            this.publish();
+          }
+        })
+        .catch((error) => {
+          this.errors.storage = error;
+          this.publish();
+          throw error;
+        })
+    );
   }
 
   private openIndex(domain: ShortcutAccessDomain): Promise<void> {
@@ -196,15 +247,19 @@ export class PromptShortcutRuntime {
     if (!this.remote) return Promise.resolve();
     return this.track(
       (async () => {
+        await this.store.applyRemoteDeletions(rows);
+        await this.cacheDiscovery(); // Persist learned revocations before network I/O.
         const domains = new Map(
-          rows.map((row) => {
-            const domain: ShortcutAccessDomain = {
-              workspaceId: this.workspaceId,
-              ownerUserId: row.ownerUserId,
-              visibility: row.visibility,
-            };
-            return [getShortcutIndexStreamId(domain), domain];
-          })
+          rows
+            .filter((row) => !row.deleted)
+            .map((row) => {
+              const domain: ShortcutAccessDomain = {
+                workspaceId: this.workspaceId,
+                ownerUserId: row.ownerUserId,
+                visibility: row.visibility,
+              };
+              return [getShortcutIndexStreamId(domain), domain];
+            })
         );
         for (const [id, index] of this.indexes) {
           if (!domains.has(id)) {
@@ -239,20 +294,37 @@ export class PromptShortcutRuntime {
         if (!this.remote && entry.ownerUserId !== this.userId)
           throw new PromptShortcutError('forbidden', 'Wrong local identity');
         const own = this.store.get(entry.id);
+        if (
+          own?.deleted ||
+          (!own?.operation &&
+            this.directory.some((row) => row.shortcutId === entry.id && row.deleted))
+        )
+          throw new PromptShortcutError('not_found', 'Shortcut was deleted');
         const isWorkingCopy =
           entry.ownerUserId === this.userId &&
           own &&
           !own.deleted &&
-          (!this.remote || own.operation === 'save') &&
           JSON.stringify(own.entry) === JSON.stringify(entry);
         if (!isWorkingCopy && this.remote) {
           if (!this.authorized(entry))
             throw new PromptShortcutError('forbidden', 'Shortcut is no longer accessible');
-          // Even cached content must obtain an actual body grant. Only durable own
-          // working copies may be opened offline without cloud authorization.
+          try {
+            const cached = await this.store.read(entry);
+            this.assertActive();
+            if (!this.authorized(entry))
+              throw new PromptShortcutError('forbidden', 'Shortcut access changed');
+            return cached;
+          } catch (error) {
+            if (
+              !(error instanceof PromptShortcutError) ||
+              !['not_found', 'revision_pending'].includes(error.code)
+            )
+              throw error;
+          }
+          // Only a cache miss needs cloud authorization and transport.
           const sync = await this.remote.acquire(
             { kind: 'body', bodyDocId: entry.bodyDocId },
-            entry.ownerUserId === this.userId
+            false
           );
           try {
             await sync.sync();
@@ -263,8 +335,14 @@ export class PromptShortcutRuntime {
           if (!this.authorized(entry))
             throw new PromptShortcutError('forbidden', 'Shortcut access changed');
         }
+        const content = await this.store.read(entry);
         this.assertActive();
-        return this.store.read(entry);
+        if (
+          this.store.get(entry.id)?.deleted ||
+          (!isWorkingCopy && this.remote && !this.authorized(entry))
+        )
+          throw new PromptShortcutError('forbidden', 'Shortcut access changed');
+        return content;
       })()
     );
   }
@@ -277,6 +355,12 @@ export class PromptShortcutRuntime {
     this.assertActive();
     if (!this.remote && input.value.visibility !== 'private')
       throw new PromptShortcutError('forbidden', 'Sharing is not supported');
+    if (
+      input.base &&
+      JSON.stringify(this.snapshot.entries.find((row) => row.id === input.base!.id)) !==
+        JSON.stringify(input.base)
+    )
+      throw new PromptShortcutError('conflict', 'Shortcut changed since editing started');
     return this.track(
       (async () => {
         const record = await this.store.save(input);
@@ -317,9 +401,27 @@ export class PromptShortcutRuntime {
           attempted.add(`${record.entry.id}:${record.entry.revision}:${record.operation}`);
           try {
             this.assertActive();
-            if (this.remote) await this.publishRecord(record);
+            let job = await this.store.preparePublication(record.entry.id);
+            if (!job) continue;
+            if (
+              this.remote &&
+              job.operation === 'save' &&
+              (record.deleted || job.entry.revision !== record.entry.revision)
+            ) {
+              const status = await this.lifetime.wait(this.remote.settle(job));
+              this.assertActive();
+              if (status === 'cancelled') {
+                await this.store.acknowledge(job, true);
+                job = await this.store.preparePublication(record.entry.id);
+                if (!job) continue;
+              }
+            }
+            if (this.remote) await this.publishRecord(job);
             this.assertActive();
-            await this.store.acknowledge(record);
+            await this.store.acknowledge(job);
+            // Finishing an older job must immediately drain the newer local head.
+            if (this.store.get(record.entry.id)?.operation)
+              attempted.delete(`${record.entry.id}:${record.entry.revision}:${record.operation}`);
             delete this.errors[record.entry.id];
           } catch (error) {
             this.errors[record.entry.id] = error;
@@ -370,32 +472,39 @@ export class PromptShortcutRuntime {
     const remote = this.remote!;
     const { entry, published } = record;
     if (record.operation === 'delete') {
-      await remote.revoke(entry);
+      await this.lifetime.wait(remote.revoke(entry));
       this.assertActive();
       // Tombstone both domains, including old visibility generations.
       for (const visibility of ['private', 'workspace'] as const)
         await this.mutateIndex({ ...entry, visibility }, (catalog) =>
           catalog.remove(entry.id, entry.revision)
         );
+      this.directory = this.directory.filter((row) => row.shortcutId !== entry.id);
+      this.remoteEntries = this.remoteEntries.filter((row) => row.id !== entry.id);
+      await this.cacheDiscovery();
       return;
     }
-    await remote.stage(record);
+    const status = await this.lifetime.wait(remote.stage(record));
     this.assertActive();
-    const body = await remote.acquire({ kind: 'body', bodyDocId: entry.bodyDocId }, true);
-    try {
-      await body.sync();
-      this.assertActive();
-      // A remote branch may have arrived during upload. Do not advertise a
-      // field-wise winner or silently activate an unresolved conflict.
-      await this.store.read(entry);
-      // Ensure the index stream exists (with NO staged projection) before a
-      // reader learns its domain. Read-only clients cannot create missing rooms.
-      await this.mutateIndex(entry, () => {});
-      await remote.activate(record);
-    } finally {
-      await body.release();
+    if (status === 'staged') {
+      const body = await remote.acquire({ kind: 'body', bodyDocId: entry.bodyDocId }, true);
+      try {
+        await body.sync();
+        this.assertActive();
+        // A remote branch may have arrived during upload. Do not advertise a
+        // field-wise winner or silently activate an unresolved conflict.
+        await this.store.read(entry);
+        // Ensure the index stream exists (with NO staged projection) before a
+        // reader learns its domain. Read-only clients cannot create missing rooms.
+        await this.mutateIndex(entry, () => {});
+        await this.lifetime.wait(remote.activate(record));
+      } finally {
+        await body.release();
+      }
     }
     this.assertActive();
+    if (this.directory.some((row) => row.shortcutId === entry.id && row.deleted))
+      throw new PromptShortcutError('conflict', 'Shortcut was deleted remotely');
     await this.mutateIndex(entry, (catalog) => catalog.put(entry));
     if (published && published.visibility !== entry.visibility)
       await this.mutateIndex(published, (catalog) =>
@@ -413,11 +522,13 @@ export class PromptShortcutRuntime {
         revision: entry.revision,
       },
     ];
+    await this.cacheDiscovery();
   }
 
   async dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.lifetime.dispose();
     this.listeners.clear();
     await this.remote?.dispose();
     await Promise.allSettled([...this.tasks]);

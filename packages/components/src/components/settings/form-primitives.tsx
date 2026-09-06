@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import { AlertTriangle } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { Label } from '@/ui/label';
 
 /**
@@ -56,6 +58,45 @@ export function Field({
       </div>
       {children}
       {hint ? <p className="text-[11px] leading-snug text-muted-foreground">{hint}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * An inline message inside a settings editor.
+ *
+ * `error` blocks the save that is about to be attempted; `warning` states a
+ * consequence the author should read before saving. Both carry the icon, so a
+ * reader who cannot see the tint still gets the signal.
+ */
+export function FormMessage({
+  tone,
+  children,
+  className,
+}: {
+  tone: 'error' | 'warning';
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      role={tone === 'error' ? 'alert' : 'status'}
+      className={cn(
+        'flex items-start gap-2 rounded-md border px-3 py-2 text-xs leading-snug',
+        tone === 'error'
+          ? 'border-destructive/30 bg-destructive/10 text-destructive'
+          : 'border-status-warning/30 bg-status-warning/10 text-foreground/90',
+        className
+      )}
+    >
+      <AlertTriangle
+        className={cn(
+          'mt-0.5 h-3.5 w-3.5 shrink-0',
+          tone === 'error' ? 'text-destructive' : 'text-status-warning'
+        )}
+        aria-hidden="true"
+      />
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
-import { lazy, Suspense, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { AlertTriangle, Loader2 } from 'lucide-react';
+import { lazy, Suspense, useId, useRef, useState, type FormEvent } from 'react';
+import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   AGENT_ROLE_NAME_MAX_LENGTH,
@@ -25,7 +25,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
 import { Switch } from '@/ui/switch';
 import { Textarea } from '@/ui/textarea';
-import { Field, Section } from './form-primitives';
+import { Field, FormMessage, Section } from './form-primitives';
 
 const AgentRoleEmojiPicker = lazy(() => import('./agent-role-emoji-picker'));
 
@@ -509,28 +509,5 @@ function ConfigOptionField({
         onChange={onChange}
       />
     </Field>
-  );
-}
-
-function FormMessage({ tone, children }: { tone: 'error' | 'warning'; children: ReactNode }) {
-  return (
-    <p
-      role={tone === 'error' ? 'alert' : 'status'}
-      className={cn(
-        'flex items-start gap-2 rounded-md border px-3 py-2 text-xs leading-snug',
-        tone === 'error'
-          ? 'border-destructive/30 bg-destructive/10 text-destructive'
-          : 'border-status-warning/30 bg-status-warning/10 text-foreground/90'
-      )}
-    >
-      <AlertTriangle
-        className={cn(
-          'mt-0.5 h-3.5 w-3.5 shrink-0',
-          tone === 'error' ? 'text-destructive' : 'text-status-warning'
-        )}
-        aria-hidden="true"
-      />
-      <span className="min-w-0">{children}</span>
-    </p>
   );
 }

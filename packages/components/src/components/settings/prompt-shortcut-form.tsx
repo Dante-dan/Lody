@@ -1,4 +1,5 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
+import { Loader2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import {
   deriveShortcutVariables,
@@ -6,20 +7,28 @@ import {
 } from '@lody/shared/prompt-shortcuts/compiler';
 import {
   getShortcutMentionScopeIssues,
+  PROMPT_SHORTCUT_LIMITS,
   type PromptShortcut,
   type PromptShortcutScope,
 } from '@lody/shared/prompt-shortcuts/model';
+import { cn } from '@/lib/utils';
 import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Textarea } from '@/ui/textarea';
-import { Checkbox } from '@/ui/checkbox';
 import { Label } from '@/ui/label';
-import { Badge } from '@/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
+import { Switch } from '@/ui/switch';
 import type { PersistedMentionRange } from '@/components/mentions/mention-persistence';
 import {
   shortcutMentionRanges,
   shortcutTemplateMentions,
 } from '@/components/mentions/shortcut-template-ranges';
+import { Field, FormMessage, Section } from './form-primitives';
+import {
+  describeShortcutProject,
+  ScopeAxisIcon,
+  SHORTCUT_SCOPE_NONE,
+} from './prompt-shortcut-scope';
 
 export type ShortcutScopeOptions = {
   projects: { value: NonNullable<PromptShortcutScope['project']>; label: string }[];
@@ -34,32 +43,59 @@ export type ShortcutPromptEditorProps = {
   onRangesChange(ranges: PersistedMentionRange[]): void;
 };
 
-/** Presentational editor: no catalog writes, runtime, machine RPC or cloud hooks. */
+const slugify = (name: string) =>
+  name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, PROMPT_SHORTCUT_LIMITS.slug);
+
+/**
+ * The Prompt Shortcut editor body.
+ *
+ * Presentational on purpose — same sections, spacing and controls as the Agent
+ * Role and MCP editors, so the three read as one surface. The container owns
+ * the catalog, the machine data and the mention source; this renders the same
+ * in Storybook as it does in Settings.
+ *
+ * "Applies to" is the author's decision, never derived from the active chat or
+ * from a mention that was inserted. It is also what the `@` menu completes
+ * against, which is why setting a scope and browsing references is one control
+ * rather than two that have to agree.
+ */
 export function PromptShortcutForm({
   initial,
   options,
   canShare,
   saving,
-  saveBlocked = false,
   allowMachineSelection = true,
+  isNew = false,
   onSave,
   onCancel,
   renderPrompt,
+  className,
 }: {
   initial: PromptShortcut;
   options: ShortcutScopeOptions;
   canShare: boolean;
   saving: boolean;
+  /** Local-only platforms have no remote machine list to choose from. */
+  allowMachineSelection?: boolean;
+  /** Labels the footer action and lets the slug follow the name while typing. */
+  isNew?: boolean;
   onSave(value: PromptShortcut): Promise<void>;
   onCancel(): void;
   renderPrompt?: (props: ShortcutPromptEditorProps) => ReactNode;
-  saveBlocked?: boolean;
-  allowMachineSelection?: boolean;
+  className?: string;
 }) {
   const { t } = useTranslation();
+  const fieldId = useId();
   const [value, setValue] = useState(initial);
   const [ranges, setRanges] = useState(() => shortcutMentionRanges(initial.mentions));
   const [error, setError] = useState<string>();
+  // A slug the author has typed is theirs; only an untouched one follows the
+  // name, so renaming an existing Shortcut never silently moves its command.
+  const [slugTouched, setSlugTouched] = useState(() => !isNew || initial.slug.length > 0);
   const variables = useMemo(
     () => deriveShortcutVariables(value.prompt, value.variables),
     [value.prompt, value.variables]
@@ -81,25 +117,12 @@ export function PromptShortcutForm({
     machineId: t('settings.promptShortcuts.machine', 'Machine'),
     providerKey: t('settings.promptShortcuts.agent', 'Agent'),
   };
-  const scopeLabels = [
-    value.scope.project &&
-      (options.projects.find(
-        (option) => JSON.stringify(option.value) === JSON.stringify(value.scope.project)
-      )?.label ??
-        (value.scope.project.kind === 'github'
-          ? value.scope.project.repository
-          : value.scope.project.id)),
-    value.scope.machineId &&
-      (options.machines.find((option) => option.value === value.scope.machineId)?.label ??
-        value.scope.machineId),
-    value.scope.providerKey &&
-      (options.providers.find((option) => option.value === value.scope.providerKey)?.label ??
-        value.scope.providerKey),
-  ].filter((label): label is string => !!label);
   const updateScope = (scope: PromptShortcutScope) =>
     setValue((previous) => ({ ...previous, scope }));
+  const tooManyVariables = variables.length > PROMPT_SHORTCUT_LIMITS.variables;
+  const blocked = scopeIssues.length > 0 || tooManyVariables;
   const submit = async () => {
-    if (saving || saveBlocked || scopeIssues.length > 0) return;
+    if (saving || blocked) return;
     setError(undefined);
     try {
       const parsed = parsePromptShortcut({
@@ -117,8 +140,6 @@ export function PromptShortcutForm({
       );
     }
   };
-  const selectClass =
-    'h-9 w-full rounded-md border border-input-border bg-input-field px-2 text-sm disabled:bg-muted';
   const promptProps: ShortcutPromptEditorProps = {
     value: value.prompt,
     onValueChange: (prompt) => setValue((previous) => ({ ...previous, prompt })),
@@ -130,273 +151,361 @@ export function PromptShortcutForm({
   };
   return (
     <form
-      className="space-y-4"
+      className={cn('flex min-h-0 flex-col', className)}
       onSubmit={(event) => {
         event.preventDefault();
         void submit();
       }}
     >
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="scrollbar-pro min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
+        {/* Name and command are the Shortcut's identity, shown as themselves
+            rather than inside a titled card — the same opening row as the Role
+            editor. The command carries its `/` so what is typed is what shows. */}
         <div className="space-y-1.5">
-          <Label htmlFor="shortcut-name">{t('settings.promptShortcuts.name', 'Name')}</Label>
-          <Input
-            id="shortcut-name"
-            value={value.name}
-            maxLength={60}
-            required
-            disabled={saving}
-            onChange={(event) => setValue({ ...value, name: event.target.value })}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="shortcut-slug">
-            {t('settings.promptShortcuts.command', 'Slash command')}
-          </Label>
-          <div className="flex items-center gap-2">
-            <span aria-hidden="true">/</span>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
             <Input
-              id="shortcut-slug"
-              value={value.slug}
-              maxLength={40}
-              pattern="[a-z0-9][a-z0-9-]*"
+              id="shortcut-name"
+              autoComplete="off"
+              aria-label={t('settings.promptShortcuts.name', 'Name')}
+              placeholder={t('settings.promptShortcuts.name', 'Name')}
+              className="h-9 min-w-0 flex-1 text-sm"
+              value={value.name}
+              maxLength={PROMPT_SHORTCUT_LIMITS.name}
               required
               disabled={saving}
-              onChange={(event) => setValue({ ...value, slug: event.target.value })}
+              onChange={(event) => {
+                const name = event.target.value;
+                setValue((previous) => ({
+                  ...previous,
+                  name,
+                  slug: slugTouched ? previous.slug : slugify(name),
+                }));
+              }}
             />
-          </div>
-        </div>
-      </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="shortcut-description">
-          {t('settings.promptShortcuts.description', 'Description (optional)')}
-        </Label>
-        <Input
-          id="shortcut-description"
-          value={value.description ?? ''}
-          maxLength={240}
-          disabled={saving}
-          onChange={(event) => setValue({ ...value, description: event.target.value })}
-        />
-      </div>
-      <fieldset disabled={saving} className="space-y-2">
-        <legend className="text-sm font-medium">
-          {t('settings.promptShortcuts.scope', 'Scope')}
-        </legend>
-        <p className="text-xs text-muted-foreground">
-          {t(
-            'settings.promptShortcuts.scopeHelp',
-            'No scope means available throughout this workspace. Select scope before adding restricted mentions.'
-          )}
-        </p>
-        <div className="grid gap-2 sm:grid-cols-3">
-          <div>
-            <Label htmlFor="shortcut-project">
-              {t('settings.promptShortcuts.project', 'Project')}
-            </Label>
-            <select
-              id="shortcut-project"
-              className={selectClass}
-              value={value.scope.project ? JSON.stringify(value.scope.project) : ''}
-              onChange={(event) =>
-                updateScope({
-                  ...value.scope,
-                  project: event.target.value ? JSON.parse(event.target.value) : undefined,
-                })
-              }
-            >
-              <option value="">{t('settings.promptShortcuts.none', 'None')}</option>
-              {options.projects.map((option) => (
-                <option key={JSON.stringify(option.value)} value={JSON.stringify(option.value)}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-          {allowMachineSelection ? (
-            <div>
-              <Label htmlFor="shortcut-machine">
-                {t('settings.promptShortcuts.machine', 'Machine')}
-              </Label>
-              <select
-                id="shortcut-machine"
-                className={selectClass}
-                value={value.scope.machineId ?? ''}
-                onChange={(event) =>
-                  updateScope({ ...value.scope, machineId: event.target.value || undefined })
-                }
-              >
-                <option value="">{t('settings.promptShortcuts.none', 'None')}</option>
-                {options.machines.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : (
-            <label className="flex items-center gap-2 text-sm">
-              <Checkbox
-                checked={!!value.scope.machineId}
-                disabled={options.machines.length === 0}
-                onCheckedChange={(checked) =>
-                  updateScope({
-                    ...value.scope,
-                    machineId: checked === true ? options.machines[0]?.value : undefined,
-                  })
-                }
+            <div className="flex h-9 min-w-0 items-center gap-1 rounded-md border border-input-border bg-input-field px-2 focus-within:ring-1 focus-within:ring-ring sm:w-56">
+              <span aria-hidden="true" className="font-mono text-sm text-muted-foreground">
+                /
+              </span>
+              <Input
+                id="shortcut-slug"
+                autoComplete="off"
+                aria-label={t('settings.promptShortcuts.command', 'Slash command')}
+                placeholder={t('settings.promptShortcuts.commandPlaceholder', 'review-pr')}
+                className="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 font-mono text-sm shadow-none focus-visible:ring-0"
+                value={value.slug}
+                maxLength={PROMPT_SHORTCUT_LIMITS.slug}
+                pattern="[a-z0-9][a-z0-9-]*"
+                required
+                disabled={saving}
+                onChange={(event) => {
+                  setSlugTouched(true);
+                  setValue((previous) => ({ ...previous, slug: slugify(event.target.value) }));
+                }}
               />
-              {t('settings.promptShortcuts.thisMachine', 'Limit to this machine')}
-            </label>
-          )}
-          <div>
-            <Label htmlFor="shortcut-provider">
-              {t('settings.promptShortcuts.agent', 'Agent')}
-            </Label>
-            <select
-              id="shortcut-provider"
-              className={selectClass}
-              value={value.scope.providerKey ?? ''}
-              onChange={(event) =>
-                updateScope({ ...value.scope, providerKey: event.target.value || undefined })
-              }
-            >
-              <option value="">{t('settings.promptShortcuts.none', 'None')}</option>
-              {options.providers.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            </div>
           </div>
-        </div>
-        <div
-          className="flex flex-wrap gap-1.5"
-          aria-label={t('settings.promptShortcuts.scope', 'Scope')}
-        >
-          {(scopeLabels.length
-            ? scopeLabels
-            : [t('settings.promptShortcuts.workspaceScope', 'Workspace')]
-          ).map((label, index) => (
-            <Badge
-              key={`${index}:${label}`}
-              variant="outline"
-              className="max-w-full break-all font-normal"
-            >
-              {label}
-            </Badge>
-          ))}
-        </div>
-      </fieldset>
-      <div className="space-y-1.5">
-        <Label htmlFor="shortcut-prompt">{t('settings.promptShortcuts.prompt', 'Prompt')}</Label>
-        {renderPrompt ? (
-          renderPrompt(promptProps)
-        ) : (
-          <Textarea
-            id="shortcut-prompt"
-            className="min-h-48"
-            value={value.prompt}
-            disabled={saving}
-            onChange={(event) => promptProps.onValueChange(event.target.value)}
-          />
-        )}
-        <p className="text-xs text-muted-foreground">
-          {t(
-            'settings.promptShortcuts.variablesHelp',
-            'Use !{name} for a required variable. Defaults are optional; values are inserted as literal text.'
-          )}
-        </p>
-      </div>
-      {scopeIssues.length > 0 && (
-        <div role="alert" className="text-sm text-destructive">
-          <p>
-            {t(
-              'settings.promptShortcuts.repairScope',
-              'Restore the matching scope or remove these mentions before saving.'
+          <Input
+            id="shortcut-description"
+            autoComplete="off"
+            aria-label={t('settings.promptShortcuts.description', 'Description (optional)')}
+            placeholder={t(
+              'settings.promptShortcuts.descriptionPlaceholder',
+              'Shown in the / menu'
             )}
-          </p>
-          <ul className="mt-1 list-disc space-y-1 pl-5">
-            {scopeIssues.map(({ mention, issues }) => (
-              <li key={mention.start}>
-                <code>{mention.label}</code>
-                {' — '}
-                {t('settings.promptShortcuts.requiredAxes', {
-                  defaultValue: 'Requires matching {{axes}}',
-                  axes: issues.map((issue) => axes[issue.axis]).join(', '),
-                })}
-              </li>
-            ))}
-          </ul>
+            className="h-9 text-sm"
+            value={value.description ?? ''}
+            maxLength={PROMPT_SHORTCUT_LIMITS.description}
+            disabled={saving}
+            onChange={(event) => setValue({ ...value, description: event.target.value })}
+          />
         </div>
-      )}
-      {variables.length > 0 && (
-        <fieldset className="space-y-2" disabled={saving}>
-          <legend className="text-sm font-medium">
-            {t('settings.promptShortcuts.defaults', 'Variable defaults')}
-          </legend>
-          {variables.slice(0, 20).map((variable) => (
-            <div key={variable.name} className="space-y-1">
-              <Label htmlFor={`shortcut-variable-${variable.name}`}>{variable.name}</Label>
-              <Textarea
-                id={`shortcut-variable-${variable.name}`}
-                rows={2}
-                value={variable.defaultValue ?? ''}
-                onChange={(event) =>
-                  setValue({
-                    ...value,
-                    variables: variables.map((item) =>
-                      item.name === variable.name
-                        ? { ...item, defaultValue: event.target.value }
-                        : item
-                    ),
-                  })
+
+        <Section
+          title={t('settings.promptShortcuts.scope', 'Applies to')}
+          hint={t(
+            'settings.promptShortcuts.scopeHelp',
+            'Where this Shortcut can be called, and what @ completes against. None on every axis means anywhere in this workspace.'
+          )}
+        >
+          <fieldset disabled={saving} className="grid gap-3 sm:grid-cols-3">
+            <Field label={axes.project}>
+              <ScopeSelect
+                id="shortcut-project"
+                axis="project"
+                label={axes.project}
+                value={value.scope.project ? JSON.stringify(value.scope.project) : ''}
+                fallbackLabel={
+                  value.scope.project ? describeShortcutProject(value.scope.project) : undefined
+                }
+                options={options.projects.map((option) => ({
+                  value: JSON.stringify(option.value),
+                  label: option.label,
+                }))}
+                onChange={(next) =>
+                  updateScope({ ...value.scope, project: next ? JSON.parse(next) : undefined })
+                }
+              />
+            </Field>
+            <Field label={axes.machineId}>
+              {allowMachineSelection ? (
+                <ScopeSelect
+                  id="shortcut-machine"
+                  axis="machine"
+                  label={axes.machineId}
+                  value={value.scope.machineId ?? ''}
+                  fallbackLabel={value.scope.machineId}
+                  options={options.machines}
+                  onChange={(machineId) =>
+                    updateScope({ ...value.scope, machineId: machineId || undefined })
+                  }
+                />
+              ) : (
+                // One machine exists here, so the axis is a yes/no rather than a
+                // list — but it stays the Machine axis, in its own column.
+                <div className="flex h-9 items-center justify-between gap-2 rounded-md border border-input-border bg-input-field px-2">
+                  <Label
+                    htmlFor={`${fieldId}-this-machine`}
+                    className="min-w-0 truncate text-xs font-normal"
+                  >
+                    {t('settings.promptShortcuts.thisMachineShort', 'This machine')}
+                  </Label>
+                  <Switch
+                    id={`${fieldId}-this-machine`}
+                    aria-label={t('settings.promptShortcuts.thisMachine', 'Limit to this machine')}
+                    checked={!!value.scope.machineId}
+                    disabled={options.machines.length === 0}
+                    onCheckedChange={(checked) =>
+                      updateScope({
+                        ...value.scope,
+                        machineId: checked ? options.machines[0]?.value : undefined,
+                      })
+                    }
+                  />
+                </div>
+              )}
+            </Field>
+            <Field label={axes.providerKey}>
+              <ScopeSelect
+                id="shortcut-provider"
+                axis="agent"
+                label={axes.providerKey}
+                value={value.scope.providerKey ?? ''}
+                fallbackLabel={value.scope.providerKey}
+                options={options.providers}
+                onChange={(providerKey) =>
+                  updateScope({ ...value.scope, providerKey: providerKey || undefined })
+                }
+              />
+            </Field>
+          </fieldset>
+        </Section>
+
+        <Section
+          title={t('settings.promptShortcuts.prompt', 'Prompt')}
+          hint={t(
+            'settings.promptShortcuts.promptHelp',
+            'One message. @ mentions a file or Role, $ a skill, # an issue — a kind the scope above cannot satisfy stays visible but disabled. Write !{name} where the caller fills in a value.'
+          )}
+        >
+          {renderPrompt ? (
+            renderPrompt(promptProps)
+          ) : (
+            <Textarea
+              id="shortcut-prompt"
+              aria-label={t('settings.promptShortcuts.prompt', 'Prompt')}
+              className="min-h-40 resize-none text-sm leading-6"
+              value={value.prompt}
+              disabled={saving}
+              onChange={(event) => promptProps.onValueChange(event.target.value)}
+            />
+          )}
+          {/* The scope can be cleared after the prompt was written, or a
+              reference pasted in from elsewhere. This is the one place that says
+              the two no longer agree — and it names which reference. */}
+          {scopeIssues.length > 0 && (
+            <FormMessage tone="error">
+              <span className="block font-medium">
+                {t(
+                  'settings.promptShortcuts.repairScope',
+                  'Restore the matching scope or remove these mentions before saving.'
+                )}
+              </span>
+              <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                {scopeIssues.map(({ mention, issues }) => (
+                  <li key={mention.start}>
+                    <code className="font-mono">{mention.label}</code>
+                    {' — '}
+                    {t('settings.promptShortcuts.requiredAxes', {
+                      defaultValue: 'Requires matching {{axes}}',
+                      axes: issues.map((issue) => axes[issue.axis]).join(', '),
+                    })}
+                  </li>
+                ))}
+              </ul>
+            </FormMessage>
+          )}
+        </Section>
+
+        {variables.length > 0 && (
+          <Section
+            title={t('settings.promptShortcuts.defaults', 'Variables')}
+            hint={t(
+              'settings.promptShortcuts.variablesHelp',
+              'Every !{name} in the prompt. The same name twice shares one value, and every value is required when the Shortcut is called. A default is optional — never store a secret in one.'
+            )}
+          >
+            <fieldset disabled={saving} className="space-y-2">
+              {variables.slice(0, PROMPT_SHORTCUT_LIMITS.variables).map((variable) => (
+                <div
+                  key={variable.name}
+                  className="space-y-1.5 rounded-md border border-border/60 bg-background/60 p-2"
+                >
+                  <Label
+                    htmlFor={`shortcut-variable-${variable.name}`}
+                    className="inline-flex rounded-sm bg-status-warning/12 px-1 py-0.5 font-mono text-[11px] font-normal text-status-warning"
+                  >
+                    {`!{${variable.name}}`}
+                  </Label>
+                  <Textarea
+                    id={`shortcut-variable-${variable.name}`}
+                    rows={2}
+                    className="resize-none text-xs"
+                    placeholder={t(
+                      'settings.promptShortcuts.defaultPlaceholder',
+                      'Default value (optional)'
+                    )}
+                    value={variable.defaultValue ?? ''}
+                    onChange={(event) =>
+                      setValue({
+                        ...value,
+                        variables: variables.map((item) =>
+                          item.name === variable.name
+                            ? { ...item, defaultValue: event.target.value }
+                            : item
+                        ),
+                      })
+                    }
+                  />
+                </div>
+              ))}
+            </fieldset>
+            {tooManyVariables && (
+              <FormMessage tone="error">
+                {t('settings.promptShortcuts.tooManyVariables', {
+                  defaultValue: 'A Shortcut can define at most {{count}} variables.',
+                  count: PROMPT_SHORTCUT_LIMITS.variables,
+                })}
+              </FormMessage>
+            )}
+          </Section>
+        )}
+
+        {canShare && (
+          <div className="space-y-2 rounded-lg border border-border/70 bg-card/60 px-3 py-2.5">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <Label htmlFor={`${fieldId}-share`} className="text-sm">
+                  {t('settings.promptShortcuts.share', 'Share with workspace')}
+                </Label>
+                <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                  {t(
+                    'settings.promptShortcuts.shareHint',
+                    'Off by default. Sharing is separate from where the Shortcut applies.'
+                  )}
+                </p>
+              </div>
+              <Switch
+                id={`${fieldId}-share`}
+                checked={value.visibility === 'workspace'}
+                disabled={saving}
+                onCheckedChange={(checked) =>
+                  setValue({ ...value, visibility: checked ? 'workspace' : 'private' })
                 }
               />
             </div>
-          ))}
-        </fieldset>
-      )}
-      {canShare && (
-        <label className="flex items-center gap-2 text-sm">
-          <Checkbox
-            checked={value.visibility === 'workspace'}
-            disabled={saving}
-            onCheckedChange={(checked) =>
-              setValue({ ...value, visibility: checked === true ? 'workspace' : 'private' })
-            }
-          />
-          {t('settings.promptShortcuts.share', 'Share with workspace')}
-        </label>
-      )}
-      {value.visibility === 'workspace' && (
-        <p className="text-xs text-muted-foreground">
-          {t(
-            'settings.promptShortcuts.shareWarning',
-            'Workspace members can read and copy this Prompt. Making it private later cannot remove copies they already received.'
-          )}
-        </p>
-      )}
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
-      {saveBlocked && (
-        <p role="status" className="text-sm text-muted-foreground">
-          {t(
-            'settings.promptShortcuts.waitPublication',
-            'This revision is awaiting publication. Retry the pending publication before saving another revision.'
-          )}
-        </p>
-      )}
-      <div className="flex justify-end gap-2">
-        <Button type="button" variant="outline" disabled={saving} onClick={onCancel}>
+            {value.visibility === 'workspace' && (
+              <FormMessage tone="warning">
+                {t(
+                  'settings.promptShortcuts.shareWarning',
+                  'Workspace members can read and copy this Prompt, its default values and its reference labels. Making it private later cannot remove copies they already received.'
+                )}
+              </FormMessage>
+            )}
+          </div>
+        )}
+
+        {error && <FormMessage tone="error">{error}</FormMessage>}
+      </div>
+
+      <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
+        <Button type="button" variant="outline" size="sm" disabled={saving} onClick={onCancel}>
           {t('common.cancel', 'Cancel')}
         </Button>
-        <Button type="submit" disabled={saving || saveBlocked || scopeIssues.length > 0}>
-          {t('common.save', 'Save')}
+        <Button type="submit" size="sm" disabled={saving || blocked}>
+          {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+          {isNew ? t('settings.promptShortcuts.create', 'Create') : t('common.save', 'Save')}
         </Button>
-      </div>
+      </footer>
     </form>
+  );
+}
+
+/**
+ * One "Applies to" axis.
+ *
+ * `None` is a real, selectable entry rather than an empty trigger: leaving an
+ * axis unset is a decision the author makes, and a blank control reads as an
+ * unfinished form.
+ */
+function ScopeSelect({
+  id,
+  axis,
+  label,
+  value,
+  fallbackLabel,
+  options,
+  onChange,
+}: {
+  id: string;
+  axis: 'project' | 'machine' | 'agent';
+  label: string;
+  value: string;
+  /** Printed when the saved value is not in the list — still loading, or gone. */
+  fallbackLabel?: string;
+  options: readonly { value: string; label: string }[];
+  onChange: (value: string) => void;
+}) {
+  const { t } = useTranslation();
+  // A saved axis whose option has not loaded (or no longer exists) must still
+  // print what it is set to. An empty trigger reads as "None", which is a
+  // different Shortcut from the one the author saved.
+  const entries =
+    value && !options.some((option) => option.value === value)
+      ? [...options, { value, label: fallbackLabel || value }]
+      : options;
+  return (
+    <Select
+      value={value || SHORTCUT_SCOPE_NONE}
+      onValueChange={(next) => onChange(next === SHORTCUT_SCOPE_NONE ? '' : next)}
+    >
+      <SelectTrigger id={id} className="h-9 gap-1.5 text-xs" aria-label={label}>
+        {/* Not a <span>: the trigger line-clamps its direct span children, which
+            turns a flex row into a stacked box. */}
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <ScopeAxisIcon axis={axis} className="size-3 shrink-0 text-muted-foreground" />
+          <SelectValue />
+        </div>
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={SHORTCUT_SCOPE_NONE}>
+          {t('settings.promptShortcuts.none', 'None')}
+        </SelectItem>
+        {entries.map((option) => (
+          <SelectItem key={option.value} value={option.value}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }

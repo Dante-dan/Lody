@@ -11,13 +11,16 @@ import {
   type SkillMentionItem,
 } from './mention-skill-source';
 
+/** The scope axes a disabled mention category is still waiting for. */
+export type ShortcutScopeAxis = keyof PromptShortcutScope;
+
 /** Freeze the semantic target at selection, not by reparsing a label on save. */
 export function shortcutTemplateCategories(input: {
   categories: readonly MentionCategory[];
   scope: PromptShortcutScope;
   skills: readonly SkillMentionItem[];
   allowedDirs: ReadonlySet<string> | null;
-  disabledReason: string;
+  disabledReason: (missing: readonly ShortcutScopeAxis[]) => string;
 }): MentionCategory[] {
   const { scope } = input;
   const skills = new Map(
@@ -58,24 +61,38 @@ export function shortcutTemplateCategories(input: {
   return input.categories
     .filter((category) => category.id !== 'session' && category.id !== 'command')
     .map((category) => {
-      const enabled =
+      // Skills come from two sources; either one being satisfiable enables the
+      // category, so the missing axes are the ones the closer source still needs.
+      const gates =
         category.id === 'skill'
-          ? getShortcutMentionGate('project_skill', scope).enabled ||
-            getShortcutMentionGate('global_skill', scope).enabled
-          : getShortcutMentionGate(
-              category.id === 'pr'
-                ? 'pull_request'
-                : (category.id as 'file' | 'issue' | 'agent_role'),
-              scope
-            ).enabled;
-      if (!enabled)
+          ? [
+              getShortcutMentionGate('project_skill', scope),
+              getShortcutMentionGate('global_skill', scope),
+            ]
+          : [
+              getShortcutMentionGate(
+                category.id === 'pr'
+                  ? 'pull_request'
+                  : (category.id as 'file' | 'issue' | 'agent_role'),
+                scope
+              ),
+            ];
+      const enabled = gates.some((gate) => gate.enabled);
+      if (!enabled) {
+        const missing = gates.reduce<ShortcutScopeAxis[]>(
+          (fewest, gate) => (gate.missing.length < fewest.length ? [...gate.missing] : fewest),
+          [...(gates[0]?.missing ?? [])]
+        );
         return {
           ...category,
           status: 'disabled',
-          message: input.disabledReason,
+          // Name the axes THIS kind of reference needs. One sentence repeated
+          // under every disabled entry says only "something is missing".
+          message: input.disabledReason(missing),
           activation: undefined,
           getCandidates: () => [],
         };
+      }
       return {
         ...category,
         getCandidates: (term, limit) =>

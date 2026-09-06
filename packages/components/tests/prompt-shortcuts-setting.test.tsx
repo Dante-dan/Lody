@@ -9,6 +9,7 @@ import {
 } from '@lody/shared/prompt-shortcuts';
 import type { usePromptShortcuts } from '../src/providers/prompt-shortcut-provider';
 import { PromptShortcutsSetting } from '../src/components/settings/prompt-shortcuts-setting';
+import { TooltipProvider } from '../src/ui/tooltip';
 import { initI18n } from '../src/i18n';
 
 vi.mock('../src/providers/prompt-shortcut-provider', () => ({ usePromptShortcuts: () => state }));
@@ -48,6 +49,15 @@ const shortcut: PromptShortcut = {
   createdAt: 1,
   updatedAt: 1,
 };
+const sharedByOther: PromptShortcut = {
+  ...shortcut,
+  id: 'shared',
+  ownerUserId: 'bob',
+  visibility: 'workspace',
+  name: 'Team review',
+  slug: 'team-review',
+  prompt: 'Shared content',
+};
 let state: ReturnType<typeof usePromptShortcuts>;
 let root: Root, container: HTMLDivElement;
 function runtime(workspaceId: string, userId: string, read = async () => shortcut) {
@@ -62,6 +72,17 @@ beforeEach(async () => {
       disconnect() {}
     }
   );
+  // `useIsMobile` reads matchMedia; jsdom has none. Fixed desktop width, no listeners.
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
   await initI18n('en');
   state = {
     runtime: runtime('ws', 'alice'),
@@ -81,22 +102,73 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 async function render() {
-  await act(async () => root.render(<PromptShortcutsSetting />));
+  await act(async () =>
+    root.render(
+      <TooltipProvider>
+        <PromptShortcutsSetting />
+      </TooltipProvider>
+    )
+  );
 }
-async function open() {
+async function open(name: string) {
   await act(async () => {
     [...container.querySelectorAll('button')]
-      .find((button) => button.textContent?.includes('Private review'))!
+      .find((button) => button.textContent?.includes(name))!
       .click();
   });
 }
 describe('Prompt Shortcut settings identity fencing', () => {
+  it('allows editing and deleting locally while publication is pending', async () => {
+    state = { ...state, pendingIds: [shortcut.id] };
+    await render();
+    expect(container.textContent).toContain('publishing in the background');
+
+    // A failed publication is reported as a fact about this device's copy; it
+    // still never takes the local actions away.
+    state = { ...state, errors: { [shortcut.id]: new Error('offline') } };
+    await render();
+    expect(container.textContent).toContain('Publishing failed');
+    expect(
+      container.querySelector<HTMLButtonElement>('button[aria-label="Delete shortcut"]')?.disabled
+    ).toBe(false);
+    await open('Private review');
+    expect(document.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(
+      false
+    );
+  });
+
+  it('offers a first Shortcut when the catalog is empty', async () => {
+    state = { ...state, entries: [] };
+    await render();
+    expect(container.textContent).toContain('No Prompt Shortcuts yet');
+    const create = [...container.querySelectorAll('button')].filter((button) =>
+      button.textContent?.includes('New Prompt Shortcut')
+    );
+    expect(create.length).toBeGreaterThan(0);
+    await act(async () => create.at(-1)!.click());
+    expect(document.querySelector<HTMLInputElement>('#shortcut-name')?.value).toBe('');
+  });
+
+  it("shows another member's shared Shortcut read-only, with no delete action", async () => {
+    state = {
+      ...state,
+      runtime: runtime('ws', 'alice', async () => sharedByOther),
+      entries: [projectShortcutIndex(sharedByOther, 'body-shared')],
+    };
+    await render();
+    expect(container.querySelector('button[aria-label="Delete shortcut"]')).toBeNull();
+    await open('Team review');
+    expect(document.querySelector('#shortcut-name')).toBeNull();
+    expect(document.body.textContent).toContain('Shared content');
+    expect(document.body.textContent).toContain('Only its author can change it');
+  });
+
   it.each([
     ['other-ws', 'alice'],
     ['ws', 'bob'],
   ])('drops the private editor when switching to %s / %s', async (workspaceId, userId) => {
     await render();
-    await open();
+    await open('Private review');
     expect(document.querySelector<HTMLInputElement>('#shortcut-name')?.value).toBe(
       'Private review'
     );
@@ -105,6 +177,7 @@ describe('Prompt Shortcut settings identity fencing', () => {
     expect(document.querySelector('#shortcut-name')).toBeNull();
     expect(document.body.textContent).not.toContain('Private review');
   });
+
   it('ignores a body read that completes after a workspace switch', async () => {
     let complete!: (value: PromptShortcut) => void;
     const body = new Promise<PromptShortcut>((resolve) => {
@@ -112,7 +185,7 @@ describe('Prompt Shortcut settings identity fencing', () => {
     });
     state = { ...state, runtime: runtime('ws', 'alice', () => body) };
     await render();
-    await open();
+    await open('Private review');
     state = { ...state, runtime: runtime('other', 'alice'), entries: [] };
     await render();
     await act(async () => {

@@ -297,7 +297,24 @@ export type CloudApi = {
       },
       null
     >;
-    revokeShortcut: Mutation<{ workspaceId: string; shortcutId: string }, null>;
+    settleDocument: Mutation<
+      {
+        workspaceId: string;
+        shortcutId: string;
+        bodyDocId: string;
+        visibility: 'private' | 'workspace';
+      },
+      'active' | 'cancelled'
+    >;
+    revokeShortcut: Mutation<
+      {
+        workspaceId: string;
+        shortcutId: string;
+        bodyDocId: string;
+        visibility: 'private' | 'workspace';
+      },
+      null
+    >;
     listAccessibleDocuments: Query<
       { workspaceId: string },
       Array<{
@@ -306,6 +323,7 @@ export type CloudApi = {
         ownerUserId: string;
         visibility: 'private' | 'workspace';
         revision: string | null;
+        deleted?: boolean;
       }>
     >;
     getStreamToken: Action<

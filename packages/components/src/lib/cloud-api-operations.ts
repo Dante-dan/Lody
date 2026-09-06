@@ -146,6 +146,9 @@ export const cloudOperations = {
     revokeShortcut: mutation<ConvexApi['promptShortcuts']['revokeShortcut']>(
       'promptShortcuts:revokeShortcut'
     ),
+    settleDocument: mutation<ConvexApi['promptShortcuts']['settleDocument']>(
+      'promptShortcuts:settleDocument'
+    ),
     listAccessibleDocuments: query<ConvexApi['promptShortcuts']['listAccessibleDocuments']>(
       'promptShortcuts:listAccessibleDocuments'
     ),

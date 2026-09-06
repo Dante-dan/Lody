@@ -39,14 +39,14 @@ afterEach(async () => {
   for (const close of cleanups.splice(0).reverse()) await close();
 });
 
-async function disk() {
+async function disk(userId = 'alice') {
   const path = await mkdtemp(join(tmpdir(), 'lody-shortcut-runtime-'));
   cleanups.push(() => rm(path, { recursive: true, force: true }));
   return async () => {
     const repo = await LoroRepo.create({
       storageAdapter: new FileSystemStorageAdaptor({ baseDir: path }),
     });
-    const store = await LocalShortcutStore.open({ repo, workspaceId: 'ws', userId: 'alice' });
+    const store = await LocalShortcutStore.open({ repo, workspaceId: 'ws', userId });
     return { repo, store };
   };
 }
@@ -55,16 +55,23 @@ async function cloud() {
   cleanups.push(() => server.destroy());
   const registered = new Map<string, ShortcutLocalRecord>();
   const active = new Map<string, ShortcutDirectoryEntry>();
+  const cancelled = new Set<string>();
   const events: string[] = [];
   let online = true;
   let loseActivationReply = false;
   const port = (repo: LoroRepo, userId = 'alice'): ShortcutPublicationPort => ({
     stage: async (record) => {
       if (!online) throw new Error('offline');
+      if (cancelled.has(record.entry.bodyDocId)) throw new Error('Cancelled');
       events.push('stage');
       registered.set(record.entry.bodyDocId, record);
+      return active.get(record.entry.id)?.bodyDocId === record.entry.bodyDocId
+        ? 'active'
+        : 'staged';
     },
     activate: async ({ entry, published }) => {
+      if (!online) throw new Error('offline');
+      if (cancelled.has(entry.bodyDocId)) throw new Error('Cancelled');
       const current = active.get(entry.id);
       if (current?.revision !== entry.revision) {
         if ((current?.bodyDocId ?? null) !== (published?.bodyDocId ?? null))
@@ -81,7 +88,14 @@ async function cloud() {
       if (loseActivationReply) throw new Error('lost response');
     },
     revoke: async (entry) => {
+      if (!online) throw new Error('offline');
       active.delete(entry.id);
+    },
+    settle: async ({ entry }) => {
+      if (!online) throw new Error('offline');
+      if (active.get(entry.id)?.bodyDocId === entry.bodyDocId) return 'active';
+      cancelled.add(entry.bodyDocId);
+      return 'cancelled';
     },
     acquire: async (resource, write) => {
       if (!online) throw new Error('offline');
@@ -149,7 +163,7 @@ async function openRuntime(
   remote?: Awaited<ReturnType<typeof cloud>>
 ) {
   const { store, repo } = await open();
-  const runtime = new PromptShortcutRuntime(store, remote?.port(repo));
+  const runtime = new PromptShortcutRuntime(store, remote?.port(repo, store.userId));
   let closed = false;
   const close = async () => {
     if (closed) return;
@@ -162,6 +176,301 @@ async function openRuntime(
 }
 
 describe('workspace Prompt Shortcut runtime', () => {
+  it('closes and reopens local storage without waiting for an offline cloud mutation to settle', async () => {
+    const open = await disk();
+    const remote = await cloud();
+    const { store, repo } = await open();
+    let entered!: () => void, complete!: (status: 'staged') => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const waiting = new Promise<'staged'>((resolve) => {
+      complete = resolve;
+    });
+    const runtime = new PromptShortcutRuntime(store, {
+      ...remote.port(repo),
+      stage: () => {
+        entered();
+        return waiting;
+      },
+    });
+    const entry = await runtime.save({ value, base: null, bodyDocId: 'working' });
+    await started;
+    await runtime.dispose();
+    await repo.destroy();
+    const next = await openRuntime(open, remote);
+    expect(next.runtime.getSnapshot().entries).toEqual([entry]);
+    complete('staged'); // A late reply cannot resume the disposed publisher.
+    await waiting;
+    expect(remote.events).toEqual([]);
+    await next.runtime.flush();
+    expect(next.runtime.getSnapshot().pendingIds).toEqual([]);
+  });
+  it('reopens acknowledged local data offline and allows repeated edits and deletion', async () => {
+    const open = await disk();
+    const remote = await cloud();
+    let instance = await openRuntime(open, remote);
+    let entry = await instance.runtime.save({ value, base: null, bodyDocId: 'working' });
+    await instance.runtime.flush();
+    await instance.close();
+    remote.setOnline(false);
+    remote.events.length = 0;
+    instance = await openRuntime(open, remote);
+    expect(instance.runtime.getSnapshot()).toMatchObject({ entries: [entry], loading: false });
+    expect(await instance.runtime.read(entry)).toEqual(value);
+    expect(remote.events).toEqual([]);
+    for (const revision of ['r2', 'r3']) {
+      entry = await instance.runtime.save({
+        value: { ...value, revision, prompt: `Offline ${revision} !{topic}` },
+        base: entry,
+        bodyDocId: entry.bodyDocId,
+      });
+      await instance.runtime.flush();
+    }
+    await instance.close();
+    instance = await openRuntime(open, remote);
+    expect((await instance.runtime.read(entry)).revision).toBe('r3');
+    await instance.runtime.remove(entry);
+    expect(instance.runtime.getSnapshot().entries).toEqual([]);
+    await instance.runtime.flush();
+    await instance.close();
+    instance = await openRuntime(open, remote);
+    expect(instance.runtime.getSnapshot().entries).toEqual([]);
+    remote.setOnline(true);
+    await instance.runtime.flush();
+    expect(instance.runtime.getSnapshot().pendingIds).toEqual([]);
+    expect(remote.active.size).toBe(0);
+  });
+
+  it('uses downloaded shared content after an offline restart and durably applies learned revocation', async () => {
+    const remote = await cloud();
+    const owner = await openRuntime(await disk(), remote);
+    await owner.runtime.save({
+      value: { ...value, visibility: 'workspace' },
+      base: null,
+      bodyDocId: 'working',
+    });
+    await owner.runtime.flush();
+    const open = await disk('bob');
+    let reader = await openRuntime(open, remote);
+    await reader.runtime.setDirectory([...remote.active.values()]);
+    const entry = reader.runtime.getSnapshot().entries[0]!;
+    remote.setOnline(false);
+    await expect(reader.runtime.read(entry)).rejects.toThrow('offline');
+    expect(reader.runtime.getSnapshot().entries).toEqual([entry]);
+    remote.setOnline(true);
+    expect((await reader.runtime.read(entry)).prompt).toBe(value.prompt);
+    await reader.close();
+    remote.setOnline(false);
+    remote.events.length = 0;
+    reader = await openRuntime(open, remote);
+    expect(reader.runtime.getSnapshot()).toMatchObject({ entries: [entry], loading: false });
+    expect((await reader.runtime.read(entry)).prompt).toBe(value.prompt);
+    expect(remote.events).toEqual([]);
+    await reader.runtime.setDirectory([]);
+    await expect(reader.runtime.read(entry)).rejects.toMatchObject({ code: 'forbidden' });
+    await reader.close();
+    reader = await openRuntime(open, remote);
+    expect(reader.runtime.getSnapshot().entries).toEqual([]);
+    await expect(reader.runtime.read(entry)).rejects.toMatchObject({ code: 'forbidden' });
+  });
+
+  it('does not put later private edits into a shared upload or let its late acknowledgement clear them', async () => {
+    const remote = await cloud();
+    const { store, repo } = await (await disk())();
+    const port = remote.port(repo);
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let sharedJob!: ShortcutLocalRecord;
+    const runtime = new PromptShortcutRuntime(store, {
+      ...port,
+      stage: async (record) => {
+        if (record.entry.revision === 'r1') {
+          sharedJob = record;
+          entered();
+          await blocked;
+        } else throw new Error('offline');
+        return port.stage(record);
+      },
+    });
+    cleanups.push(async () => {
+      await runtime.dispose();
+      await repo.destroy();
+    });
+    const first = await runtime.save({
+      value: { ...value, visibility: 'workspace' },
+      base: null,
+      bodyDocId: 'working-shared',
+    });
+    await started;
+    const latest = await runtime.save({
+      value: { ...value, revision: 'r2', prompt: 'NEW PRIVATE SECRET', variables: [] },
+      base: first,
+      bodyDocId: 'working-private',
+    });
+    expect((await runtime.read(latest)).prompt).toBe('NEW PRIVATE SECRET');
+    release();
+    await runtime.flush();
+    expect(runtime.getSnapshot()).toMatchObject({ entries: [latest], pendingIds: [value.id] });
+    const uploaded = await remote.server.acquireDoc(
+      getShortcutBodyStreamId(sharedJob.entry.bodyDocId)
+    );
+    expect(JSON.stringify(uploaded.doc.toJSON())).not.toContain('NEW PRIVATE SECRET');
+    expect(JSON.stringify(uploaded.doc.toJSON())).toContain(value.prompt);
+    await uploaded.release();
+    expect(store.get(value.id)?.published?.revision).toBe('r1');
+    expect(store.publication(value.id)?.entry.revision).toBe('r2');
+  });
+
+  it('settles a superseded job with a lost activation reply and publishes the newer local revision after restart', async () => {
+    const remote = await cloud();
+    const open = await disk();
+    let instance = await openRuntime(open, remote);
+    remote.loseReply(true);
+    const first = await instance.runtime.save({ value, base: null, bodyDocId: 'working' });
+    await instance.runtime.flush();
+    remote.setOnline(false);
+    const latest = await instance.runtime.save({
+      value: { ...value, revision: 'r2' },
+      base: first,
+      bodyDocId: first.bodyDocId,
+    });
+    await instance.runtime.flush();
+    await instance.close();
+    remote.loseReply(false);
+    remote.setOnline(true);
+    instance = await openRuntime(open, remote);
+    await instance.runtime.flush();
+    expect(instance.runtime.getSnapshot()).toMatchObject({ entries: [latest], pendingIds: [] });
+    expect(remote.active.get(value.id)?.revision).toBe('r2');
+  });
+
+  it('cancels a rejected publication so a local rename can publish without retrying the invalid slug', async () => {
+    const remote = await cloud();
+    const { store, repo } = await (await disk())();
+    const port = remote.port(repo);
+    const rejected: string[] = [];
+    const runtime = new PromptShortcutRuntime(store, {
+      ...port,
+      activate: async (record) => {
+        if (record.entry.slug === 'review') {
+          rejected.push(record.entry.bodyDocId);
+          throw new Error('slug collision');
+        }
+        await port.activate(record);
+      },
+    });
+    cleanups.push(async () => {
+      await runtime.dispose();
+      await repo.destroy();
+    });
+    const first = await runtime.save({ value, base: null, bodyDocId: 'working' });
+    await runtime.flush();
+    const latest = await runtime.save({
+      value: { ...value, revision: 'r2', slug: 'my-review' },
+      base: first,
+      bodyDocId: first.bodyDocId,
+    });
+    await runtime.flush();
+    expect(runtime.getSnapshot()).toMatchObject({ entries: [latest], pendingIds: [] });
+    expect(rejected).toHaveLength(1);
+    expect(remote.active.get(value.id)?.revision).toBe('r2');
+  });
+
+  it('adopts a newer owned remote revision into a separate working body without uploading local edits', async () => {
+    const remote = await cloud();
+    const firstDevice = await openRuntime(await disk(), remote);
+    await firstDevice.runtime.save({ value, base: null, bodyDocId: 'working-a' });
+    await firstDevice.runtime.flush();
+    const secondDevice = await openRuntime(await disk(), remote);
+    await secondDevice.runtime.setDirectory([...remote.active.values()]);
+    let base = secondDevice.runtime.getSnapshot().entries[0]!;
+    await secondDevice.runtime.read(base);
+    await secondDevice.runtime.save({
+      value: { ...value, revision: 'r2' },
+      base,
+      bodyDocId: base.bodyDocId,
+    });
+    await secondDevice.runtime.flush();
+    await firstDevice.runtime.setDirectory([...remote.active.values()]);
+    base = firstDevice.runtime.getSnapshot().entries[0]!;
+    expect(base.revision).toBe('r2');
+    await firstDevice.runtime.read(base);
+    remote.setOnline(false);
+    const edit = await firstDevice.runtime.save({
+      value: { ...value, revision: 'r3' },
+      base,
+      bodyDocId: base.bodyDocId,
+    });
+    await firstDevice.runtime.flush();
+    expect(edit.bodyDocId).not.toBe(base.bodyDocId);
+    expect((await firstDevice.runtime.read(edit)).revision).toBe('r3');
+    expect((await firstDevice.runtime.store.read(base)).revision).toBe('r2');
+    remote.setOnline(true);
+    await firstDevice.runtime.flush();
+    expect(remote.active.get(value.id)?.revision).toBe('r3');
+  });
+
+  it('persists explicit remote deletion for a clean owned replica without treating stale absence as deletion', async () => {
+    const remote = await cloud();
+    const open = await disk();
+    let instance = await openRuntime(open, remote);
+    const entry = await instance.runtime.save({ value, base: null, bodyDocId: 'working' });
+    await instance.runtime.flush();
+    await instance.runtime.setDirectory([]);
+    expect(instance.runtime.getSnapshot().entries).toEqual([entry]);
+    await instance.runtime.setDirectory([{ ...remote.active.get(value.id)!, deleted: true }]);
+    expect(instance.runtime.getSnapshot().entries).toEqual([]);
+    await instance.close();
+    remote.setOnline(false);
+    instance = await openRuntime(open, remote);
+    expect(instance.runtime.getSnapshot().entries).toEqual([]);
+    await expect(instance.runtime.read(entry)).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('upgrades a v1 interrupted job without losing its activation identity or uploading later work', async () => {
+    const remote = await cloud();
+    const open = await disk();
+    let instance = await openRuntime(open, remote);
+    remote.loseReply(true);
+    await instance.runtime.save({ value, base: null, bodyDocId: 'working' });
+    await instance.runtime.flush();
+    const legacy = instance.runtime.store.publication(value.id)!;
+    // Exact v1 durable shape: its working body was also the in-flight upload,
+    // and a crash could leave the old pointer-only write intent alongside it.
+    const ledger = await instance.repo.acquireFlockDoc('shortcut-local:ws:alice');
+    ledger.flock.delete(['publicationProtocol']);
+    ledger.flock.delete(['publication', value.id]);
+    ledger.flock.set(['shortcut', value.id], JSON.parse(JSON.stringify(legacy)));
+    ledger.flock.set(['writeIntent', value.id], JSON.parse(JSON.stringify(legacy)));
+    ledger.flock.commit();
+    await instance.repo.persistFlockDocNow('shortcut-local:ws:alice', ledger.flock);
+    await ledger.release();
+    await instance.close();
+    remote.setOnline(false);
+    instance = await openRuntime(open, remote);
+    const base = instance.runtime.getSnapshot().entries[0]!;
+    expect(base.bodyDocId).not.toBe(legacy.entry.bodyDocId);
+    expect(instance.runtime.store.publication(value.id)).toEqual(legacy);
+    const edited = await instance.runtime.save({
+      value: { ...value, revision: 'r2', prompt: 'LATER PRIVATE WORK', variables: [] },
+      base,
+      bodyDocId: base.bodyDocId,
+    });
+    await instance.runtime.flush();
+    expect((await instance.runtime.store.read(legacy.entry)).prompt).toBe(value.prompt);
+    remote.loseReply(false);
+    remote.setOnline(true);
+    await instance.runtime.flush();
+    expect(instance.runtime.getSnapshot()).toMatchObject({ entries: [edited], pendingIds: [] });
+    expect(remote.active.get(value.id)?.revision).toBe('r2');
+  });
+
   it('observes an index uploaded after activation without another directory query or body download', async () => {
     const remote = await cloud();
     const owner = await (await disk())();
@@ -200,7 +509,9 @@ describe('workspace Prompt Shortcut runtime', () => {
     await writer.flush();
     await received;
     unsubscribe();
-    expect(reader.getSnapshot().entries).toEqual([entry]);
+    expect(reader.getSnapshot().entries).toEqual([
+      { ...entry, bodyDocId: remote.active.get(entry.id)!.bodyDocId },
+    ]);
     // Both writes/syncs to this body belong to the author; the reader only held its index room.
     const readerBody = await readerRepo.acquireDoc('shortcut-body:shared');
     expect(readerBody.doc.getMap('revisions').size).toBe(0);
@@ -239,7 +550,7 @@ describe('workspace Prompt Shortcut runtime', () => {
       stage: async (record) => {
         entered();
         await wait;
-        await port.stage(record);
+        return port.stage(record);
       },
     });
     await runtime.save({ value, base: null, bodyDocId: 'body' });
@@ -289,10 +600,13 @@ describe('workspace Prompt Shortcut runtime', () => {
     const { projectShortcutIndex } = await import('../src/prompt-shortcuts/catalog');
     const ledger = await instance.repo.acquireFlockDoc('shortcut-local:ws:alice');
     ledger.flock.set(['writeIntent', value.id], {
-      entry: projectShortcutIndex(value, 'body'),
-      published: null,
-      operation: 'save',
-      deleted: false,
+      record: {
+        entry: projectShortcutIndex(value, 'body'),
+        published: null,
+        operation: 'save',
+        deleted: false,
+      },
+      baseRevision: null,
     });
     ledger.flock.commit();
     await instance.repo.persistFlockDocNow('shortcut-local:ws:alice', ledger.flock);
@@ -322,7 +636,7 @@ describe('workspace Prompt Shortcut runtime', () => {
     await instance.runtime.flush();
     expect(instance.runtime.getSnapshot().pendingIds).toEqual([]);
     expect(remote.events.indexOf('activate')).toBeGreaterThan(
-      remote.events.indexOf('sync:shortcut-body:body')
+      remote.events.indexOf(`sync:shortcut-body:${remote.active.get(entry.id)!.bodyDocId}`)
     );
     expect(remote.events.lastIndexOf('sync:shortcut-index:ws:alice:private')).toBeGreaterThan(
       remote.events.indexOf('activate')
@@ -403,7 +717,7 @@ describe('workspace Prompt Shortcut runtime', () => {
   it('discovers peer indexes without loading bodies and denies a cached body after revocation', async () => {
     const remote = await cloud();
     const owner = await openRuntime(await disk(), remote);
-    const entry = await owner.runtime.save({
+    await owner.runtime.save({
       value: { ...value, visibility: 'workspace' },
       base: null,
       bodyDocId: 'shared',
@@ -418,7 +732,8 @@ describe('workspace Prompt Shortcut runtime', () => {
     });
     remote.events.length = 0;
     await reader.setDirectory([...remote.active.values()]);
-    expect(reader.getSnapshot().entries).toEqual([entry]);
+    const entry = reader.getSnapshot().entries[0]!;
+    expect(entry.revision).toBe(value.revision);
     expect(remote.events.some((event) => event.includes('shortcut-body'))).toBe(false);
     expect((await reader.read(entry)).prompt).toBe(value.prompt);
     await reader.setDirectory([]);

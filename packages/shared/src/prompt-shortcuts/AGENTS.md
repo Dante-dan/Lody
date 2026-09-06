@@ -17,15 +17,10 @@
 - `catalog.ts` stores only bounded index projections in a business Flock, never
   repo meta. Permanent deletion has a separate monotonic tombstone. Do not use
   that tombstone for visibility withdrawal: re-sharing the same id is valid.
-- `local-store.ts` owns the local working catalog, pointer-only write intents
-  and publication outbox. Validate, persist intent, persist body, persist working
-  row/outbox, clear intent. Startup completes post-body saves and discards
-  pre-body intents. Never infer repair work by scanning all bodies.
-- `runtime.ts` owns discovery, authorized lazy body reads and publication:
-  stage → upload body → prepare empty index → activate CAS → upload projection
-  → withdraw old domain. An empty index carries no staged Prompt metadata.
-  UI resolves Save on local durability. Pending publication identities cannot
-  be replaced after an ambiguous response. Runtime, not UI lifetime, retries.
+- `local-store.ts` owns local working state, crash intents, publication jobs and
+  discovery cache; `runtime.ts` owns publication and authorized lazy reads.
+  Read [storage-protocol.md](storage-protocol.md) before changing either.
+  Working bodies NEVER upload. Pending publication NEVER locks local authoring.
 - `access.ts` places protected streams OUTSIDE ordinary workspace-token prefixes:
   `shortcut-index:<workspace>:<owner>:<visibility>` and `shortcut-body:<id>`.
   Shared catalogs are per-author so another member never receives write access
@@ -36,6 +31,8 @@
   suppress local exports in addition to read-only gateway grants. Release every
   replica, including late opens after disposal. The host must consistently choose
   the same access mode for concurrent leases of one room.
+- `lifetime.ts` stops cloud waits on disposal, not server effects. Preserve the
+  durable job identity; never wait for connectivity before closing local storage.
 - The repo has no workspace transports; only exact body/index resources enter
   Streams. The local ledger must NEVER enter sync. Host storage is scoped by
   account AND workspace and survives ordinary cache clear (it may be the only
@@ -44,8 +41,9 @@
 - The authoritative directory owns a live room per active index domain, not body
   joins. Keep the Flock subscription: activation can arrive before the index append,
   and a one-shot read would miss that publication until an unrelated refresh.
-  Reads still authorize the exact body even when cached. Only an owned pending
-  working copy bypasses cloud reads for offline editing/inspection.
+  Local readiness and cache hits never obtain cloud grants. Learned revocations
+  persist; offline devices cannot learn them immediately. Explicit owner deletion
+  tombstones hide clean replicas, while conflicts preserve local work.
 
 ## Validation
 

@@ -78,13 +78,14 @@ export function PromptShortcutProvider({
   const stage = useCloudMutation(api.promptShortcuts.stageDocument);
   const activate = useCloudMutation(api.promptShortcuts.activateDocument);
   const revoke = useCloudMutation(api.promptShortcuts.revokeShortcut);
+  const settle = useCloudMutation(api.promptShortcuts.settleDocument);
   const grant = useCloudAction(api.promptShortcuts.getStreamToken);
   const directory = useCloudQuery(
     api.promptShortcuts.listAccessibleDocuments,
     cloud && workspaceId && userId ? { workspaceId } : 'skip'
   );
-  const current = useRef({ workspaceId, userId, stage, activate, revoke, grant });
-  current.current = { workspaceId, userId, stage, activate, revoke, grant };
+  const current = useRef({ workspaceId, userId, stage, activate, revoke, grant, settle });
+  current.current = { workspaceId, userId, stage, activate, revoke, grant, settle };
   const [generation, setGeneration] = useState(0);
   const [instance, setInstance] = useState<{
     runtime: PromptShortcutRuntime;
@@ -171,7 +172,7 @@ export function PromptShortcutProvider({
               },
               stage: async ({ entry }) => {
                 check();
-                await current.current.stage({
+                const result = await current.current.stage({
                   workspaceId,
                   ownerUserId: userId,
                   shortcutId: entry.id,
@@ -179,6 +180,7 @@ export function PromptShortcutProvider({
                   visibility: entry.visibility,
                 });
                 check();
+                return result.status;
               },
               activate: async ({ entry, published }) => {
                 check();
@@ -195,8 +197,24 @@ export function PromptShortcutProvider({
               },
               revoke: async (entry) => {
                 check();
-                await current.current.revoke({ workspaceId, shortcutId: entry.id });
+                await current.current.revoke({
+                  workspaceId,
+                  shortcutId: entry.id,
+                  bodyDocId: entry.bodyDocId,
+                  visibility: entry.visibility,
+                });
                 check();
+              },
+              settle: async ({ entry }) => {
+                check();
+                const status = await current.current.settle({
+                  workspaceId,
+                  shortcutId: entry.id,
+                  bodyDocId: entry.bodyDocId,
+                  visibility: entry.visibility,
+                });
+                check();
+                return status;
               },
               dispose: () => sync.dispose(),
             }

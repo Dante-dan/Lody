@@ -84,9 +84,9 @@ describe('shortcut scoped sync', () => {
     const acquiring = sync.acquire(resource, false);
     const disposing = sync.dispose();
     const rejected = expect(acquiring).rejects.toThrow('disposed');
-    authorize(grant);
     await rejected;
     await disposing;
+    authorize(grant); // Closing must not depend on this response ever arriving.
     await expect(repo.unloadDoc(grant.streamId)).resolves.toBeUndefined();
     await repo.destroy();
   });

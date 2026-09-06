@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
 export const PROMPT_SHORTCUT_LIMITS = {
+  /** Author-facing field lengths, shared with the editor's own `maxLength`. */
+  name: 60,
+  slug: 40,
+  description: 240,
   promptBytes: 256 * 1024,
   documentBytes: 512 * 1024,
   indexBytes: 8 * 1024,
@@ -93,9 +97,9 @@ export const PromptShortcutSchema = z
     workspaceId: identifier,
     ownerUserId: identifier,
     visibility: z.enum(['private', 'workspace']),
-    name: z.string().trim().min(1).max(60),
+    name: z.string().trim().min(1).max(PROMPT_SHORTCUT_LIMITS.name),
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/),
-    description: z.string().max(240).optional(),
+    description: z.string().max(PROMPT_SHORTCUT_LIMITS.description).optional(),
     prompt: z
       .string()
       .refine(

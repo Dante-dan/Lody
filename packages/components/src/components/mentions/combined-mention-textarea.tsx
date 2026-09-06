@@ -392,10 +392,24 @@ function TwoLevelMentionMenu({
             scope: templateScope,
             skills: skillItems,
             allowedDirs: allowedSkillDirs,
-            disabledReason: t(
-              'settings.promptShortcuts.mentionScope',
-              'Select the required Project, Machine and Agent scope first.'
-            ),
+            disabledReason: (missing) =>
+              missing.length === 0
+                ? t(
+                    'settings.promptShortcuts.mentionScope',
+                    'Not available for the scope set in “Applies to”.'
+                  )
+                : t('settings.promptShortcuts.mentionScopeMissing', {
+                    defaultValue: 'Set {{axes}} in “Applies to” first.',
+                    axes: missing
+                      .map((axis) =>
+                        axis === 'project'
+                          ? t('settings.promptShortcuts.project', 'Project')
+                          : axis === 'machineId'
+                            ? t('settings.promptShortcuts.machine', 'Machine')
+                            : t('settings.promptShortcuts.agent', 'Agent')
+                      )
+                      .join(' + '),
+                  }),
           })
         : baseCategories,
     [templateScope, baseCategories, skillItems, allowedSkillDirs, t]

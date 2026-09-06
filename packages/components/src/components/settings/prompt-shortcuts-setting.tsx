@@ -1,25 +1,31 @@
-import { useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import { useTranslation } from 'react-i18next';
 import { useCloudQuery, usePlatformCapability } from '@lody/platform/react';
 import { getServerNow, type LocalProjectId, type MachineId, type WorkspaceId } from '@lody/shared';
 import {
   getShortcutMentionGate,
+  getShortcutMentionScopeIssues,
   type PromptShortcut,
   type PromptShortcutIndexEntry,
 } from '@lody/shared/prompt-shortcuts';
-import { Plus, Trash2 } from 'lucide-react';
+import { CloudUpload, Loader2, Plus, SquareSlash, Trash2 } from 'lucide-react';
 import { getAllAgentConfigAtom } from '@/atoms/agents';
 import { cloudOperations } from '@/lib/cloud-api-operations';
+import { cn } from '@/lib/utils';
 import { usePromptShortcuts } from '../../providers/prompt-shortcut-provider';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { useVisibleMachineMetas } from '@/hooks/use-visible-machine-metas';
 import { useVisibleLocalProjectsFromMachineIndex } from '@/hooks/use-visible-local-projects';
 import { useMachineFlockAgentConfigsForMachineIds } from '@/hooks/use-machine-flock-agent-configs';
 import { CombinedMentionTextarea } from '@/components/mentions/combined-mention-textarea';
+import { getComposerMentionChip } from '@/components/mentions/mention-chips';
 import { toPersistedMentionRanges } from '@/components/mentions/mention-persistence';
 import type { MentionProjectSource } from '@/components/mentions/mention-project-file-source';
+import { Badge } from '@/ui/badge';
 import { Button } from '@/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/ui/dialog';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -30,11 +36,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/ui/alert-dialog';
+import { settingContainerClass } from '.';
+import { FormMessage, Section } from './form-primitives';
 import {
   PromptShortcutForm,
   type ShortcutPromptEditorProps,
   type ShortcutScopeOptions,
 } from './prompt-shortcut-form';
+import { ScopePills } from './prompt-shortcut-scope';
 
 export function PromptShortcutsSetting() {
   const state = usePromptShortcuts();
@@ -57,7 +66,9 @@ function PromptShortcutsSettingContent({
   state: ReturnType<typeof usePromptShortcuts>;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   const { runtime, entries, loading, pendingIds, errors, retry } = state;
+  const scope = useShortcutScopeOptions(runtime?.workspaceId);
   const [editor, setEditor] = useState<{
     value: PromptShortcut;
     base: PromptShortcutIndexEntry | null;
@@ -100,95 +111,42 @@ function PromptShortcutsSettingContent({
       },
     });
   };
+  const owned = editor ? editor.value.ownerUserId === runtime?.userId : false;
   return (
-    <div className="space-y-4 p-1">
-      <div className="flex items-start justify-between gap-4">
-        <p className="text-sm text-muted-foreground">
-          {t(
-            'settings.promptShortcuts.intro',
-            'Save reusable Prompts with mentions and variables. Private by default.'
-          )}
-        </p>
-        <Button size="sm" onClick={create} disabled={!runtime || busy}>
-          <Plus className="size-4" />
-          {t('settings.promptShortcuts.new', 'New shortcut')}
-        </Button>
-      </div>
-      {loading && (
-        <p role="status" className="text-sm text-muted-foreground">
-          {t('common.loading', 'Loading…')}
-        </p>
-      )}
-      {!loading && entries.length === 0 && (
-        <p className="py-10 text-center text-sm text-muted-foreground">
-          {t('settings.promptShortcuts.empty', 'No Prompt Shortcuts yet.')}
-        </p>
-      )}
-      <div className="divide-y">
-        {entries.map((entry) => (
-          <div key={entry.id} className="flex items-center gap-3 py-3">
-            <button
-              type="button"
-              className="min-w-0 flex-1 text-start"
-              disabled={busy}
-              onClick={() => void edit(entry)}
-            >
-              <div className="flex flex-wrap items-baseline gap-x-3">
-                <span className="font-medium">{entry.name}</span>
-                <code className="text-xs text-muted-foreground">/{entry.slug}</code>
-              </div>
-              {entry.description && (
-                <p className="truncate text-xs text-muted-foreground">{entry.description}</p>
-              )}
-              <div className="mt-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                <span>
-                  {entry.visibility === 'private'
-                    ? t('settings.promptShortcuts.private', 'Private')
-                    : t('settings.promptShortcuts.shared', 'Workspace')}
-                </span>
-                {entry.scope.project && (
-                  <span>
-                    {entry.scope.project.kind === 'github'
-                      ? entry.scope.project.repository
-                      : entry.scope.project.id}
-                  </span>
-                )}
-                {entry.scope.machineId && (
-                  <span>{t('settings.promptShortcuts.machineScoped', 'Machine scoped')}</span>
-                )}
-                {entry.scope.providerKey && <span>{entry.scope.providerKey}</span>}
-                {pendingIds.includes(entry.id) && (
-                  <span>
-                    {t('settings.promptShortcuts.pending', 'Saved locally · publication pending')}
-                  </span>
-                )}
-              </div>
-            </button>
-            {entry.ownerUserId === runtime?.userId && (
-              <Button
-                size="icon"
-                variant="ghost"
-                disabled={busy || pendingIds.includes(entry.id)}
-                onClick={() => setRemoval(entry)}
-                aria-label={t('settings.promptShortcuts.delete', 'Delete shortcut')}
-              >
-                <Trash2 className="size-4" />
-              </Button>
-            )}
-          </div>
-        ))}
-      </div>
+    <div className={settingContainerClass}>
+      <p className="text-xs leading-snug text-muted-foreground">
+        {t(
+          'settings.promptShortcuts.intro',
+          'Saved Prompts you can call with a slash command. Each one says where it applies; a Shortcut with nothing set works anywhere in this workspace. Private until you share it.'
+        )}
+      </p>
+
+      <PromptShortcutsList
+        entries={entries}
+        options={scope.options}
+        currentUserId={runtime?.userId ?? null}
+        pendingIds={pendingIds}
+        errorIds={Object.keys(errors)}
+        loading={loading}
+        busy={busy}
+        canCreate={!!runtime}
+        onCreate={create}
+        onOpen={(entry) => void edit(entry)}
+        onDelete={setRemoval}
+      />
+
       {(error || Object.keys(errors).length > 0) && (
-        <div role="alert" className="space-y-2 text-sm">
-          <p>
+        <FormMessage tone="warning">
+          <span className="block">
             {t(
               'settings.promptShortcuts.retryHelp',
-              'Some changes could not be loaded or published. Your local saves are retained.'
+              'Some changes could not be loaded or published. Your local saves are kept, and you can keep editing.'
             )}
-          </p>
+          </span>
           <Button
             variant="outline"
             size="sm"
+            className="mt-2 h-7 text-xs"
             onClick={() => {
               setError(false);
               retry();
@@ -196,35 +154,56 @@ function PromptShortcutsSettingContent({
           >
             {t('common.retry', 'Retry')}
           </Button>
-        </div>
+        </FormMessage>
       )}
-      {editor && runtime && (
-        <Dialog
-          open
-          onOpenChange={(open) => {
-            if (!open && !busy) setEditor(null);
-          }}
+
+      <Dialog
+        open={!!editor && !!runtime}
+        onOpenChange={(open) => {
+          if (!open && !busy) setEditor(null);
+        }}
+      >
+        <DialogContent
+          overlayClassName={
+            // Desktop settings is itself a dialog; match its z-index so this
+            // later overlay covers it without stacking a second /80 veil.
+            isMobile ? undefined : 'z-[var(--z-dialog)] bg-black/20'
+          }
+          className={cn(
+            'flex max-h-[min(680px,88dvh)] w-[min(620px,96dvw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none sm:p-0',
+            !isMobile && 'shadow-popover'
+          )}
         >
-          <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl">
-            <DialogTitle>
-              {editor.base
-                ? t('settings.promptShortcuts.edit', 'Prompt Shortcut')
-                : t('settings.promptShortcuts.new', 'New shortcut')}
+          <header className="shrink-0 border-b border-border/60 px-5 py-3 pr-12">
+            <DialogTitle className="text-sm font-semibold">
+              {!editor?.base
+                ? t('settings.promptShortcuts.new', 'New Prompt Shortcut')
+                : owned
+                  ? t('settings.promptShortcuts.edit', 'Edit Prompt Shortcut')
+                  : t('settings.promptShortcuts.view', 'Prompt Shortcut')}
             </DialogTitle>
-            <DialogDescription>
-              {t(
-                'settings.promptShortcuts.editorHelp',
-                'Save a Prompt as reusable content. Scope controls where it can be used.'
-              )}
+            <DialogDescription className="mt-0.5 text-xs leading-snug text-muted-foreground">
+              {owned
+                ? t(
+                    'settings.promptShortcuts.editorHelp',
+                    'Saved to this workspace and sent as one message.'
+                  )
+                : t(
+                    'settings.promptShortcuts.readOnlyHelp',
+                    'Shared by another member. Only its author can change it.'
+                  )}
             </DialogDescription>
-            {editor.value.ownerUserId !== runtime.userId ? (
-              <pre className="whitespace-pre-wrap break-words text-sm">{editor.value.prompt}</pre>
-            ) : (
+          </header>
+          {editor && runtime ? (
+            owned ? (
               <ShortcutEditor
+                key={editor.value.id}
+                className="min-h-0 flex-1"
                 initial={editor.value}
+                isNew={!editor.base}
                 canShare={runtime.canShare}
                 saving={busy}
-                saveBlocked={pendingIds.includes(editor.value.id)}
+                scope={scope}
                 onCancel={() => setEditor(null)}
                 onSave={async (value) => {
                   setBusy(true);
@@ -243,10 +222,18 @@ function PromptShortcutsSettingContent({
                   }
                 }}
               />
-            )}
-          </DialogContent>
-        </Dialog>
-      )}
+            ) : (
+              <PromptShortcutReadOnlyView
+                className="min-h-0 flex-1"
+                shortcut={editor.value}
+                options={scope.options}
+                onClose={() => setEditor(null)}
+              />
+            )
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog
         open={!!removal}
         onOpenChange={(open) => {
@@ -256,19 +243,21 @@ function PromptShortcutsSettingContent({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {t('settings.promptShortcuts.delete', 'Delete shortcut')}
+              {t('settings.promptShortcuts.deleteTitle', 'Delete Prompt Shortcut')}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {t(
-                'settings.promptShortcuts.deleteHelp',
-                'Delete this shortcut? Prompts already inserted into drafts or sent messages are unchanged.'
-              )}
+              {t('settings.promptShortcuts.deleteHelp', {
+                defaultValue:
+                  'Delete “{{name}}”? Prompts already inserted into drafts or sent messages are unchanged.',
+                name: removal?.name ?? '',
+              })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>{t('common.cancel', 'Cancel')}</AlertDialogCancel>
             <AlertDialogAction
               disabled={busy}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={(event) => {
                 event.preventDefault();
                 if (!runtime || !removal) return;
@@ -280,6 +269,7 @@ function PromptShortcutsSettingContent({
                   .finally(() => setBusy(false));
               }}
             >
+              {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" /> : null}
               {t('common.delete', 'Delete')}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -289,24 +279,339 @@ function PromptShortcutsSettingContent({
   );
 }
 
-function ShortcutEditor(props: {
-  initial: PromptShortcut;
-  canShare: boolean;
-  saving: boolean;
-  saveBlocked: boolean;
-  onCancel(): void;
-  onSave(value: PromptShortcut): Promise<void>;
+/**
+ * The catalog, including the Shortcuts that cannot run right now.
+ *
+ * Settings is where a Shortcut gets FIXED, so a row that vanishes when its
+ * machine sleeps is a row nobody can repair — unlike the `/` menu, which shows
+ * only what the current chat can actually call.
+ */
+export function PromptShortcutsList({
+  entries,
+  options,
+  currentUserId,
+  pendingIds,
+  errorIds,
+  loading,
+  busy,
+  canCreate,
+  onCreate,
+  onOpen,
+  onDelete,
+}: {
+  entries: readonly PromptShortcutIndexEntry[];
+  options?: ShortcutScopeOptions;
+  currentUserId: string | null;
+  /** Saved locally, publication still in flight. Never a reason to disable. */
+  pendingIds: readonly string[];
+  errorIds: readonly string[];
+  loading: boolean;
+  busy: boolean;
+  canCreate: boolean;
+  onCreate: () => void;
+  onOpen: (entry: PromptShortcutIndexEntry) => void;
+  onDelete: (entry: PromptShortcutIndexEntry) => void;
 }) {
-  const allowMachineSelection = usePlatformCapability('remoteMachines');
-  const workspaceId = props.initial.workspaceId as WorkspaceId;
-  const machineIndex = useVisibleMachineMetas({ workspaceId });
+  const { t } = useTranslation();
+  const addLabel = t('settings.promptShortcuts.new', 'New Prompt Shortcut');
+  return (
+    <section className="flex flex-col">
+      <div className="flex items-center justify-between gap-2 pb-1 pt-0.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <h3 className="text-xs font-semibold text-muted-foreground">
+            {t('settings.tabs.promptShortcuts', 'Prompt Shortcuts')}
+          </h3>
+          {entries.length > 0 ? (
+            <span className="text-xs tabular-nums text-muted-foreground/70">{entries.length}</span>
+          ) : null}
+          {loading ? (
+            <span
+              role="status"
+              className="flex items-center gap-1 text-[11px] text-muted-foreground/70"
+            >
+              <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+              {t('common.loading', 'Loading…')}
+            </span>
+          ) : null}
+        </div>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7 text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+              aria-label={addLabel}
+              disabled={!canCreate || busy}
+              onClick={onCreate}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>{addLabel}</TooltipContent>
+        </Tooltip>
+      </div>
+
+      {entries.length === 0 ? (
+        loading ? null : (
+          <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-border/60 bg-card/30 px-6 py-8 text-center text-sm">
+            <SquareSlash className="h-6 w-6 text-muted-foreground/70" aria-hidden="true" />
+            <p className="mt-2 text-muted-foreground">
+              {t(
+                'settings.promptShortcuts.empty',
+                'No Prompt Shortcuts yet. Save a Prompt you retype often and call it with /.'
+              )}
+            </p>
+            <Button size="sm" className="mt-3" disabled={!canCreate || busy} onClick={onCreate}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />
+              {addLabel}
+            </Button>
+          </div>
+        )
+      ) : (
+        <div className="space-y-2">
+          {entries.map((entry) => (
+            <PromptShortcutRow
+              key={entry.id}
+              entry={entry}
+              options={options}
+              canManage={entry.ownerUserId === currentUserId}
+              pending={pendingIds.includes(entry.id)}
+              failed={errorIds.includes(entry.id)}
+              busy={busy}
+              onOpen={() => onOpen(entry)}
+              onDelete={() => onDelete(entry)}
+            />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * One catalog row.
+ *
+ * States what the author decided — the command, who can read it, where it
+ * applies, how many values a caller has to fill in — and, separately, anything
+ * that stops it working. Scope pills are the author's intent; the status line
+ * below them is a fact about right now, and the two never merge.
+ */
+export function PromptShortcutRow({
+  entry,
+  options,
+  canManage,
+  pending,
+  failed,
+  busy,
+  onOpen,
+  onDelete,
+}: {
+  entry: PromptShortcutIndexEntry;
+  options?: ShortcutScopeOptions;
+  canManage: boolean;
+  pending: boolean;
+  failed: boolean;
+  busy: boolean;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
+  const { t } = useTranslation();
+  // Derived from the index alone: the saved dependencies against the saved
+  // scope. It is not live availability — that needs the machine and the body —
+  // so the row says what to repair rather than claiming a Shortcut is ready.
+  const outOfScope = entry.dependencySummary.some(
+    (target) => getShortcutMentionScopeIssues(entry.scope, target).length > 0
+  );
+  return (
+    <div className="overflow-hidden rounded-lg bg-foreground/[0.04]">
+      <div className="flex w-full min-w-0 items-center transition-colors hover:bg-hover/40">
+        <button
+          type="button"
+          onClick={onOpen}
+          disabled={busy}
+          aria-label={canManage ? t('common.edit', 'Edit') : t('common.view', 'View')}
+          className="flex min-w-0 flex-1 items-start gap-2.5 rounded-lg px-3 py-2.5 text-left focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring"
+        >
+          <span
+            aria-hidden="true"
+            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-foreground/[0.05] font-mono text-xs text-muted-foreground"
+          >
+            /
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="min-w-0 truncate text-sm font-medium leading-tight">
+                {entry.name}
+              </span>
+              <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+                /{entry.slug}
+              </span>
+              {/* Visibility, not scope: the pills below say where it can be
+                  called, this says who can read it. */}
+              <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px]">
+                {entry.visibility === 'workspace'
+                  ? t('settings.promptShortcuts.shared', 'Shared')
+                  : t('settings.promptShortcuts.private', 'Private')}
+              </Badge>
+              {/* Owned by someone else: the missing delete button is the only
+                  other sign, and an absence is not a signal. */}
+              {canManage ? null : (
+                <Badge variant="outline" className="shrink-0 px-1.5 py-0 text-[10px] font-normal">
+                  {t('settings.promptShortcuts.readOnly', 'Read-only')}
+                </Badge>
+              )}
+            </span>
+            {entry.description ? (
+              <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-foreground">
+                {entry.description}
+              </span>
+            ) : null}
+            <span className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <ScopePills scope={entry.scope} options={options} />
+              {entry.variableCount > 0 ? (
+                <span className="text-[11px] leading-4 text-muted-foreground/80">
+                  {t('settings.promptShortcuts.variableCount', {
+                    defaultValue: '{{count}} variables',
+                    count: entry.variableCount,
+                  })}
+                </span>
+              ) : null}
+            </span>
+            {outOfScope ? (
+              <span className="mt-1 block truncate text-[11px] leading-tight text-status-warning">
+                {t(
+                  'settings.promptShortcuts.needsAttention',
+                  'A reference no longer matches this scope — open to repair it.'
+                )}
+              </span>
+            ) : null}
+            {failed ? (
+              <span className="mt-1 block truncate text-[11px] leading-tight text-status-warning">
+                {t(
+                  'settings.promptShortcuts.publishFailed',
+                  'Saved on this device. Publishing failed — it will retry.'
+                )}
+              </span>
+            ) : pending ? (
+              <span className="mt-1 flex min-w-0 items-center gap-1 text-[11px] leading-tight text-muted-foreground/80">
+                <CloudUpload className="size-3 shrink-0" aria-hidden="true" />
+                {t(
+                  'settings.promptShortcuts.pending',
+                  'Saved on this device · publishing in the background'
+                )}
+              </span>
+            ) : null}
+          </span>
+        </button>
+        <div className="flex shrink-0 items-center gap-1 self-start py-2 pl-2 pr-2">
+          {canManage ? (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+              disabled={busy}
+              aria-label={t('settings.promptShortcuts.delete', 'Delete shortcut')}
+              onClick={onDelete}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Someone else's shared Shortcut.
+ *
+ * Read-only because only its author may change it (a copy-to-mine action is not
+ * built yet). Rendered with the editor's own sections so the same Shortcut looks
+ * like the same thing whether or not you own it.
+ */
+export function PromptShortcutReadOnlyView({
+  shortcut,
+  options,
+  onClose,
+  className,
+}: {
+  shortcut: PromptShortcut;
+  options?: ShortcutScopeOptions;
+  onClose: () => void;
+  className?: string;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className={cn('flex min-h-0 flex-col', className)}>
+      <div className="scrollbar-pro min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="min-w-0 truncate text-sm font-medium">{shortcut.name}</span>
+          <span className="font-mono text-[11px] text-muted-foreground">/{shortcut.slug}</span>
+          <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+            {t('settings.promptShortcuts.shared', 'Shared')}
+          </Badge>
+        </div>
+        {shortcut.description ? (
+          <p className="text-xs leading-snug text-muted-foreground">{shortcut.description}</p>
+        ) : null}
+        <Section title={t('settings.promptShortcuts.scope', 'Applies to')}>
+          <ScopePills scope={shortcut.scope} options={options} />
+        </Section>
+        <Section title={t('settings.promptShortcuts.prompt', 'Prompt')}>
+          {/* Same type as the editor's own prompt field: one Shortcut should not
+              look like two different things depending on who opened it. */}
+          <div className="whitespace-pre-wrap break-words rounded-md border border-border/60 bg-background/60 p-2.5 text-sm leading-6">
+            {shortcut.prompt}
+          </div>
+        </Section>
+        {shortcut.variables.length > 0 ? (
+          <Section title={t('settings.promptShortcuts.defaults', 'Variables')}>
+            <ul className="space-y-1.5">
+              {shortcut.variables.map((variable) => (
+                <li key={variable.name} className="flex min-w-0 items-start gap-2 text-xs">
+                  <code className="shrink-0 rounded-sm bg-status-warning/12 px-1 py-0.5 font-mono text-[11px] text-status-warning">
+                    {`!{${variable.name}}`}
+                  </code>
+                  <span className="min-w-0 break-words text-muted-foreground">
+                    {variable.defaultValue ?? t('settings.promptShortcuts.noDefault', 'No default')}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        ) : null}
+      </div>
+      <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-border/60 px-5 py-3">
+        <Button type="button" variant="outline" size="sm" onClick={onClose}>
+          {t('common.close', 'Close')}
+        </Button>
+      </footer>
+    </div>
+  );
+}
+
+/**
+ * Everything the scope axes can be set to, resolved once for the whole panel.
+ *
+ * The list needs the same labels as the editor's selectors — a row that printed
+ * a raw machine id next to a selector that prints its name is two different
+ * answers to one question.
+ */
+function useShortcutScopeOptions(workspaceIdInput?: string) {
+  const workspaceId = workspaceIdInput as WorkspaceId | undefined;
+  const machineIndex = useVisibleMachineMetas(workspaceId ? { workspaceId } : undefined);
   const machineIds = useMemo(() => [...machineIndex.machines.keys()], [machineIndex.machines]);
   useMachineFlockAgentConfigsForMachineIds(machineIds);
-  const { projects } = useVisibleLocalProjectsFromMachineIndex(machineIndex, { workspaceId });
+  const { projects } = useVisibleLocalProjectsFromMachineIndex(
+    machineIndex,
+    workspaceId ? { workspaceId } : undefined
+  );
   const configs = useAtomValue(getAllAgentConfigAtom);
-  const repositories = useCloudQuery(cloudOperations.github.getWorkspaceRepositories, {
-    workspaceId,
-  });
+  const repositories = useCloudQuery(
+    cloudOperations.github.getWorkspaceRepositories,
+    workspaceId ? { workspaceId } : 'skip'
+  );
   const providers = useMemo(
     () =>
       new Map(
@@ -333,6 +638,33 @@ function ShortcutEditor(props: {
     })),
     providers: [...providers].map(([value, config]) => ({ value, label: config.name })),
   };
+  return { options, providers, repositories, workspaceId };
+}
+
+type ShortcutScopeData = ReturnType<typeof useShortcutScopeOptions>;
+
+/**
+ * The editor, wired to this workspace's mention sources.
+ *
+ * The prompt field is the composer's own mention textarea in template mode:
+ * `@` / `$` / `#` complete from what "Applies to" allows, and the semantic
+ * target is frozen at selection instead of re-parsed from a label at save time.
+ */
+function ShortcutEditor({
+  scope,
+  ...props
+}: {
+  initial: PromptShortcut;
+  isNew: boolean;
+  canShare: boolean;
+  saving: boolean;
+  scope: ShortcutScopeData;
+  className?: string;
+  onCancel(): void;
+  onSave(value: PromptShortcut): Promise<void>;
+}) {
+  const allowMachineSelection = usePlatformCapability('remoteMachines');
+  const { options, providers, repositories, workspaceId } = scope;
   const renderPrompt = (editor: ShortcutPromptEditorProps) => {
     const { project } = editor.scope;
     const mentionSource: MentionProjectSource | undefined =
@@ -347,23 +679,16 @@ function ShortcutEditor(props: {
             }
           : {
               kind: 'local',
-              workspaceId,
+              workspaceId: workspaceId as WorkspaceId,
               machineId: project.machineId as MachineId,
               localProjectId: project.id as LocalProjectId,
             }
         : undefined;
     const config = editor.scope.providerKey ? providers.get(editor.scope.providerKey) : undefined;
     return (
-      <CombinedMentionTextarea
-        key={JSON.stringify(editor.scope)}
-        id="shortcut-prompt"
-        className="min-h-48"
-        value={editor.value}
-        onValueChange={editor.onValueChange}
-        templateScope={editor.scope}
+      <ShortcutPromptField
+        editor={editor}
         mentionSource={mentionSource}
-        persistedMentions={editor.initialRanges}
-        commandsEnabled={false}
         disabled={props.saving}
         skillAgent={
           config
@@ -374,7 +699,6 @@ function ShortcutEditor(props: {
               }
             : undefined
         }
-        onMentionRangesChange={(ranges) => editor.onRangesChange(toPersistedMentionRanges(ranges))}
       />
     );
   };
@@ -384,6 +708,63 @@ function ShortcutEditor(props: {
       allowMachineSelection={allowMachineSelection}
       options={options}
       renderPrompt={renderPrompt}
+    />
+  );
+}
+
+/** Kept in step with the composer's box: border, radius, chip cover colour. */
+const SHORTCUT_PROMPT_SURFACE_CLASS_NAME = cn(
+  'w-full rounded-xl border border-foreground/[0.10] bg-background px-3 py-2.5',
+  'focus-within:outline-hidden focus-within:ring-1 focus-within:ring-ring/30',
+  'dark:border-input-border/70 dark:bg-input/90',
+  '[--mention-chip-surface:hsl(var(--background))] dark:[--mention-chip-surface:color-mix(in_srgb,hsl(var(--input))_90%,hsl(var(--background)))]'
+);
+
+/**
+ * The prompt field: the composer's own mention textarea, in template mode.
+ *
+ * Exported so Storybook renders the field that ships rather than a plain
+ * textarea — the chip cover colour has to match the surface behind it, and that
+ * is only visible in the real thing.
+ */
+export function ShortcutPromptField({
+  editor,
+  mentionSource,
+  skillAgent,
+  disabled,
+}: {
+  editor: ShortcutPromptEditorProps;
+  mentionSource?: MentionProjectSource;
+  skillAgent?: React.ComponentProps<typeof CombinedMentionTextarea>['skillAgent'];
+  disabled: boolean;
+}) {
+  const { t } = useTranslation();
+  return (
+    <CombinedMentionTextarea
+      // Scope owns the candidate sources, so a change rebuilds them; the draft's
+      // own ranges come back through `persistedMentions`.
+      key={JSON.stringify(editor.scope)}
+      id="shortcut-prompt"
+      aria-label={t('settings.promptShortcuts.prompt', 'Prompt')}
+      placeholder={t(
+        'settings.promptShortcuts.promptPlaceholder',
+        'Write the prompt you would otherwise retype.'
+      )}
+      value={editor.value}
+      onValueChange={editor.onValueChange}
+      templateScope={editor.scope}
+      mentionSource={mentionSource}
+      persistedMentions={editor.initialRanges}
+      getMentionChip={getComposerMentionChip}
+      commandsEnabled={false}
+      disabled={disabled}
+      rows={8}
+      // The composer's own surface: the field where a template is written and
+      // the field where a message is written are the same kind of field.
+      containerClassName={SHORTCUT_PROMPT_SURFACE_CLASS_NAME}
+      className="input-scrollbar min-h-40 resize-none border-transparent bg-transparent px-0 py-0 text-sm leading-6 text-input-foreground placeholder:text-input-placeholder focus-visible:ring-0 focus-visible:ring-offset-0"
+      skillAgent={skillAgent}
+      onMentionRangesChange={(ranges) => editor.onRangesChange(toPersistedMentionRanges(ranges))}
     />
   );
 }
