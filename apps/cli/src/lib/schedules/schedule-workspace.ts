@@ -89,14 +89,17 @@ export async function createScheduleWorkspace(args: {
       agentConfig.config.machineId !== auth.machineId
     )
       throw new ScheduleConfigurationError('OWNER_OR_AGENT_UNAVAILABLE');
-    if (run.definition.project.kind === 'local') {
+    // A schedule without a project is a plain chat run; there is no working
+    // directory to validate, and no local ledger entry to require.
+    const project = run.definition.project;
+    if (project?.kind === 'local') {
       const flock = await manager.repo.openFlockDoc(
         getMachineFlockDocId(workspaceId, auth.machineId)
       );
       const projects = getMachineFlockLocalProjects(
         readMachineFlockRowsFromFlock(flock.flock, { families: ['localProject'] })
       );
-      if (!projects[run.definition.project.localProjectId])
+      if (!projects[project.localProjectId])
         throw new ScheduleConfigurationError('PROJECT_UNAVAILABLE');
     }
     const capability = await readAgentAcpCapability({
@@ -111,7 +114,7 @@ export async function createScheduleWorkspace(args: {
     return {
       targetMachine: machine,
       agentConfig: agentConfig.config,
-      project: run.definition.project,
+      ...(project ? { project } : {}),
     };
   };
   const engine = new ScheduleEngine<PreparedSessionInput>({

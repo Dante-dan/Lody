@@ -1,6 +1,16 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import { ScheduleForm, ScheduleListView } from '../components/schedules/schedule-view';
-import type { ScheduleRegistryRow } from '@lody/shared';
+import { Bot, FolderGit2 } from 'lucide-react';
+import {
+  ScheduleForm,
+  ScheduleListView,
+  type ScheduleRowContext,
+} from '../components/schedules/schedule-view';
+import { PropertyRow, PropertyRowWide } from '../components/schedules/schedule-property-row';
+import { Switch } from '../ui/switch';
+import type { ScheduleRegistryRow, ScheduleRuntimeRow } from '@lody/shared';
+
+/** Frozen clock so "Next run" and the editor preview never drift. */
+const NOW = Date.parse('2026-09-06T09:12:00+08:00');
 
 const row: ScheduleRegistryRow = {
   scheduleId: 'daily-review',
@@ -17,8 +27,79 @@ const row: ScheduleRegistryRow = {
   agentConfigId: 'agent',
   definitionFingerprint: '0'.repeat(64),
   projectKind: 'github',
-  projectKey: 'example/project',
+  projectKey: 'loro-dev/lody',
 };
+
+const runtimeFor = (
+  target: ScheduleRegistryRow,
+  extra: Partial<ScheduleRuntimeRow> = {}
+): ScheduleRuntimeRow => ({
+  scheduleId: target.scheduleId,
+  machineId: target.machineId,
+  activationId: target.activationId,
+  observedDefinitionFingerprint: target.definitionFingerprint,
+  updatedAt: 0,
+  ...extra,
+});
+
+const rows: ScheduleRegistryRow[] = [
+  row,
+  {
+    ...row,
+    scheduleId: 'standup',
+    title: 'Post the standup summary',
+    trigger: { kind: 'cron', expression: '30 8 * * *', timeZone: 'Asia/Shanghai' },
+    projectKind: undefined,
+    projectKey: undefined,
+  },
+  {
+    ...row,
+    scheduleId: 'weekly-summary',
+    title: 'Write a weekly project summary',
+    enabled: false,
+    trigger: { kind: 'cron', expression: '0 17 * * 5', timeZone: 'Asia/Shanghai' },
+  },
+  {
+    ...row,
+    scheduleId: 'dependency-sweep',
+    title: 'Check dependencies for advisories',
+    trigger: { kind: 'interval', everyMs: 6 * 3_600_000, anchorAt: '2026-09-06T00:00:00Z' },
+    projectKind: 'local',
+    projectKey: 'local-project',
+  },
+  {
+    ...row,
+    scheduleId: 'release-notes',
+    title: 'Draft release notes',
+    trigger: { kind: 'cron', expression: '*/20 9-17 * * 1-5', timeZone: 'Asia/Shanghai' },
+  },
+];
+
+const context = (target: ScheduleRegistryRow): ScheduleRowContext => ({
+  machine: 'MacBook Pro',
+  agent: target.scheduleId === 'standup' ? 'Writer' : 'Code reviewer',
+  project: target.projectKey ? (target.projectKind === 'local' ? 'lody' : target.projectKey) : null,
+  presence: target.scheduleId === 'weekly-summary' ? 'offline' : 'online',
+  canToggle: true,
+});
+
+const runtimes: ScheduleRuntimeRow[] = [
+  runtimeFor(rows[0]!, {
+    nextScheduledAt: Date.parse('2026-09-07T09:00:00+08:00'),
+    lastDispatch: {
+      scheduledFor: Date.parse('2026-09-05T09:00:00+08:00'),
+      dispatchedAt: Date.parse('2026-09-05T09:00:04+08:00'),
+      sessionId: 'session',
+    },
+  }),
+  runtimeFor(rows[1]!, { nextScheduledAt: Date.parse('2026-09-07T08:30:00+08:00') }),
+  runtimeFor(rows[3]!, {
+    nextScheduledAt: Date.parse('2026-09-06T12:00:00+08:00'),
+    queueState: 'due',
+  }),
+  runtimeFor(rows[4]!, { queueState: 'blocked', blockedCode: 'PERMISSION_UNAVAILABLE' }),
+];
+
 const meta = {
   title: 'Workspace/Schedules',
   component: ScheduleListView,
@@ -31,46 +112,83 @@ const meta = {
     ),
   ],
   args: {
-    rows: [
-      row,
-      {
-        ...row,
-        scheduleId: 'weekly-summary',
-        title: 'Write a weekly project summary',
-        enabled: false,
-      },
-    ],
-    runtimes: [],
+    rows,
+    runtimes,
     ready: true,
+    now: NOW,
+    contextForRow: context,
     onOpen: () => {},
     onNew: () => {},
     onToggle: () => {},
+    onOpenSession: () => {},
   },
 } satisfies Meta<typeof ScheduleListView>;
 export default meta;
 type Story = StoryObj<typeof meta>;
+
 export const List: Story = {};
-export const Empty: Story = { args: { rows: [] } };
-export const Loading: Story = { args: { ready: false } };
-export const Blocked: Story = {
-  args: {
-    runtimes: [
-      {
-        scheduleId: row.scheduleId,
-        machineId: row.machineId,
-        activationId: row.activationId,
-        observedDefinitionFingerprint: row.definitionFingerprint,
-        updatedAt: 0,
-        queueState: 'blocked',
-        blockedCode: 'PERMISSION_UNAVAILABLE',
-      },
-    ],
-  },
+export const Narrow: Story = {
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
 };
-export const Editor: Story = {
+export const Empty: Story = { args: { rows: [], runtimes: [] } };
+export const Loading: Story = { args: { ready: false } };
+export const LoadError: Story = { args: { error: 'boom' } };
+export const AllOffline: Story = {
+  args: { contextForRow: (item) => ({ ...context(item), presence: 'offline' }) },
+};
+export const ConnectionUnknown: Story = {
+  args: { contextForRow: (item) => ({ ...context(item), presence: 'unknown' }) },
+};
+export const ReadOnly: Story = {
+  args: { contextForRow: (item) => ({ ...context(item), canToggle: false }) },
+};
+export const AwaitingMachine: Story = { args: { runtimes: [] } };
+
+/** Run configuration rows are owned by the workspace; stories stand in for them. */
+function RunConfigFixture({ chatOnly = false }: { chatOnly?: boolean }) {
+  return (
+    <>
+      <PropertyRowWide label="Agent">
+        <button
+          type="button"
+          className="flex h-8 w-full items-center justify-end gap-2 rounded-md px-2 text-[13px] hover:bg-hover"
+        >
+          <Bot className="size-3.5 opacity-70" />
+          Code reviewer · Sonnet · Ask each time
+        </button>
+      </PropertyRowWide>
+      <PropertyRowWide label="Project">
+        <button
+          type="button"
+          className="flex h-8 w-full items-center justify-end gap-2 rounded-md px-2 text-[13px] hover:bg-hover"
+        >
+          <FolderGit2 className="size-3.5 opacity-70" />
+          {chatOnly ? 'No project' : 'loro-dev/lody'}
+        </button>
+      </PropertyRowWide>
+      {chatOnly ? (
+        <p className="px-3 py-2 text-xs text-muted-foreground">
+          Without a project each run is a plain chat with the Agent — no repository is checked out.
+        </p>
+      ) : (
+        <PropertyRow label="Isolated worktree">
+          <Switch className="mr-2" checked aria-label="Use an isolated Git worktree" />
+        </PropertyRow>
+      )}
+    </>
+  );
+}
+
+const editor = (
+  props: Partial<React.ComponentProps<typeof ScheduleForm>> = {}
+): StoryObj<typeof meta> => ({
   render: () => (
     <div className="h-dvh overflow-auto">
       <ScheduleForm
+        now={NOW}
+        saving={false}
+        onSave={() => {}}
+        runConfig={<RunConfigFixture />}
         initial={{
           title: 'Review the latest changes',
           prompt:
@@ -79,80 +197,66 @@ export const Editor: Story = {
           misfire: 'run_once',
           overlap: 'queue_one',
         }}
-        saving={false}
-        onSave={() => {}}
-        selectors={
-          <div className="flex flex-wrap gap-3 text-sm">
-            <span>Agent: Code reviewer · Auto permission</span>
-            <span>Project: example/project</span>
-          </div>
-        }
+        {...props}
       />
     </div>
   ),
-};
+});
 
-export const Offline: Story = {
-  args: {
-    contextForRow: () => ({
-      machine: 'MacBook',
-      agent: 'Code reviewer',
-      project: 'example/project',
-      presence: 'offline',
-      canToggle: true,
-    }),
+export const Editor: Story = editor();
+export const EditorNarrow: Story = {
+  ...editor(),
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+};
+export const EditorNew: Story = editor({
+  initial: {
+    title: '',
+    prompt: '',
+    trigger: { kind: 'cron', expression: '0 9 * * *', timeZone: 'Asia/Shanghai' },
+    misfire: 'run_once',
+    overlap: 'queue_one',
   },
+});
+export const EditorChatOnly: Story = {
+  ...editor({ runConfig: <RunConfigFixture chatOnly /> }),
 };
-export const UnknownConnection: Story = {
-  args: {
-    contextForRow: () => ({
-      machine: 'MacBook',
-      agent: 'Code reviewer',
-      project: 'example/project',
-      presence: 'unknown',
-      canToggle: true,
-    }),
+export const EditorWeekly: Story = editor({
+  initial: {
+    title: 'Weekly digest',
+    prompt: 'Summarize what shipped this week.',
+    trigger: { kind: 'cron', expression: '0 17 * * 1,3,5', timeZone: 'Asia/Shanghai' },
+    misfire: 'skip',
+    overlap: 'skip',
   },
-};
-export const Elevated: Story = { args: { rows: [{ ...row, elevatedPermissions: true }] } };
-export const Due: Story = {
-  args: {
-    runtimes: [
-      {
-        scheduleId: row.scheduleId,
-        machineId: row.machineId,
-        activationId: row.activationId,
-        observedDefinitionFingerprint: row.definitionFingerprint,
-        updatedAt: 0,
-        queueState: 'due',
-        nextScheduledAt: Date.parse('2026-09-07T01:00:00Z'),
-      },
-    ],
+});
+export const EditorInterval: Story = editor({
+  initial: {
+    title: 'Dependency sweep',
+    prompt: 'Check dependencies for new advisories.',
+    trigger: { kind: 'interval', everyMs: 6 * 3_600_000, anchorAt: '2026-09-06T00:00:00Z' },
+    misfire: 'skip',
+    overlap: 'skip',
   },
-};
-export const Retrying: Story = {
-  args: { runtimes: [{ ...Due.args!.runtimes![0]!, queueState: 'retrying' }] },
-};
-
-export const MissingRequirements: Story = {
-  render: () => (
-    <div className="h-dvh overflow-auto">
-      <ScheduleForm
-        initial={{
-          title: '',
-          prompt: '',
-          trigger: row.trigger,
-          misfire: 'run_once',
-          overlap: 'queue_one',
-        }}
-        saving={false}
-        saveBlockers={[
-          'Choose an available Agent.',
-          'Choose a Project. If none are listed, add a local Project or connect a GitHub repository.',
-        ]}
-        selectors={<p className="text-sm">Agent: Not selected · Project: Not selected</p>}
-        onSave={() => {}}
-      />
-    </div>
-  ),
-};
+});
+/** An expression the picker cannot name stays visible and editable as Custom. */
+export const EditorAdvancedCron: Story = editor({
+  initial: {
+    title: 'Business-hours sweep',
+    prompt: 'Check the build every twenty minutes during business hours.',
+    trigger: { kind: 'cron', expression: '*/20 9-17 * * 1-5', timeZone: 'Asia/Shanghai' },
+    misfire: 'skip',
+    overlap: 'skip',
+  },
+});
+export const EditorMissingRequirements: Story = editor({
+  initial: {
+    title: '',
+    prompt: '',
+    trigger: row.trigger,
+    misfire: 'run_once',
+    overlap: 'queue_one',
+  },
+  saveBlockers: ['Choose an available Agent.', 'Choose an explicit permission mode.'],
+});
+export const EditorSaving: Story = editor({ saving: true });
+export const EditorError: Story = editor({ error: 'The schedule could not be saved.' });

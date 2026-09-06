@@ -1,17 +1,45 @@
 import { useId, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Clock3, Pause, Play, Plus, ShieldAlert } from 'lucide-react';
 import {
+  AlertCircle,
+  CalendarClock,
+  ChevronRight,
+  CloudOff,
+  History,
+  Pause,
+  Play,
+  Plus,
+  Search,
+} from 'lucide-react';
+import {
+  applyScheduleRecurrence,
+  defaultScheduleRecurrence,
   getServerNow,
   previewSchedule,
-  validateScheduleTrigger,
+  triggerToRecurrence,
+  type ScheduleRecurrence,
   type ScheduleRegistryRow,
   type ScheduleRuntimeRow,
   type ScheduleTrigger,
 } from '@lody/shared';
 import { Button } from '@/ui/button';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/ui/collapsible';
 import { Input } from '@/ui/input';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
+import { Skeleton } from '@/ui/skeleton';
 import { Textarea } from '@/ui/textarea';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
+import { cn } from '@/lib/utils';
+import {
+  describeStatus,
+  describeTrigger,
+  formatInstant,
+  formatUpcoming,
+  triggerTimeZone,
+  type ScheduleStatus,
+} from './schedule-format';
+import { PropertyRow, ScheduleSection, ghostSelectTriggerClass } from './schedule-property-row';
+import { ScheduleRecurrenceEditor } from './schedule-recurrence-editor';
 
 export function matchingScheduleRuntime(row: ScheduleRegistryRow, runtimes: ScheduleRuntimeRow[]) {
   return runtimes.find(
@@ -20,6 +48,189 @@ export function matchingScheduleRuntime(row: ScheduleRegistryRow, runtimes: Sche
       runtime.machineId === row.machineId &&
       runtime.activationId === row.activationId &&
       runtime.observedDefinitionFingerprint === row.definitionFingerprint
+  );
+}
+
+export type ScheduleRowContext = {
+  machine: string;
+  agent: string;
+  /** `null` for a chat-only schedule that is not bound to any project. */
+  project: string | null;
+  presence: 'online' | 'offline' | 'unknown';
+  canToggle: boolean;
+};
+
+/**
+ * Only states that are not the happy path get a pill. An enabled schedule with
+ * a next run already says so by having a next run.
+ */
+function StatusPill({ status }: { status: ScheduleStatus }) {
+  if (status.tone === 'active') return null;
+  return (
+    <span
+      className={cn(
+        'inline-flex shrink-0 items-center whitespace-nowrap rounded-full border px-1.5 py-px text-[11px] font-medium',
+        status.tone === 'attention' && 'border-status-warning/40 text-status-warning',
+        status.tone === 'progress' && 'border-status-info/40 text-status-info',
+        status.tone === 'muted' && 'border-border text-muted-foreground'
+      )}
+    >
+      {status.label}
+    </span>
+  );
+}
+
+/**
+ * One column template for the header and every row.
+ *
+ * The actions column is a fixed width rather than `auto`: sized by its content
+ * it varied per row, which redistributed the `fr` columns and left Frequency
+ * and Next run visibly unaligned down the list.
+ */
+const listGridClass =
+  'grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 sm:grid-cols-[minmax(0,1.6fr)_minmax(0,1.05fr)_minmax(0,1.1fr)_minmax(0,1.15fr)_5.75rem]';
+
+const cell = {
+  name: 'col-start-1 row-start-1',
+  frequency: 'col-span-2 row-start-2 sm:col-span-1 sm:col-start-2 sm:row-start-1',
+  next: 'col-span-2 row-start-3 sm:col-span-1 sm:col-start-3 sm:row-start-1',
+  target: 'col-span-2 row-start-4 sm:col-span-1 sm:col-start-4 sm:row-start-1',
+  actions: 'col-start-2 row-start-1 sm:col-start-5 sm:row-start-1',
+} as const;
+
+function ScheduleListRow({
+  row,
+  runtime,
+  context,
+  now,
+  onOpen,
+  onToggle,
+  onOpenSession,
+}: {
+  row: ScheduleRegistryRow;
+  runtime?: ScheduleRuntimeRow;
+  context?: ScheduleRowContext;
+  now: number;
+  onOpen: () => void;
+  onToggle?: () => void;
+  onOpenSession?: (id: string) => void;
+}) {
+  const { t, i18n } = useTranslation();
+  const zone = triggerTimeZone(row.trigger);
+  const status = describeStatus(t, row.enabled, runtime?.queueState);
+  const next = row.enabled ? runtime?.nextScheduledAt : undefined;
+  const project =
+    context?.project ?? (row.projectKey || null) ?? t('schedules.chatOnly', 'Chat only');
+  const offline = context ? context.presence !== 'online' : false;
+  return (
+    <div
+      className={cn(
+        listGridClass,
+        'group relative items-center gap-y-0.5 border-b border-border/60 px-4 py-2.5 text-[13px] transition-colors hover:bg-hover sm:gap-y-0'
+      )}
+    >
+      <button
+        type="button"
+        onClick={onOpen}
+        className={cn(cell.name, 'min-w-0 text-left focus-visible:outline-hidden')}
+      >
+        {/* Row-wide hit target: the whole row opens the schedule, while the
+            action buttons stay above it and keep their own clicks. */}
+        <span className="absolute inset-0" aria-hidden="true" />
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="truncate font-medium">{row.title}</span>
+          <span className="sm:hidden">
+            <StatusPill status={status} />
+          </span>
+        </span>
+      </button>
+
+      <div className={cn(cell.frequency, 'min-w-0 truncate text-muted-foreground')}>
+        {describeTrigger(row.trigger, t, i18n.language)}
+      </div>
+
+      <div className={cn(cell.next, 'flex min-w-0 items-center gap-2 text-muted-foreground')}>
+        {next != null ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="truncate text-foreground/80">
+                {formatUpcoming(next, zone, now, i18n.language)}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {formatInstant(next, zone, i18n.language)} · {zone}
+            </TooltipContent>
+          </Tooltip>
+        ) : row.enabled ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="truncate">
+                {t('schedules.notScheduledYet', 'Not scheduled yet')}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {t('schedules.awaitingMachine', 'Waiting for the machine to check the schedule')}
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+        <span className="hidden sm:inline">
+          <StatusPill status={status} />
+        </span>
+      </div>
+
+      <div className={cn(cell.target, 'flex min-w-0 items-center gap-1.5 text-muted-foreground')}>
+        {context?.agent ? (
+          <>
+            <span className="truncate">{context.agent}</span>
+            <span className="shrink-0 opacity-40">·</span>
+          </>
+        ) : null}
+        <span className="truncate">{project}</span>
+        {offline ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <CloudOff className="size-3.5 shrink-0 text-status-warning" />
+            </TooltipTrigger>
+            <TooltipContent>
+              {t('schedules.machineOfflineHint', 'The target machine is not connected right now.')}
+            </TooltipContent>
+          </Tooltip>
+        ) : null}
+      </div>
+
+      <div className={cn(cell.actions, 'relative flex items-center justify-end gap-0.5')}>
+        {runtime?.lastDispatch && onOpenSession ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7 shrink-0 text-muted-foreground opacity-0 focus-visible:opacity-100 group-hover:opacity-100"
+                onClick={() => onOpenSession(runtime.lastDispatch!.sessionId)}
+                aria-label={t('schedules.lastRun', 'Last run')}
+              >
+                <History className="size-3.5" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{t('schedules.lastRun', 'Last run')}</TooltipContent>
+          </Tooltip>
+        ) : null}
+        {onToggle && context?.canToggle !== false ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-7 shrink-0"
+            onClick={onToggle}
+            aria-label={
+              row.enabled ? t('schedules.pause', 'Pause') : t('schedules.resume', 'Resume')
+            }
+          >
+            {row.enabled ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+          </Button>
+        ) : null}
+        <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/50" aria-hidden="true" />
+      </div>
+    </div>
   );
 }
 
@@ -33,6 +244,7 @@ export function ScheduleListView({
   onToggle,
   contextForRow,
   onOpenSession,
+  now = getServerNow(),
 }: {
   rows: ScheduleRegistryRow[];
   runtimes: ScheduleRuntimeRow[];
@@ -41,132 +253,106 @@ export function ScheduleListView({
   onOpen: (id: string) => void;
   onNew: () => void;
   onToggle?: (row: ScheduleRegistryRow) => void;
-  contextForRow?: (row: ScheduleRegistryRow) => {
-    machine: string;
-    agent: string;
-    project: string;
-    presence: 'online' | 'offline' | 'unknown';
-    canToggle: boolean;
-  };
+  contextForRow?: (row: ScheduleRegistryRow) => ScheduleRowContext;
   onOpenSession?: (id: string) => void;
+  /** Injected so stories and tests render a fixed "next run" column. */
+  now?: number;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
-  const filtered = rows.filter((row) => row.title.toLowerCase().includes(query.toLowerCase()));
+  const filtered = rows.filter((row) =>
+    row.title.toLowerCase().includes(query.trim().toLowerCase())
+  );
   return (
     <section className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-3 border-b px-5 py-4">
-        <Clock3 className="size-4" />
-        <h1 className="flex-1 font-medium">{t('schedules.title', 'Schedules')}</h1>
-        <Button size="sm" onClick={onNew}>
-          <Plus className="size-4" />
-          {t('schedules.new', 'New schedule')}
+      <header className="flex shrink-0 items-center gap-2 px-4 py-3">
+        <h1 className="mr-auto text-sm font-medium">{t('schedules.title', 'Schedules')}</h1>
+        <div className="relative w-40 sm:w-56">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            aria-label={t('schedules.search', 'Search schedules')}
+            placeholder={t('schedules.search', 'Search schedules')}
+            className="h-8 pl-8 text-[13px]"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <Button size="sm" className="h-8 shrink-0" onClick={onNew}>
+          <Plus className="size-3.5" />
+          <span className="hidden sm:inline">{t('schedules.new', 'New schedule')}</span>
         </Button>
       </header>
-      <div className="px-5 py-3">
-        <Input
-          aria-label={t('schedules.search', 'Search schedules')}
-          placeholder={t('schedules.search', 'Search schedules')}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </div>
-      <div className="min-h-0 flex-1 overflow-auto px-5">
+
+      {ready && !error && filtered.length > 0 ? (
+        <div
+          className={cn(
+            listGridClass,
+            'hidden shrink-0 border-y bg-muted/20 px-4 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground sm:grid'
+          )}
+        >
+          <span>{t('schedules.column.name', 'Name')}</span>
+          <span>{t('schedules.column.frequency', 'Frequency')}</span>
+          <span>{t('schedules.column.next', 'Next run')}</span>
+          <span>{t('schedules.column.target', 'Runs with')}</span>
+          <span />
+        </div>
+      ) : null}
+
+      <div className="min-h-0 flex-1 overflow-auto">
         {!ready ? (
-          <p className="py-8 text-sm text-muted-foreground">
-            {t('schedules.loading', 'Loading schedules…')}
-          </p>
+          <div className="space-y-px" aria-busy="true">
+            <span className="sr-only">{t('schedules.loading', 'Loading schedules…')}</span>
+            {[0, 1, 2].map((index) => (
+              <div
+                key={index}
+                className="flex items-center gap-3 border-b border-border/60 px-4 py-3"
+              >
+                <Skeleton className="h-3.5 w-48" />
+                <Skeleton className="ml-auto h-3.5 w-24" />
+                <Skeleton className="h-3.5 w-20" />
+              </div>
+            ))}
+          </div>
         ) : error ? (
-          <p role="alert">{t('schedules.loadError', 'Schedules could not be loaded.')}</p>
+          <p className="px-4 py-8 text-sm text-destructive" role="alert">
+            {t('schedules.loadError', 'Schedules could not be loaded.')}
+          </p>
         ) : filtered.length === 0 ? (
-          <div className="py-12 text-center">
-            <p>{t('schedules.empty', 'No schedules yet')}</p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {t(
-                'schedules.emptyHelp',
-                'Choose a prompt and a time. Your machine will start a new chat for each run.'
-              )}
+          <div className="mx-auto flex max-w-sm flex-col items-center gap-2 px-6 py-16 text-center">
+            <CalendarClock className="size-5 text-muted-foreground" aria-hidden="true" />
+            <p className="text-sm font-medium">
+              {query
+                ? t('schedules.noMatches', 'No schedules match your search')
+                : t('schedules.empty', 'No schedules yet')}
             </p>
+            {query ? null : (
+              <>
+                <p className="text-[13px] text-muted-foreground">
+                  {t(
+                    'schedules.emptyHelp',
+                    'Choose a prompt and a time. Your machine will start a new chat for each run.'
+                  )}
+                </p>
+                <Button size="sm" variant="outline" className="mt-2 h-8" onClick={onNew}>
+                  <Plus className="size-3.5" />
+                  {t('schedules.new', 'New schedule')}
+                </Button>
+              </>
+            )}
           </div>
         ) : (
-          filtered.map((row) => {
-            const runtime = matchingScheduleRuntime(row, runtimes);
-            const context = contextForRow?.(row);
-            return (
-              <div key={row.scheduleId} className="flex min-h-14 items-center gap-3 border-b py-2">
-                <button className="min-w-0 flex-1 text-left" onClick={() => onOpen(row.scheduleId)}>
-                  <span className="flex items-center gap-2 text-sm font-medium">
-                    <span className="truncate">{row.title}</span>
-                    {row.elevatedPermissions ? (
-                      <ShieldAlert
-                        className="size-4 shrink-0 text-status-warning"
-                        aria-label={t('schedules.elevated', 'Elevated permissions')}
-                      />
-                    ) : null}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    {!row.enabled
-                      ? t('schedules.paused', 'Paused')
-                      : runtime?.queueState
-                        ? t(`schedules.state.${runtime.queueState}`, runtime.queueState)
-                        : t('schedules.enabled', 'Enabled')}
-                    {' · '}
-                    {t(
-                      `schedules.presence.${context?.presence ?? 'unknown'}`,
-                      context?.presence ?? 'unknown'
-                    )}
-                    {row.enabled ? (
-                      <>
-                        {' '}
-                        ·{' '}
-                        {runtime?.nextScheduledAt != null
-                          ? t('schedules.nextAt', 'Next: {{time}}', {
-                              time:
-                                new Date(runtime.nextScheduledAt).toLocaleString(undefined, {
-                                  timeZone:
-                                    row.trigger.kind === 'cron' ? row.trigger.timeZone : undefined,
-                                }) +
-                                ' ' +
-                                (row.trigger.kind === 'cron'
-                                  ? row.trigger.timeZone
-                                  : Intl.DateTimeFormat().resolvedOptions().timeZone),
-                            })
-                          : t(
-                              'schedules.awaitingMachine',
-                              'Waiting for the machine to check the schedule'
-                            )}
-                      </>
-                    ) : null}
-                  </span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    {context?.machine ?? row.machineId} · {context?.agent ?? row.agentConfigId} ·{' '}
-                    {context?.project ?? row.projectKey}
-                  </span>
-                </button>
-                {runtime?.lastDispatch && onOpenSession ? (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onOpenSession(runtime.lastDispatch!.sessionId)}
-                  >
-                    {t('schedules.lastRun', 'Last run')}
-                  </Button>
-                ) : null}
-                {onToggle && context?.canToggle !== false ? (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => onToggle(row)}
-                    aria-label={
-                      row.enabled ? t('schedules.pause', 'Pause') : t('schedules.resume', 'Resume')
-                    }
-                  >
-                    {row.enabled ? <Pause className="size-4" /> : <Play className="size-4" />}
-                  </Button>
-                ) : null}
-              </div>
-            );
-          })
+          filtered.map((row) => (
+            <ScheduleListRow
+              key={row.scheduleId}
+              row={row}
+              now={now}
+              runtime={matchingScheduleRuntime(row, runtimes)}
+              context={contextForRow?.(row)}
+              onOpen={() => onOpen(row.scheduleId)}
+              onToggle={onToggle ? () => onToggle(row) : undefined}
+              onOpenSession={onOpenSession}
+            />
+          ))
         )}
       </div>
     </section>
@@ -180,266 +366,246 @@ export type ScheduleFormValue = {
   misfire: 'skip' | 'run_once';
   overlap: 'skip' | 'queue_one';
 };
-const localInput = (value: string): string => {
-  const d = new Date(value);
-  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-};
 
+/**
+ * The schedule editor.
+ *
+ * Three questions in the order a person answers them: what to run, when, and
+ * with what. Title and prompt carry their guidance in the placeholder rather
+ * than in a label above an empty box — the accessible name stays on the field.
+ * There is no confirmation checkbox: pressing Save with a permission mode and a
+ * machine already chosen IS the decision, and repeating it as a tick-box only
+ * taught people to tick without reading.
+ */
 export function ScheduleForm({
   initial,
-  selectors,
+  runConfig,
   saveBlockers = [],
   saving,
   error,
+  now = getServerNow(),
   onSave,
 }: {
   initial: ScheduleFormValue;
-  selectors: ReactNode;
+  /** Agent / Project / worktree rows, owned by the workspace container. */
+  runConfig?: ReactNode;
   saveBlockers?: string[];
   saving: boolean;
   error?: string;
+  /** Injected so previews and tests are deterministic. */
+  now?: number;
   onSave: (value: ScheduleFormValue) => void;
 }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [value, setValue] = useState(initial);
-  const [consent, setConsent] = useState(false);
-  const preview = useMemo(() => {
+  const [recurrence, setRecurrence] = useState<ScheduleRecurrence>(() =>
+    triggerToRecurrence(initial.trigger)
+  );
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // Reuse the stored trigger verbatim while the rule is untouched, so opening
+  // and saving an advanced schedule cannot rewrite its expression.
+  const resolved = useMemo(() => {
     try {
-      return { times: previewSchedule(validateScheduleTrigger(value.trigger), 0, getServerNow()) };
+      const trigger = applyScheduleRecurrence(recurrence, initial.trigger);
+      return { trigger, times: previewSchedule(trigger, 0, now) };
     } catch {
-      return { times: [], error: t('schedules.invalidTime', 'Check the time rule and time zone.') };
+      return {
+        error:
+          recurrence.kind === 'weekly' && recurrence.weekdays.length === 0
+            ? t('schedules.requireWeekday', 'Choose at least one day of the week.')
+            : t('schedules.invalidTime', 'Check the time rule and time zone.'),
+      };
     }
-  }, [value.trigger, t]);
+  }, [initial.trigger, now, recurrence, t]);
+
   const requirementsId = useId();
   const blockers = [
     ...(!value.title.trim() ? [t('schedules.requireName', 'Enter a schedule name.')] : []),
     ...(!value.prompt.trim()
       ? [t('schedules.requirePrompt', 'Describe what the Agent should do.')]
       : []),
-    ...(preview.error ? [preview.error] : []),
+    ...(resolved.error ? [resolved.error] : []),
     ...saveBlockers,
-    ...(!consent
-      ? [t('schedules.requireConsent', 'Check the box above to allow automatic runs.')]
-      : []),
   ];
   const canSave = !saving && blockers.length === 0;
-  const trigger = value.trigger;
-  const previewZone =
-    trigger.kind === 'cron' ? trigger.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const fieldClass = 'flex h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm';
+  const zone = triggerTimeZone(resolved.trigger ?? initial.trigger);
+
   return (
     <form
-      className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-5 py-6"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (canSave) onSave(value);
+      className="mx-auto flex w-full max-w-2xl flex-col gap-5 px-4 py-5 sm:px-6"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (canSave && resolved.trigger) onSave({ ...value, trigger: resolved.trigger });
       }}
     >
-      <label className="space-y-2 text-sm">
-        {t('schedules.name', 'Name')}
+      <div className="flex flex-col gap-1">
         <Input
           required
           maxLength={200}
+          aria-label={t('schedules.name', 'Name')}
+          placeholder={t('schedules.namePlaceholder', 'Name this scheduled task')}
+          className="h-auto border-0 bg-transparent px-0 py-0.5 text-base font-semibold shadow-none placeholder:font-normal placeholder:text-muted-foreground/70 focus-visible:ring-0"
           value={value.title}
-          onChange={(e) => setValue({ ...value, title: e.target.value })}
+          onChange={(event) => setValue({ ...value, title: event.target.value })}
         />
-      </label>
-      <label className="space-y-2 text-sm">
-        {t('schedules.prompt', 'What should the Agent do?')}
         <Textarea
           required
-          rows={6}
+          rows={3}
+          aria-label={t('schedules.prompt', 'What should the Agent do?')}
+          placeholder={t(
+            'schedules.promptPlaceholder',
+            'What should the agent do on every run? For example: review yesterday’s commits and summarise anything that looks risky.'
+          )}
+          className="min-h-16 resize-y border-0 bg-transparent px-0 text-[13px] leading-relaxed shadow-none placeholder:text-muted-foreground/70 focus-visible:ring-0"
           value={value.prompt}
-          onChange={(e) => setValue({ ...value, prompt: e.target.value })}
+          onChange={(event) => setValue({ ...value, prompt: event.target.value })}
         />
-      </label>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-2 text-sm">
-          {t('schedules.frequency', 'Frequency')}
-          <select
-            className={fieldClass}
-            value={trigger.kind}
-            onChange={(e) => {
-              const kind = e.target.value;
-              setValue({
-                ...value,
-                trigger:
-                  kind === 'cron'
-                    ? {
-                        kind,
-                        expression: '0 9 * * *',
-                        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-                      }
-                    : kind === 'once'
-                      ? { kind, at: new Date(getServerNow() + 3_600_000).toISOString() }
-                      : {
-                          kind: 'interval',
-                          everyMs: 3_600_000,
-                          anchorAt: new Date(getServerNow()).toISOString(),
-                        },
-              });
-            }}
+      </div>
+
+      <ScheduleSection title={t('schedules.frequency', 'Frequency')}>
+        <ScheduleRecurrenceEditor value={recurrence} onChange={setRecurrence} now={now} />
+        <div
+          className="bg-muted/25 px-3 py-2 text-xs text-muted-foreground"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {resolved.error ? (
+            <span className="text-status-warning" role="alert">
+              {resolved.error}
+            </span>
+          ) : resolved.times?.length ? (
+            <>
+              <span className="font-medium text-foreground/80">
+                {t('schedules.nextRuns', 'Next runs')}
+              </span>
+              <span className="ml-2">
+                {resolved.times
+                  .slice(0, 3)
+                  .map((at) => formatUpcoming(at, zone, now, i18n.language))
+                  .join(' · ')}
+              </span>
+              <span className="ml-2 opacity-70">{zone}</span>
+            </>
+          ) : (
+            t('schedules.noFuture', 'No future run under this rule.')
+          )}
+        </div>
+      </ScheduleSection>
+
+      {runConfig ? (
+        <ScheduleSection title={t('schedules.runsWith', 'Runs with')}>{runConfig}</ScheduleSection>
+      ) : null}
+
+      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+        <CollapsibleTrigger asChild>
+          <button
+            type="button"
+            className="flex items-center gap-1 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
           >
-            <option value="once">{t('schedules.once', 'Once')}</option>
-            <option value="interval">{t('schedules.interval', 'Every interval')}</option>
-            <option value="cron">{t('schedules.cron', 'Cron')}</option>
-          </select>
-        </label>
-        {trigger.kind === 'interval' ? (
-          <label className="space-y-2 text-sm">
-            {t('schedules.minutes', 'Interval in minutes')}
-            <Input
-              type="number"
-              min={1}
-              step={1}
-              required
-              value={trigger.everyMs / 60_000}
-              onChange={(e) =>
-                setValue({
-                  ...value,
-                  trigger: { ...trigger, everyMs: Number(e.target.value) * 60_000 },
-                })
-              }
+            <ChevronRight
+              className={cn('size-3 transition-transform', advancedOpen && 'rotate-90')}
+              aria-hidden="true"
             />
-          </label>
-        ) : null}
-        {trigger.kind === 'cron' ? (
-          <>
-            <label className="space-y-2 text-sm">
-              {t('schedules.expression', 'Five-field cron expression')}
-              <Input
-                required
-                value={trigger.expression}
-                onChange={(e) =>
-                  setValue({ ...value, trigger: { ...trigger, expression: e.target.value } })
+            {t('schedules.advanced', 'Advanced')}
+          </button>
+        </CollapsibleTrigger>
+        <CollapsibleContent className="pt-1.5">
+          <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/40">
+            <PropertyRow label={t('schedules.misfire', 'When the machine misses a run')}>
+              <Select
+                value={value.misfire}
+                onValueChange={(next) =>
+                  setValue({ ...value, misfire: next as ScheduleFormValue['misfire'] })
                 }
-              />
-            </label>
-            <label className="space-y-2 text-sm">
-              {t('schedules.timeZone', 'Time zone')}
-              <Input
-                required
-                placeholder="Asia/Shanghai"
-                value={trigger.timeZone}
-                onChange={(e) =>
-                  setValue({ ...value, trigger: { ...trigger, timeZone: e.target.value } })
+              >
+                <SelectTrigger
+                  aria-label={t('schedules.misfire', 'When the machine misses a run')}
+                  className={ghostSelectTriggerClass}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skip">{t('schedules.skipMissed', 'Skip old runs')}</SelectItem>
+                  <SelectItem value="run_once">
+                    {t('schedules.runLatest', 'Run the latest missed time once')}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </PropertyRow>
+            <PropertyRow label={t('schedules.overlap', 'When a previous run is still active')}>
+              <Select
+                value={value.overlap}
+                onValueChange={(next) =>
+                  setValue({ ...value, overlap: next as ScheduleFormValue['overlap'] })
                 }
-              />
-            </label>
-          </>
-        ) : (
-          <label className="space-y-2 text-sm">
-            {t('schedules.startLocal', 'Start time (this device’s time zone)')}
-            <Input
-              type="datetime-local"
-              required
-              value={localInput(trigger.kind === 'once' ? trigger.at : trigger.anchorAt)}
-              onChange={(e) => {
-                if (!e.target.value) return;
-                const at = new Date(e.target.value).toISOString();
-                setValue({
-                  ...value,
-                  trigger:
-                    trigger.kind === 'once' ? { ...trigger, at } : { ...trigger, anchorAt: at },
-                });
-              }}
-            />
-          </label>
-        )}
-      </div>
-      <div className="text-sm">
-        <p className="mb-2 font-medium">
-          {t('schedules.preview', 'Next planned runs')} · {previewZone}
-        </p>
-        {preview.error ? (
-          <p role="alert">{preview.error}</p>
-        ) : preview.times.length ? (
-          <ol className="space-y-1 text-muted-foreground">
-            {preview.times.map((at) => (
-              <li key={at}>{new Date(at).toLocaleString(undefined, { timeZone: previewZone })}</li>
-            ))}
-          </ol>
-        ) : (
-          <p className="text-muted-foreground">
-            {t('schedules.noFuture', 'No future run under this rule.')}
-          </p>
-        )}
-      </div>
-      {selectors}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <label className="space-y-2 text-sm">
-          {t('schedules.misfire', 'When the machine misses a run')}
-          <select
-            className={fieldClass}
-            value={value.misfire}
-            onChange={(e) =>
-              setValue({ ...value, misfire: e.target.value as ScheduleFormValue['misfire'] })
-            }
-          >
-            <option value="skip">{t('schedules.skipMissed', 'Skip old runs')}</option>
-            <option value="run_once">
-              {t('schedules.runLatest', 'Run the latest missed time once')}
-            </option>
-          </select>
-        </label>
-        <label className="space-y-2 text-sm">
-          {t('schedules.overlap', 'When a previous run is still active')}
-          <select
-            className={fieldClass}
-            value={value.overlap}
-            onChange={(e) =>
-              setValue({ ...value, overlap: e.target.value as ScheduleFormValue['overlap'] })
-            }
-          >
-            <option value="skip">{t('schedules.skipOverlap', 'Skip the new run')}</option>
-            <option value="queue_one">
-              {t('schedules.queueLatest', 'Keep only the latest waiting run')}
-            </option>
-          </select>
-        </label>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {t(
-          'schedules.machineHelp',
-          'The selected machine must be awake and its Lody daemon running. Saving or pausing takes effect on other devices after they sync.'
-        )}
-      </p>
-      <label className="flex items-start gap-2 text-sm">
-        <input
-          className="mt-1"
-          type="checkbox"
-          checked={consent}
-          onChange={(e) => setConsent(e.target.checked)}
-        />
-        {t(
-          'schedules.consent',
-          'Allow this prompt to run automatically with the selected Agent, Project and permission mode.'
-        )}
-      </label>
+              >
+                <SelectTrigger
+                  aria-label={t('schedules.overlap', 'When a previous run is still active')}
+                  className={ghostSelectTriggerClass}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="skip">
+                    {t('schedules.skipOverlap', 'Skip the new run')}
+                  </SelectItem>
+                  <SelectItem value="queue_one">
+                    {t('schedules.queueLatest', 'Keep only the latest waiting run')}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </PropertyRow>
+          </div>
+        </CollapsibleContent>
+      </Collapsible>
+
       {error ? (
         <p className="text-sm text-destructive" role="alert">
           {error}
         </p>
       ) : null}
-      <div id={requirementsId} aria-live="polite" aria-atomic="true">
-        {blockers.length > 0 ? (
-          <div className="space-y-2 rounded-md border p-3 text-sm">
-            <p className="font-medium">{t('schedules.completeToSave', 'Before you can save:')}</p>
-            <ul className="list-disc space-y-1 pl-5">
-              {blockers.map((reason) => (
-                <li key={reason}>{reason}</li>
+
+      <div className="flex flex-col gap-3 border-t pt-4 sm:flex-row sm:items-end sm:justify-between">
+        <div id={requirementsId} aria-live="polite" aria-atomic="true" className="min-w-0 flex-1">
+          {blockers.length > 0 ? (
+            <ul className="space-y-1">
+              {blockers.map((reason, index) => (
+                <li key={reason} className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                  <AlertCircle
+                    className={cn(
+                      'mt-px size-3.5 shrink-0 text-status-warning',
+                      index > 0 && 'invisible'
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span>{reason}</span>
+                </li>
               ))}
             </ul>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
+        <Button
+          type="submit"
+          size="sm"
+          className="h-8 shrink-0 self-start sm:self-auto"
+          disabled={!canSave}
+          aria-describedby={blockers.length ? requirementsId : undefined}
+        >
+          {saving ? t('schedules.saving', 'Saving…') : t('schedules.save', 'Save schedule')}
+        </Button>
       </div>
-      <Button
-        type="submit"
-        disabled={!canSave}
-        aria-describedby={blockers.length ? requirementsId : undefined}
-      >
-        {saving ? t('schedules.saving', 'Saving…') : t('schedules.save', 'Save schedule')}
-      </Button>
     </form>
   );
+}
+
+/** Default form value for a brand new schedule: run every day at 09:00. */
+export function newScheduleFormValue(): ScheduleFormValue {
+  return {
+    title: '',
+    prompt: '',
+    trigger: applyScheduleRecurrence(defaultScheduleRecurrence()),
+    misfire: 'run_once',
+    overlap: 'queue_one',
+  };
 }

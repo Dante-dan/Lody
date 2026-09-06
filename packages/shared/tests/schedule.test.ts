@@ -250,3 +250,84 @@ it('uses explicit advertised permission categories, rejecting unrelated modes an
     }).success
   ).toBe(false);
 });
+
+describe('Chat-mode schedules carry no project', () => {
+  const chatDraft = () => {
+    const d = definition();
+    return {
+      title: d.title,
+      machineId: d.machineId,
+      trigger: d.trigger,
+      agent: d.agent,
+      misfirePolicy: d.misfirePolicy,
+      overlapPolicy: d.overlapPolicy,
+      retryPolicy: d.retryPolicy,
+      prompt: 'hello',
+    };
+  };
+  const memoryPort = () => {
+    const docs = new Map<string, LoroDoc>();
+    const rows = new Map<string, unknown>();
+    const port: ScheduleRepositoryPort = {
+      openPersistedDoc: async (id) => {
+        if (!docs.has(id)) docs.set(id, new LoroDoc());
+        return { doc: docs.get(id)! };
+      },
+      openFlockDoc: async () => ({
+        flock: {
+          scan: () => [...rows].map(([key, value]) => ({ key: JSON.parse(key), value })),
+          get: (key) => rows.get(JSON.stringify(key)),
+          set: (key, value) => rows.set(JSON.stringify(key), value),
+        },
+      }),
+      flush: async () => {},
+    };
+    return port;
+  };
+
+  it('accepts a definition with no project and keeps the field absent through the doc', async () => {
+    const repo = new ScheduleRepository(memoryPort(), 'workspace' as never);
+    await repo.save({
+      scheduleId: 'test',
+      draft: chatDraft(),
+      actorId: 'owner',
+      now: 1,
+      activationId: 'activation',
+      activityId: 'created',
+      create: true,
+    });
+    const stored = await repo.read('test');
+    expect(stored?.definition.project).toBeUndefined();
+    const [row] = await repo.list();
+    expect(row?.projectKind).toBeUndefined();
+    expect(row?.projectKey).toBeUndefined();
+    expect(row?.definitionFingerprint).toBe(scheduleDefinitionFingerprint(stored!));
+  });
+
+  it('does not confuse a chat schedule with an identical project-bound one', () => {
+    const withProject = { definition: definition(), prompt: 'hello' };
+    const { project: _project, ...rest } = definition();
+    const chat = { definition: ScheduleDefinitionSchema.parse(rest), prompt: 'hello' };
+    expect(scheduleDefinitionFingerprint(chat)).not.toBe(
+      scheduleDefinitionFingerprint(withProject)
+    );
+    expect(buildScheduleRegistryRow(chat).projectKind).toBeUndefined();
+    expect(buildScheduleRegistryRow(withProject).projectKind).toBe('github');
+  });
+
+  it('re-reads a chat schedule from the Registry rows it published', async () => {
+    const port = memoryPort();
+    const repo = new ScheduleRepository(port, 'workspace' as never);
+    await repo.save({
+      scheduleId: 'test',
+      draft: chatDraft(),
+      actorId: 'owner',
+      now: 1,
+      activationId: 'activation',
+      activityId: 'created',
+      create: true,
+    });
+    const handle = await port.openFlockDoc('workspace:sr');
+    expect(readScheduleRegistryRows(handle.flock.scan())).toHaveLength(1);
+  });
+});

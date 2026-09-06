@@ -15,7 +15,9 @@ export const scheduleDocSchema = schema({
     misfirePolicy: schema.Any<ScheduleDefinition['misfirePolicy']>(),
     overlapPolicy: schema.String<ScheduleDefinition['overlapPolicy']>(),
     agent: schema.Any<ScheduleDefinition['agent']>(),
-    project: schema.Any<ScheduleDefinition['project']>(),
+    // Absent for chat-only schedules; `schema.Any` carries no value generic,
+    // so the read path is what re-establishes the `ProjectRef` type.
+    project: schema.Any({ required: false }),
     retryPolicy: schema.Any<ScheduleDefinition['retryPolicy']>(),
     createdAt: schema.Number(),
     updatedAt: schema.Number(),

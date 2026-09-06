@@ -13,13 +13,9 @@ import { useAtom, useAtomValue } from 'jotai';
 import { useNavigate } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { v4 as uuid } from 'uuid';
-import { ArrowLeft, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Pause, Play, Trash2, X, Zap } from 'lucide-react';
 import { useCloudQuery } from '@lody/platform/react';
 import {
-  getAcpCapabilityCacheKey,
-  getStaticBuiltinAcpCapabilities,
-  hasExplicitSchedulePermission,
-  scheduleUsesElevatedPermissions,
   getServerNow,
   machineSupportsSchedulesProtocol,
   ScheduleRepository,
@@ -56,12 +52,17 @@ import { cloudOperations } from '@/lib/cloud-api-operations';
 import { AgentRunConfigMenu } from '@/components/shared/agent-run-config-menu';
 import { ProjectRefSelector } from '@/components/shared/project-ref-selector';
 import { Button } from '@/ui/button';
+import { cn } from '@/lib/utils';
+import { Switch } from '@/ui/switch';
 import {
   ScheduleForm,
   ScheduleListView,
   matchingScheduleRuntime,
+  newScheduleFormValue,
   type ScheduleFormValue,
 } from './schedule-view';
+import { PropertyRow, PropertyRowWide } from './schedule-property-row';
+import { collectScheduleSaveBlockers } from './schedule-save-blockers';
 
 export function SchedulesWorkspace({ scheduleId }: { scheduleId?: string }) {
   const enabled = useAtomValue(schedulesFeatureEnabledAtom);
@@ -148,16 +149,10 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
         })
       );
     };
-    if (!row.enabled && row.elevatedPermissions)
-      setConfirmation({
-        title: t('schedules.resume', 'Resume'),
-        description: t(
-          'schedules.elevatedHelp',
-          'This Agent can run with elevated permissions without asking you each time. Confirm that you trust this prompt and Project.'
-        ),
-        accept: apply,
-      });
-    else void mutate(apply);
+    // Resuming does not re-ask about the permission mode. The mode is chosen and
+    // shown in the editor; a second dialog here only trained people to confirm
+    // without reading. Ownership and machine capability are still enforced above.
+    void mutate(apply);
   };
   const row = registry.rows.find((r) => r.scheduleId === scheduleId);
   const isOwner = !!row && row.ownerId === user?.id;
@@ -184,26 +179,41 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
         ) : null
       ) : (
         <nav
-          className="flex shrink-0 items-center gap-1 overflow-x-auto border-b px-3 py-2"
+          className="flex shrink-0 items-center gap-0.5 overflow-x-auto border-b px-2 py-1.5"
           aria-label={t('schedules.tabs', 'Schedule tabs')}
         >
-          <Button size="sm" variant={!scheduleId ? 'secondary' : 'ghost'} onClick={() => open()}>
+          <Button
+            size="sm"
+            className="h-7 shrink-0 px-2 text-[13px] font-normal"
+            variant={!scheduleId ? 'secondary' : 'ghost'}
+            onClick={() => open()}
+          >
             {t('schedules.all', 'All schedules')}
           </Button>
           {tabs.map((id) => (
-            <div key={id} className="flex items-center">
+            <div
+              key={id}
+              className={cn(
+                'flex shrink-0 items-center rounded-md pr-0.5',
+                scheduleId === id && 'bg-secondary'
+              )}
+            >
               <Button
                 size="sm"
-                variant={scheduleId === id ? 'secondary' : 'ghost'}
+                variant="ghost"
+                className="h-7 max-w-40 px-2 text-[13px] font-normal hover:bg-transparent"
                 onClick={() => open(id)}
               >
-                {id === 'new'
-                  ? t('schedules.new', 'New schedule')
-                  : (registry.rows.find((r) => r.scheduleId === id)?.title ??
-                    t('schedules.title', 'Schedules'))}
+                <span className="truncate">
+                  {id === 'new'
+                    ? t('schedules.new', 'New schedule')
+                    : (registry.rows.find((r) => r.scheduleId === id)?.title ??
+                      t('schedules.title', 'Schedules'))}
+                </span>
               </Button>
               <button
-                className="p-1"
+                type="button"
+                className="rounded p-1 text-muted-foreground hover:bg-hover hover:text-foreground"
                 aria-label={t('schedules.closeTab', 'Close tab')}
                 onClick={() => {
                   setTabs(tabs.filter((item) => item !== id));
@@ -258,8 +268,9 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
           contextForRow={(item) => ({
             machine: machines.get(item.machineId as never)?.name ?? item.machineId,
             agent: agents.find((a) => a.id === item.agentConfigId)?.name ?? item.agentConfigId,
-            project:
-              item.projectKind === 'local'
+            project: !item.projectKey
+              ? null
+              : item.projectKind === 'local'
                 ? ([...localProjects.projects.values()].find(
                     (entry) =>
                       entry.machineId === item.machineId && entry.project.id === item.projectKey
@@ -286,21 +297,33 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
         <p className="p-5">{t('schedules.notFound', 'This schedule is unavailable or deleted.')}</p>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
-          <div className="flex flex-wrap items-center gap-2 border-b px-5 py-3">
-            <span className="mr-auto text-sm">
-              {row.enabled ? t('schedules.enabled', 'Enabled') : t('schedules.paused', 'Paused')}
-            </span>
+          <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1.5 border-b bg-background/95 px-4 py-2 backdrop-blur">
+            {row.enabled ? (
+              <span className="mr-auto text-[13px] text-muted-foreground">
+                {t(
+                  'schedules.pauseHelp',
+                  'Pausing stops future runs. Cancel already submitted Sessions separately.'
+                )}
+              </span>
+            ) : (
+              <span className="mr-auto rounded-full border px-2 py-px text-[11px] font-medium text-muted-foreground">
+                {t('schedules.paused', 'Paused')}
+              </span>
+            )}
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
+              className="h-7 px-2 text-[13px]"
               disabled={row.enabled ? !isOwner : !canManage}
               onClick={() => toggle(row)}
             >
+              {row.enabled ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
               {row.enabled ? t('schedules.pause', 'Pause') : t('schedules.resume', 'Resume')}
             </Button>
             <Button
               size="sm"
-              variant="outline"
+              variant="ghost"
+              className="h-7 px-2 text-[13px]"
               disabled={!canManage}
               onClick={() =>
                 setConfirmation({
@@ -323,11 +346,13 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
                 })
               }
             >
+              <Zap className="size-3.5" />
               {t('schedules.runNow', 'Run now')}
             </Button>
             <Button
               size="sm"
               variant="ghost"
+              className="h-7 px-2 text-[13px] text-muted-foreground hover:text-destructive"
               disabled={!isOwner}
               onClick={() =>
                 void mutate(async () => {
@@ -340,11 +365,12 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
                 })
               }
             >
-              {t('schedules.delete', 'Delete')}
+              <Trash2 className="size-3.5" />
+              <span className="sr-only sm:not-sr-only">{t('schedules.delete', 'Delete')}</span>
             </Button>
           </div>
           {!canManage ? (
-            <p className="px-5 pt-4 text-sm text-muted-foreground">
+            <p className="mx-auto max-w-2xl px-4 pt-4 text-[13px] text-muted-foreground sm:px-6">
               {t(
                 'schedules.readOnly',
                 'Only the owner can edit this schedule, using a machine with Schedule support.'
@@ -354,20 +380,19 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
           {registry.runtimes
             .filter((r) => r === matchingScheduleRuntime(row, registry.runtimes) && r.blockedCode)
             .map((r) => (
-              <p className="px-5 pt-4 text-sm" key={r.machineId}>
-                {t('schedules.blocked', 'Waiting for the machine to resolve a problem')}:{' '}
-                {t(
-                  `schedules.errors.${r.blockedCode}`,
-                  'Check the target machine, Agent and Project, then save the schedule again.'
-                )}
+              <p
+                className="mx-auto mt-4 flex max-w-2xl items-start gap-2 rounded-lg border border-status-warning/40 px-3 py-2 text-[13px] sm:px-4"
+                key={r.machineId}
+              >
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-status-warning" />
+                <span>
+                  {t(
+                    `schedules.errors.${r.blockedCode}`,
+                    'Check the target machine, Agent and Project, then save the schedule again.'
+                  )}
+                </span>
               </p>
             ))}
-          <p className="px-5 pt-4 text-xs text-muted-foreground">
-            {t(
-              'schedules.pauseHelp',
-              'Pausing stops future runs. Cancel already submitted Sessions separately.'
-            )}
-          </p>
           <ScheduleEditor
             key={`${runtime?.workspaceId}:${scheduleId}:${row.activationId}`}
             document={detail.document}
@@ -420,7 +445,6 @@ function ScheduleEditor({
   );
   const [project, setProject] = useState<ProjectRef | null>(document?.definition.project ?? null);
   const [saving, setSaving] = useState(false);
-  const [directoryConsent, setDirectoryConsent] = useState(false);
   const [error, setError] = useState<string>();
   const [identity] = useState(() => ({
     scheduleId: document?.definition.scheduleId ?? uuid(),
@@ -429,91 +453,43 @@ function ScheduleEditor({
   }));
   const selected = agents.find((config) => config.id === agent?.agentConfigId);
   const machine = selected ? machines.get(selected.machineId) : undefined;
-  const saveBlockers: string[] = [];
-  if (disabledReason) saveBlockers.push(disabledReason);
-  if (!runtime || !user)
-    saveBlockers.push(
-      t('schedules.workspaceNotReady', 'Wait for your workspace and account to finish loading.')
-    );
-  if (!selected || !agent) {
-    saveBlockers.push(t('schedules.requireAgent', 'Choose an available Agent.'));
-  } else {
-    if (!disabledReason) {
-      if (!machine)
-        saveBlockers.push(
-          t(
-            'schedules.machineMissing',
-            'The selected machine is unavailable. Start Lody on it and wait for it to sync, or choose another Agent.'
-          )
-        );
-      else if (user && machine.ownerUserId !== user.id)
-        saveBlockers.push(
-          t('schedules.requireOwnedMachine', 'Choose an Agent on a machine you own.')
-        );
-      else if (!machineSupportsSchedulesProtocol(machine))
-        saveBlockers.push(
-          t('schedules.upgrade', 'Update the target machine’s CLI to edit schedules.')
-        );
-    }
-    if (
-      !hasExplicitSchedulePermission(
-        agent,
-        machine?.acpCapabilities?.[getAcpCapabilityCacheKey(selected.id)] ??
-          getStaticBuiltinAcpCapabilities(
-            selected.cliType,
-            selected.agentType,
-            selected.runtimeOverrides
-          )
-      )
-    )
-      saveBlockers.push(t('schedules.choosePermission', 'Choose an explicit permission mode.'));
-  }
-  if (!project)
-    saveBlockers.push(
-      t(
-        'schedules.requireProject',
-        'Choose a Project. If none are listed, add a local Project or connect a GitHub repository.'
-      )
-    );
-  else if (project.kind === 'local') {
-    if (
-      selected &&
-      ![...local.projects.values()].some(
-        (entry) =>
-          entry.machineId === selected.machineId && entry.project.id === project.localProjectId
-      )
-    )
-      saveBlockers.push(t('schedules.projectMachine', 'Choose a Project on the selected machine.'));
-    if (!project.useWorktree && !directoryConsent)
-      saveBlockers.push(
-        t(
-          'schedules.requireDirectoryConsent',
-          'Use an isolated Git worktree, or allow this schedule to work in the original Project directory.'
-        )
-      );
-  }
-  const initial: ScheduleFormValue = document
-    ? {
-        title: document.definition.title,
-        prompt: document.prompt,
-        trigger: document.definition.trigger,
-        misfire: document.definition.misfirePolicy.kind,
-        overlap: document.definition.overlapPolicy,
-      }
-    : {
-        title: '',
-        prompt: '',
-        trigger: {
-          kind: 'cron',
-          expression: '0 9 * * *',
-          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        },
-        misfire: 'run_once',
-        overlap: 'queue_one',
-      };
+  const machineLocalProjectIds = useMemo(
+    () =>
+      new Set(
+        [...local.projects.values()]
+          .filter((entry) => entry.machineId === selected?.machineId)
+          .map((entry) => entry.project.id as string)
+      ),
+    [local.projects, selected?.machineId]
+  );
+  const saveBlockers = collectScheduleSaveBlockers(
+    {
+      disabledReason,
+      workspaceReady: !!runtime,
+      userId: user?.id,
+      agent,
+      agentConfig: selected ?? null,
+      machine,
+      project,
+      machineLocalProjectIds,
+    },
+    t
+  );
+  const initial: ScheduleFormValue = useMemo(
+    () =>
+      document
+        ? {
+            title: document.definition.title,
+            prompt: document.prompt,
+            trigger: document.definition.trigger,
+            misfire: document.definition.misfirePolicy.kind,
+            overlap: document.definition.overlapPolicy,
+          }
+        : newScheduleFormValue(),
+    [document]
+  );
   const save = async (value: ScheduleFormValue) => {
-    if (saving || saveBlockers.length || !runtime || !user || !selected || !agent || !project)
-      return;
+    if (saving || saveBlockers.length || !runtime || !user || !selected || !agent) return;
     setSaving(true);
     setError(undefined);
     try {
@@ -531,7 +507,7 @@ function ScheduleEditor({
               trigger: value.trigger,
               machineId: selected.machineId,
               agent,
-              project,
+              ...(project ? { project } : {}),
               misfirePolicy: { kind: value.misfire },
               overlapPolicy: value.overlap,
               retryPolicy: { dispatchMaxAttempts: 5, dispatchMaxAgeMs: 86_400_000 },
@@ -557,78 +533,73 @@ function ScheduleEditor({
       error={error}
       saveBlockers={saveBlockers}
       onSave={(value) => void save(value)}
-      selectors={
-        <div className="space-y-4">
-          <AgentRunConfigMenu
-            requireExplicitPermission
-            value={agent}
-            onChange={(next) => {
-              setAgent(next);
-              if (
-                agents.find((a) => a.id === next.agentConfigId)?.machineId !== selected?.machineId
-              )
-                setProject(null);
-            }}
-            disabled={!!disabledReason}
-          />
-          <ProjectRefSelector
-            value={project}
-            onChange={setProject}
-            localProjects={[...local.projects.values()]
-              .filter((entry) => entry.machineId === selected?.machineId)
-              .map((entry) => ({
-                key: entry.key,
-                machineId: entry.machineId,
-                localProjectId: entry.project.id,
-                name: entry.project.name,
-                rootPath: entry.project.rootPath,
-              }))}
-            repositories={(repos ?? []).flatMap((r) =>
-              r.repoFullName || r.fullName ? [{ fullName: (r.repoFullName ?? r.fullName)! }] : []
-            )}
-            onAddLocalProject={() => openSettings('projects')}
-            onConnectGitRepo={() => openSettings('github')}
-          />
-          {agent && scheduleUsesElevatedPermissions(agent) ? (
-            <p className="text-sm text-status-warning">
-              {t(
-                'schedules.elevatedHelp',
-                'This Agent can run with elevated permissions without asking you each time. Confirm that you trust this prompt and Project.'
+      runConfig={
+        <>
+          <PropertyRowWide label={t('schedules.agent', 'Agent')}>
+            <AgentRunConfigMenu
+              requireExplicitPermission
+              value={agent}
+              onChange={(next) => {
+                setAgent(next);
+                if (
+                  agents.find((a) => a.id === next.agentConfigId)?.machineId !== selected?.machineId
+                )
+                  setProject(null);
+              }}
+              disabled={!!disabledReason}
+            />
+          </PropertyRowWide>
+          <PropertyRowWide label={t('schedules.project', 'Project')}>
+            <ProjectRefSelector
+              triggerVariant="property-row"
+              value={project}
+              onChange={setProject}
+              localProjects={[...local.projects.values()]
+                .filter((entry) => entry.machineId === selected?.machineId)
+                .map((entry) => ({
+                  key: entry.key,
+                  machineId: entry.machineId,
+                  localProjectId: entry.project.id,
+                  name: entry.project.name,
+                  rootPath: entry.project.rootPath,
+                }))}
+              repositories={(repos ?? []).flatMap((r) =>
+                r.repoFullName || r.fullName ? [{ fullName: (r.repoFullName ?? r.fullName)! }] : []
               )}
-            </p>
-          ) : null}
+              onAddLocalProject={() => openSettings('projects')}
+              onConnectGitRepo={() => openSettings('github')}
+            />
+          </PropertyRowWide>
           {project?.kind === 'local' ? (
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
+            <PropertyRow
+              label={t('schedules.worktreeLabel', 'Isolated worktree')}
+              hint={
+                project.useWorktree
+                  ? undefined
+                  : t(
+                      'schedules.originalDirectory',
+                      'Runs share the original directory. Work from other Agents may overlap here.'
+                    )
+              }
+            >
+              <Switch
+                className="mr-2"
                 checked={project.useWorktree === true}
-                onChange={(e) => setProject({ ...project, useWorktree: e.target.checked })}
+                disabled={!!disabledReason}
+                onCheckedChange={(checked) => setProject({ ...project, useWorktree: checked })}
+                aria-label={t('schedules.worktree', 'Use an isolated Git worktree (recommended)')}
               />
-              {t('schedules.worktree', 'Use an isolated Git worktree (recommended)')}
-            </label>
+            </PropertyRow>
           ) : null}
-          {project?.kind === 'local' && !project.useWorktree ? (
-            <p className="text-xs text-muted-foreground">
+          {!project ? (
+            <p className="px-3 py-2 text-xs text-muted-foreground">
               {t(
-                'schedules.originalDirectory',
-                'Runs share the original directory. Work from other Agents may overlap here.'
+                'schedules.chatOnlyHelp',
+                'Without a project each run is a plain chat with the Agent — no repository is checked out.'
               )}
             </p>
           ) : null}
-          {project?.kind === 'local' && !project.useWorktree ? (
-            <label className="flex items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={directoryConsent}
-                onChange={(e) => setDirectoryConsent(e.target.checked)}
-              />
-              {t(
-                'schedules.directoryConsent',
-                'Allow this schedule to work in the original Project directory.'
-              )}
-            </label>
-          ) : null}
-        </div>
+        </>
       }
     />
   );
@@ -644,26 +615,30 @@ function ScheduleSessionHistory({ scheduleId }: { scheduleId: string }) {
     .filter((s) => s.scheduleId === scheduleId)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return (
-    <section className="mx-auto max-w-3xl border-t px-5 py-6">
-      <h2 className="mb-3 text-sm font-medium">{t('schedules.history', 'Run history')}</h2>
+    <section className="mx-auto w-full max-w-2xl px-4 pb-8 sm:px-6">
+      <h2 className="mb-1.5 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+        {t('schedules.history', 'Run history')}
+      </h2>
       {linked.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="rounded-lg border border-border/70 bg-card/40 px-3 py-3 text-[13px] text-muted-foreground">
           {t('schedules.noRuns', 'No Sessions have been created yet.')}
         </p>
       ) : (
-        linked.slice(0, 100).map((s) => (
-          <ScheduleHistoryRow
-            key={s.id}
-            session={s}
-            onOpen={() => {
-              if (slug)
-                void navigate({
-                  to: '/$workspaceName/sessions/$sessionId',
-                  params: { workspaceName: slug, sessionId: s.id },
-                });
-            }}
-          />
-        ))
+        <div className="overflow-hidden rounded-lg border border-border/70 bg-card/40">
+          {linked.slice(0, 100).map((s) => (
+            <ScheduleHistoryRow
+              key={s.id}
+              session={s}
+              onOpen={() => {
+                if (slug)
+                  void navigate({
+                    to: '/$workspaceName/sessions/$sessionId',
+                    params: { workspaceName: slug, sessionId: s.id },
+                  });
+              }}
+            />
+          ))}
+        </div>
       )}
     </section>
   );
@@ -675,18 +650,23 @@ function ScheduleHistoryRow({ session: s, onOpen }: { session: SessionMeta; onOp
   return (
     <button
       key={s.id}
-      className="flex w-full items-center justify-between border-b py-3 text-left text-sm"
+      className="flex w-full items-center gap-3 border-b border-border/60 px-3 py-2 text-left text-[13px] transition-colors first:rounded-t-lg last:rounded-b-lg last:border-b-0 hover:bg-hover"
       onClick={onOpen}
     >
-      <span>
+      <span className="min-w-0 flex-1 truncate">
         {s.title || t('schedules.openRun', 'Open run')}
-        <span className="block text-xs text-muted-foreground">
-          {liveStatus
-            ? t(`schedules.sessionState.${liveStatus.type}`, liveStatus.type)
-            : t('schedules.sessionState.inactive', 'Inactive')}
-        </span>
       </span>
-      <time>{new Date(s.createdAt).toLocaleString()}</time>
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {liveStatus
+          ? t(`schedules.sessionState.${liveStatus.type}`, liveStatus.type)
+          : t('schedules.sessionState.inactive', 'Inactive')}
+      </span>
+      <time className="shrink-0 text-xs tabular-nums text-muted-foreground">
+        {new Date(s.createdAt).toLocaleString(undefined, {
+          dateStyle: 'short',
+          timeStyle: 'short',
+        })}
+      </time>
     </button>
   );
 }

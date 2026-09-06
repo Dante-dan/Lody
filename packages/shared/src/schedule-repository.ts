@@ -85,6 +85,9 @@ export class ScheduleRepository {
     try {
       mirror.setState({
         ...document,
+        // Spread `project` explicitly: it is optional on the definition but a
+        // present (possibly undefined) key in the mirrored map.
+        definition: { ...document.definition, project: document.definition.project },
         timeline: document.timeline.map((entry) => ({
           ...entry,
           requesterSessionId: entry.requesterSessionId,

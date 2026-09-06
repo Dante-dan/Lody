@@ -77,8 +77,12 @@ export function buildScheduleRegistryRow(document: ScheduleDocument): ScheduleRe
     activeFrom: d.activeFrom,
     trigger: d.trigger,
     agentConfigId: d.agent.agentConfigId,
-    projectKind: d.project.kind,
-    projectKey: d.project.kind === 'local' ? d.project.localProjectId : d.project.repoFullName,
+    projectKind: d.project?.kind,
+    projectKey: d.project
+      ? d.project.kind === 'local'
+        ? d.project.localProjectId
+        : d.project.repoFullName
+      : undefined,
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
     elevatedPermissions: scheduleUsesElevatedPermissions(d.agent),

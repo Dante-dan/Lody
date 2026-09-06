@@ -79,7 +79,9 @@ export const ScheduleDefinitionSchema = z
     misfirePolicy: z.object({ kind: z.enum(['skip', 'run_once']) }).strict(),
     overlapPolicy: z.enum(['skip', 'queue_one']),
     agent: ScheduleAgentSchema,
-    project: ProjectRefSchema.transform((value) => value as ProjectRef),
+    // Optional: a schedule may be a plain chat with an Agent, with no
+    // repository or working directory attached at all.
+    project: ProjectRefSchema.transform((value) => value as ProjectRef).optional(),
     retryPolicy: z
       .object({
         dispatchMaxAttempts: z.number().int().min(1).max(SCHEDULE_DISPATCH_MAX_ATTEMPTS),
@@ -125,8 +127,8 @@ export const ScheduleRegistryRowSchema = ScheduleDefinitionSchema.pick({
   elevatedPermissions: z.boolean().default(false),
   definitionFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   agentConfigId: z.string().min(1),
-  projectKind: z.enum(['local', 'github']),
-  projectKey: z.string().min(1),
+  projectKind: z.enum(['local', 'github']).optional(),
+  projectKey: z.string().min(1).optional(),
 });
 export type ScheduleRegistryRow = z.infer<typeof ScheduleRegistryRowSchema>;
 

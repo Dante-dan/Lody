@@ -32,6 +32,11 @@
 - Permission validation uses ACP `_permission` category or advertised legacy
   modes, never option-id spelling. No credentials or provider exception content
   may be written to Registry runtime rows or Schedule logs.
+- `definition.project` is OPTIONAL. Absent means a chat-only run: no local-project
+  ledger lookup, no `project` on the resolved target, and `buildProjectOptions`
+  contributes nothing to the prepared Session. A project that IS set is still
+  validated against the owning machine's Flock before handoff. Never substitute a
+  default project for an absent one.
 - Dispose Task/Schedule workers before tearing down a workspace's Lody runtime.
   Timers and active evaluations must not survive workspace revocation.
 - Deterministic tests use injected clocks, explicit sync barriers and temporary

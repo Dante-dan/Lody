@@ -187,7 +187,7 @@ export async function executeScheduleCommand(
     });
     if (!hasExplicitSchedulePermission(draft.agent, capability))
       throw new Error('Choose an explicit permission mode supported by the Agent');
-    if (draft.project.kind === 'local') {
+    if (draft.project?.kind === 'local') {
       const flock = await manager.repo.openFlockDoc(getMachineFlockDocId(workspaceId, machine.id));
       const projects = getMachineFlockLocalProjects(
         readMachineFlockRowsFromFlock(flock.flock, { families: ['localProject'] })
