@@ -83,6 +83,81 @@ afterEach(async () => {
 });
 
 describe('ensureGhShimScript', () => {
+  it.each([
+    ['--help'],
+    ['-h'],
+    ['--help=true'],
+    ['https://other.ghe.com/repos/owner/repo', '--help'],
+  ])(
+    'runs API help without credentials, broker access or auth probes: %j',
+    async (...options) => {
+      const log = path.join(tempHomeDir!, 'help-invocations');
+      writeFakeGh(`#!/bin/sh
+printf '%s\\n' "$*" >> "$FAKE_GH_EXEC_LOG"
+if [ -n "$GH_TOKEN$GITHUB_TOKEN$GH_ENTERPRISE_TOKEN$GITHUB_ENTERPRISE_TOKEN" ]; then exit 91; fi
+printf '%s\\n' "$*"
+`);
+      ensureGhShimScript();
+      const result = await runShim(
+        { LODY_GIT_CRED_CONTEXT_TOKEN: undefined, FAKE_GH_EXEC_LOG: log, GH_TOKEN: 'owner-token' },
+        ['api', ...options]
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe('api --help\n');
+      expect(readFileSync(log, 'utf8')).toBe('api --help\n');
+      expect(endpointRequests).toEqual([]);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
+
+  it.each([
+    ['--help=false'],
+    ['--help', '--help=false'],
+    ['-h=false'],
+    ['--template', '--help'],
+    ['-t--help'],
+    ['--field', 'x=--help'],
+    ['--', '--help'],
+  ])('does not treat disabled or consumed help as an auth bypass: %j', async (...options) => {
+    ensureGhShimScript();
+    const result = await runShim({ LODY_GIT_CRED_CONTEXT_TOKEN: undefined }, ['api', ...options]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('context is required');
+    expect(endpointRequests).toEqual([]);
+  });
+
+  it.each([
+    ['https://github.com/owner/target/issues/1', 'https://github.com/owner/target/issues/2'],
+    ['1', 'https://github.com/owner/target/issues/2'],
+    ['https://github.com/owner/target/issues/1', '2', 'https://github.com/owner/target/issues/3'],
+  ])(
+    'resolves all subjects of a multi-issue edit to their shared repository: %j',
+    async (...subjects) => {
+      await expectManagedTarget({ GH_REPO: 'other.ghe.com/ambient/repo' }, [
+        'issue',
+        'edit',
+        ...subjects,
+        '--add-label',
+        'bug',
+      ]);
+    }
+  );
+
+  it.each([
+    ['https://github.com/owner/target/issues/1', 'https://github.com/owner/other/issues/2'],
+    ['https://github.com/owner/target/issues/1', 'https://other.ghe.com/owner/target/issues/2'],
+  ])(
+    'rejects a multi-issue edit spanning different repositories or hosts: %j',
+    async (...subjects) => {
+      await expectManagedDenied(
+        { GH_REPO: 'github.com/owner/target' },
+        ['issue', 'edit', ...subjects, '--add-label', 'bug'],
+        'Cannot determine the GitHub target safely'
+      );
+    }
+  );
+
   it('keeps the managed wrapper out of the ordinary CLI bin and removes its legacy copy', () => {
     ensureGhShimScript();
     const managedPath = getGhShimHostPath();

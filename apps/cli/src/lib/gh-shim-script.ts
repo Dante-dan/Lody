@@ -403,7 +403,23 @@ const readPrIssueArgs = (args) => {
     }
   }
   if (!command || (['create', 'list', 'status'].includes(command) && positionals.length)) return null;
-  if (positionals.slice(1).some(isUrl)) return null;
+  let subject = positionals[0];
+  if (args[0] === 'issue' && command === 'edit') {
+    const urls = positionals.filter(isUrl);
+    let issueTarget;
+    for (const value of urls) {
+      try {
+        const url = new URL(value);
+        const repo = parseRepo(url.pathname.split('/').slice(1, 3).join('/'), url.hostname);
+        if (!repo || repo.host !== 'github.com') return null;
+        const target = repo.repo.toLowerCase();
+        if (issueTarget && issueTarget !== target) return null;
+        issueTarget = target;
+      } catch { return null; }
+    }
+    // Native gh applies the first URL's repository to every number in the batch.
+    subject = urls[0] || subject;
+  } else if (positionals.slice(1).some(isUrl)) return null;
   // These commands also send authenticated requests to a secondary repository.
   // Native owner auth can handle other hosts; managed credentials must not reach them.
   if (issueRepo !== undefined && repo !== undefined) branchRepo = repo;
@@ -413,7 +429,7 @@ const readPrIssueArgs = (args) => {
     catch { return null; }
   }
   // develop's deprecated selector overrides --repo regardless of flag order.
-  return { subject: positionals[0], repo: issueRepo !== undefined ? issueRepo : repo };
+  return { subject, repo: issueRepo !== undefined ? issueRepo : repo };
 };
 
 // API accepts exactly one endpoint. Values can themselves look like URLs or
@@ -421,7 +437,7 @@ const readPrIssueArgs = (args) => {
 const readApiArgs = (args) => {
   const arity = new Map();
   for (const [takesValue, descriptors] of [
-    [false, 'include:i slurp paginate silent verbose help'],
+    [false, 'include:i slurp paginate silent verbose help:h'],
     [true, 'hostname method:X field:F raw-field:f header:H preview:p input template:t jq:q cache'],
   ]) {
     for (const descriptor of descriptors.split(' ')) {
@@ -432,6 +448,7 @@ const readApiArgs = (args) => {
   }
   const positionals = [];
   let hostname;
+  let help = false;
   let options = true;
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -450,15 +467,14 @@ const readApiArgs = (args) => {
         if (name === '--hostname') hostname = value;
         break;
       }
-      if (long && attached >= 0) {
-        if (!/^(true|false|1|0|t|f)$/i.test(arg.slice(attached + 1))) return null;
-      } else if (!long && arg[j + 2] === '=') {
-        if (!/^(true|false|1|0|t|f)$/i.test(arg.slice(j + 3))) return null;
-        break;
-      }
+      const value = long && attached >= 0 ? arg.slice(attached + 1) :
+        !long && arg[j + 2] === '=' ? arg.slice(j + 3) : 'true';
+      if (!/^(true|false|1|0|t|f)$/i.test(value)) return null;
+      if (name === '--help' || name === '-h') help = /^(true|1|t)$/i.test(value);
+      if (!long && arg[j + 2] === '=') break;
     }
   }
-  return positionals.length === 1 ? { endpoint: positionals[0], hostname } : null;
+  return help || positionals.length === 1 ? { endpoint: positionals[0], hostname, help } : null;
 };
 
 const readGitHubTarget = async (args) => {
@@ -602,13 +618,16 @@ const mayUseLocalAuth = async () => {
 const buildGhEnv = async (ghCommand, args) => {
   const env = { ...process.env };
   clearManagedTokenEnv(env);
+  const apiHelp = args[0] === 'api' && readApiArgs(args)?.help;
   // Neither a missing environment marker nor an inherited token proves ownership.
-  const allowLocalAuth = await mayUseLocalAuth();
+  const allowLocalAuth = apiHelp ? false : await mayUseLocalAuth();
   if (!allowLocalAuth) {
     for (const key of Object.keys(env)) {
       if (GITHUB_CREDENTIAL_ENV_KEYS.includes(key.toUpperCase())) delete env[key];
     }
   }
+  // Help needs no authority. Canonical arguments prevent any user operation.
+  if (apiHelp) return { env, args: ['api', '--help'] };
   // Authentication management must reach the owner's real gh unchanged, even
   // when no login exists yet; injecting an App token prevents gh auth login.
   if (args[0] === 'auth') {
@@ -655,7 +674,7 @@ const main = async () => {
   }
 
   const ghEnv = await buildGhEnv(ghCommand, process.argv.slice(2));
-  const child = spawnGh(ghCommand, process.argv.slice(2), {
+  const child = spawnGh(ghCommand, ghEnv.args || process.argv.slice(2), {
     stdio: ['inherit', 'inherit', 'pipe'],
     env: ghEnv.env,
   });

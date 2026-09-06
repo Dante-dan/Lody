@@ -36,18 +36,17 @@ control plane.
 
 ## GitHub credentials
 
-- `gh-shim-script.ts`: authorize `/github-auth-context` before credentials; missing/stale contexts
-  fail closed. Owner-only local auth; broker paths never come from child env. Non-owners
-  always use workspace-bound shims, even without a repository/broker.
-- Broker state/env contain session bearers requiring context. Host Git uses a private in-memory bearer.
-- Owner tokens/login precede requester-bound managed fallback on missing credentials/401 only.
-  Never replay commands; managed tokens are github.com-only; API URLs require HTTPS.
-- Parse API/PR/Issue flags by command arity; option values cannot select hosts. Real endpoint/subject
-  URLs override ambient repos. Unknown flags fail closed; check secondary issue targets and pin
-  managed GH_HOST to github.com.
-- Gate shared owner BASH_ENV/ZDOTDIR writes on ownership. Non-owner hooks use separate paths,
-  source no owner files, clear GitHub tokens, and restore managed gh PATH. This cannot isolate
-  same-OS-user filesystem/keychain access or shell modes replacing/ignoring hooks.
+- `gh-shim-script.ts`: authorize `/github-auth-context` first; missing/stale contexts fail closed.
+  Local auth is owner-only; broker paths are trusted, never child env. Non-owners always use
+  workspace shims, even without repo/broker. Published bearers require context; host Git uses a private in-memory bearer.
+- Owner tokens/login precede requester-bound fallback only when missing/401. Never replay commands.
+  Managed tokens require github.com and HTTPS API URLs; pin GH_HOST to github.com.
+- Parse API/PR/Issue flags by arity; values cannot select hosts, unknown flags fail closed.
+  Subject/endpoint URLs override ambient repos. Check secondary targets; issue edit uses the first
+  URL and one repo. API help runs canonical arguments without credentials; values cannot enable it.
+- Only owners write shared BASH_ENV/ZDOTDIR. Non-owner hooks use separate paths, source no owner
+  files, clear tokens and restore shim PATH. Same-OS-user filesystem/keychain and shell modes
+  replacing/ignoring hooks remain outside this boundary.
 
 ## Local Loro data plane
 
