@@ -16,7 +16,7 @@
 export type CronField =
   | { mode: 'every' }
   /** `*​/N`, or `A-B/N` when a window is set. */
-  | { mode: 'step'; step: number; from?: number; to?: number }
+  | { mode: 'step'; step: number; window?: { from?: number; to?: number } }
   /** Bounds are optional only while the person is still choosing them. */
   | { mode: 'range'; from?: number; to?: number }
   | { mode: 'list'; values: number[] }
@@ -70,8 +70,9 @@ export function formatCronField(field: CronField): string {
     case 'every':
       return '*';
     case 'step':
-      return field.from !== undefined && field.to !== undefined
-        ? `${field.from}-${field.to}/${field.step}`
+      if (!isCronFieldComplete(field)) throw new Error('Incomplete cron step window');
+      return field.window
+        ? `${field.window.from}-${field.window.to}/${field.step}`
         : `*/${field.step}`;
     case 'range':
       return `${field.from}-${field.to}`;
@@ -80,6 +81,7 @@ export function formatCronField(field: CronField): string {
     case 'raw':
       return field.text;
   }
+  throw new Error('Unsupported cron field mode');
 }
 
 function inBounds(id: CronFieldId, ...values: number[]): boolean {
@@ -98,7 +100,7 @@ function structuredCronField(text: string, id: CronFieldId): CronField | null {
   if (windowed) {
     const [from, to, by] = [Number(windowed[1]), Number(windowed[2]), Number(windowed[3])];
     return by >= 1 && from <= to && inBounds(id, from, to)
-      ? { mode: 'step', step: by, from, to }
+      ? { mode: 'step', step: by, window: { from, to } }
       : null;
   }
   const range = /^(\d{1,2})-(\d{1,2})$/.exec(text);
@@ -164,7 +166,9 @@ export function cronFieldValues(field: CronField, id: CronFieldId): number[] | n
     case 'every':
       return between(min, max, 1);
     case 'step':
-      return between(field.from ?? min, field.to ?? max, field.step);
+      return isCronFieldComplete(field)
+        ? between(field.window?.from ?? min, field.window?.to ?? max, field.step)
+        : null;
     case 'range':
       return field.from === undefined || field.to === undefined
         ? null
@@ -174,6 +178,7 @@ export function cronFieldValues(field: CronField, id: CronFieldId): number[] | n
     case 'raw':
       return null;
   }
+  throw new Error('Unsupported cron field mode');
 }
 
 /**
@@ -196,7 +201,7 @@ export function defaultCronField(
       return { mode: 'every' };
     case 'step':
       return current?.mode === 'range'
-        ? { mode: 'step', step: 1, from: current.from, to: current.to }
+        ? { mode: 'step', step: 1, window: { from: current.from, to: current.to } }
         : { mode: 'step', step: id === 'minute' ? 15 : 2 };
     case 'range':
       // Never span the whole field from `*`: `1-31` on day-of-month matches
@@ -214,12 +219,18 @@ export function defaultCronField(
       // selection instead, which is what the person is about to fill in.
       return { mode: 'list', values: current?.mode === 'every' ? [] : (values ?? [min]) };
     case 'raw':
-      return { mode: 'raw', text: current ? formatCronField(current) : '*' };
+      return {
+        mode: 'raw',
+        text: current ? (isCronFieldComplete(current) ? formatCronField(current) : '') : '*',
+      };
   }
+  throw new Error('Unsupported cron field mode');
 }
 
 /** A field the person still has to fill in; it must not be serialized. */
 export function isCronFieldComplete(field: CronField): boolean {
+  if (field.mode === 'step' && field.window)
+    return field.window.from !== undefined && field.window.to !== undefined;
   if (field.mode === 'list') return field.values.length > 0;
   if (field.mode === 'raw') return field.text.trim().length > 0;
   if (field.mode === 'range') return field.from !== undefined && field.to !== undefined;

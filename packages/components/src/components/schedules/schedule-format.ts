@@ -112,6 +112,7 @@ export function describeRecurrence(
         ? recurrence.draftText
         : describeCronFields(recurrence.fields, t, locale);
   }
+  throw new Error('Unsupported schedule recurrence');
 }
 
 /** i18n suffix for the unit a cron field counts. */
@@ -159,15 +160,15 @@ export function describeCronFields(fields: CronFields, t: TFunction, locale?: st
       case 'every':
         return null;
       case 'step':
-        return field.from !== undefined && field.to !== undefined
+        return field.window?.from !== undefined && field.window?.to !== undefined
           ? t(
               'schedules.cron.clause.stepInRange',
               'every {{step}} {{unit}} from {{from}} to {{to}}',
               {
                 step: field.step,
                 unit,
-                from: field.from,
-                to: field.to,
+                from: field.window?.from,
+                to: field.window?.to,
               }
             )
           : t('schedules.cron.clause.step', 'every {{step}} {{unit}}', { step: field.step, unit });
@@ -185,6 +186,7 @@ export function describeCronFields(fields: CronFields, t: TFunction, locale?: st
       case 'raw':
         return t('schedules.cron.clause.raw', '{{unit}} “{{text}}”', { unit, text: field.text });
     }
+    throw new Error('Unsupported cron field mode');
   };
   const clauses = CRON_FIELD_ORDER.map((id) => clause(id, fields[id])).filter(
     (entry): entry is string => entry !== null

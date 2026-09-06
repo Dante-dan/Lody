@@ -25,7 +25,11 @@ describe('reading a cron expression as editable fields', () => {
   it('models the shapes the pickers offer', () => {
     expect(parseCronField('*', 'minute')).toEqual({ mode: 'every' });
     expect(parseCronField('*/20', 'minute')).toEqual({ mode: 'step', step: 20 });
-    expect(parseCronField('9-17/2', 'hour')).toEqual({ mode: 'step', step: 2, from: 9, to: 17 });
+    expect(parseCronField('9-17/2', 'hour')).toEqual({
+      mode: 'step',
+      step: 2,
+      window: { from: 9, to: 17 },
+    });
     expect(parseCronField('9-17', 'hour')).toEqual({ mode: 'range', from: 9, to: 17 });
     expect(parseCronField('0,30', 'minute')).toEqual({ mode: 'list', values: [0, 30] });
     expect(parseCronField('5', 'dayOfMonth')).toEqual({ mode: 'list', values: [5] });
@@ -55,6 +59,7 @@ describe('reading a cron expression as editable fields', () => {
   it('round-trips every field byte for byte', () => {
     const corpus = [
       '*/20 9-17 * * 1-5',
+      '0 9-17/2 * * 1-5',
       '0 9 * * MON-FRI',
       '0 9,17 * * *',
       '30 7 1,15 * *',
@@ -148,8 +153,7 @@ describe('editing one field', () => {
     expect(defaultCronField('step', 'hour', { mode: 'range', from: 9, to: 17 })).toEqual({
       mode: 'step',
       step: 1,
-      from: 9,
-      to: 17,
+      window: { from: 9, to: 17 },
     });
     // The same instants, before and after the switch.
     for (const [from, to] of [
@@ -162,9 +166,9 @@ describe('editing one field', () => {
   });
 
   it('enumerates what a field selects', () => {
-    expect(cronFieldValues({ mode: 'step', step: 4, from: 9, to: 17 }, 'hour')).toEqual([
-      9, 13, 17,
-    ]);
+    expect(cronFieldValues({ mode: 'step', step: 4, window: { from: 9, to: 17 } }, 'hour')).toEqual(
+      [9, 13, 17]
+    );
     expect(cronFieldValues({ mode: 'every' }, 'weekday')).toEqual([0, 1, 2, 3, 4, 5, 6]);
     expect(cronFieldValues({ mode: 'raw', text: 'MON#2' }, 'weekday')).toBeNull();
   });
@@ -190,7 +194,7 @@ describe('what the pickers can build stays executable', () => {
       }),
       formatCronExpression({
         minute: { mode: 'list', values: [0, 30] },
-        hour: { mode: 'step', step: 2, from: 8, to: 20 },
+        hour: { mode: 'step', step: 2, window: { from: 8, to: 20 } },
         dayOfMonth: { mode: 'list', values: [1, 15] },
         month: { mode: 'list', values: [1, 7] },
         weekday: { mode: 'every' },
@@ -283,6 +287,30 @@ describe('switching a field mode must not change what fires', () => {
     // failed to parse and collapsed the whole editor.
     expect(withCronField('*/20 9-17 * * 1-5', 'weekday', { mode: 'list', values: [] })).toBeNull();
     expect(withCronField('*/20 9-17 * * 1-5', 'hour', { mode: 'raw', text: '  ' })).toBeNull();
+  });
+
+  it('never widens a step whose selected window is unfinished', () => {
+    const expression = '0 9-17/2 * * 1-5';
+    const fields = parseCronExpression(expression)!;
+    for (const window of [{ to: 17 }, { from: 9 }, {}]) {
+      const hour = { mode: 'step', step: 2, window } as const;
+      expect(isCronFieldComplete(hour)).toBe(false);
+      expect(incompleteCronFieldIds({ ...fields, hour })).toEqual(['hour']);
+      expect(() => formatCronExpression({ ...fields, hour })).toThrow(/incomplete/i);
+      expect(() => formatCronField(hour)).toThrow(/incomplete/i);
+      expect(withCronField(expression, 'hour', hour)).toBeNull();
+      expect(cronFieldValues(hour, 'hour')).toBeNull();
+      expect(defaultCronField('raw', 'hour', hour)).toEqual({ mode: 'raw', text: '' });
+    }
+    expect(
+      withCronField(expression, 'hour', {
+        mode: 'step',
+        step: 2,
+        window: { from: 8, to: 18 },
+      })
+    ).toBe('0 8-18/2 * * 1-5');
+    // Removing the window is an explicit choice, distinct from emptying it.
+    expect(withCronField(expression, 'hour', { mode: 'step', step: 2 })).toBe('0 */2 * * 1-5');
   });
 
   it('flags the day-of-month OR day-of-week combination', () => {

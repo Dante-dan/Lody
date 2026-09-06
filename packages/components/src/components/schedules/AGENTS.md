@@ -49,6 +49,9 @@
 - An incomplete field is a first-class state, not a short expression:
   `formatCronExpression` throws, `withCronField` returns `null`, and the form
   names the unfinished field above a disabled Save. Never emit a partial rule.
+  A step has an optional `window` object: absence means unrestricted, while an
+  object with missing bounds is unfinished. Keep both inputs visible even when
+  both bounds are cleared; only Remove range discards the window.
 - Switching a field's mode must not change which instants fire. Only `*` means
   unrestricted, and cron ORs day-of-month with day-of-week — so replacing `*`
   with an exhaustive `1,2,…,31` or `1-31` turns a weekdays-only rule into a

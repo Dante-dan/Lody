@@ -31,6 +31,7 @@ import { Skeleton } from '@/ui/skeleton';
 import { Textarea } from '@/ui/textarea';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import {
   describeStatus,
   describeTrigger,
@@ -447,7 +448,9 @@ export function ScheduleForm({
               ? t('schedules.cron.requireValues', 'Choose a value for {{field}}.', {
                   field: incomplete
                     .map((id) =>
-                      t(`schedules.cron.${id}`, id as string).toLocaleLowerCase(i18n.language)
+                      t(`schedules.cron.${id}`, id as string).toLocaleLowerCase(
+                        toIntlLocaleOrEn(i18n.language)
+                      )
                     )
                     .join(t('schedules.cron.clauseSeparator', ', ')),
                 })

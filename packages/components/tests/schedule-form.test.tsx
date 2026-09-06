@@ -570,6 +570,44 @@ describe('Custom rule drafts survive editing', () => {
     });
   });
 
+  it('keeps an unfinished step window visible and blocks saving until it is refilled', () => {
+    open('0 9-17/2 * * 1-5');
+    const startLabel = `${en['schedules.cron.hour']} range start`;
+    const endLabel = `${en['schedules.cron.hour']} range end`;
+    const start = () => byLabel<HTMLInputElement>(startLabel);
+    const end = () => byLabel<HTMLInputElement>(endLabel);
+    expect(saveButton().disabled).toBe(false);
+
+    typeInto(startLabel, '');
+    expect(start()).not.toBeNull();
+    expect(start()!.value).toBe('');
+    expect(end()!.value).toBe('17');
+    expect(saveButton().disabled).toBe(true);
+    expect(container.textContent).toContain('Choose a value for hour.');
+    submit();
+    expect(onSave).not.toHaveBeenCalled();
+
+    typeInto(endLabel, '');
+    expect(start()!.value).toBe('');
+    expect(end()!.value).toBe('');
+    expect(byLabel(en['schedules.cron.clearWindow'])).not.toBeNull();
+    expect(fieldRows()).toHaveLength(5);
+    expect(saveButton().disabled).toBe(true);
+    submit();
+    expect(onSave).not.toHaveBeenCalled();
+
+    typeInto(startLabel, '8');
+    expect(saveButton().disabled).toBe(true);
+    typeInto(endLabel, '18');
+    expect(saveButton().disabled).toBe(false);
+    submit();
+    expect(onSave.mock.calls[0]![0].trigger).toEqual({
+      kind: 'cron',
+      expression: '0 8-18/2 * * 1-5',
+      timeZone: 'Asia/Shanghai',
+    });
+  });
+
   it('keeps a field in Custom text while it is being typed', () => {
     open('0 9 * * MON#2');
     const rawLabel = `Custom text for ${en['schedules.cron.weekday']}`;

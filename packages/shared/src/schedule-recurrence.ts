@@ -320,6 +320,7 @@ export function changeScheduleRecurrenceKind(
       };
     }
   }
+  throw new Error('Unsupported schedule recurrence');
 }
 
 /**

@@ -245,7 +245,12 @@ export function CronFieldRow({
     return t('schedules.cron.mode.list', 'On selected');
   };
 
-  const windowed = field.mode === 'step' && field.from !== undefined && field.to !== undefined;
+  const windowed = field.mode === 'step' && field.window !== undefined;
+  const bounds = field.mode === 'step' ? field.window : field.mode === 'range' ? field : undefined;
+  const changeBound = (bound: 'from' | 'to', value: number | undefined) => {
+    if (field.mode === 'step') onChange({ ...field, window: { ...field.window, [bound]: value } });
+    else if (field.mode === 'range') onChange({ ...field, [bound]: value });
+  };
   const windowLabel = windowed
     ? t('schedules.cron.clearWindow', 'Remove range')
     : t('schedules.cron.addWindow', 'Limit range');
@@ -290,7 +295,7 @@ export function CronFieldRow({
         {!weekdayToggleValues && (field.mode === 'range' || windowed) ? (
           <>
             <NumberBox
-              value={(field as { from?: number }).from}
+              value={bounds?.from}
               min={min}
               max={max}
               disabled={disabled}
@@ -299,18 +304,18 @@ export function CronFieldRow({
               label={t('schedules.cron.fromFor', '{{field}} range start', {
                 field: fieldLabels[id],
               })}
-              onChange={(from) => onChange({ ...field, from } as CronField)}
+              onChange={(from) => changeBound('from', from)}
             />
             <span className="text-xs text-muted-foreground">{t('schedules.cron.to', 'to')}</span>
             <NumberBox
-              value={(field as { to?: number }).to}
+              value={bounds?.to}
               min={min}
               max={max}
               disabled={disabled}
               label={t('schedules.cron.toFor', '{{field}} range end', {
                 field: fieldLabels[id],
               })}
-              onChange={(to) => onChange({ ...field, to } as CronField)}
+              onChange={(to) => changeBound('to', to)}
             />
           </>
         ) : null}
@@ -330,7 +335,7 @@ export function CronFieldRow({
               onChange(
                 windowed
                   ? { mode: 'step', step: field.step }
-                  : { mode: 'step', step: field.step, from: min, to: max }
+                  : { mode: 'step', step: field.step, window: { from: min, to: max } }
               )
             }
           >
