@@ -37,6 +37,11 @@ constraint into a note or a `README.md` to buy bytes, because neither is
 guaranteed to be read before a change. A directory whose index cannot fit is
 usually under-structured; prefer child scopes over a longer parent.
 
+The gate rejects an `AGENTS.md` at 8192 bytes, and warns above 7000 without
+failing. Aim for the warning threshold, not the gate: a file that lands 30 bytes
+under the limit breaks for whoever adds the next sentence, and that is rarely the
+person who left it there. Route a topic out instead of trimming words.
+
 ## Current work
 
 ```sh
@@ -48,7 +53,8 @@ Status is derived from existing files: draft/outdated Specs, proposed notes,
 pending/stale translations, and topics needing SHA review. Do not maintain a
 separate global INDEX or TODO. Both commands are read-only. Check reports invalid
 metadata, repository Markdown links (including archives), oversized `AGENTS.md`
-files, and stale or broken registered topics. Errors in one topic do not hide others. Pending
+files, and stale or broken registered topics. Warnings, including an `AGENTS.md`
+nearing the size gate, are reported separately and never fail the check. Errors in one topic do not hide others. Pending
 translation or Spec approval alone does not fail the check.
 
 The [communication architecture draft](../specs/communication-architecture.zh.md)

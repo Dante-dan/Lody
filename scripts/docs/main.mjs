@@ -18,6 +18,9 @@ import { fileURLToPath } from 'node:url';
 import { extractAnchors, sourceRoots, sourceExtension } from './anchors.mjs';
 
 const documentRoots = ['specs', '.agents/docs', '.agents/notes'];
+/** Hard gate, and the budget a relocation should aim for so the next edit still fits. */
+const agentsFileLimit = 8192;
+const agentsFileTarget = 7000;
 const recordSuffix = '.anchors.json';
 const classes = new Set([
   'architecture',
@@ -283,6 +286,7 @@ export function inspectTopic(root, topic) {
 export function documentStatus(root) {
   const documents = [];
   const errors = [];
+  const warnings = [];
   for (const file of ['specs', '.agents/notes'].flatMap((p) => walk(root, p))) {
     if (
       !file.endsWith('.md') ||
@@ -331,13 +335,16 @@ export function documentStatus(root) {
     }
     documents.push({ file, status, translation, missingTranslation });
   }
-  errors.push(...checkRepositoryMarkdown(root));
-  return { documents, errors };
+  const markdown = checkRepositoryMarkdown(root);
+  errors.push(...markdown.errors);
+  warnings.push(...markdown.warnings);
+  return { documents, errors, warnings };
 }
 
 /** Check tracked and untracked non-ignored Markdown, including hubs and archives. */
 function checkRepositoryMarkdown(root) {
   const errors = [];
+  const warnings = [];
   const files = [
     ...new Set(
       git(root, ['ls-files', '--cached', '--others', '--exclude-standard', '-z'])
@@ -349,11 +356,18 @@ function checkRepositoryMarkdown(root) {
     const absolute = path.join(root, file);
     if (!existsSync(absolute) || lstatSync(absolute).isSymbolicLink()) continue;
     const bytes = readFileSync(localPath(root, file));
-    if (path.basename(file) === 'AGENTS.md' && bytes.length >= 8192)
-      errors.push(
-        `${file}: ${bytes.length} bytes; AGENTS.md must be under 8192 bytes. ` +
-          'Route the excess per .agents/README.md#where-content-goes'
-      );
+    if (path.basename(file) === 'AGENTS.md') {
+      if (bytes.length >= agentsFileLimit)
+        errors.push(
+          `${file}: ${bytes.length} bytes; AGENTS.md must be under ${agentsFileLimit} bytes. ` +
+            'Route the excess per .agents/README.md#where-content-goes'
+        );
+      else if (bytes.length > agentsFileTarget)
+        warnings.push(
+          `${file}: ${bytes.length} bytes; ${agentsFileLimit - bytes.length} left before the gate. ` +
+            `Route a topic out rather than growing it past ${agentsFileTarget} bytes.`
+        );
+    }
     const text = bytes
       .toString()
       .replace(/<!--[\s\S]*?-->/g, '')
@@ -385,7 +399,7 @@ function checkRepositoryMarkdown(root) {
         errors.push(`${file}: broken local link ${target}`);
     }
   }
-  return errors;
+  return { errors, warnings };
 }
 
 /** Explicit confirmation requires committed, recoverable content and never edits a Spec. */

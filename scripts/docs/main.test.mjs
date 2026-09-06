@@ -358,6 +358,22 @@ test('translation statuses must agree and every AGENTS file stays under 8 KiB', 
   assert.ok(documentStatus(f.root).errors.some((e) => e.includes('apps/AGENTS.md: 8192')));
 });
 
+test('an AGENTS file near the gate warns without failing the check', (t) => {
+  const f = fixture(t);
+  f.write('AGENTS.md', 'x'.repeat(7000));
+  assert.deepEqual(documentStatus(f.root).warnings, []);
+  f.write('AGENTS.md', 'x'.repeat(7001));
+  const near = documentStatus(f.root);
+  assert.ok(near.warnings.some((w) => w.includes('AGENTS.md: 7001') && w.includes('1191 left')));
+  assert.ok(!near.errors.some((e) => e.includes('AGENTS.md')));
+  f.commit();
+  confirmTopic(f.root, 'specs/flow', 'reviewed', 'evidence');
+  assert.equal(main(f.root, ['check']), 0, 'a warning alone must not fail the check');
+  f.write('AGENTS.md', 'x'.repeat(8192));
+  f.commit();
+  assert.equal(main(f.root, ['check']), 1);
+});
+
 test('a shallow clone of a consolidated commit can diff blobs without the original PR revision', (t) => {
   const f = fixture(t);
   confirmTopic(f.root, 'specs/flow', 'review', 'evidence');
