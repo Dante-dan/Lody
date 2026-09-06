@@ -286,6 +286,7 @@ import {
   type TurnRef,
 } from '@/lib/session-transient-store';
 import { PromptActivityRecorder } from '@/session/prompt-activity-recorder';
+import type { AgentSessionCloseCause } from '@/session/acp-error-classification';
 import { fetchAcpCapabilities, type FetchAcpCapabilitiesOptions } from '@/agent/acp-capabilities';
 import type { WorkspaceWatchCoordinatorApi } from './code-collab/workspace-watch-coordinator';
 import { appendIssuePrMentionsToPrompt } from '@/session/session-execution-helpers';
@@ -3743,7 +3744,6 @@ export class MessageHandler {
           `[${event.sessionId}] Session error event received: ${formatErrorMessage(event.error)}`
         );
         const sessionId = event.sessionId;
-        const turnWasActive = this.executionService.getExecutionSnapshot(sessionId).hasActiveTurn;
         this.executionService.onSessionInstanceClosed(sessionId, event.session, 'error');
         if (!event.wasCurrent) {
           this.logger.debug(`[${sessionId}] Ignoring error event from superseded session instance`);
@@ -3755,16 +3755,7 @@ export class MessageHandler {
           this.logger.debug(`[${sessionId}] Ignoring error event for GC-cleaned session`);
           return;
         }
-        if (turnWasActive) {
-          await this.drainACPBuffers(sessionId);
-          return;
-        }
-        this.clearSessionActivePresence(sessionId);
-        await this.finalizeACPState(sessionId);
-        await this.flushSessionUsage(sessionId);
-        const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
-        await sessionDoc.setStatus(SessionStatusFactory.idle());
-        this.logger.debug(`[${sessionId}] Status set to idle (via error event)`);
+        await this.settleClosedInstance(sessionId, 'error', { writeIdleStatus: true });
       })();
     });
 
@@ -3772,7 +3763,6 @@ export class MessageHandler {
       void (async () => {
         const sessionId = exit.sessionId;
         this.logger.debug(`[${sessionId}] Session exit event received (exitCode=${exit.exitCode})`);
-        const turnWasActive = this.executionService.getExecutionSnapshot(sessionId).hasActiveTurn;
         this.executionService.onSessionInstanceClosed(sessionId, exit.session, 'exit');
         if (!exit.wasCurrent) {
           this.logger.debug(`[${sessionId}] Ignoring exit event from superseded session instance`);
@@ -3782,16 +3772,7 @@ export class MessageHandler {
           this.logger.debug(`[${sessionId}] Ignoring exit event for GC-cleaned session`);
           return;
         }
-        if (turnWasActive) {
-          await this.drainACPBuffers(sessionId);
-          return;
-        }
-        this.clearSessionActivePresence(sessionId);
-        await this.finalizeACPState(sessionId);
-        await this.flushSessionUsage(sessionId);
-        const session = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
-        await session.setStatus(SessionStatusFactory.idle());
-        this.logger.debug(`[${sessionId}] Status set to idle (via exit event)`);
+        await this.settleClosedInstance(sessionId, 'exit', { writeIdleStatus: true });
       })();
     });
 
@@ -3800,7 +3781,6 @@ export class MessageHandler {
     // `terminated`).
     this.sessionManager.on('terminated', (event) => {
       const sessionId = event.sessionId;
-      const turnWasActive = this.executionService.getExecutionSnapshot(sessionId).hasActiveTurn;
       this.executionService.onSessionInstanceClosed(sessionId, event.session, 'terminated');
       if (!event.wasCurrent) {
         this.logger.debug(
@@ -3808,11 +3788,12 @@ export class MessageHandler {
         );
         return;
       }
-      if (!turnWasActive) {
+      if (!this.executionService.getExecutionSnapshot(sessionId).hasActiveTurn) {
         // Releasing the watch cuts Code Collab off from the workspace. That is
         // correct once nothing is running, but during a resume fallback this
         // event names a dead instance while the turn keeps editing files through
         // its replacement. The watch's own idle timer reclaims it either way.
+        // (Synchronous with the check: no await separates them.)
         this.codeCollabV2Service.releaseWorkspaceWatchForOwner(sessionId);
       }
       void (async () => {
@@ -3821,13 +3802,7 @@ export class MessageHandler {
           return;
         }
         try {
-          if (turnWasActive) {
-            await this.drainACPBuffers(sessionId);
-            return;
-          }
-          this.clearSessionActivePresence(sessionId);
-          await this.finalizeACPState(sessionId);
-          await this.flushSessionUsage(sessionId);
+          await this.settleClosedInstance(sessionId, 'terminated', { writeIdleStatus: false });
         } catch (error) {
           this.logger.error(
             `[${sessionId}] Failed to handle termination event: ${formatErrorMessage(error)}`
@@ -3835,6 +3810,48 @@ export class MessageHandler {
         }
       })();
     });
+  }
+
+  /**
+   * What a lifecycle listener may do once the CURRENT Session instance has closed
+   * with no turn running at event time.
+   *
+   * Ownership is re-validated before EVERY destructive write, not sampled once
+   * at the top. A turn can begin during any await here — a message lands moments
+   * after an idle session terminated — and a snapshot taken at event time then let
+   * the listener clear presence, finalize, and write `idle` over the turn that had
+   * started meanwhile. The finalize itself already refuses to stamp or clear a
+   * turn that appeared during its awaits, so the checks here guard the two writes
+   * that live outside the store: presence and the status document.
+   */
+  private async settleClosedInstance(
+    sessionId: SessionId,
+    cause: AgentSessionCloseCause,
+    options: { writeIdleStatus: boolean }
+  ): Promise<void> {
+    const turnOwnsSession = (): boolean =>
+      this.executionService.getExecutionSnapshot(sessionId).hasActiveTurn;
+
+    if (turnOwnsSession()) {
+      await this.drainACPBuffers(sessionId);
+      return;
+    }
+    // Synchronous with the check above: presence belongs to a live turn.
+    this.clearSessionActivePresence(sessionId);
+    await this.finalizeACPState(sessionId);
+    await this.flushSessionUsage(sessionId);
+    if (!options.writeIdleStatus) {
+      return;
+    }
+    const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
+    if (turnOwnsSession()) {
+      this.logger.debug(
+        `[${sessionId}] A turn started while handling the ${cause} event; leaving its status to the turn owner`
+      );
+      return;
+    }
+    await sessionDoc.setStatus(SessionStatusFactory.idle());
+    this.logger.debug(`[${sessionId}] Status set to idle (via ${cause} event)`);
   }
 
   private getMachineFlockDocIdForMachine(): string {

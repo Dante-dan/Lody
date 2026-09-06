@@ -30,6 +30,7 @@ import type {
   SessionExecutionSnapshot,
 } from '../src/session/session-execution-service';
 import type { SessionActivePresenceController } from '../src/lib/loro/session-active-presence';
+import type { SessionTransientStore } from '../src/lib/session-transient-store';
 import { loadEnv } from '../src/utils/const';
 import { createMessageHandlerHarness, destroyRepoOnRealTimers } from './message-handler-harness';
 
@@ -57,6 +58,7 @@ type MessageHandlerHost = {
     userTurnId?: string
   ): Promise<void>;
   enqueueACPUpdate(sessionId: SessionId, update: AcpSessionNotification): void;
+  store: SessionTransientStore;
   executionService: SessionExecutionService;
   codeCollabV2Service: CodeCollabV2Service;
   sessionActivePresence: SessionActivePresenceController;
@@ -259,6 +261,87 @@ describe('MessageHandler session lifecycle events vs. an owned turn', () => {
       // Buffered output is still written out, and the entry is closed.
       expect(readItems(assistant)).toEqual([{ type: 'text', text: 'partial' }]);
       expect(assistant?.finished).toBe(true);
+    } finally {
+      await destroyRepoOnRealTimers(repo);
+    }
+  });
+
+  it("leaves a turn that begins during an idle session's teardown to its owner", async () => {
+    // The listener saw NO turn at event time and took the teardown path. That
+    // path awaits (flushes, the history write); a user message dispatched during
+    // those awaits begins a turn. The finalize already refuses to stamp or clear
+    // a turn that appeared meanwhile — but presence and the `idle` status write
+    // live outside the store, and a `hasActiveTurn` sampled once at the top let
+    // the listener write `idle` over a turn that had just started. Ownership is
+    // re-validated before each of those writes.
+    const sessionId = 's-lifecycle-race' as SessionId;
+    const userTurnId = 'user-turn-race';
+    const { repo, doc, host, listeners, setActiveTurn, clearPresence, setStatus } =
+      await createHarness(sessionId);
+
+    try {
+      setActiveTurn(false);
+      // Transient state exists (the session ran before) but holds no turn.
+      host.store.get(sessionId);
+      expect(host.store.getTurnPhase(sessionId)).toBe('idle');
+
+      // Hold the finalizer inside its history write so the turn can begin
+      // deterministically "during" the teardown. Only the FIRST write is held;
+      // the new turn's own entry write below goes straight through.
+      const originalUpdateHistory = doc.updateHistory.bind(doc);
+      let finalizeWriteReached!: () => void;
+      const reached = new Promise<void>((resolve) => {
+        finalizeWriteReached = resolve;
+      });
+      let releaseFinalizeWrite!: () => void;
+      const released = new Promise<void>((resolve) => {
+        releaseFinalizeWrite = resolve;
+      });
+      vi.spyOn(doc, 'updateHistory').mockImplementationOnce(async (mutate) => {
+        finalizeWriteReached();
+        await released;
+        return await originalUpdateHistory(mutate);
+      });
+
+      listeners.exit?.({
+        sessionId,
+        exitCode: 1,
+        session: deadSession(sessionId),
+        wasCurrent: true,
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      await reached;
+      // Presence was cleared while there genuinely was no turn: correct.
+      expect(clearPresence).toHaveBeenCalledWith(sessionId);
+
+      // A message arrives: the execution service registers a runtime and begins
+      // a deferred visible turn, then opens its assistant entry.
+      setActiveTurn(true, `assistant:${userTurnId}`);
+      const turnRef = host.beginConversationTurn(sessionId, userTurnId, {
+        dispatchSource: 'crdt',
+        sessionDoc: doc,
+        deferACPUpdateTarget: true,
+      });
+      await host.createAssistantEntryForTurn(sessionId, doc, turnRef.turnId, undefined, userTurnId);
+
+      releaseFinalizeWrite();
+      await vi.advanceTimersByTimeAsync(50);
+
+      // The turn that started meanwhile is untouched: its state, its entry, and
+      // the session status.
+      expect(host.store.getTurnPhase(sessionId)).toBe('prompting');
+      expect(host.store.getTurnId(sessionId)).toBe(turnRef.turnId);
+      const assistant = (await doc.getHistory()).find((entry) => entry.id === turnRef.turnId);
+      expect(assistant).toBeDefined();
+      expect(assistant?.finished).not.toBe(true);
+      expect(setStatus).not.toHaveBeenCalled();
+
+      // And it is still fully usable: the prompt binds and its output routes.
+      expect(host.bindConversationTurnForPrompt(sessionId, turnRef)).toBe('bound');
+      host.enqueueACPUpdate(sessionId, agentChunk(sessionId, 'after the race'));
+      await vi.advanceTimersByTimeAsync(50);
+      const after = (await doc.getHistory()).find((entry) => entry.id === turnRef.turnId);
+      expect(readItems(after)).toEqual([{ type: 'text', text: 'after the race' }]);
     } finally {
       await destroyRepoOnRealTimers(repo);
     }

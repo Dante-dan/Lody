@@ -288,7 +288,9 @@ control-plane path is DEPRECATED; do not add functionality to it.
   before prompt submission; either refusal stops the prompt (or cancels an already-applied
   steer) without routing output back to its predecessor.
   Lifecycle events carry the emitting Session instance. Superseded-instance events do no
-  session-wide cleanup; current-instance events only drain buffers while a turn owner exists.
+  session-wide cleanup; current-instance events only drain buffers while a turn owner exists,
+  and their teardown (`settleClosedInstance`) re-checks for an owner before clearing presence
+  and again before writing `idle`, because a turn can begin during its awaits.
   Finalizers capture `TurnRef` before their first await, stamp its exact assistant entry,
   and clear through epoch-aware CAS. Turn cleanup preserves late updates and activity evidence.
   This is what lets the web derive the "session will continue" panel from the Cron/ScheduleWakeup
