@@ -83,6 +83,9 @@ Shared mention primitive used by composer autocomplete surfaces.
   input wrapper's top edge instead of the current caret line.
 - Menu callers should include `var(--mention-input-width)` in desktop `max-w`
   classes; viewport-only caps let wide menus escape the composer.
+- Portals stay inside the input’s nearest dialog/drawer for modal pointer and
+  scroll access. Collision bounds also respect that layer; body portals are
+  only the fallback. See `tests/mention-modal.test.tsx`.
 - Mobile mention content bypasses floating-ui and docks through
   `MentionMobilePanel`; desktop positioning classes do not control mobile layout.
 
@@ -111,7 +114,7 @@ Shared mention primitive used by composer autocomplete surfaces.
 - `mention-content.tsx` renders the desktop floating listbox and provides the
   input-width CSS variable; it delegates mobile rendering to `mention-mobile-content.tsx`.
 - `mention-mobile-content.tsx` docks the mobile panel above the composer and
-  handles drawer-safe portal placement.
+  handles dialog/drawer-safe portal placement.
 - `mention-item.tsx`, `mention-label.tsx`, `mention-highlighter.tsx`, and
   `mention-trigger.ts` provide row selection, accessibility label, inline
   highlighting, and trigger/drill-down-prefix parsing helpers.

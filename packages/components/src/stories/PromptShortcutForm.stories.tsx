@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from '@storybook/react';
 import type { PromptShortcut } from '@lody/shared/prompt-shortcuts';
 import { PromptShortcutForm } from '@/components/settings/prompt-shortcut-form';
 import { ShortcutPromptField } from '@/components/settings/prompt-shortcuts-setting';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/ui/dialog';
 import { SettingsStoryProviders } from './settings-story-shell';
 
 /**
@@ -35,17 +36,38 @@ const meta = {
   component: PromptShortcutForm,
   parameters: { layout: 'centered' },
   decorators: [
-    (Story) => (
-      <div className="flex max-h-[min(680px,88dvh)] w-[min(620px,96dvw)] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-lg">
-        <header className="shrink-0 border-b border-border/60 px-5 py-3 pr-12">
-          <h2 className="text-sm font-semibold">Edit Prompt Shortcut</h2>
-          <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
-            Saved to this workspace and sent as one message.
-          </p>
-        </header>
-        <Story />
-      </div>
-    ),
+    (Story, context) => {
+      const inDialog = context.parameters.shortcutDialog === true;
+      const Title = inDialog ? DialogTitle : 'h2';
+      const Description = inDialog ? DialogDescription : 'p';
+      const content = (
+        <>
+          <header className="shrink-0 border-b border-border/60 px-5 py-3 pr-12">
+            <Title className="text-sm font-semibold">Edit Prompt Shortcut</Title>
+            <Description className="mt-0.5 text-xs leading-snug text-muted-foreground">
+              Saved to this workspace and sent as one message.
+            </Description>
+          </header>
+          <Story />
+        </>
+      );
+      return inDialog ? (
+        <SettingsStoryProviders>
+          <Dialog open>
+            <DialogContent
+              noAnimation
+              className="flex max-h-[min(680px,88dvh)] w-[min(620px,96dvw)] max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-none sm:p-0"
+            >
+              {content}
+            </DialogContent>
+          </Dialog>
+        </SettingsStoryProviders>
+      ) : (
+        <div className="flex max-h-[min(680px,88dvh)] w-[min(620px,96dvw)] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+          {content}
+        </div>
+      );
+    },
   ],
   args: {
     initial: base,
@@ -72,7 +94,9 @@ type Story = StoryObj<typeof meta>;
 
 /** The default a new Shortcut starts from: private, no scope, no variables. */
 export const NewShortcut: Story = {
+  parameters: { shortcutDialog: true },
   args: {
+    renderPrompt: (editor) => <ShortcutPromptField editor={editor} disabled={false} />,
     isNew: true,
     initial: { ...base, name: '', slug: '', description: undefined, prompt: '', variables: [] },
   },
@@ -158,4 +182,9 @@ export const RealPromptField: Story = {
       variables: [{ name: 'topic' }],
     },
   },
+};
+
+export const NewShortcutMobile: Story = {
+  args: NewShortcut.args,
+  parameters: { shortcutDialog: true, viewport: { defaultViewport: 'mobile1' } },
 };
