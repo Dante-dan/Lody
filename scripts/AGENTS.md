@@ -58,3 +58,8 @@ maintenance commands here.
 Keep tests deterministic and side-effect-contained. Temporary files must use a
 dedicated temporary directory and cleanup must never target the repository root
 or a user data directory.
+
+- `history-schema-audit/` validates a candidate history-item write projection
+  against local SQLite stores. Keep reads transactionally read-only, temporary
+  frames isolated and deleted, and reports free of transcript content. Accepted
+  projection is not proof of production Mirror or whole-document compatibility.
