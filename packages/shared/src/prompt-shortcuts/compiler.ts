@@ -211,7 +211,8 @@ export type ExpandedShortcut = {
 export function expandShortcut(
   invocation: ShortcutInvocation,
   allowMissing = false,
-  maxBytes = PROMPT_SHORTCUT_LIMITS.documentBytes
+  maxBytes = PROMPT_SHORTCUT_LIMITS.documentBytes,
+  renderMention?: (mention: PromptShortcutMention) => string
 ): ExpandedShortcut {
   invocation = parseShortcutInvocation(invocation);
   const snapshot = invocation.snapshot;
@@ -240,7 +241,13 @@ export function expandShortcut(
   const valueBytes = new Map(
     snapshot.variables.map(({ name }) => [name, shortcutByteLength(invocation.values[name])])
   );
+  const semanticText = snapshot.mentions.map(
+    (mention) => renderMention?.(mention) ?? mention.label
+  );
   let expandedBytes = shortcutByteLength(snapshot.prompt);
+  snapshot.mentions.forEach((mention, index) => {
+    expandedBytes += shortcutByteLength(semanticText[index]!) - shortcutByteLength(mention.label);
+  });
   for (const placeholder of placeholders) {
     const replacementBytes =
       placeholder.escaped || missing.includes(placeholder.name)
@@ -258,7 +265,11 @@ export function expandShortcut(
       ...placeholder,
       kind: 'placeholder' as const,
     })),
-    ...snapshot.mentions.map((mention) => ({ ...mention, kind: 'mention' as const })),
+    ...snapshot.mentions.map((mention, index) => ({
+      ...mention,
+      text: semanticText[index]!,
+      kind: 'mention' as const,
+    })),
   ].sort((a, b) => a.start - b.start);
   const result: ExpandedShortcut = { text: '', mentions: [], unresolved: [] };
   let cursor = 0;
@@ -266,7 +277,7 @@ export function expandShortcut(
     result.text += snapshot.prompt.slice(cursor, segment.start);
     const start = result.text.length;
     if (segment.kind === 'mention') {
-      result.text += segment.label;
+      result.text += segment.text;
       result.mentions.push({
         start,
         end: result.text.length,

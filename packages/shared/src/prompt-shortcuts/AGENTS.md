@@ -8,7 +8,9 @@
   eligibility. Scope is author input, never inferred from mentions or active UI.
 - `compiler.ts` freezes invocation snapshots, derives variables and compiles
   ordered inline segments. Injected values are literal; never hydrate/parse them
-  again as mentions, shortcuts or variables. Offsets are UTF-16, byte quotas UTF-8.
+  again as mentions, shortcuts or variables. The optional semantic renderer lowers
+  stable targets during the same segment pass and contributes to the byte budget.
+  Offsets are UTF-16, byte quotas UTF-8.
 - `document.ts` saves coherent immutable revisions with explicit parent ancestry.
   Concurrent heads are a conflict, not a field-wise merge of text and ranges.
   Only live heads retain materialized content; old operations remain in CRDT

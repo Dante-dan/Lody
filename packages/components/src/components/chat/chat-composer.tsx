@@ -117,6 +117,7 @@ export interface ChatComposerProps {
   onPromptPaste?: (event: ClipboardEvent<HTMLTextAreaElement>) => void;
   promptPlaceholder?: string;
   promptDisabled?: boolean;
+  draftSuspended?: boolean;
   promptRows?: number;
   promptEnterKeyHint?: TextareaProps['enterKeyHint'];
   promptRef?: Ref<HTMLTextAreaElement>;
@@ -127,6 +128,7 @@ export interface ChatComposerProps {
    * regions of the sent text were mentions; see `useMentionPromptExpansion`.
    */
   onMentionRangesChange?: (ranges: MentionRange[]) => void;
+  onShortcutAvailabilityChange?: (blocked: boolean) => void;
   /** Ranges stored with the draft, restored when the composer remounts. */
   persistedMentions?: readonly PersistedMentionRange[];
   /** Identity of the draft `promptValue` belongs to; see `draftKey` there. */
@@ -242,12 +244,14 @@ export function ChatComposer({
   onPromptPaste,
   promptPlaceholder,
   promptDisabled = false,
+  draftSuspended = false,
   promptRows = 3,
   promptEnterKeyHint,
   promptRef,
   pastedTextDrafts = [],
   onPastedTextDraftsChange,
   onMentionRangesChange,
+  onShortcutAvailabilityChange,
   persistedMentions,
   draftKey,
   mentionActionsRef,
@@ -283,6 +287,7 @@ export function ChatComposer({
   focusOnContainerClick = false,
 }: ChatComposerProps) {
   const { t, i18n } = useTranslation();
+  const shortcutsEnabled = variant !== 'dialog';
   const intlLocale = useMemo(
     () => toIntlLocale(i18n.resolvedLanguage ?? i18n.language),
     [i18n.language, i18n.resolvedLanguage]
@@ -874,6 +879,7 @@ export function ChatComposer({
               ) : null}
 
               <CombinedMentionTextarea
+                enablePromptShortcuts={shortcutsEnabled}
                 id={promptId}
                 ref={promptRef}
                 mentionSource={mentionSource}
@@ -888,6 +894,7 @@ export function ChatComposer({
                 onMentionClick={handleMentionClick}
                 getMentionChip={getComposerMentionChip}
                 onMentionRangesChange={onMentionRangesChange}
+                onShortcutAvailabilityChange={onShortcutAvailabilityChange}
                 persistedMentions={persistedMentions}
                 draftKey={draftKey}
                 mentionActionsRef={mentionActionsRef}
@@ -895,6 +902,7 @@ export function ChatComposer({
                 onPaste={onPromptPaste}
                 onCopy={handlePromptCopy}
                 disabled={promptDisabled}
+                draftSuspended={draftSuspended}
                 rows={effectivePromptRows}
                 enterKeyHint={promptEnterKeyHint}
                 placeholder={resolvedPromptPlaceholder}
@@ -976,6 +984,7 @@ export function ChatComposer({
         ) : (
           <>
             <CombinedMentionTextarea
+              enablePromptShortcuts={shortcutsEnabled}
               id={promptId}
               ref={promptRef}
               mentionSource={mentionSource}
@@ -990,6 +999,7 @@ export function ChatComposer({
               onMentionClick={handleMentionClick}
               getMentionChip={getComposerMentionChip}
               onMentionRangesChange={onMentionRangesChange}
+              onShortcutAvailabilityChange={onShortcutAvailabilityChange}
               persistedMentions={persistedMentions}
               draftKey={draftKey}
               mentionActionsRef={mentionActionsRef}
@@ -997,6 +1007,7 @@ export function ChatComposer({
               onPaste={onPromptPaste}
               onCopy={handlePromptCopy}
               disabled={promptDisabled}
+              draftSuspended={draftSuspended}
               rows={effectivePromptRows}
               enterKeyHint={promptEnterKeyHint}
               placeholder={resolvedPromptPlaceholder}

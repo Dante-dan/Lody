@@ -1,0 +1,145 @@
+import { useEffect, useRef, useState } from 'react';
+import type { Meta, StoryObj } from '@storybook/react';
+import { createShortcutInvocation, type PromptShortcut } from '@lody/shared/prompt-shortcuts';
+import { Mention, MentionInput, useMentionContext } from '@/ui/mention';
+import { getComposerMentionChip } from '@/components/mentions/mention-chips';
+import { ShortcutParameters } from '@/components/mentions/shortcut-parameters';
+import {
+  isShortcutMention,
+  shortcutDraftMissingVariables,
+} from '@/components/mentions/shortcut-composer-state';
+import { shortcutEditReplacement } from '@/components/mentions/shortcut-expand-edit';
+import { useTranslation } from 'react-i18next';
+const body: PromptShortcut = {
+  v: 1,
+  id: 'review',
+  workspaceId: 'ws',
+  ownerUserId: 'user',
+  visibility: 'private',
+  name: 'Review',
+  slug: 'review',
+  prompt: 'Review !{topic}\n  Keep !{focus}',
+  variables: [{ name: 'topic' }, { name: 'focus', defaultValue: '$literal !{unchanged}' }],
+  mentions: [],
+  scope: {},
+  revision: 'r1',
+  createdAt: 1,
+  updatedAt: 1,
+};
+function Editor({
+  activeId,
+  onActive,
+  mobile,
+  expanded,
+}: {
+  activeId: string | null;
+  onActive: (id: string | null) => void;
+  mobile: boolean;
+  expanded: boolean;
+}) {
+  const context = useMentionContext('story');
+  const { t } = useTranslation();
+  const chip = context.mentions.find(
+    (range) => range.value === activeId && isShortcutMention(range)
+  );
+  const initialExpansion = useRef(false);
+  useEffect(() => {
+    if (expanded && !initialExpansion.current) {
+      initialExpansion.current = true;
+      const first = context.mentions.find(isShortcutMention);
+      if (first) context.onMentionReplace(shortcutEditReplacement(first));
+      onActive(null);
+    }
+  }, [context, expanded, onActive]);
+  const missing = shortcutDraftMissingVariables(context.mentions);
+  return (
+    <>
+      {missing.length ? (
+        <p role="status" className="my-3 text-xs text-destructive">
+          {t('promptShortcut.missingVariables', { names: missing.join(', ') })}
+        </p>
+      ) : null}
+      {chip && isShortcutMention(chip) ? (
+        <ShortcutParameters
+          invocation={chip.data}
+          mobile={mobile}
+          onClose={() => {
+            onActive(null);
+            context.inputRef.current?.focus();
+          }}
+          onExpand={() => {
+            context.onMentionReplace(shortcutEditReplacement(chip));
+            onActive(null);
+          }}
+          onChange={(name, value) =>
+            context.onMentionsChange((ranges) =>
+              ranges.map((range) =>
+                range.value === chip.value && isShortcutMention(range)
+                  ? {
+                      ...range,
+                      data: { ...range.data, values: { ...range.data.values, [name]: value } },
+                    }
+                  : range
+              )
+            )
+          }
+        />
+      ) : null}
+    </>
+  );
+}
+function Harness({ mobile = false, expanded = false }: { mobile?: boolean; expanded?: boolean }) {
+  const [text, setText] = useState('Before /review and /review after');
+  const [active, setActive] = useState<string | null>('one');
+  const [mentions] = useState(() => [
+    {
+      start: 7,
+      end: 14,
+      value: 'one',
+      kind: 'prompt_shortcut',
+      data: createShortcutInvocation('one', body),
+    },
+    {
+      start: 19,
+      end: 26,
+      value: 'two',
+      kind: 'prompt_shortcut',
+      data: {
+        ...createShortcutInvocation('two', body),
+        values: { topic: 'Second invocation', focus: 'Tests' },
+      },
+    },
+  ]);
+  return (
+    <div className="w-[min(560px,95vw)] rounded-lg border bg-background p-4 [--mention-chip-surface:hsl(var(--background))]">
+      <Mention
+        editHistory
+        inputValue={text}
+        onInputValueChange={setText}
+        defaultMentions={mentions}
+        getMentionChip={getComposerMentionChip}
+        onMentionClick={(range) => setActive(range.value)}
+      >
+        <MentionInput
+          value={text}
+          aria-label="Prompt"
+          className="w-full resize-none bg-transparent p-2"
+        />
+        <Editor activeId={active} onActive={setActive} mobile={mobile} expanded={expanded} />
+      </Mention>
+    </div>
+  );
+}
+const meta = {
+  title: 'Chat/Shortcut Inline Draft',
+  component: Harness,
+  parameters: { layout: 'centered' },
+} satisfies Meta<typeof Harness>;
+export default meta;
+type Story = StoryObj<typeof meta>;
+export const MultipleChips: Story = {};
+export const ExpandedMissing: Story = { args: { expanded: true } };
+export const MobileSheet: Story = {
+  args: { mobile: true },
+  parameters: { viewport: { defaultViewport: 'mobile1' } },
+};

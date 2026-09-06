@@ -36,7 +36,9 @@ function Probe() {
   latest.mentions = context.mentions;
   latest.values = context.value;
   latest.open = context.open;
-  latest.onMentionAdd = context.onMentionAdd;
+  latest.onMentionAdd = (...args) => {
+    void context.onMentionAdd(...args);
+  };
   return null;
 }
 

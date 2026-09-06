@@ -93,7 +93,10 @@ function constrainCaretToMentionBoundary(input: InputElement, mentions: readonly
   if (selectionStart !== selectionEnd) return;
 
   const mention = mentions.find(
-    (candidate) => selectionStart > candidate.start && selectionStart < candidate.end
+    (candidate) =>
+      candidate.atomic !== false &&
+      selectionStart > candidate.start &&
+      selectionStart < candidate.end
   );
   if (!mention) return;
 
@@ -343,7 +346,10 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
 
       for (const { trigger, index: lastTriggerIndex } of candidates) {
         const mentionAtTrigger = context.mentions.find(
-          (mention) => mention.start <= lastTriggerIndex && mention.end > lastTriggerIndex
+          (mention) =>
+            mention.atomic !== false &&
+            mention.start <= lastTriggerIndex &&
+            mention.end > lastTriggerIndex
         );
 
         const isDirectoryMentionAtEnd =
@@ -501,8 +507,9 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
   );
 
   const onCompositionStart = React.useCallback(() => {
+    context.cancelMentionPreparation();
     isComposingRef.current = true;
-  }, []);
+  }, [context]);
 
   const onCompositionEnd = React.useCallback(
     (event: React.CompositionEvent<InputElement>) => {
@@ -532,7 +539,10 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
       const mentionAtClick =
         selectionStart === selectionEnd
           ? context.mentions.find(
-              (mention) => selectionStart >= mention.start && selectionStart <= mention.end
+              (mention) =>
+                mention.atomic !== false &&
+                selectionStart >= mention.start &&
+                selectionStart <= mention.end
             )
           : undefined;
 
@@ -570,6 +580,15 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
         return;
       }
 
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        (event.key.toLowerCase() === 'z' || (!event.metaKey && event.key.toLowerCase() === 'y')) &&
+        context.onHistoryRestore(event.shiftKey || event.key.toLowerCase() === 'y')
+      ) {
+        event.preventDefault();
+        return;
+      }
       const input = event.currentTarget;
       const cursorPosition = input.selectionStart ?? 0;
       const selectionEnd = input.selectionEnd ?? cursorPosition;
@@ -702,7 +721,7 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
         if (!registered?.navigateText) return false;
         const span = getTriggerSpan();
         if (!span) return false;
-        context.onMentionAdd(registered.value, span.triggerIndex);
+        void context.onMentionAdd(registered.value, span.triggerIndex);
         return true;
       }
 
@@ -735,7 +754,7 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
         const shouldCommit =
           Boolean(registeredItem.navigateText) && registeredItem.label === searchText;
 
-        context.onMentionAdd(selectedItem.value, span.triggerIndex, {
+        void context.onMentionAdd(selectedItem.value, span.triggerIndex, {
           commit: shouldCommit,
         });
         return true;
@@ -821,9 +840,20 @@ const MentionInput = React.forwardRef<InputElement, MentionInputProps>((props, f
       const input = event.currentTarget;
       const cursorPosition = input.selectionStart ?? 0;
 
-      if (event.inputType === 'deleteContentBackward') {
+      const inputType = event.inputType ?? (event.nativeEvent as InputEvent).inputType;
+      if (
+        (inputType === 'historyUndo' || inputType === 'historyRedo') &&
+        context.onHistoryRestore(inputType === 'historyRedo')
+      ) {
+        event.preventDefault();
+        return;
+      }
+      if (inputType === 'deleteContentBackward') {
         const mentionAtCursor = context.mentions.find(
-          (mention) => cursorPosition > mention.start && cursorPosition <= mention.end
+          (mention) =>
+            mention.atomic !== false &&
+            cursorPosition > mention.start &&
+            cursorPosition <= mention.end
         );
 
         if (mentionAtCursor) {

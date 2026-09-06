@@ -1,3 +1,4 @@
+import type { MentionPrepare } from '@/ui/mention/index';
 import * as React from 'react';
 import { useTranslation } from 'react-i18next';
 import { getAgentRoleEmoji, type AcpCommandSummary } from '@lody/shared';
@@ -42,6 +43,7 @@ export type MentionCategoryId =
   | 'pr'
   | 'skill'
   | 'command'
+  | 'prompt_shortcut'
   | 'session'
   | 'agent_role';
 
@@ -52,6 +54,7 @@ export type MentionIcon =
   | 'pr'
   | 'skill'
   | 'command'
+  | 'prompt_shortcut'
   | 'session'
   | 'agent_role';
 
@@ -81,6 +84,10 @@ export type MentionCandidateDetail = {
 export type MentionCandidate = {
   /** Payload recorded on the mention range; also the row key. */
   value: string;
+  /** Diagnostic rows stay visible but cannot commit by pointer or keyboard. */
+  disabled?: boolean;
+  disabledReason?: string;
+  onPrepare?: MentionPrepare;
   /** What the user can type to match exactly, driving Enter-on-exact-match. */
   label: string;
   /**
@@ -186,6 +193,8 @@ export type MentionMenuView =
       /** Categories whose own name matches, offered above the results. */
       categories: MentionCategory[];
       groups: MentionCandidateGroup[];
+      /** Direct grouped triggers activate only their own sources, even while empty. */
+      queriedCategories?: readonly MentionCategory[];
     }
   /** `@issue:foo` — second level, scoped to one category. */
   | {
@@ -218,7 +227,11 @@ export function selectMentionViewActivations(
   categories: readonly MentionCategory[]
 ): MentionCategoryActivation[] {
   const queried =
-    view?.level === 'category' ? [view.category] : view?.level === 'aggregate' ? categories : [];
+    view?.level === 'category'
+      ? [view.category]
+      : view?.level === 'aggregate'
+        ? (view.queriedCategories ?? categories)
+        : [];
   const bySource = new Map<MentionSourceKey, MentionCategoryActivation>();
   for (const category of queried) {
     if (category.status === 'disabled') continue;
@@ -290,6 +303,19 @@ export function selectMentionMenuViewForTrigger(
 ): MentionMenuView | null {
   if (trigger === MENTION_TRIGGER) {
     return selectMentionMenuView(categories, search, options);
+  }
+  if (trigger === '/') {
+    const directCategories = categories.filter((category) => category.directTrigger === '/');
+    return {
+      level: 'aggregate',
+      term: search,
+      categories: [],
+      queriedCategories: directCategories,
+      groups: directCategories.map((category) => ({
+        category,
+        candidates: category.status === 'disabled' ? [] : category.getCandidates(search),
+      })),
+    };
   }
   const direct = categories.find((entry) => entry.directTrigger === trigger);
   if (!direct) return null;
@@ -544,7 +570,7 @@ export function buildAgentRoleCandidates(
 
 export function toCommandCandidate(command: AcpCommandSummary): MentionCandidate {
   return {
-    value: command.name,
+    value: `acp-command:${command.name}`,
     label: command.name,
     // A slash command already owns the whole prompt: its `/` trigger only fires
     // on a slash-only composer, so the trigger span *is* the prompt.
@@ -614,6 +640,9 @@ export type MentionCategorySources = {
   command?: SourceState & {
     commands: readonly AcpCommandSummary[];
   };
+  promptShortcut?: SourceState & {
+    getCandidates: MentionCategory['getCandidates'];
+  };
   session?: SourceState & {
     items: readonly SessionMentionItem[];
     header?: MentionCategoryHeader;
@@ -632,7 +661,7 @@ export type MentionSourceKey = keyof MentionCategorySources;
  */
 export function useMentionCategories(sources: MentionCategorySources): MentionCategory[] {
   const { t } = useTranslation();
-  const { file, issuePr, skill, command, session, agentRole } = sources;
+  const { file, issuePr, skill, command, promptShortcut, session, agentRole } = sources;
 
   // Partitioned once and shared with the Fuse indexes: the cache holds both
   // types, and re-splitting it inside `getCandidates` walked the whole list
@@ -757,12 +786,24 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
       });
     }
 
+    if (promptShortcut?.enabled) {
+      categories.push({
+        id: 'prompt_shortcut',
+        namespace: 'shortcut',
+        directTrigger: '/',
+        label: t('mention.category.promptShortcut.label', 'Prompt Shortcuts'),
+        icon: 'prompt_shortcut',
+        ...sourceCategoryFields('promptShortcut', promptShortcut),
+        getCandidates: promptShortcut.getCandidates,
+      });
+    }
+
     if (command?.enabled) {
       categories.push({
         id: 'command',
         namespace: 'cmd',
         directTrigger: '/',
-        label: t('mention.category.command.label', 'Commands'),
+        label: t('mention.category.command.label', 'Agent Commands'),
         icon: 'command',
         ...sourceCategoryFields('command', command),
         getCandidates: (term, limit) => buildCommandCandidates(command.commands, term, limit),
@@ -773,6 +814,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
   }, [
     agentRole,
     command,
+    promptShortcut,
     file,
     issueFuse,
     issuePr,

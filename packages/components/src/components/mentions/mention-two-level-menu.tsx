@@ -113,6 +113,7 @@ function CandidateIcon({
     case 'skill':
       return <Boxes className={className} />;
     case 'command':
+    case 'prompt_shortcut':
       return <Terminal className={className} />;
     case 'session':
       return <MessageSquare className={className} />;
@@ -168,11 +169,14 @@ function CandidateRow({
   return (
     <MentionItem
       value={candidate.value}
+      disabled={candidate.disabled}
+      title={candidate.disabledReason}
       label={candidate.label}
       kind={candidate.kind}
       insertText={candidate.insertText}
       navigateText={candidate.navigateText}
       onMentionSelect={onSelect}
+      onMentionPrepare={candidate.onPrepare}
     >
       <CandidateIcon
         icon={candidate.icon}
@@ -191,6 +195,9 @@ function CandidateRow({
         </span>
         {candidate.subtitle ? (
           <span className="truncate text-xs text-muted-foreground">{candidate.subtitle}</span>
+        ) : null}
+        {candidate.disabledReason ? (
+          <span className="text-xs text-muted-foreground">{candidate.disabledReason}</span>
         ) : null}
       </div>
       {candidate.trailing ? (
@@ -409,6 +416,14 @@ export function MentionTwoLevelMenuBody({
           {view.groups.map((group) => (
             <React.Fragment key={group.category.id}>
               <GroupLabel>{group.category.label}</GroupLabel>
+              {group.candidates.length === 0 ? (
+                <Message>
+                  {group.category.message ??
+                    (group.category.status === 'loading'
+                      ? t('mention.menu.loading', 'Loading…')
+                      : t('mention.menu.noResults', 'No results'))}
+                </Message>
+              ) : null}
               {group.candidates.map((candidate, rank) => (
                 <CandidateRow
                   key={candidate.value}

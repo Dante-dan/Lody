@@ -196,6 +196,11 @@ function formatSkillPathMarkdownDestination(path: string): string {
   return path.replace(/\\/g, '\\\\').replace(/\)/g, '\\)');
 }
 
+/** Stable-target form, shared by ordinary skill mentions and frozen Shortcut semantics. */
+export function formatSkillMentionPrompt(token: string, path: string): string {
+  return `use ${SKILL_MENTION_PROMPT_PREFIX}${token} [${SKILL_MENTION_PATH_LABEL}](${formatSkillPathMarkdownDestination(path)})`;
+}
+
 function buildSkillMentionPathByToken(
   items: readonly SkillMentionItem[],
   allowedDirs: ReadonlySet<string> | null
@@ -269,7 +274,7 @@ export function buildSkillMentionRewrites(
     rewrites.push({
       start,
       end: tokenEnd,
-      replacement: `use ${SKILL_MENTION_PROMPT_PREFIX}${token} [${SKILL_MENTION_PATH_LABEL}](${formatSkillPathMarkdownDestination(path)})`,
+      replacement: formatSkillMentionPrompt(token, path),
       span: { kind: 'skill', label: `${SKILL_MENTION_TRIGGER}${token}`, target: token },
     });
     return true;

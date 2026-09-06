@@ -1,9 +1,21 @@
 // @vitest-environment jsdom
 
 import { act, createElement } from 'react';
+import { getDefaultStore } from 'jotai';
+import { currentWorkspaceIdAtom, userAtom } from '../src/atoms';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createShortcutInvocation, type PromptShortcut } from '@lody/shared/prompt-shortcuts';
+import type { Mention } from '../src/ui/mention/index';
 import type { AgentRole, AgentRoleId, SessionMeta } from '@lody/shared';
+
+const composerRanges = vi.hoisted(() => ({
+  change: undefined as ((ranges: Mention[]) => void) | undefined,
+  promptChange: undefined as ((text: string) => void) | undefined,
+}));
+vi.mock('../src/providers/prompt-shortcut-provider', () => ({
+  usePromptShortcuts: () => ({ runtime: { userId: 'user-1', workspaceId: 'ws' } }),
+}));
 
 const sessionAgentRoleState = vi.hoisted(() => ({
   control: {
@@ -35,6 +47,7 @@ vi.mock('../src/components/chat/chat-composer', async () => {
   const React = await import('react');
   return {
     ChatComposer: (props: {
+      onMentionRangesChange?: (ranges: Mention[]) => void;
       promptRef?: React.Ref<HTMLTextAreaElement>;
       promptValue: string;
       promptDisabled?: boolean;
@@ -42,8 +55,10 @@ vi.mock('../src/components/chat/chat-composer', async () => {
       onPromptKeyDown?: React.KeyboardEventHandler<HTMLTextAreaElement>;
       primaryAction?: React.ReactNode;
       footerSelector?: React.ReactNode;
-    }) =>
-      React.createElement(
+    }) => {
+      composerRanges.change = props.onMentionRangesChange;
+      composerRanges.promptChange = props.onPromptChange;
+      return React.createElement(
         React.Fragment,
         null,
         React.createElement('textarea', {
@@ -56,7 +71,8 @@ vi.mock('../src/components/chat/chat-composer', async () => {
         }),
         props.primaryAction,
         props.footerSelector
-      ),
+      );
+    },
   };
 });
 
@@ -194,6 +210,69 @@ describe('SessionChatInputArea submission feedback', () => {
     await renderPermissionModeCase({ modeId: 'ask' });
     expect(container.querySelector('[data-testid="desktop-permission-mode-button"]')).toBeNull();
   });
+
+  it.each(['account', 'workspace'] as const)(
+    'does not expose Shortcut-bearing cached text after an in-place %s switch',
+    async (axis) => {
+      const store = getDefaultStore();
+      const previousUser = store.get(userAtom);
+      const previousWorkspace = store.get(currentWorkspaceIdAtom);
+      await renderPermissionModeCase({});
+      act(() => {
+        composerRanges.promptChange?.('Private /review');
+        composerRanges.change?.([
+          {
+            start: 8,
+            end: 15,
+            value: 'private-invocation',
+            kind: 'prompt_shortcut',
+            data: createShortcutInvocation('private-invocation', {
+              v: 1,
+              id: 'review',
+              workspaceId: 'ws',
+              ownerUserId: 'user-1',
+              visibility: 'private',
+              name: 'Review',
+              slug: 'review',
+              prompt: 'Private prompt',
+              variables: [],
+              mentions: [],
+              scope: {},
+              revision: 'r1',
+              createdAt: 1,
+              updatedAt: 1,
+            }),
+          },
+        ]);
+      });
+      expect(container?.querySelector('textarea')?.value).toBe('Private /review');
+      try {
+        act(() => {
+          if (axis === 'account') {
+            store.set(userAtom, { id: 'other', name: 'Other', email: 'other@example.test' });
+          } else {
+            store.set(
+              currentWorkspaceIdAtom,
+              'other-workspace' as NonNullable<typeof previousWorkspace>
+            );
+          }
+        });
+        expect(container?.querySelector('textarea')?.value).toBe('');
+        act(() => composerRanges.promptChange?.('New identity draft'));
+        expect(container?.querySelector('textarea')?.value).toBe('New identity draft');
+        act(() => {
+          store.set(userAtom, previousUser);
+          store.set(currentWorkspaceIdAtom, previousWorkspace);
+        });
+        expect(container?.querySelector('textarea')?.value).toBe('');
+      } finally {
+        act(() => {
+          store.set(userAtom, previousUser);
+          store.set(currentWorkspaceIdAtom, previousWorkspace);
+        });
+      }
+    }
+  );
 
   it('keeps the desktop permission button when the selected Role does not pin it', async () => {
     await renderPermissionModeCase({});
@@ -519,5 +598,74 @@ describe('SessionChatInputArea submission feedback', () => {
     const textareaAfterSwitch = container.querySelector('textarea');
     // Focus must NOT have been restored to the new session's textarea.
     expect(document.activeElement).not.toBe(textareaAfterSwitch);
+  });
+
+  it('sends canonical Shortcut expansion and retains the same invocation on rejection', async () => {
+    const body: PromptShortcut = {
+      v: 1,
+      id: 'review',
+      workspaceId: 'ws',
+      ownerUserId: 'user-1',
+      visibility: 'private',
+      name: 'Review',
+      slug: 'review',
+      prompt: '  !{topic}\n  end  ',
+      variables: [{ name: 'topic' }],
+      mentions: [],
+      scope: {},
+      revision: 'r1',
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const invocation = createShortcutInvocation('invocation', body);
+    invocation.values.topic = '$literal !{unchanged}';
+    const onSendMessage = vi.fn(async () => false);
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () =>
+      root?.render(
+        createElement(SessionChatInputArea, {
+          session: {
+            id: 'shortcut-send',
+            userId: 'user-1',
+            machineId: 'machine-1',
+            cliType: 'builtin',
+            agentType: 'codex',
+            status: { type: 'idle' },
+            createdAt: '2026-07-19T00:00:00.000Z',
+          } as SessionMeta,
+          sessionLocalProjectRootPath: null,
+          isMachineRemoved: false,
+          isAgentBusy: false,
+          isDark: false,
+          isEmptyConversation: false,
+          selectedModeId: null,
+          selectedModelId: null,
+          modeOptions: [],
+          modelOptions: [],
+          onModeChange: () => {},
+          onModelChange: () => {},
+          onSendMessage,
+          onStop: () => {},
+          onRemoveQueueItem: async () => {},
+          initialInputText: 'Before /review after',
+        })
+      )
+    );
+    act(() =>
+      composerRanges.change?.([
+        { start: 7, end: 14, value: invocation.id, kind: 'prompt_shortcut', data: invocation },
+      ])
+    );
+    await act(async () => container?.querySelector('button')?.click());
+    expect(onSendMessage).toHaveBeenCalledWith(
+      [{ type: 'text', text: 'Before   $literal !{unchanged}\n  end   after' }],
+      undefined
+    );
+    expect(container.querySelector('textarea')?.value).toBe('Before /review after');
+    await act(async () => container?.querySelector('button')?.click());
+    expect(onSendMessage).toHaveBeenCalledTimes(2);
+    expect(onSendMessage.mock.calls[1]).toEqual(onSendMessage.mock.calls[0]);
   });
 });

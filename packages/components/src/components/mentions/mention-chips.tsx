@@ -1,3 +1,5 @@
+import { ordinaryShortcutTargetRange } from './shortcut-semantic-mention';
+import { isShortcutMention, missingShortcutVariables } from './shortcut-composer-state';
 import * as React from 'react';
 import { ClipboardList, MessagesSquare, UserRoundCog } from 'lucide-react';
 
@@ -80,6 +82,7 @@ const CHIP_KINDS: ReadonlySet<string> = new Set([
   'skill',
   'session',
   'command',
+  'prompt_shortcut',
   'agent_role',
   'issue',
   'pr',
@@ -147,9 +150,17 @@ const getMentionPath = (mention: Mention, text: string): string =>
 export const getComposerMentionChip: MentionChipResolver = (mention: Mention, text: string) => {
   const kind = mention.kind ?? 'mention';
   if (kind === 'pasted_text') return pastedTextChip(text);
+  if (isShortcutMention(mention)) {
+    const missing = missingShortcutVariables(mention.data);
+    return {
+      iconSlots: 0,
+      className: missing.length ? 'text-destructive' : MENTION_CHIP_CLASS_NAME,
+      badge: missing.length ? `!${missing.length}` : undefined,
+    };
+  }
   if (!CHIP_KINDS.has(kind)) return null;
 
-  const icon = getMentionKindIcon(kind, { path: getMentionPath(mention, text) });
+  const icon = getMentionKindIcon(kind, { path: getMentionPath(ordinaryShortcutTargetRange(mention), text) });
   // No glyph means the range keeps its own sigil visible and is coloured,
   // nothing more — so it surrenders no character to an icon slot.
   return { icon: icon ?? undefined, className: MENTION_CHIP_CLASS_NAME, iconSlots: icon ? 1 : 0 };

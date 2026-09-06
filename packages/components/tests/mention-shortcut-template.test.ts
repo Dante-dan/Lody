@@ -8,7 +8,16 @@ import type { MentionCategory } from '../src/components/mentions/mention-registr
 
 describe('Shortcut template mention policy', () => {
   it('disables unscoped categories, removes sessions/commands, and never invokes disabled sources', () => {
-    const ids = ['file', 'issue', 'pr', 'skill', 'agent_role', 'session', 'command'] as const;
+    const ids = [
+      'file',
+      'issue',
+      'pr',
+      'skill',
+      'agent_role',
+      'session',
+      'command',
+      'prompt_shortcut',
+    ] as const;
     const categories: MentionCategory[] = ids.map((id) => ({
       id,
       namespace: id,

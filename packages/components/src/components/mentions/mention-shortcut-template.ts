@@ -59,7 +59,7 @@ export function shortcutTemplateCategories(input: {
     return null;
   };
   return input.categories
-    .filter((category) => category.id !== 'session' && category.id !== 'command')
+    .filter((category) => !['session', 'command', 'prompt_shortcut'].includes(category.id))
     .map((category) => {
       // Skills come from two sources; either one being satisfiable enables the
       // category, so the missing axes are the ones the closer source still needs.

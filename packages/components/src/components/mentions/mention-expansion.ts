@@ -1,6 +1,9 @@
+import { ordinaryShortcutTargetRange } from './shortcut-semantic-mention';
+import { compileShortcutPrompt } from './shortcut-prompt-compilation';
+import { shortcutComposerScope } from './shortcut-composer-state';
+import { usePromptShortcuts } from '../../providers/prompt-shortcut-provider';
 import * as React from 'react';
 import {
-  applyTextRewrites,
   MESSAGE_TEXT_SPAN_KINDS,
   type MessageTextSpan,
   type MessageTextSpanKind,
@@ -116,6 +119,18 @@ export function useMentionPromptExpansion({
   promptValue,
 }: MentionPromptExpansionInput): (args: MentionPromptExpansionArgs) => ExpandedMentionPrompt {
   const skillRewrites = useSkillMentionRewrites(source, skillAgent, promptValue);
+  const { runtime: shortcutRuntime } = usePromptShortcuts();
+  const shortcutContext = React.useMemo(
+    () =>
+      shortcutRuntime
+        ? {
+            userId: shortcutRuntime.userId,
+            workspaceId: shortcutRuntime.workspaceId,
+            scope: shortcutComposerScope(source, skillAgent),
+          }
+        : null,
+    [shortcutRuntime, source, skillAgent]
+  );
   const agentRoleContext = React.useMemo(
     () =>
       buildAgentRoleMentionContext({
@@ -129,15 +144,23 @@ export function useMentionPromptExpansion({
   const agentRoleItems = useAgentRoleMentionItems(agentRoleContext);
 
   return React.useCallback(
-    ({ text, mentions = [], pastedTextDrafts = [] }: MentionPromptExpansionArgs) => ({
-      ...applyTextRewrites(text, [
-        ...buildPastedTextRewrites(pastedTextDrafts),
-        ...skillRewrites(text),
-        ...buildSessionMentionRewrites(text, mentions),
-        ...buildAgentRoleMentionRewrites(text, mentions, agentRoleItems),
-        ...buildVerbatimMentionRewrites(text, mentions),
-      ]),
-    }),
-    [agentRoleItems, skillRewrites]
+    ({ text, mentions = [], pastedTextDrafts = [] }: MentionPromptExpansionArgs) =>
+      compileShortcutPrompt({
+        text,
+        mentions,
+        context: shortcutContext,
+        ordinaryRewrites: [
+          ...buildPastedTextRewrites(pastedTextDrafts),
+          ...skillRewrites(text),
+          ...buildSessionMentionRewrites(text, mentions.map(ordinaryShortcutTargetRange)),
+          ...buildAgentRoleMentionRewrites(
+            text,
+            mentions.map(ordinaryShortcutTargetRange),
+            agentRoleItems
+          ),
+          ...buildVerbatimMentionRewrites(text, mentions.map(ordinaryShortcutTargetRange)),
+        ],
+      }),
+    [agentRoleItems, skillRewrites, shortcutContext]
   );
 }
