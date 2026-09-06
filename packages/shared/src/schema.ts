@@ -227,9 +227,15 @@ const historyMessageItemSchema = schema
     {
       type: schema.String<MessageContent['type']>(),
       text: schema.LoroText({ required: false }),
-      markdown: schema.LoroText({ required: false }),
-      content: schema.LoroList(historyToolContentSchema, undefined, { required: false }),
-      steps: schema.LoroList(historyScriptStepSchema, undefined, { required: false }),
+      // These are insertion hints, not new validation constraints on old/future
+      // payloads. A malformed legacy field must not reject unrelated writes.
+      markdown: schema.Any({ storageSchema: schema.LoroText({ required: false }) }),
+      content: schema.Any({
+        storageSchema: schema.LoroList(historyToolContentSchema, undefined, { required: false }),
+      }),
+      steps: schema.Any({
+        storageSchema: schema.LoroList(historyScriptStepSchema, undefined, { required: false }),
+      }),
       // `file` item: the mutable lifecycle fields `transport`/`machineId` are
       // carried through the `.catchall(...)` below (like every other variant's
       // payload fields, e.g. image's `imageId`/`sizeBytes`). They are plain

@@ -1,7 +1,6 @@
 # Product surfaces (`src/components`)
 
-Parent `AGENTS.md` files also apply. `CLAUDE.md` is a symlink; edit `AGENTS.md` only.
-Child directories (`sessions/`, `mobile/`, `chat/`, `settings/`, …) own their own rules.
+Parent and child-directory `AGENTS.md` rules apply. Edit `AGENTS.md`, not `CLAUDE.md`.
 
 ## Sidebar and session rows
 
@@ -26,20 +25,18 @@ Reasoning: [components-sidebar-session-tree.md](../../../../.agents/docs/compone
   groups, the local-project sections, and `sidebar-updated-session-list.tsx` (Updated
   bucket and Pinned section) — plus `sidebar-navigation-model.ts`, so keyboard nav
   matches what is rendered.
-- It is presentation only and is NOT `parentSessionId`: opened Sessions keep their own
-  workspace/lifecycle and stay first-class rows, while `parentSessionId` children never
-  reach the sidebar at all (`sessionListAtom`).
+- This is presentation, not `parentSessionId`: opened Sessions own their workspace and
+  lifecycle; `parentSessionId` children stay out of the sidebar (`sessionListAtom`).
 - TWO fields, never merged: `openedBySessionId` is the PRECISE opener and drives
   navigation; `openedByRowSessionId` is the sidebar ROW to indent under. They differ when
   an agent inside a child Tab creates a Session, so `buildSidebarOpenerRowResolver`
-  (`sessions/session-list-rows.ts`) walks `parentSessionId` up to the root row. Never
-  "simplify" that by rewriting `openedBySessionId` to the root: "Go to Opener Session"
-  and the conversation's "Opened by" entry must land on the exact Tab that created it.
+  (`sessions/session-list-rows.ts`) walks `parentSessionId` to the root row. Never
+  rewrite `openedBySessionId`: "Go to Opener Session" and "Opened by" must reach the
+  exact Tab that created it.
 - The opener and unrelated top-level rows keep the exact flat-list alignment. The shared
   leading slot owns the node-centre affordance: an opener shows its disclosure at rest
   and swaps it for ⋯ on row hover; a child shows ├/└ and swaps those for ⋯ in the SAME
-  7px-centred position. It draws the tree UNCONDITIONALLY — a working / unread / waiting
-  row must never lose its nesting, which is the whole point of moving status out of it.
+  7px-centred position. Working / unread / waiting rows must keep their tree nesting.
   Only a child widens that slot from 14px to 26px, producing the 12px title indent
   without shifting the row background. Keep connector geometry in
   `sidebar-row-shared.tsx`, and keep the context menu's expand/collapse item wired to the
@@ -51,8 +48,7 @@ Reasoning: [components-sidebar-session-tree.md](../../../../.agents/docs/compone
   hover away in the desktop info card. Pass the three flags to the end slot, never to the
   leading slot. The mobile chat rows keep their own leading-node rule
   ([mobile/AGENTS.md](mobile/AGENTS.md)); do not assume the two match.
-- The resolver needs `allActiveSessions`, so any new list must take it from the sidebar
-  rather than re-deriving it from rows.
+- Pass the sidebar's `allActiveSessions` to the resolver; do not derive it from rows.
 - The tree never hides a Session: a missing, cross-section, cross-group, cycling, or
   deeper-than-one-level opener degrades to a top-level row, and the preview cap
   (`MAX_VISIBLE_SESSIONS` / `SHOW_FULL_BUCKET_THRESHOLD`) counts top-level rows.

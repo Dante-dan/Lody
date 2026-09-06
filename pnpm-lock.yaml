@@ -144,7 +144,7 @@ patchedDependencies:
     hash: 80637977dda4ea924da866a67751774a621195429af5af0f103e9129b3bec57f
     path: patches/app-builder-lib@26.15.3.patch
   loro-mirror@2.3.1:
-    hash: c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306
+    hash: ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f
     path: patches/loro-mirror@2.3.1.patch
   loro-repo@0.20.0:
     hash: 74be8ab90bed65c9ce8b0d7cb32f8cafdbd0ecda6d9b7c8048836600d116d357
@@ -355,7 +355,7 @@ importers:
         version: link:../../packages/code-review-viewer
       loro-mirror:
         specifier: 'catalog:'
-        version: 2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1)
+        version: 2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1)
       loro-repo:
         specifier: 'catalog:'
         version: 0.20.0(patch_hash=74be8ab90bed65c9ce8b0d7cb32f8cafdbd0ecda6d9b7c8048836600d116d357)(@loro-dev/flock-wasm@0.4.3)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.15.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@13.0.3)(loro-crdt@1.15.1)
@@ -1109,13 +1109,13 @@ importers:
         version: 1.15.1
       loro-mirror:
         specifier: 'catalog:'
-        version: 2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1)
+        version: 2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1)
       loro-mirror-jotai:
         specifier: 'catalog:'
-        version: 2.3.1(jotai@2.17.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.17)(react@19.2.0))(loro-crdt@1.15.1)(loro-mirror@2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1))
+        version: 2.3.1(jotai@2.17.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.17)(react@19.2.0))(loro-crdt@1.15.1)(loro-mirror@2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1))
       loro-mirror-react:
         specifier: 'catalog:'
-        version: 2.3.1(loro-crdt@1.15.1)(loro-mirror@2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1))(react@19.2.0)
+        version: 2.3.1(loro-crdt@1.15.1)(loro-mirror@2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1))(react@19.2.0)
       loro-repo:
         specifier: 'catalog:'
         version: 0.20.0(patch_hash=74be8ab90bed65c9ce8b0d7cb32f8cafdbd0ecda6d9b7c8048836600d116d357)(@loro-dev/flock-wasm@0.4.3)(@loro-dev/flock@4.4.4)(@loro-dev/streams-crdt@0.15.1(@loro-dev/flock-wasm@0.4.3)(loro-crdt@1.15.1))(@types/better-sqlite3@7.6.13)(better-sqlite3@12.10.0)(loro-crdt@1.15.1)
@@ -1425,7 +1425,7 @@ importers:
         version: 1.15.1
       loro-mirror:
         specifier: 'catalog:'
-        version: 2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1)
+        version: 2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1)
       zod:
         specifier: 4.3.6
         version: 4.3.6
@@ -22522,19 +22522,19 @@ snapshots:
 
   loro-crdt@1.15.1: {}
 
-  loro-mirror-jotai@2.3.1(jotai@2.17.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.17)(react@19.2.0))(loro-crdt@1.15.1)(loro-mirror@2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1)):
+  loro-mirror-jotai@2.3.1(jotai@2.17.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.17)(react@19.2.0))(loro-crdt@1.15.1)(loro-mirror@2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1)):
     dependencies:
       jotai: 2.17.1(@babel/core@7.29.0)(@babel/template@7.28.6)(@types/react@19.2.17)(react@19.2.0)
       loro-crdt: 1.15.1
-      loro-mirror: 2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1)
+      loro-mirror: 2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1)
 
-  loro-mirror-react@2.3.1(loro-crdt@1.15.1)(loro-mirror@2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1))(react@19.2.0):
+  loro-mirror-react@2.3.1(loro-crdt@1.15.1)(loro-mirror@2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1))(react@19.2.0):
     dependencies:
       loro-crdt: 1.15.1
-      loro-mirror: 2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1)
+      loro-mirror: 2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1)
       react: 19.2.0
 
-  loro-mirror@2.3.1(patch_hash=c8eb6e4bfc44f1089f4a1c57794a098e4dc31210e091e4677cb1831076469306)(loro-crdt@1.15.1):
+  loro-mirror@2.3.1(patch_hash=ba4635306b23358997952dbc2c3bd3cffb64583abc90d8ea75733e981d64c24f)(loro-crdt@1.15.1):
     dependencies:
       immer: 10.2.0
       loro-crdt: 1.15.1

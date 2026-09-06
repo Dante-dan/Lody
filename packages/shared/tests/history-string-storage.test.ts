@@ -6,6 +6,7 @@ import { sessionDocSchema } from '../src/schema';
 // Preserve the previous schema's insertion policy for an actual old reader/writer.
 const turn = sessionDocSchema.definition.history.itemSchema;
 const item = turn.definition.items.itemSchema;
+const legacyItemDefinition = { type: item.definition.type, text: item.definition.text };
 const legacySchema = schema({
   ...sessionDocSchema.definition,
   history: schema.LoroList(
@@ -14,7 +15,7 @@ const legacySchema = schema({
         ...turn.definition,
         items: schema.LoroList(
           schema
-            .LoroMap(item.definition, item.options)
+            .LoroMap(legacyItemDefinition, item.options)
             .catchall(schema.Any({ defaultLoroText: true })),
           undefined,
           { required: false }
@@ -69,6 +70,149 @@ const clean = (v: unknown): unknown => {
 };
 
 describe('history string storage compatibility', () => {
+  it.each([
+    ['content', 'legacy content'],
+    ['content', { text: 'legacy map' }],
+    ['content', [{ type: 'content', content: 'legacy nested content' }]],
+    ['markdown', { text: 'legacy markdown' }],
+    ['steps', { output: 'legacy steps' }],
+  ] as const)('keeps legacy %s shapes without blocking unrelated writes', (key, value) => {
+    const doc = new LoroDoc();
+    const old = create(doc, true);
+    old.setState((s) => {
+      s.history.push(entry('old'));
+    });
+    old.setState((s) => {
+      Object.assign(s.history[0]!.items[2]!, { [key]: value });
+    });
+    old.dispose();
+    const tool = toolMap(doc);
+    const stored = tool.get(key);
+    const id = stored && typeof stored === 'object' && 'id' in stored ? stored.id : undefined;
+    const before = doc.version().encode();
+    const json = doc.toJSON();
+    const mirror = create(doc);
+    try {
+      expect(doc.version().encode()).toEqual(before);
+      expect(doc.toJSON()).toEqual(json);
+      expect(() =>
+        mirror.setState((s) => {
+          s.history[0]!.items[0]!.text += ' world';
+          s.history.push(entry('next'));
+        })
+      ).not.toThrow();
+      const after = tool.get(key);
+      expect(clean(mirror.getState().history[0]!.items[2]![key])).toEqual(value);
+      if (id) expect(after).toHaveProperty('id', id);
+      expect(mirror.getState().history).toHaveLength(2);
+      const reader = create(doc, true);
+      expect(clean(reader.getState())).toEqual(clean(mirror.getState()));
+      reader.dispose();
+    } finally {
+      mirror.dispose();
+      doc.free();
+    }
+  });
+
+  it('edits a legacy Map behind a List hint without replacing its container', () => {
+    const doc = new LoroDoc();
+    const old = create(doc, true);
+    old.setState((s) => {
+      s.history.push(entry('old'));
+    });
+    old.setState((s) => {
+      Object.assign(s.history[0]!.items[2]!, { content: { output: 'old' } });
+    });
+    old.dispose();
+    const content = toolMap(doc).get('content') as LoroMap;
+    const output = content.get('output') as LoroText;
+    const mirror = create(doc);
+    try {
+      expect(() =>
+        mirror.setState((s) => {
+          Object.assign(s.history[0]!.items[2]!, { content: { output: 'edited' } });
+        })
+      ).not.toThrow();
+      expect((toolMap(doc).get('content') as LoroMap).id).toBe(content.id);
+      expect((content.get('output') as LoroText).id).toBe(output.id);
+      expect(output.toString()).toBe('edited');
+    } finally {
+      mirror.dispose();
+      doc.free();
+    }
+  });
+
+  it('edits a legacy Text behind a List hint without replacing its container', () => {
+    const doc = new LoroDoc();
+    const old = create(doc, true);
+    old.setState((s) => {
+      s.history.push(entry('old'));
+    });
+    old.setState((s) => {
+      Object.assign(s.history[0]!.items[2]!, { content: 'old' });
+    });
+    old.dispose();
+    const content = toolMap(doc).get('content') as LoroText;
+    const mirror = create(doc);
+    try {
+      mirror.setState((s) => {
+        Object.assign(s.history[0]!.items[2]!, { content: 'edited' });
+      });
+      expect((toolMap(doc).get('content') as LoroText).id).toBe(content.id);
+      expect(content.toString()).toBe('edited');
+    } finally {
+      mirror.dispose();
+      doc.free();
+    }
+  });
+
+  it('uses actual value kinds when new payloads do not match storage hints', () => {
+    const doc = new LoroDoc();
+    const mirror = create(doc);
+    try {
+      mirror.setState((s) => {
+        const next = entry('new');
+        Object.assign(next.items[2]!, {
+          content: { output: 'map output' },
+          markdown: ['list markdown'],
+          steps: 'string steps',
+        });
+        s.history.push(next);
+      });
+      const tool = toolMap(doc);
+      expect(tool.get('content')).toBeInstanceOf(LoroMap);
+      expect(tool.get('markdown')).toBeInstanceOf(LoroList);
+      expect(tool.get('steps')).toBe('string steps');
+      mirror.setState((s) => {
+        Object.assign(s.history[0]!.items[2]!, { content: { output: 'edited output' } });
+      });
+      expect((tool.get('content') as LoroMap).get('output')).toBe('edited output');
+      const reader = create(doc);
+      expect(clean(reader.getState())).toEqual(clean(mirror.getState()));
+      reader.dispose();
+    } finally {
+      mirror.dispose();
+      doc.free();
+    }
+  });
+
+  it('still rejects invalid required history fields before writing', () => {
+    const doc = new LoroDoc();
+    const mirror = create(doc);
+    mirror.setState((s) => {
+      s.history.push(entry('new'));
+    });
+    const before = doc.version().encode();
+    expect(() =>
+      mirror.setState((s) => {
+        Object.assign(s.history[0]!.items[0]!, { text: 42 });
+      })
+    ).toThrow('validation');
+    expect(doc.version().encode()).toEqual(before);
+    mirror.dispose();
+    doc.free();
+  });
+
   it('creates plain metadata, nested strings and list strings while keeping streaming Text', () => {
     const doc = new LoroDoc();
     const mirror = create(doc);
