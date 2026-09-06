@@ -40,6 +40,18 @@ context/message-flow.md "Upstream".
 
 ## Background
 
+### Grok permission handling
+
+Grok's TUI combines the runtime YOLO setting with client-side `AllowOnce` responses.
+`lody-acp-extension.ts` owns this compatibility rule for builtin Grok only;
+`agent-client.ts` evaluates it against the accepted session config and exposes config
+subscriptions. `MessageHandler` persists the selected outcome in the existing permission
+history. Enabling Always Approve also drains already waiting requests and clears their UI
+state and subscriptions. New requests without `allow_once` stay interactive; the queue
+drain cancels such requests, matching the TUI without creating lasting grants. User
+questions and other providers do not participate. The Grok adapter passes native requests
+through so this durable flow remains their single owner.
+
 ### ACP start concurrency
 
 Unbounded concurrent Codex starts each spawn a lody.exe adapter, a Codex app-server, and a
@@ -157,7 +169,12 @@ installed reusable runtime, and blocks on `ensureCurrentRuntime()` only when no 
 installed. `ManagedRuntimeUpdateCoordinator` serially downloads stale targets in the
 background and never hot-swaps a running ACP process. Real session creation also normalizes
 its `NewSessionResponse` through `acp-capability-normalization.ts`; the session execution
-service schedules a non-blocking cache update before the first prompt.
+service schedules a non-blocking cache update before the first prompt. Adapters may publish
+per-model reasoning-effort ladders on that session response as
+`_meta.lody.modelReasoningEfforts`. Normalization merges the map into the cached
+`modelReasoningEfforts`, together with the legacy `model[effort]` id derivation for builtin
+Codex only — other agents use the same brackets for unrelated variants (Claude's `opus[1m]`
+is a context window). Vendor model `_meta` never enters the CLI.
 
 ### Session titles
 
