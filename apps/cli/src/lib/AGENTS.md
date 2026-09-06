@@ -42,7 +42,7 @@ control plane.
 - Owner tokens/login precede requester-bound managed fallback on missing credentials/401 only.
   Never replay commands. API hosts/PR URLs override ambient repos; managed tokens are github.com-only.
 - PR/Issue URLs may follow command-specific boolean flags. Body/template URL values and unknown
-  option arity never select credentials.
+  option arity never select credentials. Check secondary issue targets; pin managed GH_HOST to github.com.
 - Gate shared owner BASH_ENV/ZDOTDIR writes on ownership. Non-owner hooks use separate paths,
   source no owner files, clear GitHub tokens, and restore managed gh PATH. This cannot isolate
   same-OS-user filesystem/keychain access or shell modes replacing/ignoring hooks.

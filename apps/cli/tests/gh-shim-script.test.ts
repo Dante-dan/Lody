@@ -47,6 +47,7 @@ if [ "$1" = "api" ] && [ "$4" = "user" ]; then
   fi
   exit 0
 fi
+if [ "$FAKE_GH_PRINT_HOST" = "1" ]; then printf '%s' "$GH_HOST"; exit 0; fi
 if [ -n "$FAKE_GH_EXEC_LOG" ]; then printf '%s\\n' "$*" >> "$FAKE_GH_EXEC_LOG"; fi
 if [ -n "$FAKE_GH_COMMAND_ERROR" ]; then printf '%s' "$FAKE_GH_COMMAND_ERROR" >&2; exit 1; fi
 if [ "$1" = "print-mixed-case-tokens" ]; then
@@ -565,6 +566,21 @@ describe('ensureGhShimScript', () => {
     ['pr', 'checkout', '-f', '--detach', '--recurse-submodules'],
     ['pr', 'checks', '--watch', '--required', '--fail-fast'],
     ['pr', 'diff', '--name-only', '--patch'],
+    ['pr', 'diff', '--exclude', '*.lock'],
+    ['pr', 'diff', '-e', '*.lock'],
+    ['pr', 'diff', '-e*.lock', '--exclude=generated/*'],
+    ['issue', 'close', '--duplicate-of', '2'],
+    ['issue', 'delete', '--confirm'],
+    ['issue', 'edit', '--type', 'Bug'],
+    ['issue', 'edit', '--remove-type'],
+    ['issue', 'edit', '--parent', '2'],
+    ['issue', 'edit', '--remove-parent'],
+    ['issue', 'edit', '--add-sub-issue', '2'],
+    ['issue', 'edit', '--remove-sub-issue', '2'],
+    ['issue', 'edit', '--add-blocked-by', '2'],
+    ['issue', 'edit', '--remove-blocked-by', '2'],
+    ['issue', 'edit', '--add-blocking', '2'],
+    ['issue', 'edit', '--remove-blocking', '2'],
     ['pr', 'close', '--delete-branch'],
     ['pr', 'comment', '--edit-last', '--create-if-none', '--editor'],
     ['pr', 'edit', '--remove-milestone'],
@@ -703,6 +719,155 @@ describe('ensureGhShimScript', () => {
       expect(brokerRequests).toEqual([]);
     }
   );
+
+  it.each([
+    ['--issue-repo', 'github.com/owner/target', '--repo', 'github.com/branch/repo', '1'],
+    ['--repo', 'github.com/branch/repo', '-igithub.com/owner/target', '1'],
+    ['--issue-repo', 'other.ghe.com/owner/repo', 'https://github.com/owner/target/issues/1'],
+  ])('honors the develop issue selector and subject URL precedence: %j', async (...options) => {
+    await startTokenBroker('app-token');
+    ensureGhShimScript();
+    const args = ['issue', 'develop', ...options];
+    const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(args.join(' ') + '\n');
+    expect(brokerRequests).toEqual([
+      { repoFullName: 'owner/target', contextToken: 'test-context' },
+    ]);
+  });
+
+  it.each([
+    ['--repo', 'github.com/branch/repo', '--issue-repo', 'other.ghe.com/owner/repo', '1'],
+    ['-iother.ghe.com/owner/repo', '--repo', 'github.com/branch/repo', '1'],
+    ['--issue-repo=github.com/owner/repo', 'https://other.ghe.com/owner/repo/issues/1'],
+    ['--issue-repo=', '--repo', 'github.com/branch/repo', '1'],
+  ])('keeps Enterprise develop targets out of managed auth: %j', async (...options) => {
+    await startTokenBroker('app-token');
+    ensureGhShimScript();
+    const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, [
+      'issue',
+      'develop',
+      ...options,
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('No managed GitHub credential');
+    expect(brokerRequests).toEqual([]);
+  });
+
+  it.each([
+    [
+      'issue',
+      'develop',
+      '--issue-repo',
+      'github.com/owner/target',
+      '--repo',
+      'other.ghe.com/branch/repo',
+      '1',
+    ],
+    ['issue', 'develop', '--repo', 'other.ghe.com/branch/repo', '-igithub.com/owner/target', '1'],
+    [
+      'issue',
+      'develop',
+      '--branch-repo',
+      'other.ghe.com/branch/repo',
+      'https://github.com/owner/target/issues/1',
+    ],
+    [
+      'issue',
+      'develop',
+      '--branch-repo',
+      'branch/repo',
+      'https://github.com/owner/target/issues/1',
+    ],
+    [
+      'issue',
+      'close',
+      '--duplicate-of',
+      'https://other.ghe.com/owner/repo/issues/2',
+      'https://github.com/owner/target/issues/1',
+    ],
+  ])('rejects managed auth for secondary Enterprise targets: %j', async (...args) => {
+    await startTokenBroker('app-token');
+    ensureGhShimScript();
+    const result = await runShim(
+      { GH_HOST: 'other.ghe.com', GH_REPO: 'github.com/owner/target' },
+      args
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('Cannot determine the GitHub target safely');
+    expect(brokerRequests).toEqual([]);
+  });
+
+  it.each([
+    [
+      'issue',
+      'develop',
+      '--branch-repo',
+      'github.com/branch/repo',
+      'https://github.com/owner/target/issues/1',
+    ],
+    [
+      'issue',
+      'close',
+      '--duplicate-of',
+      'https://github.com/owner/target/issues/2',
+      'https://github.com/owner/target/issues/1',
+    ],
+  ])('allows managed auth for secondary github.com targets: %j', async (...args) => {
+    await startTokenBroker('app-token');
+    ensureGhShimScript();
+    const result = await runShim({ GH_HOST: 'other.ghe.com' }, args);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(args.join(' ') + '\n');
+    expect(brokerRequests).toEqual([
+      { repoFullName: 'owner/target', contextToken: 'test-context' },
+    ]);
+  });
+
+  it.each([false, true])(
+    'pins implicit hosts only for managed credentials (owner=%s)',
+    async (owner) => {
+      await startTokenBroker('app-token', { allowLocalAuth: owner });
+      ensureGhShimScript();
+      const result = await runShim(
+        {
+          FAKE_GH_PRINT_HOST: '1',
+          FAKE_GH_AUTHED: owner ? '1' : '',
+          GH_HOST: '',
+        },
+        [
+          'issue',
+          'develop',
+          '--branch-repo',
+          'branch/repo',
+          'https://github.com/owner/target/issues/1',
+        ]
+      );
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(owner ? '' : 'github.com');
+      expect(brokerRequests).toEqual(
+        owner ? [] : [{ repoFullName: 'owner/target', contextToken: 'test-context' }]
+      );
+    }
+  );
+
+  it('keeps exclude patterns out of PR diff target resolution', async () => {
+    await startTokenBroker('app-token');
+    ensureGhShimScript();
+    const result = await runShim({ GH_REPO: 'github.com/ambient/repo' }, [
+      'pr',
+      'diff',
+      '--exclude',
+      'https://github.com/owner/repo/pull/1',
+      'https://other.ghe.com/owner/repo/pull/2',
+    ]);
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('No managed GitHub credential');
+    expect(brokerRequests).toEqual([]);
+  });
 
   it('keeps an enterprise URL after a boolean flag out of managed auth', async () => {
     await startTokenBroker('app-token');

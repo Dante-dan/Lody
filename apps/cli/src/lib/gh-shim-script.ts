@@ -310,7 +310,7 @@ const parseRepo = (raw, defaultHost) => {
   return /^[\\w.-]+\\/[\\w.-]+$/.test(repo) ? { host: host.toLowerCase(), repo } : null;
 };
 
-// Command-scoped option arity from cli.github.com/manual. Each descriptor is
+// Command-scoped option arity audited against cli/cli v2.96.0. Each descriptor is
 // long-name[:short-name]; a short name is not necessarily boolean elsewhere.
 const viewFlags = ['comments:c web:w', 'json jq:q template:t'];
 const commentFlags = ['edit-last create-if-none delete-last editor:e web:w yes', 'body:b body-file:F attach'];
@@ -324,7 +324,7 @@ const prIssueCommandFlags = {
     close: ['delete-branch:d', 'comment:c'],
     comment: commentFlags,
     create: ['draft:d dry-run editor:e fill:f fill-first fill-verbose no-maintainer-edit web:w', createValues + ' base:B head:H reviewer:r'],
-    diff: ['name-only patch web:w', 'color'],
+    diff: ['name-only patch web:w', 'color exclude:e'],
     edit: ['remove-milestone', editValues + ' add-reviewer base:B remove-reviewer'],
     list: ['draft:d web:w', listValues + ' base:B head:H'],
     lock: ['', 'reason:r'],
@@ -339,12 +339,12 @@ const prIssueCommandFlags = {
     view: viewFlags,
   },
   issue: {
-    close: ['', 'comment:c reason:r'],
+    close: ['', 'comment:c reason:r duplicate-of'],
     comment: commentFlags,
     create: ['editor:e web:w', createValues + ' blocked-by blocking parent type'],
-    delete: ['yes', ''],
-    develop: ['checkout:c list:l', 'base:b branch-repo name:n'],
-    edit: ['remove-milestone', editValues],
+    delete: ['yes confirm', ''],
+    develop: ['checkout:c list:l', 'base:b branch-repo name:n issue-repo:i'],
+    edit: ['remove-milestone remove-type remove-parent', editValues + ' type parent add-sub-issue remove-sub-issue add-blocked-by remove-blocked-by add-blocking remove-blocking'],
     list: ['web:w', listValues + ' mention milestone:m type'],
     lock: ['', 'reason:r'],
     pin: ['', ''],
@@ -364,6 +364,9 @@ const readPrIssueArgs = (args) => {
   const positionals = [];
   let command;
   let repo;
+  let issueRepo;
+  let branchRepo;
+  let duplicate;
   let options = true;
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
@@ -392,9 +395,14 @@ const readPrIssueArgs = (args) => {
       if (arity.get(name)) {
         let value = attached >= 0 ? arg.slice(attached + 1) : args[++i];
         if (!long && attached >= 0 && value.startsWith('=')) value = value.slice(1);
-        // Consume known values once; only --repo selects the repository.
+        // Consume known values once; never rescan them as flags or subjects.
         if (value === undefined) return null;
         if (name === '--repo' || name === '-R') repo = value;
+        if (args[0] === 'issue' && command === 'develop') {
+          if (name === '--issue-repo' || name === '-i') issueRepo = value;
+          if (name === '--branch-repo') branchRepo = value;
+        }
+        if (args[0] === 'issue' && command === 'close' && name === '--duplicate-of') duplicate = value;
         break;
       }
       if (long && attached >= 0) {
@@ -407,7 +415,16 @@ const readPrIssueArgs = (args) => {
   }
   if (!command || (['create', 'list', 'status'].includes(command) && positionals.length)) return null;
   if (positionals.slice(1).some(isUrl)) return null;
-  return { subject: positionals[0], repo };
+  // These commands also send authenticated requests to a secondary repository.
+  // Native owner auth can handle other hosts; managed credentials must not reach them.
+  if (issueRepo !== undefined && repo !== undefined) branchRepo = repo;
+  if (branchRepo && parseRepo(branchRepo, process.env.GH_HOST || 'github.com')?.host !== 'github.com') return null;
+  if (isUrl(duplicate)) {
+    try { if (new URL(duplicate).hostname !== 'github.com') return null; }
+    catch { return null; }
+  }
+  // develop's deprecated selector overrides --repo regardless of flag order.
+  return { subject: positionals[0], repo: issueRepo !== undefined ? issueRepo : repo };
 };
 
 const readGitHubTarget = async (args) => {
@@ -584,6 +601,8 @@ const buildGhEnv = async (ghCommand, args) => {
   if (target.host === 'github.com' && target.repo) {
     const token = await fetchTokenFromBroker(target.repo);
     if (token) {
+      // Do not let a sole Enterprise login in hosts.yml choose implicit hosts.
+      env.GH_HOST = 'github.com';
       injectGhToken(env, token);
       return { env, managed: { token, repoFullName: target.repo } };
     }
