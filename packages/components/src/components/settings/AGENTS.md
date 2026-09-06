@@ -2,8 +2,10 @@
 
 ## The shared editor grammar
 
-`form-primitives.tsx` owns `Section`, `Field` and `FormMessage`. Every settings
-editor — MCP connection, Agent Role, Prompt Shortcut — is the same stack:
+`form-primitives.tsx` owns `Section`, `Field`, `FormMessage` and
+`AutoGrowTextarea` (a one-row field that tracks its content's height; it must
+re-measure on width changes, because wrapping is what decides the row count).
+Every settings editor — MCP connection, Agent Role, Prompt Shortcut — is the same stack:
 a dialog `header` (`px-5 py-3 pr-12`), a scrolling `scrollbar-pro` body of
 bordered sections, and a bordered footer with Cancel plus the primary action.
 Lists share one row grammar too (`rounded-lg bg-foreground/[0.04]`, a row body

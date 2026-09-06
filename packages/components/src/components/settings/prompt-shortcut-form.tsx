@@ -23,7 +23,7 @@ import {
   shortcutMentionRanges,
   shortcutTemplateMentions,
 } from '@/components/mentions/shortcut-template-ranges';
-import { FormMessage, Section } from './form-primitives';
+import { AutoGrowTextarea, FormMessage, Section } from './form-primitives';
 import {
   describeShortcutProject,
   ScopeAxisIcon,
@@ -347,7 +347,7 @@ export function PromptShortcutForm({
                 <div key={variable.name} className="flex items-start gap-2">
                   {/* Fixed column so the names line up; the chip itself hugs
                       its token rather than painting an empty 7rem block. */}
-                  <div className="w-28 shrink-0 pt-2">
+                  <div className="w-28 shrink-0 pt-1.5">
                     <Label
                       htmlFor={`shortcut-variable-${variable.name}`}
                       className="inline-block max-w-full truncate rounded-sm bg-status-warning/12 px-1 py-0.5 font-mono text-[11px] font-normal text-status-warning"
@@ -356,10 +356,9 @@ export function PromptShortcutForm({
                       {`!{${variable.name}}`}
                     </Label>
                   </div>
-                  <Textarea
+                  <AutoGrowTextarea
                     id={`shortcut-variable-${variable.name}`}
-                    rows={2}
-                    className="min-w-0 flex-1 resize-none text-xs"
+                    className="min-w-0 flex-1 py-1.5 text-xs leading-5"
                     placeholder={t(
                       'settings.promptShortcuts.defaultPlaceholder',
                       'Default value (optional)'
