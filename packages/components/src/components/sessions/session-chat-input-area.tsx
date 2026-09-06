@@ -1,4 +1,4 @@
-import { isShortcutDraftRange } from '@/components/mentions/shortcut-expand-edit';
+import { isShortcutDraftRange } from '@/components/mentions/shortcut-composer-state';
 import { shortcutCompilationErrorMessage } from '@/components/mentions/shortcut-prompt-compilation';
 import { shortcutDraftRepository } from '@/lib/shortcut-composer-draft';
 import { shortcutDraftMissingVariables } from '@/components/mentions/shortcut-composer-state';

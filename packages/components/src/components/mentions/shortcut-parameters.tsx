@@ -1,15 +1,15 @@
-import { shortcutEditReplacement } from './shortcut-expand-edit';
 import { usePromptShortcuts } from '../../providers/prompt-shortcut-provider';
 import { shortcutAvailabilityMessage } from './mention-prompt-shortcut-source';
 import { shortcutInvocationAvailability } from './shortcut-composer-state';
 import type { PromptShortcutScope } from '@lody/shared/prompt-shortcuts';
-import { useEffect, useMemo, useRef } from 'react';
+import { useEffect, useId, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   PROMPT_SHORTCUT_LIMITS,
   shortcutByteLength,
   type ShortcutInvocation,
 } from '@lody/shared/prompt-shortcuts';
+import { cn } from '@/lib/utils';
 import { useMentionContext } from '@/ui/mention';
 import { Button } from '@/ui/button';
 import { AutoGrowTextarea } from '../settings/form-primitives';
@@ -21,57 +21,74 @@ import {
   shortcutDraftMissingVariables,
 } from './shortcut-composer-state';
 
+/**
+ * The values one invocation needs, asked for where the invocation is.
+ *
+ * Reads as the settings variable editor it mirrors: the `!{name}` token on the
+ * left, its value beside it, growing from one row. A missing value tints its own
+ * token rather than adding an asterisk, so the thing you have to fix is the
+ * thing that is marked.
+ */
 export function ShortcutParameters({
   invocation,
   mobile,
   onChange,
   onClose,
-  onExpand,
 }: {
   invocation: ShortcutInvocation;
   mobile: boolean;
   onChange: (name: string, value: string) => void;
   onClose: () => void;
-  onExpand?: () => void;
 }) {
   const { t } = useTranslation();
+  const fieldId = useId();
   const missing = missingShortcutVariables(invocation);
   const title = t('promptShortcut.parameters', { name: invocation.snapshot.name });
   const description = t('promptShortcut.parametersHint');
+  const done = t('promptShortcut.done');
   const fields = (
-    <div className="space-y-3" onKeyDown={(event) => event.stopPropagation()}>
+    <div className="space-y-1.5" onKeyDown={(event) => event.stopPropagation()}>
       {invocation.snapshot.variables.map(({ name }, index) => {
         const value = invocation.values[name] ?? '';
+        const absent = missing.includes(name);
         const tooLarge = shortcutByteLength(value) > PROMPT_SHORTCUT_LIMITS.variableValueBytes;
         return (
-          <label key={name} className="block space-y-1 text-sm">
-            <span>
-              {name}
-              {missing.includes(name) ? ' *' : ''}
-            </span>
-            <AutoGrowTextarea
-              value={value}
-              autoFocus={name === (missing[0] ?? invocation.snapshot.variables[0]?.name)}
-              aria-invalid={missing.includes(name) || tooLarge}
-              aria-label={name}
-              onChange={(event) => onChange(name, event.target.value)}
-              className="min-h-9"
-              data-variable-index={index}
-            />
-            {tooLarge ? (
-              <span className="text-destructive">{t('promptShortcut.valueTooLarge')}</span>
-            ) : null}
-          </label>
+          <div key={name} className="flex items-start gap-2">
+            {/* Fixed column so the tokens line up; the chip hugs its own text. */}
+            <div className="w-24 shrink-0 pt-1.5">
+              <label
+                htmlFor={`${fieldId}-${name}`}
+                className={cn(
+                  'inline-block max-w-full truncate rounded-sm px-1 py-0.5 font-mono text-[11px]',
+                  absent
+                    ? 'bg-destructive/10 text-destructive'
+                    : 'bg-status-warning/12 text-status-warning'
+                )}
+                title={`!{${name}}`}
+              >
+                {`!{${name}}`}
+              </label>
+            </div>
+            <div className="min-w-0 flex-1 space-y-1">
+              <AutoGrowTextarea
+                id={`${fieldId}-${name}`}
+                value={value}
+                autoFocus={name === (missing[0] ?? invocation.snapshot.variables[0]?.name)}
+                aria-invalid={absent || tooLarge}
+                aria-label={name}
+                onChange={(event) => onChange(name, event.target.value)}
+                className="py-1.5 text-xs leading-5"
+                data-variable-index={index}
+              />
+              {tooLarge ? (
+                <p className="text-[11px] leading-snug text-destructive">
+                  {t('promptShortcut.valueTooLarge')}
+                </p>
+              ) : null}
+            </div>
+          </div>
         );
       })}
-      {onExpand ? (
-        <Button type="button" variant="ghost" size="sm" onClick={onExpand}>
-          {t('promptShortcut.expandEdit')}
-        </Button>
-      ) : null}
-      <Button type="button" variant="outline" size="sm" onClick={onClose}>
-        {t('promptShortcut.done')}
-      </Button>
     </div>
   );
   if (mobile)
@@ -90,16 +107,37 @@ export function ShortcutParameters({
           side="bottom"
           className="max-h-[75dvh] overflow-y-auto rounded-t-xl"
         >
-          <SheetTitle className="mb-1 pr-7 text-base">{title}</SheetTitle>
-          <SheetDescription className="mb-4">{description}</SheetDescription>
+          <SheetTitle className="mb-0.5 pr-7 text-sm font-semibold">{title}</SheetTitle>
+          <SheetDescription className="mb-3 text-xs leading-snug">{description}</SheetDescription>
           {fields}
+          <Button type="button" size="sm" className="mt-3 w-full" onClick={onClose}>
+            {done}
+          </Button>
         </SheetContent>
       </Sheet>
     );
   return (
-    <section aria-label={title} className="mt-2 space-y-2 rounded-md border p-3">
-      <p className="text-sm font-medium">{title}</p>
-      <p className="text-xs text-muted-foreground">{description}</p>
+    <section
+      aria-label={title}
+      className="mt-2 space-y-2 rounded-lg border border-border/60 bg-card/60 p-2.5"
+    >
+      <header className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <h3 className="truncate text-xs font-semibold text-muted-foreground">{title}</h3>
+          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground/90">{description}</p>
+        </div>
+        {/* Dismissal is the only action here — the values are already saved on
+            the invocation as they are typed. */}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="-mr-1 -mt-0.5 h-7 shrink-0 px-2 text-xs"
+          onClick={onClose}
+        >
+          {done}
+        </Button>
+      </header>
       {fields}
     </section>
   );
@@ -173,10 +211,6 @@ export function ShortcutInvocationEditor({
           invocation={active.data}
           mobile={mobile}
           onClose={close}
-          onExpand={() => {
-            context.onMentionReplace(shortcutEditReplacement(active));
-            onActiveIdChange(null);
-          }}
           onChange={(name, value) =>
             context.onMentionsChange((ranges) =>
               ranges.map((range) =>

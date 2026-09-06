@@ -1,4 +1,3 @@
-import { ordinaryShortcutTargetRange } from './shortcut-semantic-mention';
 import { compileShortcutPrompt } from './shortcut-prompt-compilation';
 import { shortcutComposerScope } from './shortcut-composer-state';
 import { usePromptShortcuts } from '../../providers/prompt-shortcut-provider';
@@ -152,13 +151,9 @@ export function useMentionPromptExpansion({
         ordinaryRewrites: [
           ...buildPastedTextRewrites(pastedTextDrafts),
           ...skillRewrites(text),
-          ...buildSessionMentionRewrites(text, mentions.map(ordinaryShortcutTargetRange)),
-          ...buildAgentRoleMentionRewrites(
-            text,
-            mentions.map(ordinaryShortcutTargetRange),
-            agentRoleItems
-          ),
-          ...buildVerbatimMentionRewrites(text, mentions.map(ordinaryShortcutTargetRange)),
+          ...buildSessionMentionRewrites(text, mentions),
+          ...buildAgentRoleMentionRewrites(text, mentions, agentRoleItems),
+          ...buildVerbatimMentionRewrites(text, mentions),
         ],
       }),
     [agentRoleItems, skillRewrites, shortcutContext]

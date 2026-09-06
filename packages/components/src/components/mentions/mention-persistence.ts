@@ -75,8 +75,6 @@ export const toPersistedMentionRanges = (
         range.kind &&
         range.kind !== 'pasted_text' &&
         range.kind !== 'prompt_shortcut' &&
-        range.kind !== 'shortcut_unresolved' &&
-        range.kind !== 'shortcut_literal' &&
         range.value
     )
     .map(({ start, end, value, kind }) => ({ start, end, value, kind: kind as MentionKind }));

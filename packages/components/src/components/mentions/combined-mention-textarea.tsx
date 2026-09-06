@@ -1,4 +1,4 @@
-import { isShortcutDraftRange } from './shortcut-expand-edit';
+import { isShortcutDraftRange } from './shortcut-composer-state';
 import { useShortcutComposerDraft } from './use-shortcut-composer-draft';
 import { shortcutDraftMentions } from '@/lib/shortcut-composer-draft';
 import { useShortcutMentionSource } from './use-shortcut-mention-source';
@@ -1100,7 +1100,7 @@ export const CombinedMentionTextarea = React.forwardRef<
         onFilter={(options) => options}
         autoCloseOnEmpty={false}
         loop
-        className="w-full [&_[data-mention-kind=shortcut_unresolved]]:bg-destructive/15"
+        className="w-full"
       >
         <FileMentionHydrator
           text={value}

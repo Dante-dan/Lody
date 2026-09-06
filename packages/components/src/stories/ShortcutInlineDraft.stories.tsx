@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
 import { createShortcutInvocation, type PromptShortcut } from '@lody/shared/prompt-shortcuts';
 import { Mention, MentionInput, useMentionContext } from '@/ui/mention';
@@ -8,7 +8,6 @@ import {
   isShortcutMention,
   shortcutDraftMissingVariables,
 } from '@/components/mentions/shortcut-composer-state';
-import { shortcutEditReplacement } from '@/components/mentions/shortcut-expand-edit';
 import { useTranslation } from 'react-i18next';
 const body: PromptShortcut = {
   v: 1,
@@ -30,27 +29,16 @@ function Editor({
   activeId,
   onActive,
   mobile,
-  expanded,
 }: {
   activeId: string | null;
   onActive: (id: string | null) => void;
   mobile: boolean;
-  expanded: boolean;
 }) {
   const context = useMentionContext('story');
   const { t } = useTranslation();
   const chip = context.mentions.find(
     (range) => range.value === activeId && isShortcutMention(range)
   );
-  const initialExpansion = useRef(false);
-  useEffect(() => {
-    if (expanded && !initialExpansion.current) {
-      initialExpansion.current = true;
-      const first = context.mentions.find(isShortcutMention);
-      if (first) context.onMentionReplace(shortcutEditReplacement(first));
-      onActive(null);
-    }
-  }, [context, expanded, onActive]);
   const missing = shortcutDraftMissingVariables(context.mentions);
   return (
     <>
@@ -66,10 +54,6 @@ function Editor({
           onClose={() => {
             onActive(null);
             context.inputRef.current?.focus();
-          }}
-          onExpand={() => {
-            context.onMentionReplace(shortcutEditReplacement(chip));
-            onActive(null);
           }}
           onChange={(name, value) =>
             context.onMentionsChange((ranges) =>
@@ -88,7 +72,7 @@ function Editor({
     </>
   );
 }
-function Harness({ mobile = false, expanded = false }: { mobile?: boolean; expanded?: boolean }) {
+function Harness({ mobile = false }: { mobile?: boolean }) {
   const [text, setText] = useState('Before /review and /review after');
   const [active, setActive] = useState<string | null>('one');
   const [mentions] = useState(() => [
@@ -125,7 +109,7 @@ function Harness({ mobile = false, expanded = false }: { mobile?: boolean; expan
           aria-label="Prompt"
           className="w-full resize-none bg-transparent p-2"
         />
-        <Editor activeId={active} onActive={setActive} mobile={mobile} expanded={expanded} />
+        <Editor activeId={active} onActive={setActive} mobile={mobile} />
       </Mention>
     </div>
   );
@@ -138,7 +122,6 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 export const MultipleChips: Story = {};
-export const ExpandedMissing: Story = { args: { expanded: true } };
 export const MobileSheet: Story = {
   args: { mobile: true },
   parameters: { viewport: { defaultViewport: 'mobile1' } },

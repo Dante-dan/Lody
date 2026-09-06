@@ -3909,6 +3909,5 @@
   "promptShortcut.draftSaveFailed": "Could not save this Shortcut draft locally. Keep this composer open and retry your edit.",
   "promptShortcut.variablesRequired": "Fill the missing Shortcut variables before sending.",
   "promptShortcut.promptTooLarge": "Expanded prompt exceeds the size limit.",
-  "promptShortcut.invalidDraft": "This Shortcut draft is incomplete. Remove the affected chip and insert it again.",
-  "promptShortcut.expandEdit": "Expand and edit"
+  "promptShortcut.invalidDraft": "This Shortcut draft is incomplete. Remove the affected chip and insert it again."
 }

@@ -18,6 +18,11 @@ export function isShortcutMention(mention: Mention): mention is ShortcutMention 
   return mention.kind === 'prompt_shortcut' && !!mention.data;
 }
 
+/** Ranges the Shortcut draft owns, as opposed to ordinary composer mentions. */
+export function isShortcutDraftRange(mention: Mention): boolean {
+  return isShortcutMention(mention);
+}
+
 export function missingShortcutVariables(invocation: ShortcutInvocation): string[] {
   return invocation.snapshot.variables
     .filter(({ name }) => !invocation.values[name]?.trim())
@@ -25,16 +30,11 @@ export function missingShortcutVariables(invocation: ShortcutInvocation): string
 }
 
 export function shortcutDraftMissingVariables(mentions: readonly Mention[]): string[] {
-  return [
-    ...mentions
-      .filter(isShortcutMention)
-      .flatMap(({ data }) =>
-        missingShortcutVariables(data).map((name) => `${data.snapshot.name}: ${name}`)
-      ),
-    ...mentions
-      .filter((mention) => mention.kind === 'shortcut_unresolved')
-      .map((mention) => mention.value),
-  ];
+  return mentions
+    .filter(isShortcutMention)
+    .flatMap(({ data }) =>
+      missingShortcutVariables(data).map((name) => `${data.snapshot.name}: ${name}`)
+    );
 }
 
 export function shortcutComposerScope(

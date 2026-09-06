@@ -1,4 +1,4 @@
-import { isShortcutDraftRange } from './shortcut-expand-edit';
+import { isShortcutDraftRange } from './shortcut-composer-state';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { usePromptShortcuts } from '../../providers/prompt-shortcut-provider';
 import {

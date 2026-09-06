@@ -1,4 +1,4 @@
-import { isShortcutDraftRange } from '@/components/mentions/shortcut-expand-edit';
+import { isShortcutDraftRange } from '@/components/mentions/shortcut-composer-state';
 import { shortcutCompilationErrorMessage } from '@/components/mentions/shortcut-prompt-compilation';
 import { shortcutDraftMissingVariables } from '@/components/mentions/shortcut-composer-state';
 import {
@@ -985,11 +985,7 @@ function WorkspaceChatLanding({
   const [shortcutUnavailable, setShortcutUnavailable] = useState(false);
   const handleMentionRangesChange = useCallback(
     (ranges: MentionRange[]) => {
-      shortcutRangesRef.current = ranges.filter(
-        (range) =>
-          isShortcutDraftRange(range) &&
-          ['prompt_shortcut', 'shortcut_literal', 'shortcut_unresolved'].includes(range.kind ?? '')
-      );
+      shortcutRangesRef.current = ranges.filter(isShortcutDraftRange);
       shortcutMissingRef.current = shortcutDraftMissingVariables(ranges);
       setShortcutMissing(shortcutMissingRef.current);
       // Stored with the prompt so a returning draft does not have to have its

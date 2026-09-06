@@ -1,8 +1,4 @@
-import {
-  expandedShortcutTarget,
-  renderShortcutSemanticMention,
-  shortcutSemanticSpan,
-} from './shortcut-semantic-mention';
+import { renderShortcutSemanticMention, shortcutSemanticSpan } from './shortcut-semantic-mention';
 import { shortcutInvocationAvailability } from './shortcut-composer-state';
 import type { TFunction } from 'i18next';
 import { shortcutAvailabilityMessage } from './mention-prompt-shortcut-source';
@@ -32,52 +28,8 @@ export function compileShortcutPrompt(input: {
   maxBytes?: number;
 }) {
   const chips = input.mentions.filter((mention) => mention.kind === 'prompt_shortcut');
-  if (input.mentions.some((mention) => mention.kind === 'shortcut_unresolved'))
-    throw new PromptShortcutError(
-      'missing_variables',
-      'Edit or delete unresolved variable markers'
-    );
-  const literal = input.mentions.filter((mention) => mention.kind === 'shortcut_literal');
-  const semantic = input.mentions.flatMap((mention): TextRewrite[] => {
-    const target = expandedShortcutTarget(mention);
-    if (!target) return [];
-    const label = input.text.slice(mention.start, mention.end);
-    const source = { ...mention, label, target };
-    // Ordinary Role authorization remains owned by the live Role rewrite builder.
-    const approvedRole = input.ordinaryRewrites.find(
-      (rewrite) =>
-        rewrite.start === mention.start &&
-        rewrite.end === mention.end &&
-        rewrite.span?.kind === 'agent_role'
-    );
-    return [
-      {
-        start: mention.start,
-        end: mention.end,
-        replacement:
-          target.kind === 'agent_role'
-            ? (approvedRole?.replacement ?? label)
-            : renderShortcutSemanticMention(source),
-        span: (({ start: _start, end: _end, ...span }) => span)(shortcutSemanticSpan(source)),
-      },
-    ];
-  });
-  const regular = input.ordinaryRewrites.filter(
-    (rewrite) =>
-      ![...literal, ...semantic].some(
-        (range) => rewrite.start < range.end && rewrite.end > range.start
-      )
-  );
-  const baseRewrites = [...regular, ...semantic];
-  if (!chips.length) {
-    const result = applyTextRewrites(input.text, baseRewrites);
-    if (
-      (literal.length || semantic.length) &&
-      shortcutByteLength(result.text) > (input.maxBytes ?? PROMPT_SHORTCUT_LIMITS.promptBytes)
-    )
-      throw new PromptShortcutError('size_limit', 'Expanded prompt exceeds the message byte limit');
-    return result;
-  }
+  const baseRewrites = input.ordinaryRewrites;
+  if (!chips.length) return applyTextRewrites(input.text, baseRewrites);
   validateShortcutRanges(
     input.text,
     [...input.mentions].sort((a, b) => a.start - b.start)

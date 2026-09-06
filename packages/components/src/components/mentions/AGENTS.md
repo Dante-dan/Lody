@@ -54,11 +54,10 @@ hydration, persisted ranges, session/Role addressing, or transcript semantics.
   definition of where an `@` token ends. Both the file and session hydrators
   scan with it; they have to agree, because the session one decides what it may
   claim by asking the file source which tokens it already knows.
-- `shortcut-expand-edit.ts` removes one invocation into editable text, stable
-  semantic targets, generated unresolved markers and non-blocking literal ranges.
-  Literal ranges prevent rescanning substituted text until edited. Markers are
-  non-atomic and disappear on any intersecting edit; only surviving generated
-  markers block send. Both kinds persist in the recovery checkpoint and undo.
+- An invocation chip is atomic and stays a chip: there is no "expand and edit"
+  that lowers one back into editable text. So the draft carries no generated
+  variable markers and no literal ranges, and nothing but a chip's own values can
+  block send. To change the template itself, edit the Shortcut in Settings.
 - `shortcut-prompt-compilation.ts` compiles snapshot segments with stable-target
   lowering, then sends those and ordinary original-coordinate rewrites through
   one `applyTextRewrites` emitter. Variable output is never scanned for tokens.
@@ -76,8 +75,12 @@ hydration, persisted ranges, session/Role addressing, or transcript semantics.
   Landing/session owners mask Shortcut-bearing cached
   text from foreign account/workspace domains without replacing normal caches.
 - `shortcut-parameters.tsx` edits one invocation at a time in a desktop tray or
-  mobile sheet. Whitespace-only values are missing; defaults never refill an
-  explicitly cleared value. Both send entry points gate on live missing values.
+  mobile sheet, in the settings variable editor's own grammar: the `!{name}`
+  token beside its value, a missing value tinting that token rather than adding
+  a marker of its own. Whitespace-only values are missing; defaults never refill
+  an explicitly cleared value. Both send entry points gate on live missing
+  values, and dismissing the tray is the only action in it — values are already
+  on the invocation as they are typed.
 - `shortcut-composer-state.ts` derives scope from composer project/provider identity.
   Invocation snapshots and values live on each `prompt_shortcut` range, keyed by
   invocation id; never reconstruct them from the visible slug or live catalog.

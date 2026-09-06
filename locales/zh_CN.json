@@ -3909,6 +3909,5 @@
   "promptShortcut.draftSaveFailed": "无法在本地保存此 Shortcut 草稿。请保持输入框打开并重试编辑。",
   "promptShortcut.variablesRequired": "请先填写缺失的 Shortcut 变量。",
   "promptShortcut.promptTooLarge": "展开后的 Prompt 超过大小限制。",
-  "promptShortcut.invalidDraft": "此 Shortcut 草稿不完整。请删除有问题的 chip 后重新插入。",
-  "promptShortcut.expandEdit": "展开并编辑"
+  "promptShortcut.invalidDraft": "此 Shortcut 草稿不完整。请删除有问题的 chip 后重新插入。"
 }

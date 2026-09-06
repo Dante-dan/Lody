@@ -1,10 +1,5 @@
 import type { MessageTextSpan } from '@lody/shared';
-import {
-  PromptShortcutTargetSchema,
-  type PromptShortcutTarget,
-  type PromptShortcutMention,
-} from '@lody/shared/prompt-shortcuts';
-import type { Mention } from '@/ui/mention/index';
+import type { PromptShortcutMention } from '@lody/shared/prompt-shortcuts';
 import { formatSkillMentionPrompt } from './mention-skill-source';
 import { buildAgentRoleMentionPrompt } from './mention-agent-role-source';
 
@@ -37,29 +32,4 @@ export function shortcutSemanticSpan(mention: PromptShortcutMention): MessageTex
         ? target.agentRoleId
         : `#${target.number}`;
   return { start: mention.start, end: mention.end, label: mention.label, kind, target: value };
-}
-
-export const SHORTCUT_TARGET_PREFIX = 'shortcut-target:';
-export function expandedShortcutTarget(
-  mention: Pick<Mention, 'value'>
-): PromptShortcutTarget | null {
-  if (!mention.value.startsWith(SHORTCUT_TARGET_PREFIX)) return null;
-  try {
-    return PromptShortcutTargetSchema.parse(
-      JSON.parse(mention.value.slice(SHORTCUT_TARGET_PREFIX.length))
-    );
-  } catch {
-    return null;
-  }
-}
-export function ordinaryShortcutTargetRange(mention: Mention): Mention {
-  const target = expandedShortcutTarget(mention);
-  if (!target) return mention;
-  const value =
-    target.kind === 'file' || target.kind === 'skill'
-      ? target.path
-      : target.kind === 'agent_role'
-        ? target.agentRoleId
-        : `#${target.number}`;
-  return { ...mention, value };
 }

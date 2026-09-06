@@ -1,4 +1,3 @@
-import { expandedShortcutTarget } from '@/components/mentions/shortcut-semantic-mention';
 import { parseShortcutInvocation } from '@lody/shared/prompt-shortcuts';
 import type { Mention } from '@/ui/mention/index';
 import { isShortcutMention } from '@/components/mentions/shortcut-composer-state';
@@ -14,7 +13,6 @@ export type ShortcutDraftRecord = {
   v: 1;
   text: string;
   mentions: PersistedMentionRange[];
-  annotations?: PersistedMentionRange[];
   invocations: Array<{
     start: number;
     end: number;
@@ -32,31 +30,14 @@ export function captureShortcutDraft(
   const invocations = mentions
     .filter(isShortcutMention)
     .map(({ start, end, value, data }) => ({ start, end, value, data }));
-  const annotations = mentions
-    .filter(
-      (range) =>
-        ['shortcut_unresolved', 'shortcut_literal'].includes(range.kind ?? '') &&
-        range.start >= 0 &&
-        range.end <= text.length &&
-        range.end > range.start
-    )
-    .map(({ start, end, value, kind }) => ({ start, end, value, kind: kind! }));
   if (
-    (!invocations.length &&
-      !annotations.length &&
-      !mentions.some((range) => expandedShortcutTarget(range))) ||
+    !invocations.length ||
     invocations.some(
       (range) => text.slice(range.start, range.end) !== `/${range.data.snapshot.slug}`
     )
   )
     return null;
-  return {
-    v: 1,
-    text,
-    mentions: toPersistedMentionRanges(mentions),
-    invocations,
-    ...(annotations.length ? { annotations } : {}),
-  };
+  return { v: 1, text, mentions: toPersistedMentionRanges(mentions), invocations };
 }
 export function parseShortcutDraft(
   value: unknown,
@@ -88,13 +69,6 @@ export function parseShortcutDraft(
       ids.add(range.value);
       end = range.end;
     }
-    const annotations = sanitizeMentionRanges(record.text, record.annotations).filter(
-      (range) =>
-        range.kind === 'shortcut_literal' ||
-        (range.kind === 'shortcut_unresolved' &&
-          /^[A-Za-z][A-Za-z0-9_-]{0,39}$/.test(range.value) &&
-          record.text.slice(range.start, range.end) === `!{${range.value}}`)
-    );
     const mentions = sanitizeMentionRanges(record.text, record.mentions).filter(
       (range) => range.kind !== 'prompt_shortcut'
     );
@@ -104,16 +78,10 @@ export function parseShortcutDraft(
       )
     )
       return null;
-    const ordered = [...mentions, ...invocations, ...annotations].sort((a, b) => a.start - b.start);
+    const ordered = [...mentions, ...invocations].sort((a, b) => a.start - b.start);
     if (ordered.some((range, index) => index > 0 && range.start < ordered[index - 1]!.end))
       return null;
-    return {
-      v: 1,
-      text: record.text,
-      mentions,
-      invocations,
-      ...(annotations.length ? { annotations } : {}),
-    };
+    return { v: 1, text: record.text, mentions, invocations };
   } catch {
     return null;
   }
@@ -121,11 +89,6 @@ export function parseShortcutDraft(
 export function shortcutDraftMentions(record: ShortcutDraftRecord): Mention[] {
   return [
     ...record.mentions,
-    ...(record.annotations ?? []).map((range) => ({
-      ...range,
-      atomic: false,
-      ...(range.kind === 'shortcut_literal' ? { highlight: false } : {}),
-    })),
     ...record.invocations.map((range) => ({ ...range, kind: 'prompt_shortcut' })),
   ].sort((a, b) => a.start - b.start);
 }
