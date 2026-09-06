@@ -27,7 +27,10 @@ matched via `_meta.lody.toolName`). For those, the small `rawInput`/`rawOutput` 
 kept, the persisted `title` is pinned to the canonical tool name, and
 `schedulingTimeZone` is recorded — this machine's IANA zone, captured at persist time,
 because cron is local-time to it and the panel must resolve fire times in that zone via
-`nextCronFireMs` rather than the viewer's browser zone.
+`nextCronFireMs` rather than the viewer's browser zone. Also retain `recordedAtMs`,
+the first-persisted wall-clock sighting: cron-fire steers extend the turn's `endedAt`
+past a one-shot fire minute, so using it as the creation anchor can roll the fire to
+next year. For one-shot crons, prefer the output's `nextFireAt` over any anchor.
 
 This is what lets the web derive its "session will continue" panel from the
 Cron/ScheduleWakeup `tool_call` items in history: the CLI persists NO extra

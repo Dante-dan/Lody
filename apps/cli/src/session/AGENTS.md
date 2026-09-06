@@ -51,8 +51,8 @@ Contract: specs/session-orchestration.md.
   entry ids from `userTurnId`. `invocation` atomically owns source Turn, requester, and input
   config; steer replaces it before tool execution.
 - Publish `latestUserMsgId` in the SAME write as the history append (`appendUserTurn`). Only
-  dispatch producers publish it; all but queue promotion clear a prior missing-history marker,
-  which promotion must NOT clear.
+  dispatch producers publish it. Renderer sends and queue promotion retain the missing-history
+  tombstone; CLI dispatch producers keep their own marker policy.
 - Ordinary turn execution writes only `processingUserMsgId` and `lastHandledUserMsgId`; no start
   or terminal path may read-await-rewrite the other slots.
 - INVARIANT: a steer the agent never accepted must not stay parked in `pending_apply`. Requeue it

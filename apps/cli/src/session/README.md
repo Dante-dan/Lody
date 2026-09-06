@@ -65,9 +65,8 @@ names is terminal.
 The renderer derives a visible "not delivered" label for a marked entry from the marker plus
 its non-terminal status — no CLI repair write, no schema change. Recovery is a fresh send: the
 label opens a confirmation dialog that re-sends the SAME content as a brand-new message
-through the ordinary producer path, whose dispatch write clears the marker as a side effect,
-and the resend supersedes the abandoned entry to `canceled` so the stale pending copy can
-never dispatch once the marker is gone.
+through the ordinary producer path. The renderer retains the marker as a tombstone and
+supersedes the abandoned entry to `canceled`; it must never revive the old turn.
 
 ### Bootstrap scan cost
 

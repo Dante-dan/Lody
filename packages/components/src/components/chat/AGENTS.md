@@ -1,7 +1,7 @@
 # components/chat
 
 `CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only.
-Ownership index and the reasoning behind these rules: [README.md](README.md).
+Index and rationale: [README.md](README.md).
 
 ## Composer and selectors
 
@@ -10,19 +10,14 @@ Ownership index and the reasoning behind these rules: [README.md](README.md).
   footer selector row. MCP is always a second level: a desktop hover submenu, and
   on touch a panel pushed onto the same surface with a back row. Toggling never
   closes the menu, and the entry hides itself when the catalog is empty.
-- The desktop project picker (`chat-landing-selectors.tsx`,
-  `unified-project-selector.tsx`) is composer run config on the standard
-  DropdownMenu surface: it mixes local + GitHub projects by
-  recent activity, pins the no-project / add-local / connect-GitHub actions, and
-  mounts at most 20 option rows — the 20 most recent while the query is empty, or
-  the first 20 matches over the complete option set while searching. Its top scope
-  row is ordered machine → project → worktree/branch. Direct local-project
-  sessions never render or pass a branch (the local branch picker appears only in
-  explicit worktree mode); GitHub sessions keep theirs and stay
-  machine-independent. The selected machine filters both local projects and agent
-  configs, and changing away from a selected local project's machine clears that
-  project rather than silently choosing another. Keep the mobile type-specific
-  pickers independent until their sheet is redesigned.
+- Desktop project pickers use the standard DropdownMenu, mixing local/GitHub projects by
+  recency. Pin no-project/add-local/connect-GitHub actions; mount at most 20 rows
+  (most recent when empty, first matches across all options when searching).
+  Scope order: machine → project → worktree/branch. Direct local sessions never
+  render/pass a branch; explicit local worktrees and GitHub sessions keep theirs.
+  GitHub projects are machine-independent. Machine selection filters local projects
+  and agent configs; changing machines clears an incompatible local project without
+  selecting a replacement. Keep mobile pickers independent.
 - A single-member workspace never passes project-sharing state. In multi-member
   workspaces, local project options and the selected desktop trigger show only an
   effective `Private` status — Team and unresolved states stay hidden — where
@@ -71,6 +66,12 @@ Ownership index and the reasoning behind these rules: [README.md](README.md).
   MUST consume that same identity. Attachment hooks never reset it independently;
   reset only after a full draft clear. Submit blocks while `hasBlockingImages` or
   `hasBlockingFiles`.
+- Keep reserved session id and attachments in module-level atoms
+  (`atoms/chat-landing-draft.ts`, `buildChatLandingDraftKey`), keyed by workspace
+  SLUG, not the initially unresolved workspace id. Drafts survive route unmount:
+  never revoke preview URLs or abort uploads on unmount; uploads settle into the
+  atom. Revoke/abort only on attachment removal or full draft clear. Never persist
+  these atoms to localStorage; losing attachments on app restart is expected.
 - Submit immediately hides and disables the visible landing draft but preserves
   its controlled text, attachment resources, and reserved session id until
   `startSession` accepts. Failure must reveal the unchanged draft; only acceptance
