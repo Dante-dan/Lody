@@ -41,9 +41,10 @@ control plane.
   always use workspace-bound shims, even without a repository/broker.
 - Broker state/env contain session bearers requiring context. Host Git uses a private in-memory bearer.
 - Owner tokens/login precede requester-bound managed fallback on missing credentials/401 only.
-  Never replay commands. API hosts/PR URLs override ambient repos; managed tokens are github.com-only.
-- PR/Issue URLs may follow command-specific boolean flags. Body/template URL values and unknown
-  option arity never select credentials. Check secondary issue targets; pin managed GH_HOST to github.com.
+  Never replay commands; managed tokens are github.com-only.
+- Parse API/PR/Issue flags by command arity; option values cannot select hosts. Real endpoint/subject
+  URLs override ambient repos. Unknown flags fail closed; check secondary issue targets and pin
+  managed GH_HOST to github.com.
 - Gate shared owner BASH_ENV/ZDOTDIR writes on ownership. Non-owner hooks use separate paths,
   source no owner files, clear GitHub tokens, and restore managed gh PATH. This cannot isolate
   same-OS-user filesystem/keychain access or shell modes replacing/ignoring hooks.

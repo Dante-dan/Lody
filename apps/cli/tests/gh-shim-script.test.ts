@@ -50,11 +50,11 @@ fi
 if [ "$FAKE_GH_PRINT_HOST" = "1" ]; then printf '%s' "$GH_HOST"; exit 0; fi
 if [ -n "$FAKE_GH_EXEC_LOG" ]; then printf '%s\\n' "$*" >> "$FAKE_GH_EXEC_LOG"; fi
 if [ -n "$FAKE_GH_COMMAND_ERROR" ]; then printf '%s' "$FAKE_GH_COMMAND_ERROR" >&2; exit 1; fi
-if [ "$1" = "print-mixed-case-tokens" ]; then
+if [ "$FAKE_GH_PRINT_MIXED" = "1" ]; then
   printf '%s|%s|%s|%s' "$gh_token" "$GitHub_Token" "$Gh_Enterprise_Token" "$github_enterprise_token"
   exit 0
 fi
-if [ "$1" = "print-token" ]; then
+if [ "$1" = "print-token" ] || { [ "$1" = "api" ] && [ "$2" = "graphql" ]; }; then
   printf 'GH_TOKEN=%s\\n' "\${GH_TOKEN:-}"
   printf 'GITHUB_TOKEN=%s\\n' "\${GITHUB_TOKEN:-}"
   printf 'MARKER=%s\\n' "\${${LODY_MANAGED_GH_TOKEN_SHA256_ENV}:-}"
@@ -409,13 +409,14 @@ describe('ensureGhShimScript', () => {
     ensureGhShimScript();
     const result = await runShim(
       {
+        FAKE_GH_PRINT_MIXED: '1',
         gh_token: 'owner',
         GitHub_Token: 'owner',
         Gh_Enterprise_Token: 'owner',
         github_enterprise_token: 'owner',
         LODY_GITHUB_REPO_FULL_NAME: 'loro-dev/lody',
       },
-      ['print-mixed-case-tokens']
+      ['api', 'graphql']
     );
     expect(result.status).toBe(0);
     expect(result.stdout).toBe('|||');
@@ -536,6 +537,106 @@ describe('ensureGhShimScript', () => {
     expect(result.status).toBe(0);
     expect(brokerRequestCount).toBe(0);
   });
+
+  it.each([
+    [
+      '--template',
+      'https://api.github.com/repos/owner/decoy',
+      'https://other.ghe.com/api/v3/repos/owner/private',
+    ],
+    [
+      '-it',
+      'https://api.github.com/repos/owner/decoy',
+      'https://other.ghe.com/api/v3/repos/owner/private',
+    ],
+    ['--template', '--hostname=github.com', '--hostname', 'other.ghe.com', 'repos/owner/private'],
+    ['--hostname', 'github.com', '--hostname', 'other.ghe.com', 'repos/owner/private'],
+  ])(
+    'never selects API credentials from consumed values: %j',
+    async (...options) => {
+      await startTokenBroker('app-token');
+      ensureGhShimScript();
+      const result = await runShim({ LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' }, [
+        'api',
+        ...options,
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('No managed GitHub credential');
+      expect(brokerRequests).toEqual([]);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
+
+  it.each([
+    [
+      '--template',
+      'https://other.ghe.com/repos/owner/decoy',
+      'https://api.github.com/repos/owner/target',
+    ],
+    ['--template', '--hostname=other.ghe.com', 'https://api.github.com/repos/owner/target'],
+    ['--hostname', 'other.ghe.com', '--hostname=github.com', 'repos/owner/target'],
+    ['-itliteral', '--cache=60m', 'https://api.github.com/repos/owner/target'],
+    [
+      '--field',
+      'url=https://other.ghe.com/repos/owner/decoy',
+      '--method=GET',
+      'https://api.github.com/repos/owner/target',
+    ],
+    ['--include=false', '--', 'https://api.github.com/repos/owner/target'],
+  ])(
+    'resolves the API endpoint with known option arities: %j',
+    async (...options) => {
+      await startTokenBroker('app-token');
+      ensureGhShimScript();
+      const args = ['api', ...options];
+      const result = await runShim({ LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' }, args);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(args.join(' ') + '\n');
+      expect(brokerRequests).toEqual([
+        { repoFullName: 'owner/target', contextToken: 'test-context' },
+      ]);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
+
+  it.each([
+    [],
+    ['--template', 'https://api.github.com/repos/owner/decoy'],
+    ['--unknown', 'https://api.github.com/repos/owner/target'],
+    ['repos/owner/target', 'https://other.ghe.com/repos/owner/private'],
+    ['--include=invalid', 'repos/owner/target'],
+  ])(
+    'rejects ambiguous API arguments without managed credentials: %j',
+    async (...options) => {
+      await startTokenBroker('app-token');
+      ensureGhShimScript();
+      const result = await runShim({ LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' }, [
+        'api',
+        ...options,
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('Cannot determine the GitHub target safely');
+      expect(brokerRequests).toEqual([]);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
+
+  it.each([false, true])(
+    'leaves unsupported command groups to owner native auth (owner=%s)',
+    async (owner) => {
+      await startTokenBroker('app-token', { allowLocalAuth: owner });
+      ensureGhShimScript();
+      const args = ['repo', 'view', '--json', 'name', 'https://other.ghe.com/owner/repo'];
+      const result = await runShim({ LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' }, args);
+      expect(result.status).toBe(owner ? 0 : 1);
+      expect(result.stdout).toBe(owner ? args.join(' ') + '\n' : '');
+      if (!owner) expect(result.stderr).toContain('Cannot determine the GitHub target safely');
+      expect(brokerRequests).toEqual([]);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
 
   it.each([
     ['pr', '--comments', 'pull'],
@@ -1069,7 +1170,7 @@ describe('broker failure contracts', () => {
       });
       expect(result.status).toBe(1);
       expect(result.stderr).toBe('Bad credentials (HTTP 401)');
-      expect(readFileSync(commandLog, 'utf8')).toBe('print-token\n');
+      expect(readFileSync(commandLog, 'utf8')).toBe('api graphql\n');
       expect(endpointRequests).toEqual([
         { endpoint: '/github-auth-context', body: { contextToken: 'test-context' } },
         {
@@ -1111,7 +1212,7 @@ const setPlatformForTest = (platform: NodeJS.Platform): (() => void) => {
 
 const runShim = async (
   env: Record<string, string | undefined>,
-  args: string[] = ['print-token'],
+  args: string[] = ['api', 'graphql'],
   brokerStateFilePath?: string
 ): Promise<{ status: number | null; stdout: string; stderr: string }> => {
   const shimPath = getGhShimHostPath(brokerStateFilePath);

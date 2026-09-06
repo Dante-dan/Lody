@@ -280,17 +280,6 @@ const readGitRemoteOrigin = async () => {
   }
 };
 
-const readFlag = (args, long, short) => {
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '--') break;
-    if (arg === long || (short && arg === short)) return args[i + 1];
-    if (arg.startsWith(long + '=')) return arg.slice(long.length + 1);
-    if (short && arg.startsWith(short) && arg.length > short.length) return arg.slice(short.length);
-  }
-  return null;
-};
-
 const parseRepo = (raw, defaultHost) => {
   const value = String(raw || '').trim();
   if (!value) return null;
@@ -427,6 +416,51 @@ const readPrIssueArgs = (args) => {
   return { subject: positionals[0], repo: issueRepo !== undefined ? issueRepo : repo };
 };
 
+// API accepts exactly one endpoint. Values can themselves look like URLs or
+// hostname flags, so only consumed positional/hostname arguments select auth.
+const readApiArgs = (args) => {
+  const arity = new Map();
+  for (const [takesValue, descriptors] of [
+    [false, 'include:i slurp paginate silent verbose help'],
+    [true, 'hostname method:X field:F raw-field:f header:H preview:p input template:t jq:q cache'],
+  ]) {
+    for (const descriptor of descriptors.split(' ')) {
+      const [long, short] = descriptor.split(':');
+      arity.set('--' + long, takesValue);
+      if (short) arity.set('-' + short, takesValue);
+    }
+  }
+  const positionals = [];
+  let hostname;
+  let options = true;
+  for (let i = 1; i < args.length; i++) {
+    const arg = args[i];
+    if (options && arg === '--') { options = false; continue; }
+    if (!options || !arg.startsWith('-') || arg === '-') { positionals.push(arg); continue; }
+    const long = arg.startsWith('--');
+    const names = long ? [arg.split('=')[0]] : [...arg.slice(1)].map((letter) => '-' + letter);
+    for (let j = 0; j < names.length; j++) {
+      const name = names[j];
+      if (!arity.has(name)) return null;
+      const attached = long ? arg.indexOf('=') : j + 2 < arg.length ? j + 1 : -1;
+      if (arity.get(name)) {
+        let value = attached >= 0 ? arg.slice(attached + 1) : args[++i];
+        if (!long && attached >= 0 && value.startsWith('=')) value = value.slice(1);
+        if (value === undefined) return null;
+        if (name === '--hostname') hostname = value;
+        break;
+      }
+      if (long && attached >= 0) {
+        if (!/^(true|false|1|0|t|f)$/i.test(arg.slice(attached + 1))) return null;
+      } else if (!long && arg[j + 2] === '=') {
+        if (!/^(true|false|1|0|t|f)$/i.test(arg.slice(j + 3))) return null;
+        break;
+      }
+    }
+  }
+  return positionals.length === 1 ? { endpoint: positionals[0], hostname } : null;
+};
+
 const readGitHubTarget = async (args) => {
   // gh also accepts inherited repo flags before the pr/issue command group.
   let groupIndex = 0;
@@ -440,31 +474,32 @@ const readGitHubTarget = async (args) => {
     args = [args[groupIndex], ...args.slice(0, groupIndex), ...args.slice(groupIndex + 1)];
   }
   const subjectCommand = args[0] === 'pr' || args[0] === 'issue';
-  const hostFlag = subjectCommand ? null : readFlag(args, '--hostname');
-  const host = String(hostFlag || process.env.GH_HOST || 'github.com').toLowerCase();
-  if (args[0] === 'api') {
-    const endpoint = args.find((arg) => /^(\\/?repos\\/|https?:\\/\\/)/.test(arg));
-    if (endpoint) {
-      const url = endpoint.startsWith('http') ? new URL(endpoint) : null;
-      const apiHost = url ? (url.hostname === 'api.github.com' ? 'github.com' : url.hostname) : host;
-      const match = (url ? url.pathname : endpoint).match(/^\\/?repos\\/([^/]+\\/[^/?#]+)/);
-      let repo = match ? match[1] : null;
-      if (repo && repo.includes('{')) {
-        const context = parseRepo(process.env.GH_REPO || await readGitRemoteOrigin() || process.env.LODY_GITHUB_REPO_FULL_NAME, host);
-        if (context) {
-          const [owner, name] = context.repo.split('/');
-          repo = repo.replace('{owner}', owner).replace('{repo}', name);
-        }
+  const apiArgs = args[0] === 'api' ? readApiArgs(args) : undefined;
+  if (apiArgs === null || (!subjectCommand && !apiArgs)) return { host: null, repo: null };
+  const host = String(apiArgs?.hostname || process.env.GH_HOST || 'github.com').toLowerCase();
+  if (apiArgs) {
+    const endpoint = apiArgs.endpoint;
+    let url = null;
+    try { if (endpoint.includes('://')) url = new URL(endpoint); }
+    catch { return { host: null, repo: null }; }
+    const apiHost = url ? (url.hostname === 'api.github.com' ? 'github.com' : url.hostname) : host;
+    const match = (url ? url.pathname : endpoint).match(/^\\/?repos\\/([^/]+\\/[^/?#]+)/);
+    let repo = match ? match[1] : null;
+    if (repo && repo.includes('{')) {
+      const context = parseRepo(process.env.GH_REPO || await readGitRemoteOrigin() || process.env.LODY_GITHUB_REPO_FULL_NAME, host);
+      if (context) {
+        const [owner, name] = context.repo.split('/');
+        repo = repo.replace('{owner}', owner).replace('{repo}', name);
       }
-      return { host: apiHost, repo: repo && !repo.includes('{') ? repo : null };
     }
-    // API calls honor GH_HOST/--hostname, not a git remote's hostname.
-    return { host, repo: process.env.LODY_GITHUB_REPO_FULL_NAME || null };
+    // Repository-less API endpoints use the workspace's credential context.
+    return { host: apiHost, repo: repo && !repo.includes('{') ? repo :
+      (!match && !url ? process.env.LODY_GITHUB_REPO_FULL_NAME || null : null) };
   }
   // PR/Issue subjects override ambient repositories; option values do not.
   const parsed = subjectCommand ? readPrIssueArgs(args) : undefined;
   if (parsed === null) return { host: null, repo: null };
-  const subject = subjectCommand ? parsed?.subject : args[2];
+  const subject = parsed.subject;
   if (subject && /^https?:\\/\\//i.test(subject)) {
     try {
       const url = new URL(subject);
@@ -473,7 +508,7 @@ const readGitHubTarget = async (args) => {
     } catch { return { host, repo: null }; }
   }
   // Never rescan option values (e.g. a template containing '-Rowner/repo').
-  const explicitRepo = (subjectCommand ? parsed.repo : readFlag(args, '--repo', '-R')) || process.env.GH_REPO;
+  const explicitRepo = parsed.repo || process.env.GH_REPO;
   if (explicitRepo) return parseRepo(explicitRepo, host) || { host, repo: null };
   return parseRepo(await readGitRemoteOrigin(), host) ||
     parseRepo(process.env.LODY_GITHUB_REPO_FULL_NAME || process.env.GITHUB_REPOSITORY, host) ||
