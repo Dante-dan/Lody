@@ -50,6 +50,13 @@ rolls `docPersistedVersions` back and re-queues the document, and `MetaPersister
 advances `lastPersistedVersion` only after `save()` resolves. So this is a UX and
 correctness-of-failure problem, not a durability bug.
 
+It is, however, a durability WINDOW: nothing re-triggers a flush after a failure, so the
+re-queued document waits for the next doc event and the meta Flock for its next
+subscription callback. A transient failure therefore leaves the last change unpersisted
+until the user happens to edit again — filed upstream as
+[loro-dev/loro-repo#130](https://github.com/loro-dev/loro-repo/issues/130), which is
+orthogonal to a full disk (where nothing can be persisted anyway) and out of scope here.
+
 ### Alternatives considered
 
 **An in-memory repo fallback**, mirroring `ResilientRemoteCursorStore`. Rejected: that
@@ -64,6 +71,12 @@ abstract; it converts a visible failure into silent data loss.
 once), listed as optional in the issue. Rejected: on a full disk the reopen fails too,
 and a self-healing storage layer makes it harder for the app to fail closed. Sticky
 classification plus an explicit restart is the clearer contract.
+
+Reinforced afterwards: `ensureDb` caches the promise from a FAILED open and never clears
+it, unlike the `close()` and `versionchange` paths, so the adaptor instance is already
+dead for the page lifetime once opening fails
+([loro-dev/loro-repo#131](https://github.com/loro-dev/loro-repo/issues/131)). An
+app-level reopen would have been building on a layer that cannot reopen itself.
 
 **Patching `patches/loro-repo.patch`** to classify inside the library, which the issue
 suggested for speed. Rejected: `StorageAdapter` is a public interface and every method

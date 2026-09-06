@@ -41,6 +41,12 @@ room，也开 `readwrite` 事务，因此会话创建是在**读路径**上就�
 回滚并把文档重新入队，`MetaPersister` 也只在 `save()` 成功之后才推进 `lastPersistedVersion`。
 所以这是一个失败表现的正确性与体验问题，不是持久性缺陷。
 
+但它确实是一个**持久性窗口**问题：失败后没有任何东西会重新触发 flush，重新入队的文档要等下一次
+doc event，meta Flock 要等下一次订阅回调。因此一次瞬时失败会让最后一次改动一直不落盘，直到用户
+恰好又编辑了点什么。已上报为
+[loro-dev/loro-repo#130](https://github.com/loro-dev/loro-repo/issues/130)，它与磁盘写满
+正交（后者本来就什么都存不下），不在本次范围内。
+
 ### 考虑过的替代方案
 
 **内存版仓库兜底**，照搬 `ResilientRemoteCursorStore`。否决：那个 store 之所以能安全降级，是
@@ -53,6 +59,11 @@ room，也开 `readwrite` 事务，因此会话创建是在**读路径**上就�
 **在 `InvalidStateError` 时自动重开**（`db.close()`、清掉缓存的 promise、重试一次），issue 里
 列为可选项。否决：磁盘满时重开大概率同样失败，而会自愈的存储层会让应用更难失败关闭。粘性分类
 加上显式重启是更清晰的契约。
+
+事后得到进一步印证：`ensureDb` 会把**失败**的 open promise 缓存下来且从不清空，与 `close()`
+和 `versionchange` 两条路径的做法相反，因此一旦开库失败，该 adaptor 实例在整个页面生命周期内
+就已经是死的（[loro-dev/loro-repo#131](https://github.com/loro-dev/loro-repo/issues/131)）。
+应用层的重开只会建立在一个自己都无法重开的层之上。
 
 **改 `patches/loro-repo.patch`** 在库内做分类，这是 issue 出于速度考虑建议的做法。否决：
 `StorageAdapter` 是公开接口且所有方法都是 `async`，因此裸的同步 `db.transaction()` 抛出本来就
