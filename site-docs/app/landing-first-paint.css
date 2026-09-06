@@ -1,19 +1,35 @@
-/* First-paint subset for the landing hero H1. Inlined by
+/* First-paint subset for the landing hero + nav. Inlined by
    finalize-prerender-html.mjs; underwater.css / site-nav.css stay the full
-   source. Keep this file small and system-font only — no webfonts. */
+   source. Must match the final first-screen layout, background, and type —
+   deferred CSS must not restyle this chrome. System-font only; no webfonts. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
 
 html {
   color-scheme: dark;
   background: rgb(0, 2, 6);
+  scrollbar-width: none;
 }
 
-html:not(.dark) {
+html.light {
   color-scheme: light;
   background: rgb(248, 251, 255);
 }
 
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 body {
   margin: 0;
+  overflow-x: clip;
+  font-family: var(--lody-docs-font-sans, ui-sans-serif, system-ui, sans-serif);
 }
 
 body.flex {
@@ -35,25 +51,26 @@ body.flex-col {
   min-height: 100dvh;
   flex-direction: column;
   overflow-x: clip;
-  color: hsl(209 55% 14%);
+  color: hsl(205 100% 96%);
   --site-content-max: 1200px;
   --site-content-width: min(var(--site-content-max), 92vw);
   --lody-docs-font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
     sans-serif;
   --lody-docs-font-heading: var(--lody-docs-font-sans);
+  --landing-ink: 205 100% 96%;
+  --landing-ink-muted: 203 38% 78%;
+  --landing-border: 200 70% 72%;
+  --landing-surface-1: 213 62% 9%;
+  --landing-primary: 195 100% 64%;
+}
+
+html.light .underwater-landing {
+  color: hsl(209 55% 14%);
   --landing-ink: 209 55% 14%;
   --landing-ink-muted: 207 38% 24%;
   --landing-border: 205 45% 38%;
   --landing-surface-1: 190 52% 97%;
   --landing-primary: 192 74% 40%;
-}
-
-.dark .underwater-landing {
-  color: hsl(205 100% 96%);
-  --landing-ink: 205 100% 96%;
-  --landing-ink-muted: 203 38% 78%;
-  --landing-border: 200 70% 72%;
-  --landing-surface-1: 213 62% 9%;
 }
 
 .underwater-bg {
@@ -67,16 +84,16 @@ body.flex-col {
   height: 100lvh;
   min-height: 100%;
   pointer-events: none;
+  background: linear-gradient(to bottom, rgb(0, 2, 6) 0%, rgb(2, 7, 16) 50%, rgb(0, 1, 4) 100%);
+}
+
+html.light .underwater-bg {
   background: linear-gradient(
     to bottom,
     rgb(248, 251, 255) 0%,
     rgb(184, 210, 240) 52%,
     rgb(144, 182, 232) 100%
   );
-}
-
-.dark .underwater-bg {
-  background: linear-gradient(to bottom, rgb(0, 2, 6) 0%, rgb(2, 7, 16) 50%, rgb(0, 1, 4) 100%);
 }
 
 .underwater-bg__overlay {
@@ -127,6 +144,7 @@ body.flex-col {
   font-family: var(--lody-docs-font-sans);
   font-size: clamp(0.82rem, 1.45vw, 0.95rem);
   font-weight: 500;
+  letter-spacing: -0.01em;
 }
 
 .underwater-hero__title {
@@ -140,6 +158,11 @@ body.flex-col {
   letter-spacing: -0.03em;
   color: hsl(var(--landing-ink));
   text-wrap: balance;
+  text-shadow: 0 2px 24px hsl(214 90% 4% / 0.6);
+}
+
+html.light .underwater-hero__title {
+  text-shadow: 0 1px 2px hsl(210 50% 14% / 0.16);
 }
 
 .underwater-hero__lead {
@@ -219,6 +242,7 @@ body.flex-col {
   border-bottom: 1px solid hsl(var(--landing-border) / 0.72);
   background: hsl(var(--landing-surface-1) / 0.86);
   color: hsl(var(--landing-ink));
+  backdrop-filter: saturate(1.3) blur(12px);
 }
 
 .site-nav__inner {

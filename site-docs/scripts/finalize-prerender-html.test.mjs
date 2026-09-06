@@ -81,16 +81,20 @@ await test('landing first paint inlines critical CSS and defers every stylesheet
   const next = finalizePrerenderHtml(landingHtml, '/* c */ .underwater-hero__title{color:red}');
   assert.match(next, /data-landing-first-paint/u);
   assert.match(next, /\.underwater-hero__title\{color:red\}/u);
-  assert.match(next, /media="print" onload="this\.media='all'"/u);
+  assert.match(next, /data-lody-defer-css/u);
+  assert.match(next, /data-lody-apply-css/u);
+  assert.doesNotMatch(next, /onload="this\.media='all'"/u);
   assert.match(next, /<noscript><link rel="stylesheet" href="\/assets\/index\.css"\/><\/noscript>/u);
   assert.doesNotMatch(next, /logo-96\.png/u);
 });
 
-await test('docs keep index.css render-blocking and only defer page-only sheets', () => {
-  const next = deferNonCriticalStylesheets(docsHtml);
+await test('docs keep index.css render-blocking so reading chrome cannot FOUC', () => {
+  const next = finalizePrerenderHtml(docsHtml);
+  assert.doesNotMatch(next, /data-landing-first-paint/u);
+  assert.doesNotMatch(next, /data-lody-defer-css/u);
   assert.match(next, /<link rel="stylesheet" href="\/assets\/index\.css"\/>/u);
+  assert.match(next, /onload="this\.media='all'"/u);
   assert.match(next, /legal-abc\.css/u);
-  assert.match(next, /media="print"/u);
 });
 
 await test('injectLandingFirstPaintStyle is a no-op off the landing', () => {

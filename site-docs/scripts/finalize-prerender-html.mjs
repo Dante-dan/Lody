@@ -40,22 +40,42 @@ function stylesheetHref(tag) {
   return /(?:^|\s)href=["']([^"']+)["']/iu.exec(tag)?.[1] ?? '';
 }
 
-export function deferStylesheetTag(tag) {
-  if (/media=["']print["']/iu.test(tag) || /onload=/iu.test(tag)) return tag;
-  const deferred = tag
-    .replace(/\smedia=["'][^"']*["']/iu, '')
-    .replace(/<link\b/iu, '<link media="print" onload="this.media=\'all\'"');
+/**
+ * Landing: download at print priority, apply after the first painted frame so
+ * the inlined first-screen CSS can become LCP. That inlined sheet must already
+ * match final hero/nav layout, background, and type — applying the bundle must
+ * not restyle first-screen chrome.
+ *
+ * Docs and other pages: only unused page-only sheets are deferred, and they
+ * apply on load. `index-*.css` stays render-blocking so reading chrome cannot
+ * FOUC.
+ */
+export function deferStylesheetTag(tag, { applyAfterPaint } = { applyAfterPaint: false }) {
+  if (/data-lody-defer-css/iu.test(tag) || /media=["']print["']/iu.test(tag)) return tag;
+  const stripped = tag.replace(/\smedia=["'][^"']*["']/iu, '');
+  const deferred = applyAfterPaint
+    ? stripped.replace(/<link\b/iu, '<link media="print" data-lody-defer-css')
+    : stripped.replace(/<link\b/iu, '<link media="print" onload="this.media=\'all\'"');
   return `${deferred}<noscript>${tag}</noscript>`;
 }
 
 export function deferNonCriticalStylesheets(html) {
   const landing = isLandingDocument(html);
   return html.replace(/<link\b[^>]*\brel=["']stylesheet["'][^>]*>/giu, (tag) => {
-    if (landing || isPageOnlyStylesheetHref(stylesheetHref(tag))) {
-      return deferStylesheetTag(tag);
+    if (landing) return deferStylesheetTag(tag, { applyAfterPaint: true });
+    if (isPageOnlyStylesheetHref(stylesheetHref(tag))) {
+      return deferStylesheetTag(tag, { applyAfterPaint: false });
     }
     return tag;
   });
+}
+
+export const APPLY_DEFERRED_CSS_SCRIPT =
+  '<script data-lody-apply-css>(function(){function apply(){var n=document.querySelectorAll("link[data-lody-defer-css]");for(var i=0;i<n.length;i++)n[i].media="all";}function afterPaint(){requestAnimationFrame(function(){requestAnimationFrame(apply);});}if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",afterPaint);else afterPaint();})();</script>';
+
+export function injectApplyDeferredCssScript(html) {
+  if (/data-lody-apply-css/u.test(html) || !/data-lody-defer-css/u.test(html)) return html;
+  return html.replace(/<\/head>/iu, `${APPLY_DEFERRED_CSS_SCRIPT}</head>`);
 }
 
 export function stripLandingImagePreloads(html) {
@@ -81,11 +101,12 @@ export function injectLandingFirstPaintStyle(html, css) {
   return html.replace(/<head([^>]*)>/iu, `<head$1>${style}`);
 }
 
-export function finalizePrerenderHtml(html, firstPaintCss = '') {
+export function finalizePrerenderHtml(html, landingCss = '') {
   let next = stripNonCriticalModulePreload(html);
   next = stripLandingImagePreloads(next);
-  next = injectLandingFirstPaintStyle(next, firstPaintCss);
+  next = injectLandingFirstPaintStyle(next, landingCss);
   next = deferNonCriticalStylesheets(next);
+  next = injectApplyDeferredCssScript(next);
   return next;
 }
 
@@ -105,11 +126,11 @@ function walkHtmlFiles(dir, files = []) {
 }
 
 export function finalizePrerenderHtmlTree(clientRoot) {
-  const firstPaintCss = readFileSync(path.join(packageRoot, 'app/landing-first-paint.css'), 'utf8');
+  const landingCss = readFileSync(path.join(packageRoot, 'app/landing-first-paint.css'), 'utf8');
   const files = walkHtmlFiles(clientRoot);
   for (const file of files) {
     const html = readFileSync(file, 'utf8');
-    const next = finalizePrerenderHtml(html, firstPaintCss);
+    const next = finalizePrerenderHtml(html, landingCss);
     if (next !== html) {
       writeFileSync(file, next);
     }
