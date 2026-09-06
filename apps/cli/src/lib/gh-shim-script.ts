@@ -399,6 +399,7 @@ const readRepoCommandArgs = (args) => {
   const arity = new Map([['--repo', true], ['-R', true], ['--help', false], ['-h', false]]);
   const positionals = [];
   let command;
+  let help = false;
   let repo;
   let issueRepo;
   let branchRepo;
@@ -441,14 +442,14 @@ const readRepoCommandArgs = (args) => {
         if (args[0] === 'issue' && command === 'close' && name === '--duplicate-of') duplicate = value;
         break;
       }
-      if (long && attached >= 0) {
-        if (!/^(true|false|1|0|t|f)$/i.test(arg.slice(attached + 1))) return null;
-      } else if (!long && arg[j + 2] === '=') {
-        if (!/^(true|false|1|0|t|f)$/i.test(arg.slice(j + 3))) return null;
-        break;
-      }
+      const value = long && attached >= 0 ? arg.slice(attached + 1) :
+        !long && arg[j + 2] === '=' ? arg.slice(j + 3) : 'true';
+      if (!/^(true|false|1|0|t|f)$/i.test(value)) return null;
+      if (name === '--help' || name === '-h') help = /^(true|1|t)$/i.test(value);
+      if (!long && arg[j + 2] === '=') break;
     }
   }
+  if (help) return { help, command };
   if (!command) return null;
   const subjectCommand = args[0] === 'pr' || args[0] === 'issue';
   if (subjectCommand && ['create', 'list', 'status'].includes(command) && positionals.length) return null;
@@ -533,7 +534,7 @@ const readApiArgs = (args) => {
   return help || positionals.length === 1 ? { endpoint: positionals[0], hostname, help } : null;
 };
 
-const readGitHubTarget = async (args) => {
+const normalizeRepoArgs = (args) => {
   // gh also accepts inherited repo flags before repository command groups.
   let groupIndex = 0;
   while (groupIndex < args.length) {
@@ -545,6 +546,10 @@ const readGitHubTarget = async (args) => {
   if (groupIndex && Object.hasOwn(repoCommandFlags, args[groupIndex])) {
     args = [args[groupIndex], ...args.slice(0, groupIndex), ...args.slice(groupIndex + 1)];
   }
+  return args;
+};
+
+const readGitHubTarget = async (args) => {
   const repoCommand = Object.hasOwn(repoCommandFlags, args[0]);
   const apiArgs = args[0] === 'api' ? readApiArgs(args) : undefined;
   if (apiArgs === null || (!repoCommand && !apiArgs)) return { host: null, repo: null };
@@ -586,6 +591,36 @@ const readGitHubTarget = async (args) => {
   return parseRepo(await readGitRemoteOrigin(), host) ||
     parseRepo(process.env.LODY_GITHUB_REPO_FULL_NAME || process.env.GITHUB_REPOSITORY, host) ||
     { host, repo: null };
+};
+
+const helpGroups = new Set([...Object.keys(repoCommandFlags), ...
+  'agent-task alias attestation auth codespace config discussion extension gist gpg-key org preview project ruleset search secret skill ssh-key variable'.split(' ')]);
+
+const readCredentialFreeArgs = (args) => {
+  if (!args.length || (args.length === 1 && args[0] === '-h')) return ['help', '--'];
+  if (args.length === 1 && /^(version|--version(?:=(true|1|t))?)$/i.test(args[0])) return ['--version'];
+  const parsed = args[0] === 'api' ? readApiArgs(args) :
+    Object.hasOwn(repoCommandFlags, args[0]) ? readRepoCommandArgs(args) : null;
+  if (parsed?.help) return ['help', '--', args[0], ...(parsed.command ? [parsed.command] : [])];
+  // A successfully consumed value (e.g. repo edit -h=true) is never rescanned as help.
+  if (parsed) return null;
+  let parts;
+  if (args[0] === 'help') return ['help', '--', ...args.slice(1)];
+  else if (helpGroups.has(args[0]) && (args.length === 1 || (args.length === 2 && args[1] === '-h'))) parts = [args[0]];
+  else {
+    let help = false;
+    let options = true;
+    parts = [];
+    for (const arg of args) {
+      if (arg === '--') { options = false; continue; }
+      const match = options && /^--help(?:=(true|false|1|0|t|f))?$/i.exec(arg);
+      if (match) help = !match[1] || /^(true|1|t)$/i.test(match[1]);
+      else parts.push(arg);
+    }
+    if (!help) return null;
+  }
+  // Outside the arity table, accept plain help paths only, never unknown option values.
+  return parts.every((part) => !part.startsWith('-')) ? ['help', '--', ...parts] : null;
 };
 
 // The daemon chooses this workspace binding when generating the wrapper.
@@ -674,23 +709,37 @@ const mayUseLocalAuth = async () => {
 const buildGhEnv = async (ghCommand, args) => {
   const env = { ...process.env };
   clearManagedTokenEnv(env);
-  const apiHelp = args[0] === 'api' && readApiArgs(args)?.help;
+  const normalizedArgs = normalizeRepoArgs(args);
+  const helpArgs = readCredentialFreeArgs(normalizedArgs);
   // Neither a missing environment marker nor an inherited token proves ownership.
-  const allowLocalAuth = apiHelp ? false : await mayUseLocalAuth();
+  const allowLocalAuth = helpArgs ? false : await mayUseLocalAuth();
   if (!allowLocalAuth) {
     for (const key of Object.keys(env)) {
       if (GITHUB_CREDENTIAL_ENV_KEYS.includes(key.toUpperCase())) delete env[key];
     }
   }
   // Help needs no authority. Canonical arguments prevent any user operation.
-  if (apiHelp) return { env, args: ['api', '--help'] };
+  if (helpArgs) {
+    // Help must not load owner aliases/extensions or start background authentication.
+    const directory = fs.mkdtempSync(path.join(require('os').tmpdir(), 'lody-gh-help-'));
+    process.on('exit', () => { try { fs.rmSync(directory, { recursive: true, force: true }); } catch {} });
+    env.GH_CONFIG_DIR = directory;
+    env.XDG_DATA_HOME = directory;
+    env.XDG_STATE_HOME = directory;
+    env.XDG_CACHE_HOME = directory;
+    env.GH_PAGER = '';
+    env.GH_NO_UPDATE_NOTIFIER = '1';
+    env.GH_NO_EXTENSION_UPDATE_NOTIFIER = '1';
+    // The separator keeps gh's extension-help rewrite from executing a command.
+    return { env, args: helpArgs };
+  }
   // Authentication management must reach the owner's real gh unchanged, even
   // when no login exists yet; injecting an App token prevents gh auth login.
   if (args[0] === 'auth') {
     if (allowLocalAuth) return { env };
     throw new Error('GitHub authentication management is unavailable for this session.');
   }
-  const target = await readGitHubTarget(args);
+  const target = await readGitHubTarget(normalizedArgs);
   if (!target.host) {
     // The owner's native gh can resolve ambiguous arguments itself. A shared
     // session must stop rather than risk selecting another host's credentials.

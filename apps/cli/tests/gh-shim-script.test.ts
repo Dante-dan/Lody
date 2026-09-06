@@ -122,43 +122,138 @@ describe('ensureGhShimScript', () => {
   );
 
   it.each([
-    ['--help'],
-    ['-h'],
-    ['--help=true'],
-    ['https://other.ghe.com/repos/owner/repo', '--help'],
+    [
+      ['api', '--help'],
+      ['help', '--', 'api'],
+    ],
+    [
+      ['api', '-h'],
+      ['help', '--', 'api'],
+    ],
+    [
+      ['api', '--help=true'],
+      ['help', '--', 'api'],
+    ],
+    [
+      ['api', 'https://other.ghe.com/repos/owner/repo', '--help'],
+      ['help', '--', 'api'],
+    ],
+    [['--help'], ['help', '--']],
+    [['-h'], ['help', '--']],
+    [['help'], ['help', '--']],
+    [
+      ['help', '--help'],
+      ['help', '--', '--help'],
+    ],
+    [
+      ['--help', '--', 'pr'],
+      ['help', '--', 'pr'],
+    ],
+    [['--version'], ['--version']],
+    [['version'], ['--version']],
+    [['pr'], ['help', '--', 'pr']],
+    [
+      ['pr', '--help'],
+      ['help', '--', 'pr'],
+    ],
+    [['run'], ['help', '--', 'run']],
+    [
+      ['run', '--help'],
+      ['help', '--', 'run'],
+    ],
+    [
+      ['pr', 'view', '--help'],
+      ['help', '--', 'pr', 'view'],
+    ],
+    [
+      ['run', 'list', '--help'],
+      ['help', '--', 'run', 'list'],
+    ],
+    [
+      ['repo', 'clone', '--help'],
+      ['help', '--', 'repo', 'clone'],
+    ],
+    [
+      ['help', 'pr', 'view'],
+      ['help', '--', 'pr', 'view'],
+    ],
+    [
+      ['repo', 'synthetic-custom-alias', '--help'],
+      ['help', '--', 'repo', 'synthetic-custom-alias'],
+    ],
+    [
+      ['help', 'synthetic-custom-alias'],
+      ['help', '--', 'synthetic-custom-alias'],
+    ],
+    [
+      ['extension', 'exec', '--help'],
+      ['help', '--', 'extension', 'exec'],
+    ],
   ])(
-    'runs API help without credentials, broker access or auth probes: %j',
-    async (...options) => {
+    'runs isolated help/version without credentials, broker access or auth probes: %j',
+    async (args, expectedArgs) => {
       const log = path.join(tempHomeDir!, 'help-invocations');
+      const directoryLog = path.join(tempHomeDir!, 'help-directories');
+      const ownerConfig = path.join(tempHomeDir!, 'owner-config');
+      const ownerData = path.join(tempHomeDir!, 'owner-data');
+      for (const dir of [ownerConfig, ownerData]) {
+        mkdirSync(dir);
+        writeFileSync(path.join(dir, 'owner-sentinel'), 'synthetic owner config/extensions');
+      }
       writeFakeGh(`#!/bin/sh
 printf '%s\\n' "$*" >> "$FAKE_GH_EXEC_LOG"
 if [ -n "$GH_TOKEN$GITHUB_TOKEN$GH_ENTERPRISE_TOKEN$GITHUB_ENTERPRISE_TOKEN" ]; then exit 91; fi
+for dir in "$GH_CONFIG_DIR" "$XDG_DATA_HOME" "$XDG_STATE_HOME" "$XDG_CACHE_HOME"; do
+  if [ "$dir" = "$OWNER_CONFIG" ] || [ "$dir" = "$OWNER_DATA" ]; then exit 92; fi
+  if [ ! -d "$dir" ] || [ -n "$(/bin/ls -A "$dir")" ]; then exit 93; fi
+  printf '%s\\n' "$dir" >> "$HELP_DIRECTORY_LOG"
+done
+if [ -z "$GH_NO_UPDATE_NOTIFIER" ] || [ -z "$GH_NO_EXTENSION_UPDATE_NOTIFIER" ]; then exit 94; fi
 printf '%s\\n' "$*"
 `);
       ensureGhShimScript();
       const result = await runShim(
-        { LODY_GIT_CRED_CONTEXT_TOKEN: undefined, FAKE_GH_EXEC_LOG: log, GH_TOKEN: 'owner-token' },
-        ['api', ...options]
+        {
+          LODY_GIT_CRED_CONTEXT_TOKEN: undefined,
+          FAKE_GH_EXEC_LOG: log,
+          HELP_DIRECTORY_LOG: directoryLog,
+          GH_TOKEN: 'owner-token',
+          GH_CONFIG_DIR: ownerConfig,
+          XDG_DATA_HOME: ownerData,
+          XDG_STATE_HOME: ownerData,
+          XDG_CACHE_HOME: ownerData,
+          OWNER_CONFIG: ownerConfig,
+          OWNER_DATA: ownerData,
+        },
+        args
       );
       expect(result.status).toBe(0);
-      expect(result.stdout).toBe('api --help\n');
-      expect(readFileSync(log, 'utf8')).toBe('api --help\n');
+      expect(result.stdout).toBe(expectedArgs.join(' ') + '\n');
+      expect(readFileSync(log, 'utf8')).toBe(expectedArgs.join(' ') + '\n');
       expect(endpointRequests).toEqual([]);
+      const temporaryDirectories = readFileSync(directoryLog, 'utf8').trim().split('\n');
+      expect(temporaryDirectories).toHaveLength(4);
+      for (const dir of temporaryDirectories) expect(existsSync(dir)).toBe(false);
     },
     SHIM_INTEGRATION_TIMEOUT_MS
   );
 
   it.each([
-    ['--help=false'],
-    ['--help', '--help=false'],
-    ['-h=false'],
-    ['--template', '--help'],
-    ['-t--help'],
-    ['--field', 'x=--help'],
-    ['--', '--help'],
-  ])('does not treat disabled or consumed help as an auth bypass: %j', async (...options) => {
+    ['api', '--help=false'],
+    ['api', '--help', '--help=false'],
+    ['api', '-h=false'],
+    ['api', '--template', '--help'],
+    ['api', '-t--help'],
+    ['api', '--field', 'x=--help'],
+    ['api', '--', '--help'],
+    ['pr', 'view', '--template', '--help'],
+    ['repo', 'edit', '-h', 'https://github.com/owner/homepage'],
+    ['repo', 'edit', '-h=true'],
+    ['pr', 'view', '--', '--help'],
+    ['pr', '--', '--help'],
+  ])('does not treat disabled or consumed help as an auth bypass: %j', async (...args) => {
     ensureGhShimScript();
-    const result = await runShim({ LODY_GIT_CRED_CONTEXT_TOKEN: undefined }, ['api', ...options]);
+    const result = await runShim({ LODY_GIT_CRED_CONTEXT_TOKEN: undefined }, args);
     expect(result.status).toBe(1);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('context is required');

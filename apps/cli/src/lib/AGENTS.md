@@ -43,7 +43,7 @@ control plane.
   Managed tokens require github.com and HTTPS API URLs; pin GH_HOST to github.com.
 - Parse API/repository flags by arity; values cannot select hosts, unknown flags fail closed.
   Subject/endpoint URLs override ambient repos. Check secondary targets; issue edit uses the first
-  URL and one repo. API help runs canonical arguments without credentials; values cannot enable it.
+  URL and one repo. Help/version clear credentials, isolate config/data and run canonical args only.
 - Only owners write shared BASH_ENV/ZDOTDIR. Non-owner hooks use separate paths, source no owner
   files, clear tokens and restore shim PATH. Same-OS-user filesystem/keychain and shell modes
   replacing/ignoring hooks remain outside this boundary.
