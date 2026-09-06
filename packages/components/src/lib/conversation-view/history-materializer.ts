@@ -73,10 +73,22 @@ export const isContainerSchema = (schema: SchemaType | undefined): boolean =>
 /** `definition[key]`, else the map's catchall, else nothing. */
 export function getMapFieldSchema(
   schema: SchemaType | undefined,
-  key: string
+  key: string,
+  value?: unknown
 ): SchemaType | undefined {
   if (!isMapSchema(schema)) return undefined;
-  if (Object.prototype.hasOwnProperty.call(schema.definition, key)) return schema.definition[key];
+  if (Object.prototype.hasOwnProperty.call(schema.definition, key)) {
+    const field = schema.definition[key];
+    // Optional write-layout hints remain compatible with unpatched Mirror.
+    const storage =
+      field?.type === 'any'
+        ? (field.options as InferContainerOptions & { storageSchema?: SchemaType }).storageSchema
+        : undefined;
+    const kind = storage?.getContainerType();
+    return storage && kind && (value === undefined || matchesContainerType(kind, value))
+      ? storage
+      : field;
+  }
   return schema.catchallType;
 }
 
@@ -249,7 +261,7 @@ export function writeMapEntry(
   baseInfer: MaterializeInfer
 ): void {
   if (schema) {
-    const fieldSchema = getMapFieldSchema(schema, key);
+    const fieldSchema = getMapFieldSchema(schema, key, item);
     if (isAnySchema(fieldSchema)) {
       const infer = applySchemaToInfer(fieldSchema, baseInfer);
       if (inferContainerType(item, infer)) insertContainerIntoMap(map, undefined, key, item, infer);

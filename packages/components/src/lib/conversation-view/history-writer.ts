@@ -143,7 +143,7 @@ function diffMap(
     if (key === CID_KEY) continue;
     const oldItem = oldValue[key];
     const newItem = newValue[key];
-    const fieldSchema = getMapFieldSchema(schema, key);
+    const fieldSchema = getMapFieldSchema(schema, key, newItem);
     if (fieldSchema?.type === 'ignore') continue;
     if (newItem === undefined) {
       if (key in oldValue && oldItem !== undefined) map.delete(key);
@@ -174,6 +174,24 @@ function diffMap(
       continue;
     }
     if (oldItem === newItem) continue;
+    // Schema choices govern new fields; string edits preserve the existing
+    // representation so legacy Text identities and primitive values survive.
+    if (
+      (!fieldSchema || fieldSchema.type === 'any' || fieldSchema.type === 'loro-text') &&
+      !schemaHasTransform(fieldSchema) &&
+      typeof oldItem === 'string' &&
+      typeof newItem === 'string'
+    ) {
+      const stored = map.get(key);
+      if (isContainer(stored) && stored.kind() === 'Text') {
+        (stored as LoroText).update(newItem);
+        continue;
+      }
+      if (typeof stored === 'string') {
+        map.set(key, newItem);
+        continue;
+      }
+    }
     if (
       containerType &&
       matchesContainerType(containerType, newItem) &&

@@ -19,10 +19,11 @@
  *   scroll      one ensureRange of 30 turns at a rotating offset on an open view
  *               (20+ iterations; read the p99 column)
  *   stream      one text delta appended to the tail turn with the view subscribed
+ *   append      append one user turn through HistoryWriter with the view subscribed
  *   stream(Mirror) the same delta with a full Mirror subscribed instead
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -41,6 +42,8 @@ import { Bench } from 'tinybench';
 // Benchmarks import the view implementation by path: this package stays a
 // pure domain package with no dependency on `@lody/components`.
 import { createConversationViewFromDoc } from '../../components/src/lib/conversation-view/create-conversation-view-from-doc';
+import { createHistoryWriter } from '../../components/src/lib/conversation-view/history-writer';
+import { measuredLatency } from './latency-stats';
 import type { ConversationView } from '../../components/src/lib/conversation-view/types';
 import { materializeReplay } from '../src/materialize';
 import { buildSyntheticReplay, DEFAULT_SYNTHETIC_REPLAY } from './fixture';
@@ -61,15 +64,18 @@ function readFlag(name: string): string | null {
 
 function loadFixture(): { history: SessionHistoryInput[]; label: string } {
   const flag = readFlag('fixture');
-  const file = flag ? expandHome(flag) : path.join(os.tmpdir(), 'lody-conversation-fixture.json');
-  if (flag || existsSync(file)) {
+  const file = flag ? expandHome(flag) : null;
+  if (file) {
     const parsed = JSON.parse(readFileSync(file, 'utf8')) as SessionHistoryInput[];
     if (!Array.isArray(parsed) || parsed.length === 0) {
       throw new Error(`${file} is not a non-empty history array; run bench:capture first`);
     }
     return { history: parsed, label: `desensitized fixture ${file}` };
   }
-  const replay = buildSyntheticReplay(DEFAULT_SYNTHETIC_REPLAY);
+  const turns = Number(readFlag('turns') ?? DEFAULT_SYNTHETIC_REPLAY.turns);
+  if (!Number.isSafeInteger(turns) || turns < 1)
+    throw new Error('--turns must be a positive integer');
+  const replay = buildSyntheticReplay({ ...DEFAULT_SYNTHETIC_REPLAY, turns });
   const history = materializeReplay({
     provider: { cliType: 'builtin', agentType: 'claude' },
     acpSessionId: 'bench-acp-session' as never,
@@ -203,6 +209,16 @@ async function main(): Promise<void> {
     10
   );
 
+  if (
+    !scales.length ||
+    !Number.isSafeInteger(iterations) ||
+    iterations < 1 ||
+    !Number.isSafeInteger(baselineIterations) ||
+    baselineIterations < 0
+  ) {
+    throw new Error('Use positive scales/iterations and non-negative baseline-iterations');
+  }
+
   process.stdout.write(
     `fixture: ${label}\n${base.length} turns, ${countItems(base)} message items\n` +
       `scales: ${scales.join(', ')}   iterations: ${iterations}` +
@@ -212,10 +228,10 @@ async function main(): Promise<void> {
   for (const scale of scales) {
     const history = scaleHistory(base, scale);
     const snapshot = buildSnapshot(history);
-    const preImported = importedDoc(snapshot);
 
     // Long-lived state for the scroll and stream tasks.
-    const scrollView = openView(importedDoc(snapshot));
+    const scrollDoc = importedDoc(snapshot);
+    const scrollView = openView(scrollDoc);
     let scrollOffset = 0;
     const streamDoc = importedDoc(snapshot);
     const streamView = openView(streamDoc);
@@ -232,6 +248,10 @@ async function main(): Promise<void> {
       initialState: { session: { id: BENCH_SESSION_ID }, history: [] },
     });
     const mirrorStreamText = tailText(mirrorStreamDoc);
+    const appendDoc = importedDoc(snapshot);
+    const appendView = openView(appendDoc);
+    const appendWriter = createHistoryWriter(appendDoc, appendView);
+    let appended = 0;
     let delta = 0;
 
     // `time: 0` with an explicit iteration count keeps every task at exactly the
@@ -294,6 +314,19 @@ async function main(): Promise<void> {
         streamText.insert(streamText.length, ` token${delta}`);
         streamDoc.commit();
       })
+      .add('append', () => {
+        appended += 1;
+        appendWriter.append({
+          id: `bench-append-${appended}`,
+          role: 'user',
+          timestamp: '2026-01-01T00:00:00.000Z',
+          items: [{ type: 'text', text: 'next user turn' }],
+          fileDiff: [],
+        });
+        if (appendView.turnCount !== history.length + appended) {
+          throw new Error('append did not update the view');
+        }
+      })
       .add('stream(Mirror)', () => {
         delta += 1;
         mirrorStreamText.insert(mirrorStreamText.length, ` token${delta}`);
@@ -313,20 +346,15 @@ async function main(): Promise<void> {
     await bench.run();
     if (baselineIterations > 0) await baselineBench.run();
     await eventBench.run();
-    void preImported;
     mirrorStream.dispose();
 
-    const tasks = [...bench.tasks, ...baselineBench.tasks, ...eventBench.tasks];
-    for (const task of tasks) {
-      if (task.result?.error) throw task.result.error;
-    }
-    // tinybench 2.x reports latency stats on the result itself; 3.x nests
-    // them under `latency`. Read whichever shape is present.
-    type LatencyStats = { mean?: number; p99?: number; max?: number; samples?: unknown[] };
-    const statsOf = (task: (typeof tasks)[number]): LatencyStats => {
-      const result = task.result as (LatencyStats & { latency?: LatencyStats }) | undefined;
-      return result?.latency ?? result ?? {};
-    };
+    // A disabled baseline is absent, never a fabricated zero-duration result.
+    const tasks = [
+      ...bench.tasks,
+      ...(baselineIterations > 0 ? baselineBench.tasks : []),
+      ...eventBench.tasks,
+    ];
+    const statsOf = measuredLatency;
     const rows = tasks.map((task) => {
       const stats = statsOf(task);
       return {
@@ -344,17 +372,29 @@ async function main(): Promise<void> {
         `stream events observed: ${streamEvents}\n`
     );
     console.table(rows);
-    const meanOf = (name: string) => statsOf(tasks.find((task) => task.name === name)!).mean ?? 0;
+    const meanOf = (name: string) => {
+      const task = tasks.find((candidate) => candidate.name === name);
+      return task ? statsOf(task).mean : undefined;
+    };
     const mirrorMean = meanOf('Mirror');
-    const openMean = meanOf('open');
+    const openMean = meanOf('open')!;
     const perTurn = (ms: number) => ((ms * 1000) / Math.max(history.length, 1)).toFixed(1);
-    process.stdout.write(
-      `  Mirror ${perTurn(mirrorMean)} µs/turn vs open ${perTurn(openMean)} µs/turn` +
-        ` (${(mirrorMean / Math.max(openMean, 1e-6)).toFixed(0)}x)\n\n`
-    );
+    if (mirrorMean !== undefined)
+      process.stdout.write(
+        `  Mirror ${perTurn(mirrorMean)} µs/turn vs open ${perTurn(openMean)} µs/turn` +
+          ` (${(mirrorMean / Math.max(openMean, 1e-6)).toFixed(0)}x)\n\n`
+      );
     scrollView.dispose();
     streamView.dispose();
+    appendView.dispose();
+    freeDoc(scrollDoc);
+    freeDoc(streamDoc);
+    freeDoc(mirrorStreamDoc);
+    freeDoc(appendDoc);
   }
 }
 
-void main();
+void main().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});

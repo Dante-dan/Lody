@@ -190,7 +190,14 @@ export function createConversationViewFromDoc(
   };
 
   const withHydratedFacts = (row: TurnIndexRow, turn: SessionHistory): TurnIndexRow => {
-    const next: TurnIndexRow = { ...row, ...countsOfTurn(turn), summary: summarizeTurn(turn) };
+    // A full read subsumes this turn's events, including scalar deletions.
+    // Never merge scalars from the previous row back into the current document.
+    const next: TurnIndexRow = {
+      ...pickIndexScalars(turn as unknown as Record<string, unknown>),
+      ...countsOfTurn(turn),
+      summary: summarizeTurn(turn),
+    };
+    if (row.inputConfig !== undefined) next.inputConfig = row.inputConfig;
     if (next.role === 'user') next.inputConfig = pickIndexInputConfig(turn.inputConfig);
     return next;
   };

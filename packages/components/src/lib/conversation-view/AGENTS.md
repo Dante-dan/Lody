@@ -15,12 +15,17 @@ Opening a conversation must cost O(window), not O(turns). loro-mirror's
   user config fill in idle chunks and resolve `ready`. Hydrated objects equal
   Mirror's output (`tests/conversation-view-from-doc.test.ts`) and are patched
   copy-on-write from doc events (`apply-turn-event.ts`), falling back to a
-  full re-read when a path does not resolve.
+  full re-read when a path does not resolve. Every full read also replaces
+  all index scalars from that same turn, including absent/deleted fields;
+  structural batches may then safely skip the subsumed turn events.
 - **Write** through `HistoryWriter` (`history-writer.ts`). Its container
   shape is byte-identical to `Mirror.setState`
   (`history-materializer.ts` restates loro-mirror's inference rules over
   the shared schema; `tests/history-writer.test.ts` proves op equality). Do
-  not add another write path or write history through `setState`.
+  not add another write path or write history through `setState`. Optional
+  `Any.options.storageSchema` hints affect matching new map-field layouts only;
+  mismatched values retain Any inference, and existing string edits keep their
+  stored Text identity or primitive representation.
 - **Control plane**: the session Mirror uses `sessionControlPlaneSchema`
   (`history: schema.Ignore()`) over `createControlPlaneDoc`, which drops
   `history` events (the incremental event path applies ignored roots) and
