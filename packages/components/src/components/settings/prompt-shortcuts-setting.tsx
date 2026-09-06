@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useCloudQuery, usePlatformCapability } from '@lody/platform/react';
 import { getServerNow, type LocalProjectId, type MachineId, type WorkspaceId } from '@lody/shared';
 import {
+  getShortcutEmoji,
   getShortcutMentionGate,
   getShortcutMentionScopeIssues,
   type PromptShortcut,
@@ -434,9 +435,9 @@ export function PromptShortcutRow({
         >
           <span
             aria-hidden="true"
-            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-foreground/[0.05] font-mono text-xs text-muted-foreground"
+            className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-foreground/[0.05] text-sm leading-none"
           >
-            /
+            {getShortcutEmoji(entry)}
           </span>
           {/* Two columns, not one stack: identity reads down the left, and what
               the author set plus what is happening to it sit against the right
@@ -555,6 +556,9 @@ export function PromptShortcutReadOnlyView({
     <div className={cn('flex min-h-0 flex-col', className)}>
       <div className="scrollbar-pro min-h-0 flex-1 space-y-3 overflow-y-auto px-5 py-4">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span aria-hidden="true" className="text-sm leading-none">
+            {getShortcutEmoji(shortcut)}
+          </span>
           <span className="min-w-0 truncate text-sm font-medium">{shortcut.name}</span>
           <span className="font-mono text-[11px] text-muted-foreground">/{shortcut.slug}</span>
           <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">

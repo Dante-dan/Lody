@@ -117,8 +117,6 @@ export type MentionPrepare = (request: {
  * the trailing character reads as right padding.
  */
 interface MentionChip {
-  /** Non-layout badge painted over the chip; caller supplies accessible text separately. */
-  badge?: React.ReactNode;
   /** Painted over the range's first `iconSlots` characters. */
   icon?: React.ReactNode;
   /**

@@ -150,11 +150,13 @@ export const getComposerMentionChip: MentionChipResolver = (mention: Mention, te
   const kind = mention.kind ?? 'mention';
   if (kind === 'pasted_text') return pastedTextChip(text);
   if (isShortcutMention(mention)) {
-    const missing = missingShortcutVariables(mention.data);
+    // Colour only: the tray names the missing values, and a badge floating over
+    // the text was a second marker for the same fact.
     return {
       iconSlots: 0,
-      className: missing.length ? 'text-destructive' : MENTION_CHIP_CLASS_NAME,
-      badge: missing.length ? `!${missing.length}` : undefined,
+      className: missingShortcutVariables(mention.data).length
+        ? 'text-destructive'
+        : MENTION_CHIP_CLASS_NAME,
     };
   }
   if (!CHIP_KINDS.has(kind)) return null;

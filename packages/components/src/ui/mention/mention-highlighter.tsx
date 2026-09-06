@@ -212,16 +212,7 @@ function MentionChipContent({ chip, text }: { chip: MentionChip; text: string })
           ) : null}
         </span>
       ) : null}
-      {labelText ? (
-        <span className="relative">
-          {labelText}
-          {chip.badge ? (
-            <span className="absolute -top-2 right-0 rounded bg-background text-[9px] leading-none">
-              {chip.badge}
-            </span>
-          ) : null}
-        </span>
-      ) : null}
+      {labelText ? <span>{labelText}</span> : null}
       {trailingText ? <span className="invisible">{trailingText}</span> : null}
     </>
   );

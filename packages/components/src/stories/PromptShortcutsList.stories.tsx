@@ -43,6 +43,7 @@ const entry = (patch: Partial<PromptShortcut>): PromptShortcutIndexEntry =>
 const entries: PromptShortcutIndexEntry[] = [
   entry({
     id: 'review-pr',
+    emoji: '🔍',
     description: 'Review a pull request with the team conventions.',
     variables: [{ name: 'pr_url' }, { name: 'focus' }],
     prompt: 'Review !{pr_url} focusing on !{focus}.',
@@ -50,6 +51,7 @@ const entries: PromptShortcutIndexEntry[] = [
   entry({
     id: 'ship-notes',
     name: 'Release notes',
+    emoji: '🚀',
     slug: 'release-notes',
     visibility: 'workspace',
     description: 'Draft release notes from the merged pull requests.',
@@ -92,6 +94,7 @@ const entries: PromptShortcutIndexEntry[] = [
     id: 'shared-by-others',
     name: 'Team incident review',
     slug: 'incident',
+    emoji: '🚨',
     ownerUserId: 'someone-else',
     visibility: 'workspace',
     description: 'Shared by a teammate — read-only for everyone else.',

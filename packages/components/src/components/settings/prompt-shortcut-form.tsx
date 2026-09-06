@@ -6,7 +6,9 @@ import {
   parsePromptShortcut,
 } from '@lody/shared/prompt-shortcuts/compiler';
 import {
+  DEFAULT_PROMPT_SHORTCUT_EMOJI,
   getShortcutMentionScopeIssues,
+  normalizeShortcutEmoji,
   PROMPT_SHORTCUT_LIMITS,
   type PromptShortcut,
   type PromptShortcutScope,
@@ -23,6 +25,7 @@ import {
   shortcutMentionRanges,
   shortcutTemplateMentions,
 } from '@/components/mentions/shortcut-template-ranges';
+import { EmojiField } from './emoji-field';
 import { AutoGrowTextarea, FormMessage, Section } from './form-primitives';
 import {
   describeShortcutProject,
@@ -163,25 +166,39 @@ export function PromptShortcutForm({
             editor. The command carries its `/` so what is typed is what shows. */}
         <div className="space-y-1.5">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <Input
-              id="shortcut-name"
-              autoComplete="off"
-              aria-label={t('settings.promptShortcuts.name', 'Name')}
-              placeholder={t('settings.promptShortcuts.name', 'Name')}
-              className="h-9 min-w-0 flex-1 text-sm"
-              value={value.name}
-              maxLength={PROMPT_SHORTCUT_LIMITS.name}
-              required
-              disabled={saving}
-              onChange={(event) => {
-                const name = event.target.value;
-                setValue((previous) => ({
-                  ...previous,
-                  name,
-                  slug: slugTouched ? previous.slug : slugify(name),
-                }));
-              }}
-            />
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <EmojiField
+                value={value.emoji ?? ''}
+                defaultEmoji={DEFAULT_PROMPT_SHORTCUT_EMOJI}
+                onChange={(emoji) =>
+                  setValue((previous) => ({
+                    ...previous,
+                    ...(normalizeShortcutEmoji(emoji)
+                      ? { emoji: normalizeShortcutEmoji(emoji) }
+                      : { emoji: undefined }),
+                  }))
+                }
+              />
+              <Input
+                id="shortcut-name"
+                autoComplete="off"
+                aria-label={t('settings.promptShortcuts.name', 'Name')}
+                placeholder={t('settings.promptShortcuts.name', 'Name')}
+                className="h-9 min-w-0 flex-1 text-sm"
+                value={value.name}
+                maxLength={PROMPT_SHORTCUT_LIMITS.name}
+                required
+                disabled={saving}
+                onChange={(event) => {
+                  const name = event.target.value;
+                  setValue((previous) => ({
+                    ...previous,
+                    name,
+                    slug: slugTouched ? previous.slug : slugify(name),
+                  }));
+                }}
+              />
+            </div>
             <div className="flex h-9 min-w-0 items-center gap-1 rounded-md border border-input-border bg-input-field px-2 focus-within:ring-1 focus-within:ring-ring sm:w-56">
               <span aria-hidden="true" className="font-mono text-sm text-muted-foreground">
                 /

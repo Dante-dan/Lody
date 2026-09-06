@@ -2,6 +2,10 @@
 
 ## The shared editor grammar
 
+`emoji-field.tsx` is the one emoji control (button + lazy `emoji-picker-panel`
++ reset), shared by the Agent Role and Prompt Shortcut editors so a catalog
+entry's glyph is the same affordance everywhere.
+
 `form-primitives.tsx` owns `Section`, `Field`, `FormMessage` and
 `AutoGrowTextarea` (a one-row field that tracks its content's height; it must
 re-measure on width changes, because wrapping is what decides the row count).
@@ -25,6 +29,10 @@ to read as one drift apart a padding value at a time.
 - `prompt-shortcut-form.tsx` is presentational. Scope starts empty; never infer it
   from the active composer or a selected mention. Sharing starts private, and the
   slug follows the name only for a new Shortcut whose slug the author never typed.
+- A Shortcut carries an optional `emoji`, stored normalized (stripped and capped
+  in `shared/prompt-shortcuts/model.ts`) and projected into the index, so the
+  list can show it without loading a body. Unset renders
+  `DEFAULT_PROMPT_SHORTCUT_EMOJI` rather than an empty tile.
 - `prompt-shortcut-scope.tsx` owns the axis order (Project → Machine → Agent),
   their icons, the `None` sentinel a Radix `Select` needs, and the read-only
   pills. All axes unset prints one muted `Workspace` pill — that is scope, never

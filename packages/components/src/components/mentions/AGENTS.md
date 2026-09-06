@@ -74,6 +74,11 @@ hydration, persisted ranges, session/Role addressing, or transcript semantics.
   must keep the original invocation data. Accepted sends clear before promotion.
   Landing/session owners mask Shortcut-bearing cached
   text from foreign account/workspace domains without replacing normal caches.
+- A chip with missing values is coloured, nothing more: no badge painted over
+  the text. The tray names the values, and two markers for one fact is one too
+  many. While the tray is open the composer stops reserving its blank writing
+  rows (`onShortcutParametersOpenChange`), because those rows would otherwise
+  sit between the `/command` and the fields that belong to it.
 - `shortcut-parameters.tsx` edits one invocation at a time in a desktop tray or
   mobile sheet, in the settings variable editor's own grammar: the `!{name}`
   token beside its value, a missing value tinting that token rather than adding

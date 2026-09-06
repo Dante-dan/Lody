@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const PROMPT_SHORTCUT_LIMITS = {
   /** Author-facing field lengths, shared with the editor's own `maxLength`. */
   name: 60,
+  emoji: 8,
   slug: 40,
   description: 240,
   promptBytes: 256 * 1024,
@@ -12,6 +13,27 @@ export const PROMPT_SHORTCUT_LIMITS = {
   mentions: 50,
   variables: 20,
 } as const;
+
+/**
+ * A real default rather than a blank slot: every Shortcut then reads the same
+ * way in the list, and the picker is a change rather than a decision the author
+ * has to make before the Shortcut looks finished.
+ */
+export const DEFAULT_PROMPT_SHORTCUT_EMOJI = '📝';
+
+/**
+ * Keep an emoji to one short, whitespace-free glyph.
+ *
+ * Capped and stripped rather than validated against an emoji table: the field
+ * is decoration, so the only real requirements are that it cannot smuggle a
+ * second line of text into a row and cannot carry invisible characters.
+ */
+export const normalizeShortcutEmoji = (value: unknown): string | undefined => {
+  if (typeof value !== 'string') return undefined;
+  const stripped = value.replace(/\p{Cc}/gu, '').replace(/\s+/gu, '');
+  const capped = Array.from(stripped).slice(0, PROMPT_SHORTCUT_LIMITS.emoji).join('');
+  return capped || undefined;
+};
 
 const utf8 = new TextEncoder();
 export const shortcutByteLength = (value: string): number => utf8.encode(value).byteLength;
@@ -98,6 +120,12 @@ export const PromptShortcutSchema = z
     ownerUserId: identifier,
     visibility: z.enum(['private', 'workspace']),
     name: z.string().trim().min(1).max(PROMPT_SHORTCUT_LIMITS.name),
+    // Stored normalized: a synced row from another client is rejected rather
+    // than silently repaired, so every reader sees the same glyph.
+    emoji: z
+      .string()
+      .refine((value) => normalizeShortcutEmoji(value) === value)
+      .optional(),
     slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/),
     description: z.string().max(PROMPT_SHORTCUT_LIMITS.description).optional(),
     prompt: z
@@ -116,6 +144,9 @@ export const PromptShortcutSchema = z
   .strict();
 
 export type PromptShortcut = z.infer<typeof PromptShortcutSchema>;
+
+export const getShortcutEmoji = (shortcut: Pick<PromptShortcut, 'emoji'>): string =>
+  shortcut.emoji || DEFAULT_PROMPT_SHORTCUT_EMOJI;
 export type PromptShortcutScope = z.infer<typeof PromptShortcutScopeSchema>;
 export type PromptShortcutProject = z.infer<typeof projectSchema>;
 export type PromptShortcutTarget = z.infer<typeof PromptShortcutTargetSchema>;

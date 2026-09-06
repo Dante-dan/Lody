@@ -19,6 +19,7 @@ const base: PromptShortcut = {
   ownerUserId: 'user',
   visibility: 'private',
   name: 'Review changes',
+  emoji: '🔍',
   slug: 'review-changes',
   description: 'Review a change against its requirements.',
   prompt:
