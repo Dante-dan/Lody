@@ -758,11 +758,11 @@ export function ShortcutPromptField({
       getMentionChip={getComposerMentionChip}
       commandsEnabled={false}
       disabled={disabled}
-      rows={8}
+      rows={4}
       // The composer's own surface: the field where a template is written and
       // the field where a message is written are the same kind of field.
       containerClassName={SHORTCUT_PROMPT_SURFACE_CLASS_NAME}
-      className="input-scrollbar min-h-40 resize-none border-transparent bg-transparent px-0 py-0 text-sm leading-6 text-input-foreground placeholder:text-input-placeholder focus-visible:ring-0 focus-visible:ring-offset-0"
+      className="input-scrollbar min-h-28 resize-none border-transparent bg-transparent px-0 py-0 text-sm leading-6 text-input-foreground placeholder:text-input-placeholder focus-visible:ring-0 focus-visible:ring-offset-0"
       skillAgent={skillAgent}
       onMentionRangesChange={(ranges) => editor.onRangesChange(toPersistedMentionRanges(ranges))}
     />

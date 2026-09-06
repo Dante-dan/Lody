@@ -202,11 +202,12 @@ describe('Prompt Shortcut editor', () => {
         />
       )
     );
+    // Each axis names itself in its trigger; there is no field label above it.
     expect(
       ['shortcut-project', 'shortcut-machine', 'shortcut-provider'].map(
         (id) => scopeTrigger(id).textContent
       )
-    ).toEqual(['None', 'None', 'None']);
+    ).toEqual(['ProjectNone', 'MachineNone', 'AgentNone']);
     await edit('#shortcut-prompt', 'Review !{topic}\nExplain !{reason}');
     await edit('#shortcut-variable-topic', 'line one\n$literal @literal !{literal}');
     await submitForm();

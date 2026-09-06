@@ -16,14 +16,14 @@ import { Button } from '@/ui/button';
 import { Input } from '@/ui/input';
 import { Textarea } from '@/ui/textarea';
 import { Label } from '@/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/ui/select';
 import { Switch } from '@/ui/switch';
 import type { PersistedMentionRange } from '@/components/mentions/mention-persistence';
 import {
   shortcutMentionRanges,
   shortcutTemplateMentions,
 } from '@/components/mentions/shortcut-template-ranges';
-import { Field, FormMessage, Section } from './form-primitives';
+import { FormMessage, Section } from './form-primitives';
 import {
   describeShortcutProject,
   ScopeAxisIcon,
@@ -210,7 +210,7 @@ export function PromptShortcutForm({
             aria-label={t('settings.promptShortcuts.description', 'Description (optional)')}
             placeholder={t(
               'settings.promptShortcuts.descriptionPlaceholder',
-              'Shown in the / menu'
+              'Description — shown in the / menu'
             )}
             className="h-9 text-sm"
             value={value.description ?? ''}
@@ -221,99 +221,85 @@ export function PromptShortcutForm({
         </div>
 
         <Section
-          title={t('settings.promptShortcuts.scope', 'Applies to')}
-          hint={t(
-            'settings.promptShortcuts.scopeHelp',
-            'Where this Shortcut can be called, and what @ completes against. None on every axis means anywhere in this workspace.'
-          )}
-        >
-          <fieldset disabled={saving} className="grid gap-3 sm:grid-cols-3">
-            <Field label={axes.project}>
-              <ScopeSelect
-                id="shortcut-project"
-                axis="project"
-                label={axes.project}
-                value={value.scope.project ? JSON.stringify(value.scope.project) : ''}
-                fallbackLabel={
-                  value.scope.project ? describeShortcutProject(value.scope.project) : undefined
-                }
-                options={options.projects.map((option) => ({
-                  value: JSON.stringify(option.value),
-                  label: option.label,
-                }))}
-                onChange={(next) =>
-                  updateScope({ ...value.scope, project: next ? JSON.parse(next) : undefined })
-                }
-              />
-            </Field>
-            <Field label={axes.machineId}>
-              {allowMachineSelection ? (
-                <ScopeSelect
-                  id="shortcut-machine"
-                  axis="machine"
-                  label={axes.machineId}
-                  value={value.scope.machineId ?? ''}
-                  fallbackLabel={value.scope.machineId}
-                  options={options.machines}
-                  onChange={(machineId) =>
-                    updateScope({ ...value.scope, machineId: machineId || undefined })
-                  }
-                />
-              ) : (
-                // One machine exists here, so the axis is a yes/no rather than a
-                // list — but it stays the Machine axis, in its own column.
-                <div className="flex h-9 items-center justify-between gap-2 rounded-md border border-input-border bg-input-field px-2">
-                  <Label
-                    htmlFor={`${fieldId}-this-machine`}
-                    className="min-w-0 truncate text-xs font-normal"
-                  >
-                    {t('settings.promptShortcuts.thisMachineShort', 'This machine')}
-                  </Label>
-                  <Switch
-                    id={`${fieldId}-this-machine`}
-                    aria-label={t('settings.promptShortcuts.thisMachine', 'Limit to this machine')}
-                    checked={!!value.scope.machineId}
-                    disabled={options.machines.length === 0}
-                    onCheckedChange={(checked) =>
-                      updateScope({
-                        ...value.scope,
-                        machineId: checked ? options.machines[0]?.value : undefined,
-                      })
-                    }
-                  />
-                </div>
-              )}
-            </Field>
-            <Field label={axes.providerKey}>
-              <ScopeSelect
-                id="shortcut-provider"
-                axis="agent"
-                label={axes.providerKey}
-                value={value.scope.providerKey ?? ''}
-                fallbackLabel={value.scope.providerKey}
-                options={options.providers}
-                onChange={(providerKey) =>
-                  updateScope({ ...value.scope, providerKey: providerKey || undefined })
-                }
-              />
-            </Field>
-          </fieldset>
-        </Section>
-
-        <Section
           title={t('settings.promptShortcuts.prompt', 'Prompt')}
           hint={t(
             'settings.promptShortcuts.promptHelp',
-            'One message. @ mentions a file or Role, $ a skill, # an issue — a kind the scope above cannot satisfy stays visible but disabled. Write !{name} where the caller fills in a value.'
+            'One message. @ mentions a file or Role, $ a skill, # an issue; write !{name} where the caller fills in a value. The selectors below say where this Shortcut can be called and what @ completes against — None on every axis means anywhere in this workspace.'
           )}
         >
+          {/* Scope sits with the prompt rather than in a section of its own: it
+              is the same decision as writing the prompt, because it is what the
+              `@` menu completes against. */}
+          <fieldset disabled={saving} className="grid gap-2 sm:grid-cols-3">
+            <ScopeSelect
+              id="shortcut-project"
+              axis="project"
+              label={axes.project}
+              value={value.scope.project ? JSON.stringify(value.scope.project) : ''}
+              fallbackLabel={
+                value.scope.project ? describeShortcutProject(value.scope.project) : undefined
+              }
+              options={options.projects.map((option) => ({
+                value: JSON.stringify(option.value),
+                label: option.label,
+              }))}
+              onChange={(next) =>
+                updateScope({ ...value.scope, project: next ? JSON.parse(next) : undefined })
+              }
+            />
+            {allowMachineSelection ? (
+              <ScopeSelect
+                id="shortcut-machine"
+                axis="machine"
+                label={axes.machineId}
+                value={value.scope.machineId ?? ''}
+                fallbackLabel={value.scope.machineId}
+                options={options.machines}
+                onChange={(machineId) =>
+                  updateScope({ ...value.scope, machineId: machineId || undefined })
+                }
+              />
+            ) : (
+              // One machine exists here, so the axis is a yes/no rather than a
+              // list — but it stays the Machine axis, in its own column.
+              <div className="flex h-9 items-center gap-1.5 rounded-md border border-input-border bg-input-field px-2">
+                <ScopeAxisIcon axis="machine" className="size-3 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                  {axes.machineId}
+                </span>
+                <Switch
+                  id={`${fieldId}-this-machine`}
+                  aria-label={t('settings.promptShortcuts.thisMachine', 'Limit to this machine')}
+                  checked={!!value.scope.machineId}
+                  disabled={options.machines.length === 0}
+                  onCheckedChange={(checked) =>
+                    updateScope({
+                      ...value.scope,
+                      machineId: checked ? options.machines[0]?.value : undefined,
+                    })
+                  }
+                />
+              </div>
+            )}
+            <ScopeSelect
+              id="shortcut-provider"
+              axis="agent"
+              label={axes.providerKey}
+              value={value.scope.providerKey ?? ''}
+              fallbackLabel={value.scope.providerKey}
+              options={options.providers}
+              onChange={(providerKey) =>
+                updateScope({ ...value.scope, providerKey: providerKey || undefined })
+              }
+            />
+          </fieldset>
           {renderPrompt ? (
             renderPrompt(promptProps)
           ) : (
             <Textarea
               id="shortcut-prompt"
               aria-label={t('settings.promptShortcuts.prompt', 'Prompt')}
-              className="min-h-40 resize-none text-sm leading-6"
+              className="min-h-28 resize-none text-sm leading-6"
               value={value.prompt}
               disabled={saving}
               onChange={(event) => promptProps.onValueChange(event.target.value)}
@@ -356,20 +342,24 @@ export function PromptShortcutForm({
           >
             <fieldset disabled={saving} className="space-y-2">
               {variables.slice(0, PROMPT_SHORTCUT_LIMITS.variables).map((variable) => (
-                <div
-                  key={variable.name}
-                  className="space-y-1.5 rounded-md border border-border/60 bg-background/60 p-2"
-                >
-                  <Label
-                    htmlFor={`shortcut-variable-${variable.name}`}
-                    className="inline-flex rounded-sm bg-status-warning/12 px-1 py-0.5 font-mono text-[11px] font-normal text-status-warning"
-                  >
-                    {`!{${variable.name}}`}
-                  </Label>
+                // Name beside its default, not above it: the name is short and
+                // fixed, so stacking them spent a whole row on one token.
+                <div key={variable.name} className="flex items-start gap-2">
+                  {/* Fixed column so the names line up; the chip itself hugs
+                      its token rather than painting an empty 7rem block. */}
+                  <div className="w-28 shrink-0 pt-2">
+                    <Label
+                      htmlFor={`shortcut-variable-${variable.name}`}
+                      className="inline-block max-w-full truncate rounded-sm bg-status-warning/12 px-1 py-0.5 font-mono text-[11px] font-normal text-status-warning"
+                      title={`!{${variable.name}}`}
+                    >
+                      {`!{${variable.name}}`}
+                    </Label>
+                  </div>
                   <Textarea
                     id={`shortcut-variable-${variable.name}`}
                     rows={2}
-                    className="resize-none text-xs"
+                    className="min-w-0 flex-1 resize-none text-xs"
                     placeholder={t(
                       'settings.promptShortcuts.defaultPlaceholder',
                       'Default value (optional)'
@@ -490,10 +480,16 @@ function ScopeSelect({
     >
       <SelectTrigger id={id} className="h-9 gap-1.5 text-xs" aria-label={label}>
         {/* Not a <span>: the trigger line-clamps its direct span children, which
-            turns a flex row into a stacked box. */}
+            turns a flex row into a stacked box. The axis names itself here
+            because these three sit inline above the prompt with no field label
+            of their own. */}
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
           <ScopeAxisIcon axis={axis} className="size-3 shrink-0 text-muted-foreground" />
-          <SelectValue />
+          <span className="shrink-0 text-muted-foreground">{label}</span>
+          <span className="min-w-0 truncate">
+            {entries.find((option) => option.value === value)?.label ??
+              t('settings.promptShortcuts.none', 'None')}
+          </span>
         </div>
       </SelectTrigger>
       <SelectContent>
