@@ -38,8 +38,11 @@ locks forever, so the date is deliberately not repeated in the note or an FAQ.
 
 Loading three.js through a module-eval `import()` plus `lazy` keeps it out of the
 landing's critical chunk, with the CSS gradient on `.underwater-bg` standing in
-until mount. On mobile the import waits for idle so the hero title can paint
-without competing with the 3D chunk. The seabed attributes are computed in a worker from pure math shared
+until mount. On the client the import waits for `load` plus idle so the hero
+title can paint without competing with the 3D chunk. The preview chunk and
+rotating H1 words use the same gate — a one-viewport `rootMargin` used to start
+the preview download during LCP because the stage sits just below a 100dvh hero.
+The seabed attributes are computed in a worker from pure math shared
 via `underwater-terrain-math.ts`, using one regular height grid for normals
 instead of four extra noise samples per point, and fade in through the terrain
 `uReveal` uniform while gradient, particles, and jellyfish render immediately.

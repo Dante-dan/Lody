@@ -6,6 +6,7 @@
  * (shared sessions, private machines). Diff review stays in the play stage.
  */
 
+import { scheduleAfterLoadIdle } from '@site/lib/after-first-paint';
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { PowerDemoId } from './landing-power-demos';
 
@@ -41,15 +42,15 @@ function ClientPowerDemo({
   locale,
   title,
   summary,
+  ready,
 }: {
   id: PowerDemoId;
   locale: 'en' | 'zh';
   title: string;
   /** SSR-visible summary so crawlers still get the feature without hydrate. */
   summary?: string;
+  ready: boolean;
 }) {
-  const [ready, setReady] = useState(false);
-  useEffect(() => setReady(true), []);
   const placeholder = (
     <div
       className="uw-power__demo uw-power__demo--ssr lody-app-preview dark"
@@ -79,6 +80,20 @@ export function LandingPowerSection({
   locale: 'en' | 'zh';
 }) {
   const sectionRef = useRef<HTMLElement>(null);
+  const [demosReady, setDemosReady] = useState(false);
+
+  useEffect(() => {
+    const section = sectionRef.current;
+    const arm = () => setDemosReady(true);
+    if (!section || typeof IntersectionObserver === 'undefined') {
+      return scheduleAfterLoadIdle(arm, { timeoutMs: 10_000 });
+    }
+    const io = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) arm();
+    });
+    io.observe(section);
+    return () => io.disconnect();
+  }, []);
 
   useEffect(() => {
     const section = sectionRef.current;
@@ -174,6 +189,7 @@ export function LandingPowerSection({
                 locale={locale}
                 title={feature.title}
                 summary={feature.body}
+                ready={demosReady}
               />
               <h3 className="uw-power__card-title">{feature.title}</h3>
               {feature.body ? <p className="uw-power__card-body">{feature.body}</p> : null}

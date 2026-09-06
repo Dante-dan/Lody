@@ -68,9 +68,9 @@ Demo sequencing and screenshot notes live in
 - `underwater-background.tsx` is client-only three.js in `useEffect`. Startup is
   deliberately staged — keep all three legs when touching it: (1)
   `underwater-experience.tsx` loads it via module-eval `import()` + `lazy` (keep the
-  `.underwater-bg` CSS gradient in sync with the BG shader). Desktop starts that
-  import immediately; mobile / coarse pointer defers it to idle so the hero H1
-  can become LCP without a 3D download. (2) the initial seabed
+  `.underwater-bg` CSS gradient in sync with the BG shader). The client fetch
+  waits for load + idle so the hero H1 can become LCP without a 3D download.
+  (2) the initial seabed
   attributes are computed in `underwater-terrain.worker.ts` via
   `underwater-terrain-math.ts` and fade in through the terrain `uReveal` uniform, while
   gradient/particles/jellyfish render immediately; (3) first render waits on
@@ -78,11 +78,12 @@ Demo sequencing and screenshot notes live in
   the main thread.
 - `underwater-experience.tsx` must mount `landing-app-preview.tsx` via `lazy()` —
   deliberately NOT module-eval `import()` like the background. The `previewArmed` latch
-  fires one viewport ahead (idle fallback for non-scrollers) and never flips back, so the
-  frame is filled before arrival and ghost scripts never remount. Tab durations + the
+  fires once the stage enters the viewport (or after a long post-load idle) and never
+  flips back, so first paint does not download the preview chunk. Tab durations + the
   demo id union live in `landing-demo-durations.ts`; importing them from the preview
   would pull it back into the critical chunk. The stage frame carries `aria-hidden` +
-  `inert`.
+  `inert`. Hero word rotation and decorative CSS motion wait for the same load+idle
+  gate (`uw-motion-ready`); `prefers-reduced-motion` still disables them.
 
 ## Product replica fidelity
 
