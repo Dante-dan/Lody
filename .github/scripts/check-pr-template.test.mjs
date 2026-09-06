@@ -6,18 +6,18 @@ import { checkPullRequestBody } from './check-pr-body.mjs';
 const templateUrl = new URL('../PULL_REQUEST_TEMPLATE.md', import.meta.url);
 const template = readFileSync(templateUrl, 'utf8');
 
-test('the unedited template is not a valid PR body', () => {
+void test('the unedited template is not a valid PR body', () => {
   const result = checkPullRequestBody(template);
   assert.equal(result.ok, false);
   assert.ok(result.findings.some((f) => f.startsWith('## Summary must contain')));
 });
 
-test('guidance stays in comments, so it cannot pass as a filled field', () => {
+void test('guidance stays in comments, so it cannot pass as a filled field', () => {
   const visible = template.replace(/<!--[\s\S]*?-->/g, '');
   assert.equal(/[^\s|\-#]/.test(visible.split('## Summary')[1].split('##')[0]), false);
 });
 
-test('every repository path the template names resolves', () => {
+void test('every repository path the template names resolves', () => {
   const referenced = [...template.matchAll(/(?:^|\s)((?:\.[\w-]+|[\w-]+)(?:\/[\w.-]+)+\.md)/gm)].map(
     (match) => match[1]
   );
@@ -27,7 +27,7 @@ test('every repository path the template names resolves', () => {
   }
 });
 
-test('an author who fills every required field passes', () => {
+void test('an author who fills every required field passes', () => {
   const body = template
     .replace('## Related issue', '## Related issue\n\nRefs #123')
     .replace(
