@@ -28,6 +28,9 @@ for diagrams and views, and keep each view at one abstraction level. Diagrams
 and file paths are maintained facts: when a change makes one wrong, fix it or
 remove it in the same PR.
 
+[Visual explanations](visual-explanations.md) is the worked-example companion to
+the writing guide; the pull request template points contributors there.
+
 Name the owning Spec for intent and the scoped `AGENTS.md` for invariants rather
 than restating either. A page whose reason to exist is not visible in its
 opening lines belongs somewhere else.

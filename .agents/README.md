@@ -130,4 +130,5 @@ module separately instead of mixing product features with internal functions.
 Place visuals beside short explanations, mark conceptual sketches, and keep real
 paths accurate. Diagrams are maintained facts too. Use HTML only when a static
 view cannot explain the point; prose must remain independently understandable.
-The PR template embeds the full visual authoring examples for outside authors.
+Worked examples live in [visual explanations](docs/visual-explanations.md); the
+PR template points there so outside authors need nothing installed.
