@@ -34,7 +34,7 @@ function useDrawerViewportBottom() {
   const [bottom, setBottom] = React.useState(0);
 
   React.useLayoutEffect(() => {
-    if (!enabled) return;
+    if (!enabled) return undefined;
     const viewport = window.visualViewport;
     const measure = () => {
       // A resized WebView needs no extra inset; an overlay keyboard does.
