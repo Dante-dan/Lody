@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { Cron } from 'croner';
 
 import {
   CRON_FIELD_ORDER,
   cronFieldValues,
   cronFieldsAreStructured,
+  cronFieldsCombineDayAndWeekday,
+  incompleteCronFieldIds,
+  isCronFieldComplete,
   defaultCronField,
   formatCronExpression,
   formatCronField,
@@ -102,15 +106,31 @@ describe('editing one field', () => {
     expect(withCronField('0 9 * *', 'minute', { mode: 'every' })).toBeNull();
   });
 
-  it('offers a usable starting value for each structured mode', () => {
+  it('offers a usable starting value for the modes that have one', () => {
     for (const id of CRON_FIELD_ORDER) {
-      for (const mode of ['every', 'step', 'range', 'list'] as const) {
+      for (const mode of ['every', 'step'] as const) {
         const field = defaultCronField(mode, id);
         expect(field.mode).toBe(mode);
+        expect(isCronFieldComplete(field)).toBe(true);
         // Round-trippable, so switching modes cannot produce text the pickers
         // would then have to show as raw.
         expect(parseCronField(formatCronField(field), id)).toEqual(field);
       }
+    }
+  });
+
+  it('starts a selection unfinished rather than inventing one', () => {
+    for (const id of CRON_FIELD_ORDER) {
+      for (const mode of ['list', 'range'] as const) {
+        // From `*` there is no equivalent finite value, so the person picks.
+        const fromEvery = defaultCronField(mode, id, { mode: 'every' });
+        expect(fromEvery.mode).toBe(mode);
+        expect(isCronFieldComplete(fromEvery)).toBe(false);
+      }
+      // From a finite field the values carry over, so it stays complete.
+      const finite = defaultCronField('range', id, { mode: 'list', values: [1, 3] });
+      expect(finite).toEqual({ mode: 'range', from: 1, to: 3 });
+      expect(isCronFieldComplete(finite)).toBe(true);
     }
   });
 
@@ -207,5 +227,67 @@ describe('what the pickers can build stays executable', () => {
       Date.parse('2026-09-06T17:00:00Z'),
       Date.parse('2026-09-07T09:00:00Z'),
     ]);
+  });
+});
+
+describe('switching a field mode must not change what fires', () => {
+  /** Real execution, not just text: does this rule fire at that instant? */
+  const fires = (expression: string, iso: string) =>
+    new Cron(expression, { timezone: 'UTC', paused: true, domAndDow: false }).match(new Date(iso));
+
+  it('never enumerates `*`, because day-of-month and weekday are ORed', () => {
+    const weekdaysOnly = '*/20 9-17 * * 1-5';
+    const saturday = '2026-09-12T09:00:00Z';
+    expect(fires(weekdaysOnly, saturday)).toBe(false);
+
+    // Choosing "On selected" for day-of-month starts EMPTY. Enumerating 1…31
+    // instead would satisfy the day clause on every date, and the OR would make
+    // this weekdays-only rule fire on Saturday.
+    const next = defaultCronField('list', 'dayOfMonth', { mode: 'every' });
+    expect(next).toEqual({ mode: 'list', values: [] });
+    expect(isCronFieldComplete(next)).toBe(false);
+    expect(() =>
+      formatCronExpression({ ...parseCronExpression(weekdaysOnly)!, dayOfMonth: next })
+    ).toThrow(/incomplete/i);
+
+    // The enumeration this used to produce really does flip the rule.
+    const enumerated = formatCronExpression({
+      ...parseCronExpression(weekdaysOnly)!,
+      dayOfMonth: { mode: 'list', values: Array.from({ length: 31 }, (_, i) => i + 1) },
+    });
+    expect(fires(enumerated, saturday)).toBe(true);
+  });
+
+  it('preserves the fired instants when a finite field changes representation', () => {
+    const base = parseCronExpression('0 9-17 * * *')!;
+    const asList = defaultCronField('list', 'hour', base.hour);
+    const asStep = defaultCronField('step', 'hour', base.hour);
+    const probes = Array.from(
+      { length: 24 },
+      (_, hour) => `2026-09-12T${String(hour).padStart(2, '0')}:00:00Z`
+    );
+    for (const replacement of [asList, asStep]) {
+      const expression = formatCronExpression({ ...base, hour: replacement });
+      expect(probes.map((at) => fires(expression, at))).toEqual(
+        probes.map((at) => fires('0 9-17 * * *', at))
+      );
+    }
+  });
+
+  it('reports an incomplete field instead of emitting a short expression', () => {
+    const fields = parseCronExpression('*/20 9-17 * * 1-5')!;
+    const emptied = { ...fields, weekday: { mode: 'list', values: [] } as const };
+    expect(incompleteCronFieldIds(emptied)).toEqual(['weekday']);
+    expect(() => formatCronExpression(emptied)).toThrow(/incomplete/i);
+    // The old behaviour produced `*/20 9-17 * * ` — four fields, which then
+    // failed to parse and collapsed the whole editor.
+    expect(withCronField('*/20 9-17 * * 1-5', 'weekday', { mode: 'list', values: [] })).toBeNull();
+    expect(withCronField('*/20 9-17 * * 1-5', 'hour', { mode: 'raw', text: '  ' })).toBeNull();
+  });
+
+  it('flags the day-of-month OR day-of-week combination', () => {
+    expect(cronFieldsCombineDayAndWeekday(parseCronExpression('0 9 * * 1-5')!)).toBe(false);
+    expect(cronFieldsCombineDayAndWeekday(parseCronExpression('0 9 1 * *')!)).toBe(false);
+    expect(cronFieldsCombineDayAndWeekday(parseCronExpression('0 9 1 * 1-5')!)).toBe(true);
   });
 });

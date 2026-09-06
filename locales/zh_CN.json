@@ -3898,9 +3898,7 @@
   "schedules.cron.modeFor": "{{field}}规则",
   "schedules.cron.stepFor": "{{field}}间隔",
   "schedules.cron.rawFor": "{{field}}自定义文本",
-  "schedules.cron.from": "从",
   "schedules.cron.to": "到",
-  "schedules.cron.toValue": "至",
   "schedules.cron.addWindow": "限定区间",
   "schedules.cron.clearWindow": "取消区间",
   "schedules.cron.chooseValues": "选择…",
@@ -3925,5 +3923,9 @@
   "schedules.cron.clause.raw": "{{unit}}“{{text}}”",
   "schedules.cron.clause.everyMinute": "每分钟",
   "schedules.cron.clauseSeparator": "，",
+  "schedules.cron.requireValues": "请为{{field}}选择一个值。",
+  "schedules.cron.dayOrWeekdayHint": "同时设置了日期和星期。cron 会在任意一个匹配时运行，而不是两个都匹配。",
+  "schedules.cron.fromFor": "{{field}}区间开始",
+  "schedules.cron.toFor": "{{field}}区间结束",
   "schedules.errors.SCHEDULES_DISABLED": "此机器的定时执行已由运行环境暂停。"
 }

@@ -1,3 +1,9 @@
+import {
+  formatCronExpression,
+  incompleteCronFieldIds,
+  parseCronExpression,
+  type CronFields,
+} from './schedule-cron-fields';
 import { validateScheduleTrigger } from './schedule-time';
 import type { ScheduleTrigger } from './schedule-types';
 
@@ -35,7 +41,16 @@ export type ScheduleRecurrence =
   | ({ kind: 'monthly'; dayOfMonth: number } & ScheduleTimeOfDay)
   | { kind: 'interval'; everyMs: number; anchorAt: string }
   | { kind: 'once'; at: string }
-  | { kind: 'custom'; expression: string; timeZone: string };
+  /**
+   * The five cron fields as the person is editing them, plus an optional
+   * whole-expression text draft while they type one.
+   *
+   * The FIELDS are the state, not a string that gets re-parsed on every
+   * keystroke. Re-deriving the edit state from a serialized expression is what
+   * made a `raw` field snap back to a range as soon as its text parsed, and
+   * made an emptied selection collapse the whole editor.
+   */
+  | { kind: 'custom'; fields: CronFields; timeZone: string; draftText?: string };
 
 export type ScheduleRecurrenceKind = ScheduleRecurrence['kind'];
 
@@ -127,16 +142,25 @@ export function getDeviceTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 }
 
+/** An unrestricted rule, used only to seed a not-yet-parseable text draft. */
+const EMPTY_FIELDS = (): CronFields => parseCronExpression('* * * * *')!;
+
 /** Interpretation of a trigger a person can read and edit field by field. */
 export function triggerToRecurrence(trigger: ScheduleTrigger): ScheduleRecurrence {
   if (trigger.kind === 'once') return { kind: 'once', at: trigger.at };
   if (trigger.kind === 'interval')
     return { kind: 'interval', everyMs: trigger.everyMs, anchorAt: trigger.anchorAt };
-  const custom: ScheduleRecurrence = {
-    kind: 'custom',
-    expression: trigger.expression,
-    timeZone: trigger.timeZone,
-  };
+  const parsed = parseCronExpression(trigger.expression);
+  const custom: ScheduleRecurrence = parsed
+    ? { kind: 'custom', fields: parsed, timeZone: trigger.timeZone }
+    : // A persisted trigger is always five fields, so this is only reachable
+      // for text a person is still typing.
+      {
+        kind: 'custom',
+        fields: EMPTY_FIELDS(),
+        timeZone: trigger.timeZone,
+        draftText: trigger.expression,
+      };
   const fields = trigger.expression.trim().split(/\s+/);
   if (fields.length !== 5) return custom;
   const [minuteField, hourField, dayField, monthField, weekdayField] = fields as [
@@ -177,7 +201,7 @@ export function recurrenceToTrigger(recurrence: ScheduleRecurrence): ScheduleTri
   if (recurrence.kind === 'custom')
     return validateScheduleTrigger({
       kind: 'cron',
-      expression: recurrence.expression,
+      expression: customRecurrenceExpression(recurrence),
       timeZone: recurrence.timeZone,
     });
   const weekdayField =
@@ -201,7 +225,9 @@ export function sameScheduleRecurrence(a: ScheduleRecurrence, b: ScheduleRecurre
   if (a.kind === 'interval' && b.kind === 'interval')
     return a.everyMs === b.everyMs && a.anchorAt === b.anchorAt;
   if (a.kind === 'custom' && b.kind === 'custom')
-    return a.expression === b.expression && a.timeZone === b.timeZone;
+    return (
+      a.timeZone === b.timeZone && customRecurrenceSignature(a) === customRecurrenceSignature(b)
+    );
   if (a.kind === 'interval' || a.kind === 'once' || a.kind === 'custom') return false;
   if (b.kind === 'interval' || b.kind === 'once' || b.kind === 'custom') return false;
   if (a.hour !== b.hour || a.minute !== b.minute || a.timeZone !== b.timeZone) return false;
@@ -275,16 +301,54 @@ export function changeScheduleRecurrenceKind(
     case 'once':
       return { kind, at: new Date(now + 3_600_000).toISOString() };
     case 'custom': {
+      // Seed the pickers with the rule the person already has, so Custom opens
+      // on their schedule rather than on a blank one.
+      const seed = (expression: string) => parseCronExpression(expression);
       try {
         const trigger = recurrenceToTrigger(current);
-        if (trigger.kind === 'cron')
-          return { kind, expression: trigger.expression, timeZone: trigger.timeZone };
+        if (trigger.kind === 'cron') {
+          const fields = seed(trigger.expression);
+          if (fields) return { kind, fields, timeZone: trigger.timeZone };
+        }
       } catch {
         // Fall through to a readable default rather than blocking the switch.
       }
-      return { kind, expression: `${time.minute} ${time.hour} * * *`, timeZone: time.timeZone };
+      return {
+        kind,
+        fields: seed(`${time.minute} ${time.hour} * * *`)!,
+        timeZone: time.timeZone,
+      };
     }
   }
+}
+
+/**
+ * The expression a custom rule currently means.
+ *
+ * While a whole-expression text draft is open that draft IS the rule, even
+ * before it parses — `validateScheduleTrigger` then rejects it and the editor
+ * shows why, instead of the draft being silently replaced by the last good one.
+ */
+export function customRecurrenceExpression(
+  recurrence: Extract<ScheduleRecurrence, { kind: 'custom' }>
+): string {
+  return recurrence.draftText ?? formatCronExpression(recurrence.fields);
+}
+
+/** Comparable form that tolerates an incomplete draft. */
+function customRecurrenceSignature(
+  recurrence: Extract<ScheduleRecurrence, { kind: 'custom' }>
+): string {
+  if (recurrence.draftText !== undefined) return `text:${recurrence.draftText}`;
+  const incomplete = incompleteCronFieldIds(recurrence.fields);
+  if (incomplete.length) return `incomplete:${incomplete.join(',')}`;
+  return formatCronExpression(recurrence.fields);
+}
+
+/** Parts of a custom rule the person still has to fill in. */
+export function incompleteScheduleRecurrenceFields(recurrence: ScheduleRecurrence): string[] {
+  if (recurrence.kind !== 'custom' || recurrence.draftText !== undefined) return [];
+  return incompleteCronFieldIds(recurrence.fields);
 }
 
 /** The zone a recurrence's wall clock is read in; instants use the device. */

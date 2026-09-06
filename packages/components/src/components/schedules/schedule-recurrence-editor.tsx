@@ -9,8 +9,10 @@ import {
   changeScheduleRecurrenceKind,
   getDeviceTimeZone,
   normalizeScheduleWeekdays,
+  cronFieldsCombineDayAndWeekday,
+  formatCronExpression,
+  incompleteCronFieldIds,
   parseCronExpression,
-  withCronField,
   type ScheduleIntervalUnitId,
   type ScheduleRecurrence,
   type ScheduleRecurrenceKind,
@@ -142,45 +144,26 @@ function WeekdayPicker({
 /**
  * "Custom" as pickers, with an explicit text escape hatch.
  *
- * The rule stays a five-field cron expression — that is what the protocol
- * persists — but a person edits it one field at a time. Text mode is opt-in and
- * never the default, and any field the pickers cannot model already appears in
- * its own per-field text box, so nothing an existing schedule contains is
- * hidden, approximated or lost.
+ * The five fields are the state. Nothing here re-derives an edit mode by
+ * serializing and re-parsing the expression, which is what made a `raw` field
+ * snap back to a range the moment its text happened to parse, and made an
+ * emptied selection produce a four-field string that collapsed every picker.
+ * An incomplete field simply is not serialized; the form reports it and blocks
+ * Save.
  */
 function CustomRuleEditor({
-  expression,
+  value,
   onChange,
   disabled,
-  textMode,
 }: {
-  expression: string;
-  onChange: (next: string) => void;
+  value: Extract<ScheduleRecurrence, { kind: 'custom' }>;
+  onChange: (next: Extract<ScheduleRecurrence, { kind: 'custom' }>) => void;
   disabled?: boolean;
-  textMode: boolean;
 }) {
   const { t } = useTranslation();
-  const fields = parseCronExpression(expression);
-  // Only a rule that is not five fields cannot be shown as rows at all; that is
-  // unreachable for a stored schedule, but it can happen while someone is
-  // typing in text mode, so the rows stay hidden until it parses again.
-  const showText = textMode || fields === null;
+  const showText = value.draftText !== undefined;
   return (
     <>
-      {fields && !textMode
-        ? CRON_FIELD_ORDER.map((id) => (
-            <CronFieldRow
-              key={id}
-              id={id}
-              field={fields[id]}
-              disabled={disabled}
-              onChange={(next) => {
-                const updated = withCronField(expression, id, next);
-                if (updated !== null) onChange(updated);
-              }}
-            />
-          ))
-        : null}
       {showText ? (
         <PropertyRow
           label={t('schedules.repeat.expression', 'Expression')}
@@ -192,40 +175,75 @@ function CustomRuleEditor({
             disabled={disabled}
             aria-label={t('schedules.expression', 'Five-field cron expression')}
             className="h-8 w-full max-w-56 font-mono text-[13px]"
-            value={expression}
-            onChange={(event) => onChange(event.target.value)}
+            value={value.draftText}
+            onChange={(event) => {
+              // The draft is what the person typed. Fields follow it only when
+              // it parses, so a half-typed rule neither reverts nor is lost.
+              const draftText = event.target.value;
+              const parsed = parseCronExpression(draftText);
+              onChange({ ...value, draftText, ...(parsed ? { fields: parsed } : {}) });
+            }}
           />
         </PropertyRow>
+      ) : (
+        CRON_FIELD_ORDER.map((id) => (
+          <CronFieldRow
+            key={id}
+            id={id}
+            field={value.fields[id]}
+            disabled={disabled}
+            onChange={(field) => onChange({ ...value, fields: { ...value.fields, [id]: field } })}
+          />
+        ))
+      )}
+      {!showText && cronFieldsCombineDayAndWeekday(value.fields) ? (
+        <p className="px-3 py-2 text-xs text-muted-foreground">
+          {t(
+            'schedules.cron.dayOrWeekdayHint',
+            'A date and a weekday are both set. Cron runs when EITHER matches, not both.'
+          )}
+        </p>
       ) : null}
     </>
   );
 }
 
 function CustomEditingToggleRow({
-  expression,
-  textMode,
-  onTextModeChange,
+  value,
+  onChange,
   disabled,
 }: {
-  expression: string;
-  textMode: boolean;
-  onTextModeChange: (next: boolean) => void;
+  value: Extract<ScheduleRecurrence, { kind: 'custom' }>;
+  onChange: (next: Extract<ScheduleRecurrence, { kind: 'custom' }>) => void;
   disabled?: boolean;
 }) {
   const { t } = useTranslation();
-  const parses = parseCronExpression(expression) !== null;
+  const showText = value.draftText !== undefined;
+  const incomplete = incompleteCronFieldIds(value.fields).length > 0;
+  const draftParses = showText && parseCronExpression(value.draftText!) !== null;
   return (
     <PropertyRow label={t('schedules.cron.editing', 'Editing')}>
       <Button
         type="button"
         variant="ghost"
         size="sm"
-        // Returning to the pickers needs a rule they can show.
-        disabled={disabled || (textMode && !parses)}
+        // Returning to the pickers needs a rule they can show; leaving them
+        // needs a rule that can be written down.
+        disabled={disabled || (showText ? !draftParses : incomplete)}
         className="h-8 px-2 text-xs font-normal text-muted-foreground"
-        onClick={() => onTextModeChange(!textMode)}
+        onClick={() => {
+          if (!showText) {
+            onChange({ ...value, draftText: formatCronExpression(value.fields) });
+            return;
+          }
+          const parsed = parseCronExpression(value.draftText!);
+          if (parsed) {
+            const { draftText: _draftText, ...rest } = value;
+            onChange({ ...rest, fields: parsed });
+          }
+        }}
       >
-        {textMode || !parses
+        {showText
           ? t('schedules.cron.usePickers', 'Use pickers')
           : t('schedules.cron.editAsText', 'Edit as text')}
       </Button>
@@ -267,7 +285,6 @@ export function ScheduleRecurrenceEditor({
   const timeValue = hasWallClock
     ? `${String(value.hour).padStart(2, '0')}:${String(value.minute).padStart(2, '0')}`
     : '';
-  const [customTextMode, setCustomTextMode] = useState(false);
   const intervalValue = value.kind === 'interval' ? value : null;
   const interval = intervalValue ? splitInterval(intervalValue.everyMs) : null;
 
@@ -424,12 +441,7 @@ export function ScheduleRecurrenceEditor({
       ) : null}
 
       {value.kind === 'custom' ? (
-        <CustomRuleEditor
-          expression={value.expression}
-          textMode={customTextMode}
-          disabled={disabled}
-          onChange={(expression) => onChange({ ...value, expression })}
-        />
+        <CustomRuleEditor value={value} onChange={onChange} disabled={disabled} />
       ) : null}
 
       {value.kind !== 'once' && value.kind !== 'interval' ? (
@@ -444,12 +456,7 @@ export function ScheduleRecurrenceEditor({
       ) : null}
 
       {value.kind === 'custom' ? (
-        <CustomEditingToggleRow
-          expression={value.expression}
-          textMode={customTextMode}
-          onTextModeChange={setCustomTextMode}
-          disabled={disabled}
-        />
+        <CustomEditingToggleRow value={value} onChange={onChange} disabled={disabled} />
       ) : null}
     </>
   );

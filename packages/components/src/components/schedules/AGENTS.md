@@ -40,6 +40,22 @@
   in its own text box. So `parse`/`format` round-trip byte for byte, and an
   untouched rule is re-emitted unchanged — saving can never silently rewrite an
   existing plan or invalidate its fingerprint.
+- **The five fields are the edit state.** `ScheduleRecurrence['custom']` carries
+  `fields` (plus a `draftText` while the whole expression is being typed), and
+  nothing re-derives an edit mode by serializing and re-parsing. Deriving it is
+  what made a `raw` field snap back to a range the moment its text happened to
+  parse, and made an emptied selection produce a four-field string that removed
+  every picker and stranded the person in a cron text box.
+- An incomplete field is a first-class state, not a short expression:
+  `formatCronExpression` throws, `withCronField` returns `null`, and the form
+  names the unfinished field above a disabled Save. Never emit a partial rule.
+- Switching a field's mode must not change which instants fire. Only `*` means
+  unrestricted, and cron ORs day-of-month with day-of-week — so replacing `*`
+  with an exhaustive `1,2,…,31` or `1-31` turns a weekdays-only rule into a
+  daily one while looking like a representation change. From `*`, `list` and
+  `range` start UNFINISHED; values carry over only between already-finite modes.
+  When both day-of-month and weekday restrict, the editor states the OR out
+  loud. Cover mode switches with real croner `match` assertions, not text.
 - Cron day-of-week accepts 0 AND 7 for Sunday, so a RANGE must be expanded from
   its raw bounds and folded onto 0 only afterwards. Folding first turns `0-7`
   (every day) into `0-0` and reads it as Sundays only — a loss that is invisible

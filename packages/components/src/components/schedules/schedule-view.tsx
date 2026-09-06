@@ -15,6 +15,7 @@ import {
   applyScheduleRecurrence,
   defaultScheduleRecurrence,
   getServerNow,
+  incompleteScheduleRecurrenceFields,
   previewSchedule,
   triggerToRecurrence,
   type ScheduleRecurrence,
@@ -434,14 +435,26 @@ export function ScheduleForm({
       const trigger = applyScheduleRecurrence(recurrence, initial.trigger);
       return { trigger, times: previewSchedule(trigger, 0, now) };
     } catch {
+      // Name the part that is unfinished. An incomplete custom field is the
+      // common case — the person just switched a field to "On selected" and has
+      // not chosen yet — and "check the time rule" would not tell them where.
+      const incomplete = incompleteScheduleRecurrenceFields(recurrence);
       return {
         error:
           recurrence.kind === 'weekly' && recurrence.weekdays.length === 0
             ? t('schedules.requireWeekday', 'Choose at least one day of the week.')
-            : t('schedules.invalidTime', 'Check the time rule and time zone.'),
+            : incomplete.length
+              ? t('schedules.cron.requireValues', 'Choose a value for {{field}}.', {
+                  field: incomplete
+                    .map((id) =>
+                      t(`schedules.cron.${id}`, id as string).toLocaleLowerCase(i18n.language)
+                    )
+                    .join(t('schedules.cron.clauseSeparator', ', ')),
+                })
+              : t('schedules.invalidTime', 'Check the time rule and time zone.'),
       };
     }
-  }, [initial.trigger, now, recurrence, t]);
+  }, [i18n.language, initial.trigger, now, recurrence, t]);
 
   const misfireLabels: Record<ScheduleFormValue['misfire'], string> = {
     skip: t('schedules.skipMissed', 'Skip old runs'),

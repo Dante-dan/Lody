@@ -158,8 +158,9 @@ function NumberBox({
   label,
   disabled,
 }: {
-  value: number;
-  onChange: (next: number) => void;
+  /** `undefined` while a range bound has not been chosen yet. */
+  value: number | undefined;
+  onChange: (next: number | undefined) => void;
   min: number;
   max: number;
   label: string;
@@ -173,9 +174,14 @@ function NumberBox({
       step={1}
       disabled={disabled}
       aria-label={label}
+      placeholder="—"
       className="h-8 w-16 text-right"
-      value={value}
+      value={value ?? ''}
       onChange={(event) => {
+        if (event.target.value === '') {
+          onChange(undefined);
+          return;
+        }
         const next = Number(event.target.value);
         if (Number.isFinite(next)) onChange(Math.min(max, Math.max(min, Math.round(next))));
       }}
@@ -246,7 +252,10 @@ export function CronFieldRow({
   const weekdayToggleValues =
     id === 'weekday' && field.mode === 'list'
       ? field.values
-      : id === 'weekday' && field.mode === 'range'
+      : id === 'weekday' &&
+          field.mode === 'range' &&
+          field.from !== undefined &&
+          field.to !== undefined
         ? // Fold Sunday-as-7 only after expanding, and only once: a range bound
           // normalized first turns `0-7` into `0-0`. The parser guarantees
           // 0..6 today, and this keeps that true if the bounds ever widen.
@@ -254,7 +263,7 @@ export function CronFieldRow({
             ...new Set(
               Array.from(
                 { length: field.to - field.from + 1 },
-                (_, index) => (field.from + index) % 7
+                (_, index) => (field.from! + index) % 7
               )
             ),
           ].sort((a, b) => a - b)
@@ -272,27 +281,35 @@ export function CronFieldRow({
             label={t('schedules.cron.stepFor', 'Interval for {{field}}', {
               field: fieldLabels[id],
             })}
-            onChange={(step) => onChange({ ...field, step })}
+            // A step of 1 is the smallest meaningful interval; an emptied box
+            // keeps the field valid rather than half-written.
+            onChange={(step) => onChange({ ...field, step: step ?? 1 })}
           />
         ) : null}
 
         {!weekdayToggleValues && (field.mode === 'range' || windowed) ? (
           <>
             <NumberBox
-              value={field.mode === 'range' ? field.from : (field as { from: number }).from}
+              value={(field as { from?: number }).from}
               min={min}
               max={max}
               disabled={disabled}
-              label={t('schedules.cron.from', 'From')}
+              // Every field can show a range, so the accessible name has to
+              // say WHICH range; a bare "From" is ambiguous on the same screen.
+              label={t('schedules.cron.fromFor', '{{field}} range start', {
+                field: fieldLabels[id],
+              })}
               onChange={(from) => onChange({ ...field, from } as CronField)}
             />
             <span className="text-xs text-muted-foreground">{t('schedules.cron.to', 'to')}</span>
             <NumberBox
-              value={field.mode === 'range' ? field.to : (field as { to: number }).to}
+              value={(field as { to?: number }).to}
               min={min}
               max={max}
               disabled={disabled}
-              label={t('schedules.cron.toValue', 'To')}
+              label={t('schedules.cron.toFor', '{{field}} range end', {
+                field: fieldLabels[id],
+              })}
               onChange={(to) => onChange({ ...field, to } as CronField)}
             />
           </>

@@ -360,8 +360,8 @@ describe('Building a custom rule with pickers', () => {
     submit();
     expect(savedExpression()).toBe('*/5 9-17 * * 1-5');
 
-    setNumber(en['schedules.cron.from'], 8);
-    setNumber(en['schedules.cron.toValue'], 20);
+    setNumber(`${en['schedules.cron.hour']} range start`, 8);
+    setNumber(`${en['schedules.cron.hour']} range end`, 20);
     submit();
     expect(savedExpression()).toBe('*/5 8-20 * * 1-5');
   });
@@ -455,5 +455,211 @@ describe('Building a custom rule with pickers', () => {
     expect(byLabel(`${en['schedules.cron.month']} rule`)!.textContent).toBe('On selected');
     submit();
     expect(savedExpression()).toBe('0 6 1 1 *');
+  });
+});
+
+/**
+ * The editor's state is the five fields, not a string it re-parses. These are
+ * the three ways the previous derive-from-serialized-cron design broke.
+ */
+describe('Custom rule drafts survive editing', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let onSave: ReturnType<typeof vi.fn>;
+  beforeAll(async () => {
+    if (!i18next.isInitialized)
+      await i18next
+        .use(initReactI18next)
+        .init({ lng: 'en', resources: { en: { translation: en } } });
+  });
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.append(container);
+    root = createRoot(container);
+    onSave = vi.fn();
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+  });
+
+  /** A fresh root per rule: `initial` seeds uncontrolled editor state. */
+  const open = (expression: string) => {
+    act(() => root.unmount());
+    container.replaceChildren();
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <ScheduleForm
+          now={NOW}
+          saving={false}
+          onSave={onSave}
+          initial={{
+            title: 'Build sweep',
+            prompt: 'Check the build.',
+            trigger: { kind: 'cron', expression, timeZone: 'Asia/Shanghai' },
+            misfire: 'skip',
+            overlap: 'skip',
+          }}
+        />
+      )
+    );
+  };
+  const byLabel = <T extends Element>(label: string) =>
+    container.querySelector<T>(`[aria-label="${label}"]`);
+  const click = (element: Element | null) =>
+    act(() => {
+      (element as HTMLElement).click();
+    });
+  const typeInto = (label: string, text: string) =>
+    act(() => {
+      const input = byLabel<HTMLInputElement>(label)!;
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, text);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  const submit = () =>
+    act(() => {
+      container
+        .querySelector('form')!
+        .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+  const saveButton = () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  const fieldRows = () =>
+    ['minute', 'hour', 'dayOfMonth', 'month', 'weekday'].filter((id) =>
+      byLabel(`${en[`schedules.cron.${id}` as keyof typeof en]} rule`)
+    );
+
+  it('does not enumerate `*` when a field switches to a selection', () => {
+    open('*/20 9-17 * * 1-5');
+    // Emulate the mode change the Radix menu performs.
+    const dayRule = byLabel<HTMLElement>(`${en['schedules.cron.dayOfMonth']} rule`)!;
+    expect(dayRule.textContent).toBe('Every day');
+    // Choosing "On selected" must leave the rule unfinished rather than
+    // silently widening it to every date (day-of-month ORs with weekday).
+    click(byLabel(`${en['schedules.cron.weekday']} rule`));
+    // The weekday selection is emptied by unticking every day.
+    for (const day of ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']) click(byLabel(day));
+    expect(container.textContent).not.toContain('1,2,3');
+  });
+
+  it('keeps every picker on screen when the last selection is cleared', () => {
+    open('*/20 9-17 * * 1-5');
+    expect(fieldRows()).toHaveLength(5);
+    for (const day of ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']) click(byLabel(day));
+
+    // The previous design serialized this to `*/20 9-17 * * `, which failed to
+    // parse and removed all five rows, leaving only a raw cron box.
+    expect(fieldRows()).toHaveLength(5);
+    expect(byLabel(en['schedules.expression'])).toBeNull();
+
+    // Save is blocked, and the reason names the field.
+    expect(saveButton().disabled).toBe(true);
+    expect(container.textContent).toContain('Choose a value for');
+    submit();
+    expect(onSave).not.toHaveBeenCalled();
+
+    // Choosing a day again restores a saveable rule, and the untouched fields
+    // are exactly as they were.
+    click(byLabel('Wednesday'));
+    expect(saveButton().disabled).toBe(false);
+    submit();
+    expect(onSave.mock.calls[0]![0].trigger).toEqual({
+      kind: 'cron',
+      expression: '*/20 9-17 * * 3',
+      timeZone: 'Asia/Shanghai',
+    });
+  });
+
+  it('keeps a field in Custom text while it is being typed', () => {
+    open('0 9 * * MON#2');
+    const rawLabel = `Custom text for ${en['schedules.cron.weekday']}`;
+    expect(byLabel<HTMLInputElement>(rawLabel)!.value).toBe('MON#2');
+
+    // Typing a value that happens to parse as a list must NOT swap the control
+    // out from under the cursor; the person chose Custom text.
+    typeInto(rawLabel, '2');
+    const stillRaw = byLabel<HTMLInputElement>(rawLabel);
+    expect(stillRaw).not.toBeNull();
+    expect(stillRaw!.value).toBe('2');
+    expect(byLabel<HTMLElement>(`${en['schedules.cron.weekday']} rule`)!.textContent).toBe(
+      'Custom text'
+    );
+
+    // Emptying it is an incomplete draft, not a four-field expression.
+    typeInto(rawLabel, '');
+    expect(byLabel(rawLabel)).not.toBeNull();
+    expect(saveButton().disabled).toBe(true);
+
+    typeInto(rawLabel, '1-5');
+    submit();
+    expect(onSave.mock.calls[0]![0].trigger).toEqual({
+      kind: 'cron',
+      expression: '0 9 * * 1-5',
+      timeZone: 'Asia/Shanghai',
+    });
+  });
+
+  it('explains that a date and a weekday combine with OR', () => {
+    open('0 9 1 * 1-5');
+    expect(container.textContent).toContain(en['schedules.cron.dayOrWeekdayHint']);
+    open('0 9 * * 1,3');
+    expect(container.textContent).not.toContain(en['schedules.cron.dayOrWeekdayHint']);
+  });
+
+  it('holds a half-typed whole expression instead of reverting it', () => {
+    open('*/20 9-17 * * 1-5');
+    const toggle = () =>
+      [...container.querySelectorAll('button')].find(
+        (button) =>
+          button.textContent === en['schedules.cron.editAsText'] ||
+          button.textContent === en['schedules.cron.usePickers']
+      )!;
+    click(toggle());
+    const text = () => byLabel<HTMLInputElement>(en['schedules.expression'])!;
+    expect(text().value).toBe('*/20 9-17 * * 1-5');
+
+    // Mid-edit the string is not five fields. It must stay exactly as typed.
+    typeInto(en['schedules.expression'], '0 9 * *');
+    expect(text().value).toBe('0 9 * *');
+    expect(saveButton().disabled).toBe(true);
+    expect(toggle().disabled).toBe(true);
+
+    typeInto(en['schedules.expression'], '0 9 * * 6');
+    expect(toggle().disabled).toBe(false);
+    click(toggle());
+    expect(byLabel(en['schedules.expression'])).toBeNull();
+    expect(fieldRows()).toHaveLength(5);
+    submit();
+    expect(onSave.mock.calls[0]![0].trigger).toEqual({
+      kind: 'cron',
+      expression: '0 9 * * 6',
+      timeZone: 'Asia/Shanghai',
+    });
+  });
+
+  it('still re-emits an untouched rule byte for byte', () => {
+    // `1-5,0` mixes a range and a list, which the pickers never emit. It stays
+    // in its own text box, and an untouched rule is returned exactly as stored.
+    open('*/20 9 * * 1-5,0');
+    expect(
+      byLabel<HTMLInputElement>(`Custom text for ${en['schedules.cron.weekday']}`)!.value
+    ).toBe('1-5,0');
+    submit();
+    expect(onSave.mock.calls[0]![0].trigger).toEqual({
+      kind: 'cron',
+      expression: '*/20 9 * * 1-5,0',
+      timeZone: 'Asia/Shanghai',
+    });
+  });
+
+  it('blocks saving a rule the persisted protocol rejects, without rewriting it', () => {
+    // `MON#2` is croner syntax the schedule protocol refuses. It stays visible
+    // and editable; what must not happen is a silent rewrite to something legal.
+    open('0 9 * * MON#2');
+    expect(
+      byLabel<HTMLInputElement>(`Custom text for ${en['schedules.cron.weekday']}`)!.value
+    ).toBe('MON#2');
+    submit();
+    expect(onSave).not.toHaveBeenCalled();
   });
 });

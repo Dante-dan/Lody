@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyScheduleRecurrence,
   changeScheduleRecurrenceKind,
+  customRecurrenceExpression,
   defaultScheduleRecurrence,
   previewSchedule,
   recurrenceToTrigger,
@@ -122,7 +123,10 @@ describe('recurrence ⇄ trigger mapping', () => {
       '0 9 * *',
     ]) {
       const trigger = cron(expression);
-      expect(triggerToRecurrence(trigger)).toEqual({ kind: 'custom', expression, timeZone: ZONE });
+      const recurrence = triggerToRecurrence(trigger);
+      expect(recurrence.kind).toBe('custom');
+      // The fields ARE the state; the expression is what they mean.
+      expect(customRecurrenceExpression(recurrence as never)).toBe(expression);
     }
   });
 
@@ -199,13 +203,21 @@ describe('editing an existing schedule', () => {
 
   it('keeps an unmapped expression editable as custom text', () => {
     const stored = cron('0 9 * * MON#2');
-    const recurrence = triggerToRecurrence(stored);
-    expect(recurrence).toEqual({ kind: 'custom', expression: '0 9 * * MON#2', timeZone: ZONE });
+    const recurrence = triggerToRecurrence(stored) as Extract<
+      ScheduleRecurrence,
+      { kind: 'custom' }
+    >;
+    expect(recurrence.kind).toBe('custom');
+    expect(recurrence.fields.weekday).toEqual({ mode: 'raw', text: 'MON#2' });
     // Croner extensions are rejected by the persisted protocol, so an author
-    // who opens one must be able to correct it in place.
+    // who opens one must be able to correct it in place — editing that one
+    // field, not the whole expression.
     expect(
       applyScheduleRecurrence(
-        { ...recurrence, expression: '0 9 * * 2' } as ScheduleRecurrence,
+        {
+          ...recurrence,
+          fields: { ...recurrence.fields, weekday: { mode: 'list', values: [2] } },
+        },
         stored
       )
     ).toEqual(cron('0 9 * * 2'));
@@ -254,7 +266,16 @@ describe('switching between kinds', () => {
         'custom',
         NOW
       )
-    ).toEqual({ kind: 'custom', expression: '30 7 * * 1-5', timeZone: ZONE });
+    ).toMatchObject({ kind: 'custom', timeZone: ZONE });
+    expect(
+      customRecurrenceExpression(
+        changeScheduleRecurrenceKind(
+          { kind: 'weekdays', hour: 7, minute: 30, timeZone: ZONE },
+          'custom',
+          NOW
+        ) as never
+      )
+    ).toBe('30 7 * * 1-5');
   });
 
   it('is a no-op for the current kind', () => {

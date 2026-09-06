@@ -3898,9 +3898,7 @@
   "schedules.cron.modeFor": "{{field}} rule",
   "schedules.cron.stepFor": "Interval for {{field}}",
   "schedules.cron.rawFor": "Custom text for {{field}}",
-  "schedules.cron.from": "From",
   "schedules.cron.to": "to",
-  "schedules.cron.toValue": "To",
   "schedules.cron.addWindow": "Limit range",
   "schedules.cron.clearWindow": "Remove range",
   "schedules.cron.chooseValues": "Choose…",
@@ -3925,5 +3923,9 @@
   "schedules.cron.clause.raw": "{{unit}} “{{text}}”",
   "schedules.cron.clause.everyMinute": "Every minute",
   "schedules.cron.clauseSeparator": ", ",
+  "schedules.cron.requireValues": "Choose a value for {{field}}.",
+  "schedules.cron.dayOrWeekdayHint": "A date and a weekday are both set. Cron runs when EITHER matches, not both.",
+  "schedules.cron.fromFor": "{{field}} range start",
+  "schedules.cron.toFor": "{{field}} range end",
   "schedules.errors.SCHEDULES_DISABLED": "Scheduled execution on this machine is paused by its environment configuration."
 }

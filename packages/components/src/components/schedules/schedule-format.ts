@@ -3,6 +3,7 @@ import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import {
   CRON_FIELD_ORDER,
   getDeviceTimeZone,
+  type CronFields,
   normalizeScheduleWeekdays,
   parseCronExpression,
   scheduleRecurrenceTimeZone,
@@ -107,7 +108,9 @@ export function describeRecurrence(
         time: formatInstant(Date.parse(recurrence.at), getDeviceTimeZone(), locale),
       });
     case 'custom':
-      return describeCronExpression(recurrence.expression, t, locale);
+      return recurrence.draftText !== undefined
+        ? recurrence.draftText
+        : describeCronFields(recurrence.fields, t, locale);
   }
 }
 
@@ -132,7 +135,11 @@ const cronUnitKey = (id: CronFieldId): string =>
  */
 export function describeCronExpression(expression: string, t: TFunction, locale?: string): string {
   const fields = parseCronExpression(expression);
-  if (!fields) return expression;
+  return fields ? describeCronFields(fields, t, locale) : expression;
+}
+
+/** The same sentence, from the fields a person is editing. */
+export function describeCronFields(fields: CronFields, t: TFunction, locale?: string): string {
   const list = (id: CronFieldId, values: number[]): string => {
     const names =
       id === 'weekday'
