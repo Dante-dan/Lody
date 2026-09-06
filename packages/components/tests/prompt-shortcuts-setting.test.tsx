@@ -121,7 +121,7 @@ describe('Prompt Shortcut settings identity fencing', () => {
   it('allows editing and deleting locally while publication is pending', async () => {
     state = { ...state, pendingIds: [shortcut.id] };
     await render();
-    expect(container.textContent).toContain('publishing in the background');
+    expect(container.textContent).toContain('Publishing in the background');
 
     // A failed publication is reported as a fact about this device's copy; it
     // still never takes the local actions away.

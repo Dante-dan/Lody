@@ -104,7 +104,13 @@ it('initializes defaults once, keeps values independent and blocks whitespace-on
   const chips = context.mentions.filter(isShortcutMention);
   expect(chips[0]!.data.values.topic).toBe('   ');
   expect(chips[1]!.data.values.topic).toBe('code');
-  expect(container.querySelector('[role="status"]')?.textContent).toContain('Review: topic');
+  // The field itself carries the missing state now; the separate reminder line
+  // above the tray is gone, because the red token already says which value.
+  expect(
+    container
+      .querySelector<HTMLTextAreaElement>('textarea[aria-label="topic"]')
+      ?.getAttribute('aria-invalid')
+  ).toBe('true');
   act(() => root.render(<Harness />));
   expect(container.querySelector<HTMLTextAreaElement>('textarea[aria-label="topic"]')?.value).toBe(
     '   '

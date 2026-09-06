@@ -15,11 +15,7 @@ import { Button } from '@/ui/button';
 import { AutoGrowTextarea } from '../settings/form-primitives';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
-import {
-  isShortcutMention,
-  missingShortcutVariables,
-  shortcutDraftMissingVariables,
-} from './shortcut-composer-state';
+import { isShortcutMention, missingShortcutVariables } from './shortcut-composer-state';
 
 /**
  * The values one invocation needs, asked for where the invocation is.
@@ -119,7 +115,7 @@ export function ShortcutParameters({
   return (
     <section
       aria-label={title}
-      className="mt-2 space-y-2 rounded-lg border border-border/60 bg-card/60 p-2.5"
+      className="mt-1.5 space-y-2 rounded-lg border border-border/60 bg-card/60 p-2.5"
     >
       <header className="flex items-start justify-between gap-2">
         <div className="min-w-0">
@@ -162,7 +158,6 @@ export function ShortcutInvocationEditor({
   const seenIds = useRef(new Set<string>());
   const chips = useMemo(() => context.mentions.filter(isShortcutMention), [context.mentions]);
   const active = chips.find(({ value }) => value === activeId);
-  const missing = shortcutDraftMissingVariables(context.mentions);
   const unavailable = chips
     .map(({ data }) => ({
       name: data.snapshot.name,
@@ -200,11 +195,6 @@ export function ShortcutInvocationEditor({
           {name}: {shortcutAvailabilityMessage(availability, t)}
         </p>
       ))}
-      {missing.length > 0 ? (
-        <p role="status" className="mt-2 text-xs text-destructive">
-          {t('promptShortcut.missingVariables', { names: missing.join(', ') })}
-        </p>
-      ) : null}
       {active ? (
         <ShortcutParameters
           key={active.value}

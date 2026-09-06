@@ -4,11 +4,7 @@ import { createShortcutInvocation, type PromptShortcut } from '@lody/shared/prom
 import { Mention, MentionInput, useMentionContext } from '@/ui/mention';
 import { getComposerMentionChip } from '@/components/mentions/mention-chips';
 import { ShortcutParameters } from '@/components/mentions/shortcut-parameters';
-import {
-  isShortcutMention,
-  shortcutDraftMissingVariables,
-} from '@/components/mentions/shortcut-composer-state';
-import { useTranslation } from 'react-i18next';
+import { isShortcutMention } from '@/components/mentions/shortcut-composer-state';
 const body: PromptShortcut = {
   v: 1,
   id: 'review',
@@ -35,18 +31,11 @@ function Editor({
   mobile: boolean;
 }) {
   const context = useMentionContext('story');
-  const { t } = useTranslation();
   const chip = context.mentions.find(
     (range) => range.value === activeId && isShortcutMention(range)
   );
-  const missing = shortcutDraftMissingVariables(context.mentions);
   return (
     <>
-      {missing.length ? (
-        <p role="status" className="my-3 text-xs text-destructive">
-          {t('promptShortcut.missingVariables', { names: missing.join(', ') })}
-        </p>
-      ) : null}
       {chip && isShortcutMention(chip) ? (
         <ShortcutParameters
           invocation={chip.data}

@@ -438,16 +438,20 @@ export function PromptShortcutRow({
           >
             /
           </span>
-          <span className="min-w-0 flex-1">
-            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+          {/* Two columns, not one stack: identity reads down the left, and what
+              the author set plus what is happening to it sit against the right
+              edge. Both halves wrap instead of relying on a viewport breakpoint —
+              settings render in a panel far narrower than the window. */}
+          <span className="flex min-w-0 flex-1 flex-col gap-1">
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <span className="min-w-0 truncate text-sm font-medium leading-tight">
                 {entry.name}
               </span>
               <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
                 /{entry.slug}
               </span>
-              {/* Visibility, not scope: the pills below say where it can be
-                  called, this says who can read it. */}
+              {/* Visibility, not scope: the pills say where it can be called,
+                  this says who can read it. */}
               <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px]">
                 {entry.visibility === 'workspace'
                   ? t('settings.promptShortcuts.shared', 'Shared')
@@ -460,45 +464,50 @@ export function PromptShortcutRow({
                   {t('settings.promptShortcuts.readOnly', 'Read-only')}
                 </Badge>
               )}
-            </span>
-            {entry.description ? (
-              <span className="mt-0.5 block truncate text-[11px] leading-tight text-muted-foreground">
-                {entry.description}
+              <span className="ms-auto flex shrink-0 items-center gap-1.5">
+                <ScopePills scope={entry.scope} options={options} />
+                {entry.variableCount > 0 ? (
+                  <span className="text-[11px] leading-4 text-muted-foreground/80">
+                    {t('settings.promptShortcuts.variableCount', {
+                      defaultValue: '{{count}} variables',
+                      count: entry.variableCount,
+                    })}
+                  </span>
+                ) : null}
               </span>
-            ) : null}
-            <span className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-              <ScopePills scope={entry.scope} options={options} />
-              {entry.variableCount > 0 ? (
-                <span className="text-[11px] leading-4 text-muted-foreground/80">
-                  {t('settings.promptShortcuts.variableCount', {
-                    defaultValue: '{{count}} variables',
-                    count: entry.variableCount,
-                  })}
+            </span>
+            {entry.description || outOfScope || failed || pending ? (
+              <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                {entry.description ? (
+                  <span className="min-w-0 truncate text-[11px] leading-tight text-muted-foreground">
+                    {entry.description}
+                  </span>
+                ) : null}
+                {/* Short status phrases, so several can share the line and still
+                    sit against the right edge. */}
+                <span className="ms-auto flex shrink-0 items-center gap-x-3 gap-y-1">
+                  {outOfScope ? (
+                    <span className="text-[11px] leading-tight text-status-warning">
+                      {t(
+                        'settings.promptShortcuts.needsAttention',
+                        'A reference is outside this scope'
+                      )}
+                    </span>
+                  ) : null}
+                  {failed ? (
+                    <span className="text-[11px] leading-tight text-status-warning">
+                      {t(
+                        'settings.promptShortcuts.publishFailed',
+                        'Publishing failed · will retry'
+                      )}
+                    </span>
+                  ) : pending ? (
+                    <span className="flex items-center gap-1 text-[11px] leading-tight text-muted-foreground/80">
+                      <CloudUpload className="size-3 shrink-0" aria-hidden="true" />
+                      {t('settings.promptShortcuts.pending', 'Publishing in the background')}
+                    </span>
+                  ) : null}
                 </span>
-              ) : null}
-            </span>
-            {outOfScope ? (
-              <span className="mt-1 block truncate text-[11px] leading-tight text-status-warning">
-                {t(
-                  'settings.promptShortcuts.needsAttention',
-                  'A reference no longer matches this scope — open to repair it.'
-                )}
-              </span>
-            ) : null}
-            {failed ? (
-              <span className="mt-1 block truncate text-[11px] leading-tight text-status-warning">
-                {t(
-                  'settings.promptShortcuts.publishFailed',
-                  'Saved on this device. Publishing failed — it will retry.'
-                )}
-              </span>
-            ) : pending ? (
-              <span className="mt-1 flex min-w-0 items-center gap-1 text-[11px] leading-tight text-muted-foreground/80">
-                <CloudUpload className="size-3 shrink-0" aria-hidden="true" />
-                {t(
-                  'settings.promptShortcuts.pending',
-                  'Saved on this device · publishing in the background'
-                )}
               </span>
             ) : null}
           </span>
