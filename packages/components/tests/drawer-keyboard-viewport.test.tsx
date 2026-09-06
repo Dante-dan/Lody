@@ -114,12 +114,25 @@ describe('native side-drawer keyboard layout', () => {
     expect(drawer.style.bottom).toBe('0px');
   });
 
-  it('does not treat pinch zoom as keyboard occlusion', () => {
+  it.each([0.999, 1.0000001])('tracks keyboard occlusion at near-unit scale %s', (scale) => {
     const drawer = renderDrawer();
-    viewport.scale = 2;
-    resize(800, 400);
+    viewport.scale = scale;
+    resize(800, 480);
+    expect(drawer.style.bottom).toBe('320px');
+    resize(800, 800);
     expect(drawer.style.bottom).toBe('0px');
+    expect(drawer.style.height).toBe('');
   });
+
+  it.each([0.98, 1.02, 2])(
+    'does not treat pinch zoom at scale %s as keyboard occlusion',
+    (scale) => {
+      const drawer = renderDrawer();
+      viewport.scale = scale;
+      resize(800, 400);
+      expect(drawer.style.bottom).toBe('0px');
+    }
+  );
 
   it('keeps CSS sizing when visualViewport is unavailable', () => {
     vi.stubGlobal('visualViewport', undefined);

@@ -10,13 +10,17 @@ Parent `AGENTS.md` files also apply.
   an auth transition selects the destination, the host owns both the non-redirecting
   auth action and navigation so an auth helper cannot discard route-specific state.
 
-## Keyboard navigation
+## Soft-keyboard viewport handling
 
 - Native non-iOS side drawers without snap points use `ui/drawer.tsx`'s live
   viewport bottom inset when input repositioning is enabled. Never cache a
   keyboard-shrunken drawer height or infer keyboard visibility from focus:
   Android-compatible shells can resize the WebView and retain input focus on hide.
   Preserve the separate iOS native keyboard offset and bottom-sheet handling.
+  `repositionInputs={false}` explicitly opts out of both Vaul repositioning and
+  this inset; callers using it own their keyboard layout.
+
+## Keyboard navigation
 
 - Each independently navigable list owns one `FocusScope` and one
   `useListKeyboardNavigation` call. Rows expose `data-scope-item` plus a stable

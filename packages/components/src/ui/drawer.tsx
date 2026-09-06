@@ -41,7 +41,8 @@ function useDrawerViewportBottom() {
       // Never infer keyboard visibility from focus or resize-event counts:
       // Android's Back button can hide the keyboard while retaining focus.
       setBottom(
-        viewport && viewport.scale === 1
+        // Allow small scale-reporting errors while excluding pinch zoom.
+        viewport && Math.abs(viewport.scale - 1) < 0.01
           ? Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)
           : 0
       );
