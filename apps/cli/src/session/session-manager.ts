@@ -85,6 +85,7 @@ import {
 import { ensureGhShimScript, prependGhShimBinDirToPath } from '@/lib/gh-shim-script';
 import { ensureLodyBashEnvForGhShim, shouldInjectBashEnvForGhShim } from '@/lib/lody-bashenv';
 import { ensureLodyZdotdirForGhShim, shouldInjectZdotdirForGhShim } from '@/lib/lody-zdotdir';
+import { applyNonOwnerShellEnv } from '@/lib/non-owner-shell-env';
 import type { RateLimit, SessionUsageUpdate } from 'acp-extension-core';
 import { getWorktreeManager } from './worktree/worktree-manager';
 import type {
@@ -1507,11 +1508,14 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     if (!sessionId) {
       throw new Error('SessionId is required to prepare GitHub session credentials');
     }
+    const allowLocalAuth =
+      Boolean(this.cloudPort.identity.userId) &&
+      config.requesterUserId === this.cloudPort.identity.userId;
     const contextToken = this.gitCredentialBroker?.activateSessionContext({
       sessionId,
       requesterUserId: config.requesterUserId,
       machineId: this.machineId,
-      allowLocalAuth: config.requesterUserId === this.cloudPort.identity.userId,
+      allowLocalAuth,
     });
 
     ensureCredentialHelperScript(repoId);
@@ -1538,7 +1542,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     if (!brokerStateFilePath) {
       throw new Error('GitHub broker state is required to prepare session credentials');
     }
-    this.ensureGhShimSessionEnv(sessionEnv, brokerStateFilePath);
+    this.ensureGhShimSessionEnv(sessionEnv, brokerStateFilePath, allowLocalAuth);
 
     const credentialHelperValue = buildCredentialHelperValueForHost(repoId);
     const brokerUrl = brokerEnv.url;
@@ -1575,7 +1579,9 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       sessionId: session.sessionId,
       requesterUserId,
       machineId: this.machineId,
-      allowLocalAuth: requesterUserId === this.cloudPort.identity.userId,
+      allowLocalAuth:
+        Boolean(this.cloudPort.identity.userId) &&
+        requesterUserId === this.cloudPort.identity.userId,
     });
     session.updateEnv({ [LODY_GIT_CRED_CONTEXT_TOKEN_ENV]: contextToken });
     // Preference changes take effect on the next git/gh request, without fetching
@@ -1585,7 +1591,8 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
 
   private ensureGhShimSessionEnv(
     sessionEnv: Record<string, string>,
-    brokerStateFilePath: string
+    brokerStateFilePath: string,
+    allowLocalAuth: boolean
   ): void {
     ensureGhShimScript(brokerStateFilePath);
 
@@ -1593,6 +1600,13 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       sessionEnv.PATH ?? process.env.PATH,
       brokerStateFilePath
     );
+
+    // The passthrough files are shared with live owner sessions. Authorize their
+    // generation before any write; scrubbing a future child env is too late.
+    if (!allowLocalAuth) {
+      applyNonOwnerShellEnv(sessionEnv, brokerStateFilePath);
+      return;
+    }
 
     if (shouldInjectBashEnvForGhShim()) {
       sessionEnv.BASH_ENV = ensureLodyBashEnvForGhShim(sessionEnv.BASH_ENV, brokerStateFilePath);
