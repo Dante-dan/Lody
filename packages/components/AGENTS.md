@@ -114,6 +114,23 @@ mobile surfaces.
 - `maybeClearLodyCacheOnBoot` runs at most once per page load and is shared by
   `AppInitializer` (so a user wedged before any workspace still gets the wipe) and
   `RuntimeProvider` (which must await it before opening the repo IndexedDB).
+- A full or dead repo IndexedDB is a STORAGE CRISIS, not a failed operation.
+  `lib/storage-crisis.ts` classifies it (`QuotaExceededError` -> `quota`; a closing
+  connection or an unopenable backing store -> `unavailable`) and latches ONE
+  one-way breaker for the page lifetime; `providers/crisis-aware-storage-adapter.ts`
+  wraps the adaptor passed to `LoroRepo.create`. Classification belongs there, under
+  the repo, because `openPersistedDoc` for a new session room already runs a readwrite
+  transaction — session creation breaks on the READ path — and archive, send, and
+  catalog writes hit the same dead connection right after. Once latched, every method
+  rejects with `StorageCrisisError` WITHOUT touching IndexedDB, reads included: a
+  read that answered `undefined` would look like "no such document" and invite a write
+  that overwrites durable history. Never add an in-memory repo fallback (unlike
+  `resilient-remote-cursor-store.ts`, whose cursors are rebuildable checkpoints) and
+  never retry a latched crisis — freeing disk space does not reopen a dying Chromium
+  connection, so recovery is `app.restartApp()` (`lib/app-restart.ts`), not a reload.
+  `StorageCrisisDialog` (mounted in `__root.tsx` above `RuntimeProvider`) owns the
+  user-facing explanation; raw `IDBDatabase`/`transaction` DOMException text stays
+  behind its technical-details toggle and must never reach a toast.
 - `stuck-connection-banner.tsx` (mounted once in `MainLayout`) surfaces the same
   cache-clear flow after the control connection has been continuously `loading`
   for 45s. It is observational only: it must never interrupt, retry, or time out
