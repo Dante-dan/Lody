@@ -36,9 +36,10 @@ control plane.
 
 ## GitHub credentials
 
-- `gh-shim-script.ts` checks `/github-auth-context` before credentials; missing/stale contexts
-  fail closed. Local auth is owner-only. Embed the absolute broker path, never from child env.
-  Use workspace-bound `gh-session-bin` even without a repository/broker; never fall through to native gh for non-owners.
+- `gh-shim-script.ts`: authorize `/github-auth-context` before credentials; missing/stale contexts
+  fail closed. Owner-only local auth; broker paths never come from child env. Non-owners
+  always use workspace-bound shims, even without a repository/broker.
+- Broker state/env contain session bearers requiring context. Host Git uses a private in-memory bearer.
 - Owner tokens/login precede requester-bound managed fallback on missing credentials/401 only.
   Never replay commands. API hosts/PR URLs override ambient repos; managed tokens are github.com-only.
 - PR/Issue URLs may follow command-specific boolean flags. Body/template URL values and unknown

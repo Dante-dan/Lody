@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'fs';
 import {
+  BROKER_STATE_FILE_PATH,
   createGitCredentialBrokerHandler,
   GitCredentialBroker,
   type GitCredentialBrokerSessionContext,
@@ -15,7 +17,8 @@ describe('GitCredentialBroker', () => {
 
     const logger = { debug: vi.fn() } as unknown as Logger;
     const handler = createGitCredentialBrokerHandler({
-      authToken: 'auth-token',
+      authToken: 'session-token',
+      infrastructureAuthToken: 'auth-token',
       tokenManager,
       logger,
     });
@@ -37,14 +40,15 @@ describe('GitCredentialBroker', () => {
     });
   });
 
-  it('returns app token when no requester context is provided', async () => {
+  it('returns app token only for private infrastructure authority without context', async () => {
     const tokenManager = {
       getAppTokenForRepo: vi.fn().mockResolvedValue('app-token'),
     } as unknown as GitHubTokenManager;
 
     const logger = { debug: vi.fn() } as unknown as Logger;
     const handler = createGitCredentialBrokerHandler({
-      authToken: 'auth-token',
+      authToken: 'session-token',
+      infrastructureAuthToken: 'auth-token',
       tokenManager,
       logger,
     });
@@ -63,6 +67,41 @@ describe('GitCredentialBroker', () => {
     expect(JSON.parse(res.body)).toEqual({ token: 'app-token' });
     expect(tokenManager.getAppTokenForRepo).toHaveBeenCalledWith('owner/repo');
   });
+
+  it.each(['/github-token', '/git-credential', '/github-token/reject', '/git-credential/reject'])(
+    'requires context for session-visible credential endpoint %s',
+    async (url) => {
+      const tokenManager = {
+        getAppTokenForRepo: vi.fn().mockResolvedValue('infrastructure-token'),
+        getWriteTokenForRepo: vi.fn().mockResolvedValue('write-token'),
+        invalidate: vi.fn(),
+      } as unknown as GitHubTokenManager;
+      const handler = createGitCredentialBrokerHandler({
+        authToken: 'session-token',
+        infrastructureAuthToken: 'private-token',
+        tokenManager,
+        logger: { debug: vi.fn() } as unknown as Logger,
+        resolveContext: () => null,
+      });
+      for (const contextToken of [undefined, '', null, 7, 'expired']) {
+        const res = makeRes();
+        handler(
+          makeReq({
+            url,
+            auth: 'Bearer session-token',
+            body: { repoFullName: 'owner/repo', contextToken },
+          }),
+          res
+        );
+        await res.finished;
+        expect(res.statusCode).toBe(403);
+        expect(JSON.parse(res.body).error).toBe('invalid_context');
+      }
+      expect(tokenManager.getAppTokenForRepo).not.toHaveBeenCalled();
+      expect(tokenManager.getWriteTokenForRepo).not.toHaveBeenCalled();
+      expect(tokenManager.invalidate).not.toHaveBeenCalled();
+    }
+  );
 
   it('returns requester-bound write token when a valid context is provided', async () => {
     const tokenManager = {
@@ -338,10 +377,15 @@ describe('GitCredentialBroker', () => {
     it('preserves context resolution after broker recovery', async () => {
       const tokenManager = {
         getWriteTokenForRepo: vi.fn().mockResolvedValue('write-token-after-recovery'),
+        getAppTokenForRepo: vi.fn().mockResolvedValue('infrastructure-token'),
       } as unknown as GitHubTokenManager;
       const logger = { debug: vi.fn(), error: vi.fn() } as unknown as Logger;
       const broker = new GitCredentialBroker({ tokenManager, logger });
       const initialEnv = await broker.ensureStarted();
+      const infrastructure = await broker.getInfrastructureEnv();
+      expect(infrastructure.token).not.toBe(initialEnv.token);
+      expect(process.env.LODY_GIT_CRED_BROKER_TOKEN).toBe(initialEnv.token);
+      expect(JSON.parse(readFileSync(BROKER_STATE_FILE_PATH, 'utf8')).token).toBe(initialEnv.token);
       const contextToken = broker.activateSessionContext({
         sessionId: 's1',
         requesterUserId: 'u1',
@@ -351,6 +395,22 @@ describe('GitCredentialBroker', () => {
       try {
         await (broker as unknown as { recover(): Promise<void> }).recover();
         const env = (broker as unknown as { env: typeof initialEnv | null }).env ?? initialEnv;
+        expect((await broker.getInfrastructureEnv()).token).toBe(infrastructure.token);
+        expect(JSON.parse(readFileSync(BROKER_STATE_FILE_PATH, 'utf8')).token).toBe(env.token);
+        for (const [bearer, expectedStatus] of [
+          [env.token, 403],
+          [infrastructure.token, 200],
+        ] as const) {
+          const raw = await fetch(`${env.url}/github-token`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
+            body: JSON.stringify({ repoFullName: 'owner/repo' }),
+          });
+          expect(raw.status).toBe(expectedStatus);
+          if (expectedStatus === 200)
+            await expect(raw.json()).resolves.toEqual({ token: 'infrastructure-token' });
+          else await raw.text();
+        }
         const response = await fetch(`${env.url}/github-token`, {
           method: 'POST',
           headers: {

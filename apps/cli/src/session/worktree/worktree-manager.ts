@@ -12,6 +12,7 @@ import {
   getCredentialHelperHostPath,
 } from '@/lib/git-credential-helper-script';
 import { formatErrorMessage } from '@/utils/format-error';
+import { getBrokerStateFilePathForWorkspace } from '@/lib/git-credential-broker';
 import { getLodyDataDir } from '@lody/shared/node/installation-profile';
 import { mapGitSpawnError } from './git-process-error';
 import { resolveAvailableBranchName } from './branch-name-allocation';
@@ -119,6 +120,7 @@ const buildBrokerAuthEnv = (auth: GitCredentialBrokerAuth | undefined): NodeJS.P
     ? {
         LODY_GIT_CRED_BROKER_URL: auth.url,
         LODY_GIT_CRED_BROKER_TOKEN: auth.token,
+        LODY_GIT_CRED_BROKER_STATE_FILE: getBrokerStateFilePathForWorkspace(auth.workspaceId),
       }
     : {};
 
@@ -1302,7 +1304,8 @@ export class WorktreeManager {
     sessionId: SessionId,
     baseBranch?: string,
     restoreBranchName?: string,
-    exactStartPoint?: string
+    exactStartPoint?: string,
+    brokerAuth?: GitCredentialBrokerAuth
   ): Promise<WorktreeInfo> {
     return withRepoLock(this.repoId, async () => {
       assertSafeSessionId(sessionId);
@@ -1332,7 +1335,8 @@ export class WorktreeManager {
       // needs local refs; fetch best-effort so an unreachable origin (offline,
       // dead proxy) does not block the restore.
       await this.ensureRepoLocked(
-        this.repoUrl ? (existingBranchName ? 'best-effort' : 'required') : 'skip'
+        this.repoUrl ? (existingBranchName ? 'best-effort' : 'required') : 'skip',
+        brokerAuth
       );
 
       if (existingBranchName) {

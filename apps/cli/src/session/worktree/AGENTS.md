@@ -9,13 +9,17 @@ and file responsibilities: [../README.md](../README.md).
 ## Git credential broker
 
 - INVARIANT: host-side git must receive its credential broker as an explicit argument
-  (`WorktreeManager.ensureRepo({ brokerAuth })`), never from ambient `process.env`. Every
+  (`ensureRepo({ brokerAuth })` and `createWorktree`'s fifth argument), never from ambient `process.env`. Every
   workspace's `GitCredentialBroker` writes the same process-global `LODY_GIT_CRED_BROKER_*`
   pair and the shared `~/.lody/broker.json`, and `ensureStarted()` early-returns, so the
   ambient value belongs to whichever workspace started or recovered its broker LAST and the
   correct workspace never takes the pointer back. A session in workspace A would then
   authenticate through B's token manager and fail with `repo_not_linked` →
   `terminal prompts disabled`.
+- Host Git receives the private infrastructure bearer for every fetch, including the required
+  fetch inside fresh worktree creation. Broker state files contain only session bearers;
+  recovery refreshes the URL but retains the caller's bearer. Never cache this authority on
+  the shared manager or pass it into session/setup environments.
 - Keep `brokerAuth` a per-call argument: `getWorktreeManager` caches by `repoId` alone, so two
   workspaces sharing a repo share one manager instance. The helper's connection-refused
   fallback is scoped by `LODY_GIT_CRED_BROKER_STATE_FILE`

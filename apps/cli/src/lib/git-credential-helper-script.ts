@@ -281,15 +281,15 @@ const main = async () => {
     ? await tryRejectFromBroker(baseUrl, token)
     : await tryFetchFromBroker(baseUrl, token);
 
-  // If we had a connection error and we were using env vars, try the file fallback
-  // This handles the case where the broker restarted on a different port
+  // Recover a stale broker URL without changing the caller's authorization.
+  // State files contain a session-only bearer, never the infrastructure bearer.
   if (!result.success && result.error && source === 'env' && isConnectionError(result.error)) {
     const fileConfig = getBrokerConfigFromFile();
     if (fileConfig && fileConfig.url !== baseUrl) {
       debug('fallback', { from: baseUrl, to: fileConfig.url });
       result = isRejectAction
-        ? await tryRejectFromBroker(fileConfig.url, fileConfig.token)
-        : await tryFetchFromBroker(fileConfig.url, fileConfig.token);
+        ? await tryRejectFromBroker(fileConfig.url, token)
+        : await tryFetchFromBroker(fileConfig.url, token);
     }
   }
 

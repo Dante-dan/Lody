@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RepoId } from '@lody/shared';
+import type { RepoId, SessionId } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -119,6 +119,37 @@ describe('WorktreeManager host git credential broker routing', () => {
     const env = envOfGitCall('fetch');
     expect(env.LODY_GIT_CRED_BROKER_URL).toBe('http://127.0.0.1:33215');
     expect(env.LODY_GIT_CRED_BROKER_TOKEN).toBe('session-workspace-token');
+    expect(env.LODY_GIT_CRED_BROKER_STATE_FILE).toBe(
+      path.join(dataDir, 'broker-workspace-owning-the-session.json')
+    );
+  });
+
+  it('uses private authority for the required fetch when cutting a fresh worktree', async () => {
+    process.env.LODY_GIT_CRED_BROKER_URL = 'http://127.0.0.1:44102';
+    process.env.LODY_GIT_CRED_BROKER_TOKEN = 'published-session-token';
+    const manager = await newManager();
+    const brokerAuth = {
+      workspaceId: 'workspace-owning-the-session',
+      url: 'http://127.0.0.1:33215',
+      token: 'private-infrastructure-token',
+    };
+
+    await manager.ensureRepo({ brokerAuth });
+    spawnMock.mockClear();
+    await manager.createWorktree(
+      'fresh-session' as SessionId,
+      'main',
+      undefined,
+      undefined,
+      brokerAuth
+    );
+
+    const env = envOfGitCall('fetch');
+    expect(env.LODY_GIT_CRED_BROKER_URL).toBe(brokerAuth.url);
+    expect(env.LODY_GIT_CRED_BROKER_TOKEN).toBe(brokerAuth.token);
+    expect(env.LODY_GIT_CRED_BROKER_STATE_FILE).toBe(
+      path.join(dataDir, 'broker-workspace-owning-the-session.json')
+    );
   });
 
   it('leaves the ambient pointer in place when no broker auth is supplied', async () => {
@@ -133,5 +164,21 @@ describe('WorktreeManager host git credential broker routing', () => {
     const env = envOfGitCall('fetch');
     expect(env.LODY_GIT_CRED_BROKER_URL).toBe('http://127.0.0.1:44102');
     expect(env.LODY_GIT_CRED_BROKER_TOKEN).toBe('ambient-token');
+  });
+
+  it('restores an existing worktree without fetching even when host authority is available', async () => {
+    const manager = await newManager();
+    const sessionId = 'existing-session' as SessionId;
+    mkdirSync(manager.getWorktreeHostPath(sessionId), { recursive: true });
+
+    await manager.createWorktree(sessionId, 'main', undefined, undefined, {
+      workspaceId: 'workspace-owning-the-session',
+      url: 'http://127.0.0.1:33215',
+      token: 'private-infrastructure-token',
+    });
+
+    expect(spawnMock.mock.calls.some(([, args]) => (args as string[]).includes('fetch'))).toBe(
+      false
+    );
   });
 });

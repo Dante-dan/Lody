@@ -61,6 +61,20 @@ afterEach(() => {
   rmSync(tempDir, { recursive: true, force: true });
 });
 
+it('selects private infrastructure authority only for host Git operations', async () => {
+  const ensureBroker = vi.fn(async () => ({ url: 'http://127.0.0.1:1', token: 'host-only-token' }));
+  Object.assign(manager, { ensureGitCredentialBrokerEnv: ensureBroker });
+  const hostManager = manager as unknown as {
+    resolveHostGitBrokerAuth(source: undefined): Promise<unknown>;
+  };
+  await expect(hostManager.resolveHostGitBrokerAuth(undefined)).resolves.toEqual({
+    workspaceId: 'workspace-1',
+    url: 'http://127.0.0.1:1',
+    token: 'host-only-token',
+  });
+  expect(ensureBroker).toHaveBeenCalledWith('infrastructure');
+});
+
 function configFor(requester: string): SessionConfig {
   const sourceDir = path.join(tempDir, requester || 'unknown');
   mkdirSync(sourceDir, { recursive: true });

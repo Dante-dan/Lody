@@ -52,6 +52,8 @@ export type GitCredentialBrokerEnv = {
 
 export const createGitCredentialBrokerHandler = (options: {
   authToken: string;
+  /** Never published to session env or broker state files. */
+  infrastructureAuthToken?: string;
   tokenManager: CloudGithubTokenManager;
   logger: Logger;
   resolveContext?: (contextToken: string) => GitCredentialBrokerSessionContext | null;
@@ -81,7 +83,10 @@ export const createGitCredentialBrokerHandler = (options: {
       }
 
       const auth = req.headers.authorization ?? '';
-      if (auth !== `Bearer ${options.authToken}`) {
+      const isInfrastructure =
+        Boolean(options.infrastructureAuthToken) &&
+        auth === `Bearer ${options.infrastructureAuthToken}`;
+      if (auth !== `Bearer ${options.authToken}` && !isInfrastructure) {
         res.writeHead(401, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -97,7 +102,7 @@ export const createGitCredentialBrokerHandler = (options: {
       const repoFullName = obj && typeof obj.repoFullName === 'string' ? obj.repoFullName : null;
       const contextToken = obj && typeof obj.contextToken === 'string' ? obj.contextToken : null;
       const context = contextToken ? (options.resolveContext?.(contextToken) ?? null) : null;
-      if (contextToken && !context) {
+      if (!context && (contextToken || !isInfrastructure)) {
         res.writeHead(403, { 'Content-Type': 'application/json' });
         res.end(
           JSON.stringify({
@@ -133,7 +138,7 @@ export const createGitCredentialBrokerHandler = (options: {
 
       // The git credential protocol does not tell us whether this credential
       // will be used for fetch or push. Session-scoped contexts get requester-bound
-      // write tokens; host infrastructure without a context gets the installation token.
+      // write tokens; only the private infrastructure bearer permits context-free access.
       const tokenValue = context
         ? await options.tokenManager.getWriteTokenForRepo(repoFullName, {
             requesterUserId: context.requesterUserId,
@@ -222,6 +227,7 @@ export class GitCredentialBroker {
   private readonly logger: Logger;
   private readonly tokenManager: CloudGithubTokenManager;
   private readonly workspaceId: string | undefined;
+  private readonly infrastructureAuthToken = randomBytes(32).toString('hex');
   private readonly contexts = new Map<string, GitCredentialBrokerSessionContext>();
   private readonly sessionContextTokens = new Map<string, string>();
   private server: http.Server | null = null;
@@ -251,6 +257,7 @@ export class GitCredentialBroker {
   private createHandler(authToken: string): http.RequestListener {
     return createGitCredentialBrokerHandler({
       authToken,
+      infrastructureAuthToken: this.infrastructureAuthToken,
       tokenManager: this.tokenManager,
       logger: this.logger,
       resolveContext: this.resolveContext,
@@ -294,6 +301,12 @@ export class GitCredentialBroker {
     this.startHealthCheck();
 
     return this.env;
+  }
+
+  /** Only daemon-owned Git operations receive this bearer; never persist or inherit it. */
+  async getInfrastructureEnv(): Promise<GitCredentialBrokerEnv> {
+    const env = await this.ensureStarted();
+    return { ...env, token: this.infrastructureAuthToken };
   }
 
   activateSessionContext(context: GitCredentialBrokerSessionContext): string {

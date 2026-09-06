@@ -1635,7 +1635,9 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     return this.githubTokenManager;
   }
 
-  private async ensureGitCredentialBrokerEnv(): Promise<{
+  private async ensureGitCredentialBrokerEnv(
+    scope: 'session' | 'infrastructure' = 'session'
+  ): Promise<{
     url: string;
     port: number;
     token: string;
@@ -1651,7 +1653,9 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         logger: this.logger,
       });
     }
-    return await this.gitCredentialBroker.ensureStarted();
+    return scope === 'infrastructure'
+      ? await this.gitCredentialBroker.getInfrastructureEnv()
+      : await this.gitCredentialBroker.ensureStarted();
   }
 
   /**
@@ -1671,7 +1675,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     if (source && source.kind !== 'github') {
       return undefined;
     }
-    const brokerEnv = await this.ensureGitCredentialBrokerEnv();
+    const brokerEnv = await this.ensureGitCredentialBrokerEnv('infrastructure');
     if (!brokerEnv) {
       return undefined;
     }
@@ -1783,16 +1787,17 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       this.logger.debug(
         `[${config.sessionId}] Shared parent worktree missing for ${config.parentSessionId}; creating it now`
       );
-      await worktreeManager.ensureRepo({
-        brokerAuth: await this.resolveHostGitBrokerAuth({
-          kind: 'github',
-          repoUrl: config.githubRepoUrl,
-        }),
+      const brokerAuth = await this.resolveHostGitBrokerAuth({
+        kind: 'github',
+        repoUrl: config.githubRepoUrl,
       });
+      await worktreeManager.ensureRepo({ brokerAuth });
       const sharedWorktree = await worktreeManager.createWorktree(
         config.parentSessionId,
         parentMeta?.baseBranch?.trim() || config.branch,
-        parentMeta?.branchName?.trim() || undefined
+        parentMeta?.branchName?.trim() || undefined,
+        undefined,
+        brokerAuth
       );
       await parentSessionDoc.setBranchName(sharedWorktree.branch);
       await parentSessionDoc.setIsWorktree(true);
@@ -1950,14 +1955,14 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       const worktreeInfo =
         preparedWorktreeUsable ??
         (await (async () => {
-          await worktreeManager.ensureRepo({
-            brokerAuth: await this.resolveHostGitBrokerAuth(worktreeTarget.target.source),
-          });
+          const brokerAuth = await this.resolveHostGitBrokerAuth(worktreeTarget.target.source);
+          await worktreeManager.ensureRepo({ brokerAuth });
           return await worktreeManager.createWorktree(
             config.sessionId!,
             config.branch,
             config.restoreBranchName,
-            config.worktreeStartPoint
+            config.worktreeStartPoint,
+            brokerAuth
           );
         })());
       if (!config.deferWorktreeMetaPersistence) {

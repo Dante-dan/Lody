@@ -246,11 +246,14 @@ export async function materializeSpeculativeWorktree(args: {
     await writeMarker(marker);
 
     try {
-      await args.manager.ensureRepo({ brokerAuth: await args.resolveBrokerAuth?.() });
+      const brokerAuth = await args.resolveBrokerAuth?.();
+      await args.manager.ensureRepo({ brokerAuth });
       return await args.manager.createWorktree(
         args.sessionId,
         args.baseBranch,
-        args.restoreBranchName
+        args.restoreBranchName,
+        undefined,
+        brokerAuth
       );
     } catch (error) {
       const current = await readMarker(args.sessionId);
