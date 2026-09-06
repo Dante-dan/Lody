@@ -46,22 +46,22 @@ import { scheduleAfterLoadIdle } from '@site/lib/after-first-paint';
 
 // The point-cloud background (and with it all of three.js) stays out of the
 // landing's critical chunk: the hero copy hydrates without parsing three.
-// Prerender still resolves the import so Suspense can complete. On the client
-// the fetch waits for load + idle so the hero H1 (the LCP element) is not
-// competing with a 3D chunk the first paint does not need.
+// The dynamic import starts only when this experience mounts — not at module
+// evaluation — so docs/marketing routes that share the route graph do not
+// download the 3D chunk. On the client the fetch then waits for load + idle
+// so the hero H1 (the LCP element) is not competing with it.
 function loadUnderwaterBackground() {
   return import('./underwater-background');
 }
 
-const underwaterBackgroundModule =
-  typeof window === 'undefined'
-    ? loadUnderwaterBackground()
-    : new Promise<typeof import('./underwater-background')>((resolve) => {
-        scheduleAfterLoadIdle(() => {
-          resolve(loadUnderwaterBackground());
-        });
-      });
-const UnderwaterPointCloudBackground = lazy(() => underwaterBackgroundModule);
+const UnderwaterPointCloudBackground = lazy(() => {
+  if (typeof window === 'undefined') return loadUnderwaterBackground();
+  return new Promise<typeof import('./underwater-background')>((resolve) => {
+    scheduleAfterLoadIdle(() => {
+      resolve(loadUnderwaterBackground());
+    });
+  });
+});
 
 // The product stage sits below the 100dvh hero, but `landing-app-preview` is the
 // landing's single heaviest module: it mounts REAL product UI and drags the chat

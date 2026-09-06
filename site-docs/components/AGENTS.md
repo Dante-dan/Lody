@@ -67,10 +67,11 @@ Demo sequencing and screenshot notes live in
   (`pnpm --filter @lody/site-docs generate:landing-agents`).
 - `underwater-background.tsx` is client-only three.js in `useEffect`. Startup is
   deliberately staged — keep all three legs when touching it: (1)
-  `underwater-experience.tsx` loads it via module-eval `import()` + `lazy` (keep the
-  `.underwater-bg` CSS gradient in sync with the BG shader). The client fetch
-  waits for load + idle so the hero H1 can become LCP without a 3D download.
-  (2) the initial seabed
+  `underwater-experience.tsx` loads it via `lazy(() => import())` (keep the
+  `.underwater-bg` CSS gradient in sync with the BG shader). Start that import
+  only when the experience mounts, then wait for load + idle, so docs pages that
+  share the route graph never download the 3D chunk and the hero H1 can become
+  LCP. (2) the initial seabed
   attributes are computed in `underwater-terrain.worker.ts` via
   `underwater-terrain-math.ts` and fade in through the terrain `uReveal` uniform, while
   gradient/particles/jellyfish render immediately; (3) first render waits on
