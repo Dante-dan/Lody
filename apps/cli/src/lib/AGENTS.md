@@ -41,7 +41,7 @@ control plane.
   always use workspace-bound shims, even without a repository/broker.
 - Broker state/env contain session bearers requiring context. Host Git uses a private in-memory bearer.
 - Owner tokens/login precede requester-bound managed fallback on missing credentials/401 only.
-  Never replay commands; managed tokens are github.com-only.
+  Never replay commands; managed tokens are github.com-only; API URLs require HTTPS.
 - Parse API/PR/Issue flags by command arity; option values cannot select hosts. Real endpoint/subject
   URLs override ambient repos. Unknown flags fail closed; check secondary issue targets and pin
   managed GH_HOST to github.com.

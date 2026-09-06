@@ -554,16 +554,11 @@ describe('ensureGhShimScript', () => {
   ])(
     'never selects API credentials from consumed values: %j',
     async (...options) => {
-      await startTokenBroker('app-token');
-      ensureGhShimScript();
-      const result = await runShim({ LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' }, [
-        'api',
-        ...options,
-      ]);
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('No managed GitHub credential');
-      expect(brokerRequests).toEqual([]);
+      await expectManagedDenied(
+        { LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' },
+        ['api', ...options],
+        'No managed GitHub credential'
+      );
     },
     SHIM_INTEGRATION_TIMEOUT_MS
   );
@@ -587,15 +582,8 @@ describe('ensureGhShimScript', () => {
   ])(
     'resolves the API endpoint with known option arities: %j',
     async (...options) => {
-      await startTokenBroker('app-token');
-      ensureGhShimScript();
       const args = ['api', ...options];
-      const result = await runShim({ LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' }, args);
-      expect(result.status).toBe(0);
-      expect(result.stdout).toBe(args.join(' ') + '\n');
-      expect(brokerRequests).toEqual([
-        { repoFullName: 'owner/target', contextToken: 'test-context' },
-      ]);
+      await expectManagedTarget({ LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' }, args);
     },
     SHIM_INTEGRATION_TIMEOUT_MS
   );
@@ -606,29 +594,37 @@ describe('ensureGhShimScript', () => {
     ['--unknown', 'https://api.github.com/repos/owner/target'],
     ['repos/owner/target', 'https://other.ghe.com/repos/owner/private'],
     ['--include=invalid', 'repos/owner/target'],
+    ['http://api.github.com/repos/owner/target'],
+    ['ftp://api.github.com/repos/owner/target'],
   ])(
     'rejects ambiguous API arguments without managed credentials: %j',
     async (...options) => {
-      await startTokenBroker('app-token');
-      ensureGhShimScript();
-      const result = await runShim({ LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' }, [
-        'api',
-        ...options,
-      ]);
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('Cannot determine the GitHub target safely');
-      expect(brokerRequests).toEqual([]);
+      await expectManagedDenied(
+        { LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' },
+        ['api', ...options],
+        'Cannot determine the GitHub target safely'
+      );
     },
     SHIM_INTEGRATION_TIMEOUT_MS
   );
 
-  it.each([false, true])(
-    'leaves unsupported command groups to owner native auth (owner=%s)',
-    async (owner) => {
+  it.each(
+    [
+      ['repo', 'view', '--json', 'name', 'https://other.ghe.com/owner/repo'],
+      [
+        'label',
+        'clone',
+        'https://github.com/owner/source',
+        '--repo',
+        'attacker.ghe.com/owner/target',
+      ],
+      ['api', 'http://api.github.com/repos/owner/target'],
+    ].flatMap((args) => [false, true].map((owner) => ({ args, owner })))
+  )(
+    'leaves unsafe managed targets to owner native auth: $args (owner=$owner)',
+    async ({ args, owner }) => {
       await startTokenBroker('app-token', { allowLocalAuth: owner });
       ensureGhShimScript();
-      const args = ['repo', 'view', '--json', 'name', 'https://other.ghe.com/owner/repo'];
       const result = await runShim({ LODY_GITHUB_REPO_FULL_NAME: 'owner/ambient' }, args);
       expect(result.status).toBe(owner ? 0 : 1);
       expect(result.stdout).toBe(owner ? args.join(' ') + '\n' : '');
@@ -648,15 +644,8 @@ describe('ensureGhShimScript', () => {
   ])(
     'resolves a teammate %s view URL after boolean flag %s',
     async (command, flag, subjectPath) => {
-      await startTokenBroker('app-token');
-      ensureGhShimScript();
       const args = [command, 'view', flag, `https://github.com/owner/target/${subjectPath}/1`];
-      const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
-      expect(result.status).toBe(0);
-      expect(result.stdout).toBe(args.join(' ') + '\n');
-      expect(brokerRequests).toEqual([
-        { repoFullName: 'owner/target', contextToken: 'test-context' },
-      ]);
+      await expectManagedTarget({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
     },
     SHIM_INTEGRATION_TIMEOUT_MS
   );
@@ -706,16 +695,9 @@ describe('ensureGhShimScript', () => {
   ])(
     'resolves a teammate subject URL with command-specific options: %j',
     async (...prefix) => {
-      await startTokenBroker('app-token');
-      ensureGhShimScript();
       const subjectPath = prefix[0] === 'pr' ? 'pull' : 'issues';
       const args = [...prefix, `https://github.com/owner/target/${subjectPath}/1`];
-      const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
-      expect(result.status).toBe(0);
-      expect(result.stdout).toBe(args.join(' ') + '\n');
-      expect(brokerRequests).toEqual([
-        { repoFullName: 'owner/target', contextToken: 'test-context' },
-      ]);
+      await expectManagedTarget({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
     },
     SHIM_INTEGRATION_TIMEOUT_MS
   );
@@ -726,17 +708,11 @@ describe('ensureGhShimScript', () => {
     ['--template', '--hostname=github.com', '1'],
     ['-cRother.ghe.com/owner/repo', '1'],
   ])('keeps consumed option values out of host/repo resolution: %j', async (...options) => {
-    await startTokenBroker('app-token');
-    ensureGhShimScript();
-    const result = await runShim({ GH_HOST: 'other.ghe.com', GH_REPO: 'owner/repo' }, [
-      'pr',
-      'view',
-      ...options,
-    ]);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('No managed GitHub credential');
-    expect(brokerRequests).toEqual([]);
+    await expectManagedDenied(
+      { GH_HOST: 'other.ghe.com', GH_REPO: 'owner/repo' },
+      ['pr', 'view', ...options],
+      'No managed GitHub credential'
+    );
   });
 
   it.each([
@@ -751,15 +727,8 @@ describe('ensureGhShimScript', () => {
   ])(
     'resolves repository-only PR/Issue commands without scanning values: %j',
     async (...prefix) => {
-      await startTokenBroker('app-token');
-      ensureGhShimScript();
       const args = [...prefix, '--repo=github.com/owner/target'];
-      const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
-      expect(result.status).toBe(0);
-      expect(result.stdout).toBe(args.join(' ') + '\n');
-      expect(brokerRequests).toEqual([
-        { repoFullName: 'owner/target', contextToken: 'test-context' },
-      ]);
+      await expectManagedTarget({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
     }
   );
 
@@ -773,14 +742,7 @@ describe('ensureGhShimScript', () => {
     ['pr', 'comment', '1', '--body', 'https://example.com', '-Rowner/target'],
     ['pr', 'create', '--body', 'https://example.com', '--title', 'Link', '-Rowner/target'],
   ])('consumes inherited flags and URL option values without ambiguity: %j', async (...args) => {
-    await startTokenBroker('app-token');
-    ensureGhShimScript();
-    const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe(args.join(' ') + '\n');
-    expect(brokerRequests).toEqual([
-      { repoFullName: 'owner/target', contextToken: 'test-context' },
-    ]);
+    await expectManagedTarget({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
   });
 
   it.each([
@@ -791,13 +753,11 @@ describe('ensureGhShimScript', () => {
   ])(
     'keeps inherited and URL-form Enterprise repo flags out of managed auth: %j',
     async (...args) => {
-      await startTokenBroker('app-token');
-      ensureGhShimScript();
-      const result = await runShim({ GH_REPO: 'github.com/ambient/repo' }, args);
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('No managed GitHub credential');
-      expect(brokerRequests).toEqual([]);
+      await expectManagedDenied(
+        { GH_REPO: 'github.com/ambient/repo' },
+        args,
+        'No managed GitHub credential'
+      );
     }
   );
 
@@ -811,13 +771,11 @@ describe('ensureGhShimScript', () => {
   ])(
     'preserves the enterprise repo when a repository-only option value resembles a repo flag: %j',
     async (...args) => {
-      await startTokenBroker('app-token');
-      ensureGhShimScript();
-      const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe('');
-      expect(result.stderr).toContain('No managed GitHub credential');
-      expect(brokerRequests).toEqual([]);
+      await expectManagedDenied(
+        { GH_REPO: 'other.ghe.com/ambient/repo' },
+        args,
+        'No managed GitHub credential'
+      );
     }
   );
 
@@ -826,15 +784,8 @@ describe('ensureGhShimScript', () => {
     ['--repo', 'github.com/branch/repo', '-igithub.com/owner/target', '1'],
     ['--issue-repo', 'other.ghe.com/owner/repo', 'https://github.com/owner/target/issues/1'],
   ])('honors the develop issue selector and subject URL precedence: %j', async (...options) => {
-    await startTokenBroker('app-token');
-    ensureGhShimScript();
     const args = ['issue', 'develop', ...options];
-    const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe(args.join(' ') + '\n');
-    expect(brokerRequests).toEqual([
-      { repoFullName: 'owner/target', contextToken: 'test-context' },
-    ]);
+    await expectManagedTarget({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
   });
 
   it.each([
@@ -843,17 +794,11 @@ describe('ensureGhShimScript', () => {
     ['--issue-repo=github.com/owner/repo', 'https://other.ghe.com/owner/repo/issues/1'],
     ['--issue-repo=', '--repo', 'github.com/branch/repo', '1'],
   ])('keeps Enterprise develop targets out of managed auth: %j', async (...options) => {
-    await startTokenBroker('app-token');
-    ensureGhShimScript();
-    const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, [
-      'issue',
-      'develop',
-      ...options,
-    ]);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('No managed GitHub credential');
-    expect(brokerRequests).toEqual([]);
+    await expectManagedDenied(
+      { GH_REPO: 'other.ghe.com/ambient/repo' },
+      ['issue', 'develop', ...options],
+      'No managed GitHub credential'
+    );
   });
 
   it.each([
@@ -889,16 +834,11 @@ describe('ensureGhShimScript', () => {
       'https://github.com/owner/target/issues/1',
     ],
   ])('rejects managed auth for secondary Enterprise targets: %j', async (...args) => {
-    await startTokenBroker('app-token');
-    ensureGhShimScript();
-    const result = await runShim(
+    await expectManagedDenied(
       { GH_HOST: 'other.ghe.com', GH_REPO: 'github.com/owner/target' },
-      args
+      args,
+      'Cannot determine the GitHub target safely'
     );
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('Cannot determine the GitHub target safely');
-    expect(brokerRequests).toEqual([]);
   });
 
   it.each([
@@ -917,14 +857,7 @@ describe('ensureGhShimScript', () => {
       'https://github.com/owner/target/issues/1',
     ],
   ])('allows managed auth for secondary github.com targets: %j', async (...args) => {
-    await startTokenBroker('app-token');
-    ensureGhShimScript();
-    const result = await runShim({ GH_HOST: 'other.ghe.com' }, args);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe(args.join(' ') + '\n');
-    expect(brokerRequests).toEqual([
-      { repoFullName: 'owner/target', contextToken: 'test-context' },
-    ]);
+    await expectManagedTarget({ GH_HOST: 'other.ghe.com' }, args);
   });
 
   it.each([false, true])(
@@ -955,34 +888,25 @@ describe('ensureGhShimScript', () => {
   );
 
   it('keeps exclude patterns out of PR diff target resolution', async () => {
-    await startTokenBroker('app-token');
-    ensureGhShimScript();
-    const result = await runShim({ GH_REPO: 'github.com/ambient/repo' }, [
-      'pr',
-      'diff',
-      '--exclude',
-      'https://github.com/owner/repo/pull/1',
-      'https://other.ghe.com/owner/repo/pull/2',
-    ]);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('No managed GitHub credential');
-    expect(brokerRequests).toEqual([]);
+    await expectManagedDenied(
+      { GH_REPO: 'github.com/ambient/repo' },
+      [
+        'pr',
+        'diff',
+        '--exclude',
+        'https://github.com/owner/repo/pull/1',
+        'https://other.ghe.com/owner/repo/pull/2',
+      ],
+      'No managed GitHub credential'
+    );
   });
 
   it('keeps an enterprise URL after a boolean flag out of managed auth', async () => {
-    await startTokenBroker('app-token');
-    ensureGhShimScript();
-    const result = await runShim({ GH_REPO: 'github.com/loro-dev/lody' }, [
-      'pr',
-      'view',
-      '--comments',
-      'https://other.ghe.com/owner/repo/pull/1',
-    ]);
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('No managed GitHub credential');
-    expect(brokerRequests).toEqual([]);
+    await expectManagedDenied(
+      { GH_REPO: 'github.com/loro-dev/lody' },
+      ['pr', 'view', '--comments', 'https://other.ghe.com/owner/repo/pull/1'],
+      'No managed GitHub credential'
+    );
   });
 
   it.each(['https', 'http'])('rejects a teammate PR URL after flags (%s)', async (protocol) => {
@@ -1190,6 +1114,31 @@ describe('broker failure contracts', () => {
     SHIM_INTEGRATION_TIMEOUT_MS
   );
 });
+
+// The argument matrices share one observable contract: the actual child argv
+// and the requester-bound broker request, or denial before either can run.
+async function expectManagedTarget(env: NodeJS.ProcessEnv, args: string[]): Promise<void> {
+  await startTokenBroker('app-token');
+  ensureGhShimScript();
+  const result = await runShim(env, args);
+  expect(result.status).toBe(0);
+  expect(result.stdout).toBe(args.join(' ') + '\n');
+  expect(brokerRequests).toEqual([{ repoFullName: 'owner/target', contextToken: 'test-context' }]);
+}
+
+async function expectManagedDenied(
+  env: NodeJS.ProcessEnv,
+  args: string[],
+  message: string
+): Promise<void> {
+  await startTokenBroker('app-token');
+  ensureGhShimScript();
+  const result = await runShim(env, args);
+  expect(result.status).toBe(1);
+  expect(result.stdout).toBe('');
+  expect(result.stderr).toContain(message);
+  expect(brokerRequests).toEqual([]);
+}
 
 const writeFakeGh = (source: string): void => {
   writeFakeGhNamed('gh', source);

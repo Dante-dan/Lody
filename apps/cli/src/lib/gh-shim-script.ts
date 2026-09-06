@@ -482,6 +482,7 @@ const readGitHubTarget = async (args) => {
     let url = null;
     try { if (endpoint.includes('://')) url = new URL(endpoint); }
     catch { return { host: null, repo: null }; }
+    if (url && url.protocol !== 'https:') return { host: null, repo: null };
     const apiHost = url ? (url.hostname === 'api.github.com' ? 'github.com' : url.hostname) : host;
     const match = (url ? url.pathname : endpoint).match(/^\\/?repos\\/([^/]+\\/[^/?#]+)/);
     let repo = match ? match[1] : null;
