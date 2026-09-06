@@ -32,18 +32,11 @@ export const Route = createRootRoute({
         media: '(prefers-color-scheme: dark)',
       },
       { rel: 'apple-touch-icon', href: '/_docs-assets/logo-180.png' },
-      { rel: 'preload', href: '/_docs-assets/logo-96.png', as: 'image' },
     ],
     scripts: [
       {
-        async: true,
-        src: `https://www.googletagmanager.com/gtag/js?id=${googleAnalyticsMeasurementId}`,
-      },
-      {
-        children: `window.dataLayer = window.dataLayer || [];
-function gtag(){dataLayer.push(arguments);}
-gtag('js', new Date());
-gtag('config', '${googleAnalyticsMeasurementId}');`,
+        children: `window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments);}
+window.addEventListener('load',function(){var s=document.createElement('script');s.async=true;s.src='https://www.googletagmanager.com/gtag/js?id=${googleAnalyticsMeasurementId}';s.onload=function(){gtag('js',new Date());gtag('config','${googleAnalyticsMeasurementId}');};document.head.appendChild(s);});`,
       },
       ...(vibeloftAuthKey
         ? [

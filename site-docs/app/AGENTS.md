@@ -15,3 +15,5 @@ Root `AGENTS.md` and `site-docs/AGENTS.md` also apply.
   `--mkt-*` and reference no `fd-` token, which is what keeps the reading override off
   them — check that before moving a component between marketing and reading surfaces.
 - `underwater.css` owns landing layout/legibility; `pricing.css` owns the pricing page.
+- `landing-first-paint.css` is the inlined hero/nav subset (`finalize-prerender-html.mjs`).
+  Keep it system-font-only and in sync with the hero rules in `underwater.css`.

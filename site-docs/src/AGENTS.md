@@ -8,7 +8,8 @@ Root `AGENTS.md` and `site-docs/AGENTS.md` also apply.
   `src/site-pages/**`. Do not add new route logic under `app/`; `app/` is CSS-only.
   `__root.tsx` is on every URL — keep page-only CSS (`pricing.css`, `legal.css`)
   and landing preview side effects (`pierre-diffs-web-components`) on the pages
-  that need them.
+  that need them. Shared-head gtag waits for `window.load`; do not preload the
+  nav logo from this document (it is not the LCP element).
 - `src/routes/**` maps URLs to TanStack routes. Keep route files thin: define
   `createFileRoute`, `loader`, `head`, and component wiring only.
 - `src/site-pages/<domain>.tsx` adapts reusable page components to TanStack

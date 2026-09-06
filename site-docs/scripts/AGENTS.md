@@ -27,6 +27,8 @@ Root `AGENTS.md` and `site-docs/AGENTS.md` also apply.
   `modulepreload` from every other HTML document so first paint does not compete
   with unused route chunks. Keep only the hydration runtime (entry / react /
   jsx-runtime / rolldown-runtime / preload-helper). Do not add the landing or
-  docs chunks back onto every page.
+  docs chunks back onto every page. On landing HTML it also inlines
+  `app/landing-first-paint.css` and defers the shared stylesheets so the H1 is
+  not waiting on the 500KB `index-*.css` parse.
 - `generate:landing-agents` produces `components/landing-agents.generated.ts`; provider
   marks and the ACP wall must come from it rather than hand-written lists.

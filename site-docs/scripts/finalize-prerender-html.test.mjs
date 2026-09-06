@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  deferNonCriticalStylesheets,
+  finalizePrerenderHtml,
+  injectLandingFirstPaintStyle,
   isCriticalModulePreloadHref,
+  isLandingDocument,
+  isPageOnlyStylesheetHref,
+  stripLandingImagePreloads,
   stripNonCriticalModulePreload,
 } from './finalize-prerender-html.mjs';
 
@@ -45,4 +51,56 @@ await test('stripNonCriticalModulePreload keeps runtime and drops route chunks',
   assert.doesNotMatch(next, /landing-DLX/u);
   assert.doesNotMatch(next, /pricing-B2h/u);
   assert.doesNotMatch(next, /docs-P5r/u);
+});
+
+const landingHtml = `<!DOCTYPE html><html><head>
+<link rel="stylesheet" href="/assets/index.css"/>
+<link rel="stylesheet" href="/assets/pricing-abc.css"/>
+<link rel="preload" href="/_docs-assets/logo-96.png" as="image"/>
+</head><body>
+<h1 class="underwater-hero__title">Share coding agents</h1>
+</body></html>`;
+
+const docsHtml = `<!DOCTYPE html><html><head>
+<link rel="stylesheet" href="/assets/index.css"/>
+<link rel="stylesheet" href="/assets/legal-abc.css"/>
+</head><body><article class="prose"><p>Handoff</p></article></body></html>`;
+
+await test('landing documents are detected by the hero title', () => {
+  assert.equal(isLandingDocument(landingHtml), true);
+  assert.equal(isLandingDocument(docsHtml), false);
+});
+
+await test('page-only stylesheets are pricing and legal chunks', () => {
+  assert.equal(isPageOnlyStylesheetHref('/assets/pricing-abc.css'), true);
+  assert.equal(isPageOnlyStylesheetHref('/assets/legal-abc.css'), true);
+  assert.equal(isPageOnlyStylesheetHref('/assets/index.css'), false);
+});
+
+await test('landing first paint inlines critical CSS and defers every stylesheet', () => {
+  const next = finalizePrerenderHtml(landingHtml, '/* c */ .underwater-hero__title{color:red}');
+  assert.match(next, /data-landing-first-paint/u);
+  assert.match(next, /\.underwater-hero__title\{color:red\}/u);
+  assert.match(next, /media="print" onload="this\.media='all'"/u);
+  assert.match(next, /<noscript><link rel="stylesheet" href="\/assets\/index\.css"\/><\/noscript>/u);
+  assert.doesNotMatch(next, /logo-96\.png/u);
+});
+
+await test('docs keep index.css render-blocking and only defer page-only sheets', () => {
+  const next = deferNonCriticalStylesheets(docsHtml);
+  assert.match(next, /<link rel="stylesheet" href="\/assets\/index\.css"\/>/u);
+  assert.match(next, /legal-abc\.css/u);
+  assert.match(next, /media="print"/u);
+});
+
+await test('injectLandingFirstPaintStyle is a no-op off the landing', () => {
+  assert.equal(injectLandingFirstPaintStyle(docsHtml, 'h1{}'), docsHtml);
+});
+
+await test('stripLandingImagePreloads leaves docs preloads alone', () => {
+  const withLogo = docsHtml.replace(
+    '</head>',
+    '<link rel="preload" href="/_docs-assets/logo-96.png" as="image"/></head>'
+  );
+  assert.equal(stripLandingImagePreloads(withLogo), withLogo);
 });
