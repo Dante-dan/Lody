@@ -69,13 +69,18 @@ def main():
     parser.add_argument('--limit', type=int, help='Optional smoke-test conversation limit; default: all')
     parser.add_argument('--loro-package', required=True, help='Absolute installed loro-crdt module path')
     parser.add_argument('--output', type=Path, required=True, help='Private output directory')
+    parser.add_argument('--storage-compat', action='store_true', help='Verify storage insertion policy instead of filtering')
+    parser.add_argument('--old-storage-module', type=Path, help='Bundled baseline schema and unpatched Mirror')
+    parser.add_argument('--new-storage-module', type=Path, help='Bundled current schema and patched Mirror')
     args = parser.parse_args()
+    if args.storage_compat and not (args.old_storage_module and args.new_storage_module):
+        parser.error('--storage-compat requires both storage modules')
     if args.limit is not None and args.limit <= 0:
         parser.error('--limit must be positive')
     os.umask(0o077)
     args.output.mkdir(parents=True, exist_ok=True)
     scripts = Path(__file__).resolve().parent
-    source = scripts.parents[1] / 'packages/shared/src/history-content-schema.ts'
+    source = scripts.parents[1] / ('packages/shared/src/schema.ts' if args.storage_compat else 'packages/shared/src/history-content-schema.ts')
     databases, replicas, ranked = inventory(args.root)
     results, failures = [], []
     workspace_aliases = {db: hashlib.sha256(str(db.relative_to(args.root)).encode()).hexdigest()[:12] for db in databases}
@@ -91,6 +96,8 @@ def main():
             'allReplicasScanned': scanned == len(ranked),
             'conversations': len(results), 'limit': args.limit,
             'schemaSha256': schema_hash,
+            'storageCompatibility': args.storage_compat,
+            'storageModuleHashes': ({name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in [('old', args.old_storage_module), ('new', args.new_storage_module)]} if args.storage_compat else None),
             'elapsedSeconds': round(time.time() - started, 2),
             'failures': failures, 'results': results,
             'workspaces': [{
@@ -115,6 +122,9 @@ def main():
             'LODY_HISTORY_PERMISSION_MODULE': str(temp / 'permission.cjs'),
             'LODY_HISTORY_SCHEDULING_MODULE': str(temp / 'scheduling.cjs'),
         }
+        if args.storage_compat:
+            child_env.update(LODY_STORAGE_OLD_MODULE=str(args.old_storage_module.resolve()),
+                             LODY_STORAGE_NEW_MODULE=str(args.new_storage_module.resolve()))
         for row in ranked:
             if args.limit is not None and len(results) >= args.limit:
                 break
@@ -125,7 +135,7 @@ def main():
             try:
                 snapshot, stored = write_frames(row, frame)
                 child = subprocess.run(
-                    ['node', '--max-old-space-size=1536', str(scripts / 'analyze.cjs'),
+                    ['node', '--max-old-space-size=1536', str(scripts / ('analyze-storage.cjs' if args.storage_compat else 'analyze.cjs')),
                      str(frame), args.loro_package],
                     capture_output=True, text=True, timeout=90, env=child_env)
                 result = json.loads(child.stdout.strip().splitlines()[-1])

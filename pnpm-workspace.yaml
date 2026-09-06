@@ -94,6 +94,7 @@ packageExtensions:
 packageManagerStrictVersion: true
 
 patchedDependencies:
+  loro-mirror@2.3.1: patches/loro-mirror@2.3.1.patch
   app-builder-lib@26.15.3: patches/app-builder-lib@26.15.3.patch
   '@better-auth/api-key@1.5.5': patches/@better-auth__api-key@1.5.5.patch
   '@better-auth/electron@1.5.5': patches/@better-auth__electron@1.5.5.patch

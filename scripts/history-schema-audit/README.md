@@ -51,3 +51,38 @@ This is not a general image-size limit or attachment externalization feature.
 after the entire projection, including terminal-output removal. They do not
 isolate image savings or measure SQLite size, CRDT snapshots, or retained history.
 Merging this audit does not reduce production writes or shrink existing documents.
+
+## String storage compatibility
+
+This mode tests the production insertion-policy change independently of the
+candidate filtering schema. It never projects away fields. Pass the package
+directory of an **unpatched** baseline Mirror installation, so old-reader checks
+exercise its actual code, not just the old schema on the new engine:
+
+```sh
+node scripts/history-schema-audit/build-storage.mjs \
+  /private/temporary/storage-modules BASELINE_GIT_REF /absolute/path/to/unpatched/loro-mirror
+python3 scripts/history-schema-audit/audit.py \
+  --storage-compat \
+  --old-storage-module /private/temporary/storage-modules/old.cjs \
+  --new-storage-module /private/temporary/storage-modules/new.cjs \
+  --loro-package /absolute/path/to/installed/loro-crdt \
+  --output /private/temporary/storage-results
+```
+
+Every stored document is read by both schemas without creating operations.
+Every conversation's message items are then rebuilt in a disposable document with
+the production new-write schema (using only turn id/role/timestamp as envelope).
+The audit checks exact item round trips, plain nested metadata strings, explicit
+streaming Text fields, old-reader compatibility after snapshot import, old/new
+update exchange, and preservation of an existing legacy title Text ID when that
+shape is present. Original root/turn metadata is compared on read, not rebuilt.
+No migration, SQLite update, compaction, or real document write is performed.
+The unit tests cover legacy fields and stream updates even when a corpus document
+has no matching tool title. Module hashes identify the exact old and new bundles.
+
+The new runtime includes a narrow Mirror patch: for inferred/Any and declared Text map fields,
+string-to-string edits retain the actual existing Text or primitive representation.
+Explicit transforms and non-Text declared schemas retain their own rules.
+Future upstream Mirror upgrades must retain these regression tests before removing
+the patch. This does not make unpatched old writers use the new insertion policy.

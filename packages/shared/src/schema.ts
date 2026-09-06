@@ -187,7 +187,32 @@ export type AgentConfigMeta = {
 export type SessionHistoryItem = MessageContent;
 export type SessionHistoryItems = MessageContent[];
 
-const historyItemAnySchema = schema.Any({ defaultLoroText: true });
+// This is an insertion policy, not a migration. Mirror reads and edits existing
+// containers by their actual kind; legacy Text values retain their container IDs.
+// Only explicitly declared streaming fields create Text for new history items.
+const historyItemAnySchema = schema.Any({ defaultLoroText: false });
+// Retain incremental text storage for payloads that are updated while streaming.
+// Every other field inside these blocks inherits primitive-string insertion.
+const historyToolContentSchema = schema
+  .LoroMap({
+    type: schema.String(),
+    output: schema.LoroText({ required: false }),
+    content: schema
+      .LoroMap(
+        {
+          type: schema.String(),
+          text: schema.LoroText({ required: false }),
+        },
+        { required: false }
+      )
+      .catchall(historyItemAnySchema),
+  })
+  .catchall(historyItemAnySchema);
+const historyScriptStepSchema = schema
+  .LoroMap({
+    output: schema.LoroText({ required: false }),
+  })
+  .catchall(historyItemAnySchema);
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -202,6 +227,9 @@ const historyMessageItemSchema = schema
     {
       type: schema.String<MessageContent['type']>(),
       text: schema.LoroText({ required: false }),
+      markdown: schema.LoroText({ required: false }),
+      content: schema.LoroList(historyToolContentSchema, undefined, { required: false }),
+      steps: schema.LoroList(historyScriptStepSchema, undefined, { required: false }),
       // `file` item: the mutable lifecycle fields `transport`/`machineId` are
       // carried through the `.catchall(...)` below (like every other variant's
       // payload fields, e.g. image's `imageId`/`sizeBytes`). They are plain

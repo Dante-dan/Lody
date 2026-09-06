@@ -1,0 +1,54 @@
+--- a/src/core/diff.ts
++++ b/src/core/diff.ts
+@@ -1355,4 +1355,24 @@
+         // Item inside map has changed
+         if (oldItem !== newItem) {
++            // String storage declarations control insertion. A changed string retains the
++            // actual representation already stored in this map, including legacy Text.
++            if (containerId !== "" &&
++                (!childSchema || childSchema.type === "any" || childSchema.type === "loro-text") &&
++                !hasTransform(childSchema) &&
++                typeof oldItem === "string" && typeof newItem === "string") {
++                const parent = doc.getContainerById(containerId);
++                if (parent?.kind() === "Map") {
++                    const stored = (parent as LoroMap).get(key);
++                    if (isContainer(stored) && stored.kind() === "Text") {
++                        changes.push(...diffText(oldItem, newItem, stored.id));
++                        continue;
++                    }
++                    if (typeof stored === "string") {
++                        changes.push({ container: containerId, key, value: newItem, kind: "insert" });
++                        continue;
++                    }
++                }
++            }
++
+             // The key was previously a container and new item is also a container
+             if (
+--- a/dist/core/diff.js
++++ b/dist/core/diff.js
+@@ -967,4 +967,24 @@
+         // Item inside map has changed
+         if (oldItem !== newItem) {
++            // String storage declarations control insertion. A changed string retains the
++            // actual representation already stored in this map, including legacy Text.
++            if (containerId !== "" &&
++                (!childSchema || childSchema.type === "any" || childSchema.type === "loro-text") &&
++                !hasTransform(childSchema) &&
++                typeof oldItem === "string" && typeof newItem === "string") {
++                const parent = doc.getContainerById(containerId);
++                if (parent?.kind() === "Map") {
++                    const stored = parent.get(key);
++                    if (isContainer(stored) && stored.kind() === "Text") {
++                        changes.push(...diffText(oldItem, newItem, stored.id));
++                        continue;
++                    }
++                    if (typeof stored === "string") {
++                        changes.push({ container: containerId, key, value: newItem, kind: "insert" });
++                        continue;
++                    }
++                }
++            }
++
+             // The key was previously a container and new item is also a container
+             if (containerType &&
