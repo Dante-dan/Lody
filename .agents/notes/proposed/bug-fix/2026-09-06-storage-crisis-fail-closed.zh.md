@@ -29,6 +29,9 @@ room，也开 `readwrite` 事务，因此会话创建是在**读路径**上就�
 
 ## 决策与发现
 
+实现见 [LodyAI/Lody#438](https://github.com/LodyAI/Lody/pull/438)，只覆盖 issue 中的 Phase 1；
+其中描述的 Phase 2（纯文件系统的"管理存储"面板）尚未实现，因此该 issue 保持开启。
+
 熔断器放在仓库层之下，即 `createCrisisAwareStorageAdapter` 内，而不是各个调用点：归档、发送、
 工作区目录写入撞上的是与会话创建同一条死连接。它把每个被分类的失败重新抛为
 `StorageCrisisError`，因此即便是第一次失败，原始引擎文案也到不了 toast。机制说明见
@@ -59,12 +62,28 @@ room，也开 `readwrite` 事务，因此会话创建是在**读路径**上就�
 ### 已知限制
 
 `classifyStorageFailure` 优先匹配 DOMException 的 `name`，但会回退到消息正则，而这些文案跨引擎、
-跨语言环境都不是稳定 API。已向 `loro-dev/loro-repo` 发起上游工作，给存储错误附加稳定的 `code`，
-并让 `loadDoc` 不再需要 `readwrite`；上游落地后，正则兜底可以只保留作旧版本兼容。在那之前，
-措辞不同的引擎消息会被当作未分类——这是安全侧的失败，应用保持原有行为，而不会错误地锁存。
+跨语言环境都不是稳定 API。措辞不同的引擎消息会被当作未分类——这是安全侧的失败，应用保持原有
+行为，而不会错误地锁存。
+
+上游修复是 [loro-dev/loro-repo#129](https://github.com/loro-dev/loro-repo/pull/129)：新增
+携带 `code: 'quota' | 'unavailable' | 'unknown'` 的 `RepoStorageError`，并让 `loadDoc` 不再
+需要 `readwrite`。我们**刻意没有**在这里预先写 `code` 的读取逻辑：该契约仍在上游评审中、字段名
+可能改变，而一个永远匹配不上的字段会变成藏在可用启发式背后的死代码。等 Lody 下次升级
+loro-repo 时再优先读 `code`，那时才能配上真正能验证它的测试。
+
+该 PR 把抛出的错误改名为 `RepoStorageError`，但保留了 message 文本和 `cause` 链。已验证对本
+分类器安全：它从不与 `'Error'` 比对，并且无论如何都会遍历 `cause`。
+
+上游还确认了 `loadDoc` 里的 `readwrite` 是有意为之而非疏漏：把读和 `delete(docId)` 拆成两个
+事务会丢掉期间追加的 update。修复方案是泛化已有的 compare-then-write 辅助函数，而不是简单拆开。
 
 ## 验证
 
-3208 个 components 测试（新增 27 个，覆盖分类、cause 链遍历、读失败关闭，以及恢复界面的操作），
-79 个 Electron 测试，typecheck、lint、i18n，以及 public/platform/code-collab 边界守卫。磁盘满
-这一条件是用 fixture 复现的，而非真实写满的卷；没有在耗尽磁盘的机器上做端到端手工验证。
+438 个文件共 3216 个 components 测试（新增 27 个，覆盖分类、cause 链遍历、环状 cause 链能终止、
+读失败关闭、内层 adaptor 没有的可选方法不被对外声明，以及恢复界面的操作），91 个 Electron 测试，
+27 个脚本测试，typecheck、lint、i18n、`pnpm run docs check`，以及 public/platform/code-collab
+边界守卫。以上数字来自与 `main`（90c6eaf2）合并后的分支。
+
+磁盘满这一条件是用 fixture 复现的，而非真实写满的卷；没有在耗尽磁盘的机器上做端到端手工验证。
+恢复界面挂载之后才弹出的 toast 不会被清除——它们渲染在界面下方，且携带的是受控文案而非引擎
+文本——所以这块界面压制的是上报的症状，而不是所有可能的 toast。

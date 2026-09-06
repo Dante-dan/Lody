@@ -35,6 +35,10 @@ process, so freeing disk space and reloading both fail to recover it.
 
 ## Decisions and findings
 
+Shipped in [LodyAI/Lody#438](https://github.com/LodyAI/Lody/pull/438), Phase 1 of the
+issue; the filesystem-only **Manage storage** panel it describes as Phase 2 is not built,
+so the issue stays open.
+
 The breaker lives under the repo, in `createCrisisAwareStorageAdapter`, not at the call
 sites: archive, send, and workspace-catalog writes hit the same dead connection as
 session creation. It re-throws every classified failure as `StorageCrisisError`, so raw
@@ -70,17 +74,37 @@ re-applied on every version bump for no user-visible gain.
 ### Known limit
 
 `classifyStorageFailure` matches DOMException `name` first but falls back to message
-regexes, and that prose is not stable API across engines or locales. Upstream work was
-opened against `loro-dev/loro-repo` to attach a stable `code` to storage errors and to
-stop `loadDoc` requiring `readwrite`; once it lands, the fallback can become
-compatibility-only. Until then a differently worded engine message would be treated as
-unclassified — which fails safe, in that the app keeps its previous behavior rather than
-latching wrongly.
+regexes, and that prose is not stable API across engines or locales. A differently worded
+engine message is treated as unclassified, which fails safe: the app keeps its previous
+behavior rather than latching wrongly.
+
+[loro-dev/loro-repo#129](https://github.com/loro-dev/loro-repo/pull/129) is the upstream
+fix — a `RepoStorageError` carrying `code: 'quota' | 'unavailable' | 'unknown'`, and
+`loadDoc` no longer needing `readwrite`. We deliberately did NOT pre-write `code` support
+here: the contract is open for review upstream and could be renamed, and a field name that
+never matches would be dead code hiding behind working heuristics. Read `code` first when
+Lody next bumps loro-repo, with a test that can actually exercise it.
+
+That PR renames the thrown error to `RepoStorageError` while preserving message text and
+the `cause` chain. Verified safe for this classifier, which never compares against
+`'Error'` and walks `cause` regardless.
+
+Upstream also confirmed the `readwrite` in `loadDoc` was deliberate, not an oversight:
+splitting the read and the `delete(docId)` into two transactions would drop updates
+appended in between. The fix generalizes the existing compare-then-write helper instead of
+separating them naively.
 
 ## Verification
 
-3208 component tests (27 new, covering classification, cause-chain walking, fail-closed
-reads, and the recovery screen's actions), 79 Electron tests, typecheck, lint, i18n, and
-the public/platform/code-collab boundary guards. The disk-full condition itself was
-reproduced from fixtures rather than a real full volume; no manual end-to-end run on an
-exhausted disk was performed.
+3216 component tests across 438 files (27 new, covering classification, cause-chain
+walking, a cyclic chain terminating, fail-closed reads, optional adapter methods not being
+advertised when the inner adaptor lacks them, and the recovery screen's actions), 91
+Electron tests, 27 script tests, typecheck, lint, i18n, `pnpm run docs check`, and the
+public/platform/code-collab boundary guards. Counts are from the branch merged with `main`
+at 90c6eaf2.
+
+The disk-full condition itself was reproduced from fixtures rather than a real full volume;
+no manual end-to-end run on an exhausted disk was performed. Toasts raised after the
+recovery screen mounts are not dismissed — they render beneath it and carry the controlled
+message, not engine text — so the screen suppresses the reported symptom rather than every
+possible toast.

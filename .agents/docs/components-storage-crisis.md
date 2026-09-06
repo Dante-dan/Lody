@@ -67,8 +67,8 @@ screen keeps naming the original cause rather than the last symptom.
 builds ``new Error(`${context}: ${cause.message}`, { cause })`` — it keeps the message
 but drops `cause.name`, and the name is the reliable signal. Matching also falls back to
 message text, which is a heuristic: DOMException prose is not stable API across engines
-or locales. An upstream `code` on loro-repo's storage errors would make this exact; see
-the note for what was filed.
+or locales. [loro-dev/loro-repo#129](https://github.com/loro-dev/loro-repo/pull/129) adds
+a stable `code` that would make this exact; the note explains why it is not read yet.
 
 Anything unclassified keeps its existing behavior. A transient or logic error must not
 lock the app into a state whose only exit is a restart.
