@@ -44,10 +44,32 @@ import { RotatingWords } from './landing-interactions';
 import type { PlatformDownloadLabels } from './landing-platform-download';
 
 // The point-cloud background (and with it all of three.js) stays out of the
-// landing's critical chunk: the hero copy hydrates without parsing three, while
-// this module-eval import() starts fetching the chunk in parallel. Until it
-// mounts, the container's CSS gradient (kept in sync with the BG shader) shows.
-const underwaterBackgroundModule = import('./underwater-background');
+// landing's critical chunk: the hero copy hydrates without parsing three.
+// Desktop starts the module-eval import() immediately so the scene can compile
+// behind the CSS gradient. Mobile / coarse pointer waits for idle so the hero
+// H1 (the LCP element) is not competing with a 3D chunk it cannot see yet.
+function loadUnderwaterBackground() {
+  return import('./underwater-background');
+}
+
+function shouldDeferUnderwaterBackground(): boolean {
+  if (typeof window === 'undefined') return false;
+  return window.matchMedia('(pointer: coarse), (max-width: 768px)').matches;
+}
+
+const underwaterBackgroundModule =
+  typeof window === 'undefined' || !shouldDeferUnderwaterBackground()
+    ? loadUnderwaterBackground()
+    : new Promise<typeof import('./underwater-background')>((resolve) => {
+        const start = () => {
+          resolve(loadUnderwaterBackground());
+        };
+        if (typeof window.requestIdleCallback === 'function') {
+          window.requestIdleCallback(start, { timeout: 2000 });
+        } else {
+          window.setTimeout(start, 1);
+        }
+      });
 const UnderwaterPointCloudBackground = lazy(() => underwaterBackgroundModule);
 
 // The product stage sits below the 100dvh hero, but `landing-app-preview` is the

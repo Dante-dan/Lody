@@ -68,7 +68,9 @@ Demo sequencing and screenshot notes live in
 - `underwater-background.tsx` is client-only three.js in `useEffect`. Startup is
   deliberately staged — keep all three legs when touching it: (1)
   `underwater-experience.tsx` loads it via module-eval `import()` + `lazy` (keep the
-  `.underwater-bg` CSS gradient in sync with the BG shader); (2) the initial seabed
+  `.underwater-bg` CSS gradient in sync with the BG shader). Desktop starts that
+  import immediately; mobile / coarse pointer defers it to idle so the hero H1
+  can become LCP without a 3D download. (2) the initial seabed
   attributes are computed in `underwater-terrain.worker.ts` via
   `underwater-terrain-math.ts` and fade in through the terrain `uReveal` uniform, while
   gradient/particles/jellyfish render immediately; (3) first render waits on

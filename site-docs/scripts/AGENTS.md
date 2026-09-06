@@ -23,5 +23,10 @@ Root `AGENTS.md` and `site-docs/AGENTS.md` also apply.
   TanStack prerender.
 - `finalize-404-html.mjs` runs after prerender and strips app hydration from
   `404.html` so a junk URL cannot boot the client router and blank the page.
+- `finalize-prerender-html.mjs` runs after prerender and strips non-critical
+  `modulepreload` from every other HTML document so first paint does not compete
+  with unused route chunks. Keep only the hydration runtime (entry / react /
+  jsx-runtime / rolldown-runtime / preload-helper). Do not add the landing or
+  docs chunks back onto every page.
 - `generate:landing-agents` produces `components/landing-agents.generated.ts`; provider
   marks and the ACP wall must come from it rather than hand-written lists.

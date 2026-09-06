@@ -64,8 +64,10 @@ tuning shortcut are in [`README.md`](README.md).
   content during install; never use the switch unless a later build/generate step
   is guaranteed.
 - `vite.config.ts` is the build integration point. Keep TanStack Start, Fumadocs
-  MDX, Tailwind, React, and preview-only aliases there. The deployable static
-  build output is `site-docs/out/client`; do not publish the SSR server bundle.
+  MDX, Tailwind, React, and preview-only aliases there. `build.modulePreload`
+  must not inject every route chunk; `finalize-prerender-html.mjs` strips leftovers.
+  The deployable static build output is `site-docs/out/client`; do not publish the
+  SSR server bundle.
 - `src/routeTree.gen.ts`, `public/sitemap.xml`, `public/docs-search.json`, `public/llms.txt`,
   `public/llms-full.txt`, `public/rss.xml`, `public/rss-zh.xml`,
   `lib/blog-reading-time.generated.ts`, and `lib/docs-faq.generated.ts` are

@@ -9,6 +9,13 @@ import type { DevEnvironment, Plugin, RunnableDevEnvironment } from 'vite';
 import { defineConfig } from 'vite';
 import { collectSitePaths } from './scripts/site-paths.mjs';
 
+/** Keep in sync with `scripts/finalize-prerender-html.mjs`. */
+function isCriticalModulePreloadHref(href: string) {
+  return /(?:^|\/)(?:index|rolldown-runtime|react-dom|react|jsx-runtime|preload-helper)-[^/]+\.js(?:\?|$)/u.test(
+    href
+  );
+}
+
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const componentsSrc = path.resolve(dirname, '../packages/components/src');
 const siteSrc = dirname;
@@ -247,5 +254,12 @@ export default defineConfig({
   build: {
     outDir: 'out',
     emptyOutDir: true,
+    // Do not modulepreload every route chunk into every HTML document.
+    // The entry script still loads the current page; post-prerender HTML
+    // finalize strips any leftovers TanStack injects.
+    modulePreload: {
+      polyfill: false,
+      resolveDependencies: (_filename, deps) => deps.filter(isCriticalModulePreloadHref),
+    },
   },
 });

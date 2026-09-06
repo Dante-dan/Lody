@@ -6,8 +6,12 @@
  * (shared sessions, private machines). Diff review stays in the play stage.
  */
 
-import { useEffect, useRef, useState } from 'react';
-import { LandingPowerDemo, type PowerDemoId } from './landing-power-demos';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import type { PowerDemoId } from './landing-power-demos';
+
+const LandingPowerDemo = lazy(() =>
+  import('./landing-power-demos').then((module) => ({ default: module.LandingPowerDemo }))
+);
 
 export type PowerSectionCopy = {
   /** Optional category label, e.g. Team. */
@@ -46,20 +50,25 @@ function ClientPowerDemo({
 }) {
   const [ready, setReady] = useState(false);
   useEffect(() => setReady(true), []);
+  const placeholder = (
+    <div
+      className="uw-power__demo uw-power__demo--ssr lody-app-preview dark"
+      data-power-scroll-scene={id === 'pr' ? '' : undefined}
+      aria-hidden
+      inert
+    >
+      <p className="uw-power__demo-ssr-title">{title}</p>
+      {summary ? <p className="uw-power__demo-ssr-body">{summary}</p> : null}
+    </div>
+  );
   if (!ready) {
-    return (
-      <div
-        className="uw-power__demo uw-power__demo--ssr lody-app-preview dark"
-        data-power-scroll-scene={id === 'pr' ? '' : undefined}
-        aria-hidden
-        inert
-      >
-        <p className="uw-power__demo-ssr-title">{title}</p>
-        {summary ? <p className="uw-power__demo-ssr-body">{summary}</p> : null}
-      </div>
-    );
+    return placeholder;
   }
-  return <LandingPowerDemo id={id} locale={locale} />;
+  return (
+    <Suspense fallback={placeholder}>
+      <LandingPowerDemo id={id} locale={locale} />
+    </Suspense>
+  );
 }
 
 export function LandingPowerSection({
