@@ -36,16 +36,16 @@ control plane.
 
 ## GitHub credentials
 
-- `gh-shim-script.ts` authorizes `/github-auth-context` BEFORE any credential use; missing/stale
-  contexts fail closed. Only the daemon owner may use local credentials. Bind the absolute broker
-  state path at generation, never from child env; keep wrappers in workspace-bound `gh-session-bin`.
-- Select owner tokens/active gh login before requester-bound managed fallback. Only missing
-  credentials/401 advance the chain; never replay commands. Explicit API hosts/PR URLs override
-  ambient repos; never send managed github.com tokens to another host.
-- Generate owner BASH_ENV/ZDOTDIR passthrough files only after trusted ownership is established,
-  before any write. Non-owner startup files must use separate paths, source no owner files,
-  clear GitHub tokens, and restore managed gh PATH priority. This does not isolate same-OS-user
-  filesystem/keychain access or shell modes that replace/ignore our hooks.
+- `gh-shim-script.ts` checks `/github-auth-context` before credentials; missing/stale contexts
+  fail closed. Local auth is owner-only. Embed the absolute broker path, never from child env.
+  Keep wrappers in workspace-bound `gh-session-bin`.
+- Owner tokens/login precede requester-bound managed fallback on missing credentials/401 only.
+  Never replay commands. API hosts/PR URLs override ambient repos; managed tokens are github.com-only.
+- PR/Issue URLs may follow command-specific boolean flags. Body/template URL values and unknown
+  option arity never select credentials.
+- Gate shared owner BASH_ENV/ZDOTDIR writes on ownership. Non-owner hooks use separate paths,
+  source no owner files, clear GitHub tokens, and restore managed gh PATH. This cannot isolate
+  same-OS-user filesystem/keychain access or shell modes replacing/ignoring hooks.
 
 ## Local Loro data plane
 

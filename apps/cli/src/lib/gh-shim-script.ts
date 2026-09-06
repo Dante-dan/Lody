@@ -333,11 +333,16 @@ const readGitHubTarget = async (args) => {
   }
   // gh pr/issue commands accept a URL that overrides the current repository.
   const subjectUrls = args.filter((arg) => /^https?:\\/\\/[^/]+\\/[^/]+\\/[^/]+\\/(pull|issues)\\//i.test(arg));
+  // Only known zero-arity flags can precede a subject URL. Keep this scoped to
+  // the command: short options can take values in other subcommands.
+  const isViewBooleanFlag = (flag) =>
+    (args[0] === 'pr' || args[0] === 'issue') && args[1] === 'view' &&
+    (['--comments', '--web', '--help'].includes(flag.split('=')[0]) || /^-[cw]+$/.test(flag));
   // A URL-valued --body/--template is not necessarily the command's target.
-  // Do not guess an identity when multiple URLs or an option value are present.
+  // Unknown option arity and multiple URLs remain ambiguous; never guess auth.
   if (subjectUrls.length > 1 || subjectUrls.some((url) => {
     const previous = args[args.indexOf(url) - 1];
-    return previous && previous !== '--' && previous.startsWith('-');
+    return previous && previous !== '--' && previous.startsWith('-') && !isViewBooleanFlag(previous);
   })) return { host: null, repo: null };
   const subject = subjectUrls[0] || args[2];
   if (subject && /^https?:\\/\\//i.test(subject)) {

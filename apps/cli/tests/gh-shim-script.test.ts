@@ -536,6 +536,42 @@ describe('ensureGhShimScript', () => {
     expect(brokerRequestCount).toBe(0);
   });
 
+  it.each([
+    ['pr', '--comments', 'pull'],
+    ['pr', '-c', 'pull'],
+    ['pr', '--web', 'pull'],
+    ['pr', '-cw', 'pull'],
+    ['pr', '--comments=false', 'pull'],
+    ['issue', '--comments', 'issues'],
+  ])(
+    'resolves a teammate %s view URL after boolean flag %s',
+    async (command, flag, subjectPath) => {
+      await startTokenBroker('app-token');
+      ensureGhShimScript();
+      const args = [command, 'view', flag, `https://github.com/owner/target/${subjectPath}/1`];
+      const result = await runShim({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(args.join(' ') + '\n');
+      expect(brokerRequests).toEqual([
+        { repoFullName: 'owner/target', contextToken: 'test-context' },
+      ]);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
+
+  it('keeps an enterprise URL after a boolean flag out of managed auth', async () => {
+    await startTokenBroker('app-token');
+    ensureGhShimScript();
+    const result = await runShim(
+      { GH_REPO: 'github.com/loro-dev/lody' },
+      ['pr', 'view', '--comments', 'https://other.ghe.com/owner/repo/pull/1']
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('No managed GitHub credential');
+    expect(brokerRequests).toEqual([]);
+  });
+
   it.each(['https', 'http'])('rejects a teammate PR URL after flags (%s)', async (protocol) => {
     const broker = await startTokenBroker('app-token');
     ensureGhShimScript();
@@ -564,6 +600,9 @@ describe('ensureGhShimScript', () => {
       'https://other.ghe.com/owner/repo/pull/2',
     ],
     ['pr', 'comment', '--body', 'https://github.com/loro-dev/lody/pull/1', '2'],
+    ['pr', 'view', '--template', 'https://github.com/loro-dev/lody/pull/1', '2'],
+    ['pr', 'view', '-ct', 'https://github.com/loro-dev/lody/pull/1', '2'],
+    ['pr', 'view', '--unknown', 'https://github.com/loro-dev/lody/pull/1'],
   ])('does not mistake a body URL for the target in a teammate session: %j', async (...args) => {
     const broker = await startTokenBroker('app-token');
     ensureGhShimScript();
