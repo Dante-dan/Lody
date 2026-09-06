@@ -40,6 +40,11 @@
   in its own text box. So `parse`/`format` round-trip byte for byte, and an
   untouched rule is re-emitted unchanged — saving can never silently rewrite an
   existing plan or invalidate its fingerprint.
+- Cron day-of-week accepts 0 AND 7 for Sunday, so a RANGE must be expanded from
+  its raw bounds and folded onto 0 only afterwards. Folding first turns `0-7`
+  (every day) into `0-0` and reads it as Sundays only — a loss that is invisible
+  until an unrelated time or zone edit rewrites the rule. Tests must cover a
+  Sunday-7 range across an edit, not just its untouched round trip.
 - Owner-only reduction of authority (pause/delete) remains possible when the
   machine is gone or outdated. Creating/editing/resuming/running requires the
   target Machine protocol capability. Never fall back to a different Agent.

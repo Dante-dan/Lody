@@ -247,7 +247,17 @@ export function CronFieldRow({
     id === 'weekday' && field.mode === 'list'
       ? field.values
       : id === 'weekday' && field.mode === 'range'
-        ? Array.from({ length: field.to - field.from + 1 }, (_, index) => field.from + index)
+        ? // Fold Sunday-as-7 only after expanding, and only once: a range bound
+          // normalized first turns `0-7` into `0-0`. The parser guarantees
+          // 0..6 today, and this keeps that true if the bounds ever widen.
+          [
+            ...new Set(
+              Array.from(
+                { length: field.to - field.from + 1 },
+                (_, index) => (field.from + index) % 7
+              )
+            ),
+          ].sort((a, b) => a - b)
         : null;
 
   return (

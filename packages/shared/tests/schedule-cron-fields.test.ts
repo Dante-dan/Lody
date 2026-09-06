@@ -30,6 +30,11 @@ describe('reading a cron expression as editable fields', () => {
   it('keeps anything it does not model verbatim and editable', () => {
     for (const [text, id] of [
       ['MON-FRI', 'weekday'],
+      // Sunday-as-7 is out of this module's 0..6 bounds on purpose: the field
+      // pickers cannot show a day 7, so the rule stays raw text rather than
+      // being approximated. `schedule-recurrence.ts` is what names `0-7`.
+      ['0-7', 'weekday'],
+      ['1-7', 'weekday'],
       ['MON#2', 'weekday'],
       ['JAN,JUL', 'month'],
       ['L', 'dayOfMonth'],

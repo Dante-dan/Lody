@@ -69,13 +69,20 @@ function parseFixedNumber(field: string, min: number, max: number): number | nul
   return value >= min && value <= max ? value : null;
 }
 
-function parseWeekdayToken(token: string): ScheduleWeekday | null {
+/**
+ * A day-of-week token as cron writes it: 0–7, where 0 AND 7 both mean Sunday.
+ *
+ * Folding 7 onto 0 here would be wrong, because a RANGE is expanded from these
+ * bounds: `0-7` and `1-7` are every day, and normalizing the upper bound first
+ * turned `0-7` into the empty-looking range 0-0 and read it as "Sundays only".
+ * Normalization happens after expansion, in `parseWeekdayField`.
+ */
+function parseWeekdayToken(token: string): number | null {
   const named = CRON_DAY_NAMES.indexOf(token.toUpperCase());
-  if (named >= 0) return named as ScheduleWeekday;
+  if (named >= 0) return named;
   if (!/^\d$/.test(token)) return null;
   const value = Number(token);
-  // Standard cron accepts both 0 and 7 for Sunday.
-  return value <= 7 ? ((value % 7) as ScheduleWeekday) : null;
+  return value <= 7 ? value : null;
 }
 
 /**
@@ -86,20 +93,22 @@ function parseWeekdayToken(token: string): ScheduleWeekday | null {
  */
 function parseWeekdayField(field: string): ScheduleWeekday[] | null {
   const found = new Set<ScheduleWeekday>();
+  // Sunday is 0 or 7; fold only after the range has been expanded.
+  const add = (day: number) => found.add((day % 7) as ScheduleWeekday);
   for (const part of field.split(',')) {
     if (part.includes('/') || part === '') return null;
     const bounds = part.split('-');
     if (bounds.length === 1) {
       const single = parseWeekdayToken(bounds[0]!);
       if (single === null) return null;
-      found.add(single);
+      add(single);
       continue;
     }
     if (bounds.length !== 2) return null;
     const from = parseWeekdayToken(bounds[0]!);
     const to = parseWeekdayToken(bounds[1]!);
     if (from === null || to === null || from > to) return null;
-    for (let day = from; day <= to; day++) found.add(day as ScheduleWeekday);
+    for (let day = from; day <= to; day++) add(day);
   }
   return found.size ? [...found].sort((a, b) => a - b) : null;
 }

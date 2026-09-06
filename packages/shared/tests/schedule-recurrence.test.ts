@@ -69,6 +69,48 @@ describe('recurrence ⇄ trigger mapping', () => {
     expect(triggerToRecurrence(cron('0 9 * * 0-6')).kind).toBe('daily');
   });
 
+  it('expands a weekday range before folding 7 onto Sunday', () => {
+    // Standard cron accepts 0 AND 7 for Sunday, so `0-7` and `1-7` are every
+    // day. Normalizing the bound first collapsed `0-7` to the range 0-0 and
+    // read it as "Sundays only".
+    expect(triggerToRecurrence(cron('0 9 * * 0-7')).kind).toBe('daily');
+    expect(triggerToRecurrence(cron('0 9 * * 1-7')).kind).toBe('daily');
+    expect(triggerToRecurrence(cron('0 9 * * 5-7'))).toEqual({
+      kind: 'weekly',
+      weekdays: [0, 5, 6],
+      hour: 9,
+      minute: 0,
+      timeZone: ZONE,
+    });
+    expect(triggerToRecurrence(cron('0 9 * * 6-7'))).toEqual({
+      kind: 'weekly',
+      weekdays: [0, 6],
+      hour: 9,
+      minute: 0,
+      timeZone: ZONE,
+    });
+  });
+
+  it('replays a Sunday-7 range on the same days after a time or zone edit', () => {
+    // The failure this guards is silent: an unedited rule is returned verbatim,
+    // so only changing the time or the zone revealed the lost days.
+    for (const expression of ['0 9 * * 0-7', '0 9 * * 1-7', '0 9 * * 5-7', '0 9 * * 7']) {
+      const stored = cron(expression);
+      const recurrence = triggerToRecurrence(stored);
+      const laterHour = recurrenceToTrigger({ ...recurrence, hour: 18 } as ScheduleRecurrence);
+      const otherZone = recurrenceToTrigger({
+        ...recurrence,
+        timeZone: 'Europe/Berlin',
+      } as ScheduleRecurrence);
+      const days = (trigger: ScheduleTrigger) =>
+        previewSchedule(trigger, 0, NOW, 8).map((at) => new Date(at).getUTCDay());
+      // Same weekdays as the stored rule, only the clock moved.
+      expect(days(laterHour)).toEqual(days(cron(expression.replace('0 9', '0 18'))));
+      expect(days(otherZone).length).toBe(8);
+      expect(new Set(days(laterHour))).toEqual(new Set(days(stored)));
+    }
+  });
+
   it('keeps rules it cannot name as an editable custom expression', () => {
     for (const expression of [
       '*/15 * * * *',
@@ -100,6 +142,10 @@ describe('recurrence ⇄ trigger mapping', () => {
       cron('0 9 * * *'),
       cron('30 7 * * 1-5'),
       cron('0 9 * * MON-FRI'),
+      cron('0 9 * * 0-7'),
+      cron('0 9 * * 1-7'),
+      cron('0 9 * * 5-7'),
+      cron('0 9 * * 7'),
       cron('15 18 * * SUN,WED'),
       cron('0 9 1 * *'),
       cron('0 9 28 * *'),
