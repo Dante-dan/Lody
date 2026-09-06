@@ -3892,7 +3892,6 @@ export class SessionExecutionService {
           );
           session = null;
           runtime.session = undefined;
-          runtime.pendingSession = undefined;
           activeSession = yield* restoreMissingSession(ctx);
         }
         bindReadySession(activeSession);

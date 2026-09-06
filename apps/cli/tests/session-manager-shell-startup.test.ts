@@ -7,6 +7,7 @@ import type { SessionId, WorkspaceId } from '@lody/shared';
 
 import { getGhShimHostBinDir } from '../src/lib/gh-shim-script';
 import type { LoroDocumentManager } from '../src/lib/loro/doc';
+import { Session } from '../src/session/session';
 import { SessionManager } from '../src/session/session-manager';
 import type { SessionConfig } from '../src/session/types';
 import type { Logger } from '../src/utils/logger';
@@ -142,5 +143,37 @@ describe.skipIf(process.platform === 'win32')('SessionManager startup ownership'
     expect(
       startupFiles.some((name) => existsSync(path.join(getGhShimHostBinDir(brokerPath), name)))
     ).toBe(false);
+  });
+  it('rejects late startup overlays after non-owner preparation', async () => {
+    const owner = configFor('owner');
+    const teammate = configFor('teammate');
+    await prepare(owner);
+    await prepare(teammate);
+    const session = new Session(
+      teammate,
+      { debug() {} } as unknown as Logger,
+      tempDir,
+      undefined,
+      'owner'
+    );
+    const env = (
+      session as unknown as {
+        buildShellEnv(
+          overrides: Record<string, string>,
+          login: NodeJS.ProcessEnv
+        ): NodeJS.ProcessEnv;
+      }
+    ).buildShellEnv(owner.env ?? {}, owner.env ?? {});
+    for (const shell of shells) {
+      const result = spawnSync(shell, ['-c', 'printf %s "${STARTUP_SOURCE-}"'], {
+        env: Object.fromEntries(
+          ['HOME', 'PATH', 'BASH_ENV', 'ZDOTDIR'].map((key) => [key, env[key]])
+        ),
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe('');
+    }
   });
 });

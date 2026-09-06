@@ -17,7 +17,7 @@ Architecture: context/message-flow.md. Contract: specs/session-orchestration.md.
   identity use the frozen invocation requester, never the Session owner.
 - Inject trusted machine-owner identity into `Session`; after ALL env overlays, strip every
   GitHub token key case-insensitively for non-owners/unknown owners and apply no-source startup
-  files. Gate owner passthrough-file generation BEFORE writing, including preparation/refresh.
+  files. Gate owner passthrough-file generation BEFORE writing, including preparation.
   Never inject session-wide managed GH_TOKEN. Broker/startup rules: [../lib/AGENTS.md](../lib/AGENTS.md).
 - Requester handoff replaces ACP before prompt delivery; cross-requester/unknown-owner steer
   queues a new turn. Internal `acp-replacement` retains execution ownership: MessageHandler must

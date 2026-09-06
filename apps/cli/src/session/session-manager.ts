@@ -85,7 +85,6 @@ import {
 import { ensureGhShimScript, prependGhShimBinDirToPath } from '@/lib/gh-shim-script';
 import { ensureLodyBashEnvForGhShim, shouldInjectBashEnvForGhShim } from '@/lib/lody-bashenv';
 import { ensureLodyZdotdirForGhShim, shouldInjectZdotdirForGhShim } from '@/lib/lody-zdotdir';
-import { applyNonOwnerShellEnv } from '@/lib/non-owner-shell-env';
 import type { RateLimit, SessionUsageUpdate } from 'acp-extension-core';
 import { getWorktreeManager } from './worktree/worktree-manager';
 import type {
@@ -1601,12 +1600,9 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       brokerStateFilePath
     );
 
-    // The passthrough files are shared with live owner sessions. Authorize their
-    // generation before any write; scrubbing a future child env is too late.
-    if (!allowLocalAuth) {
-      applyNonOwnerShellEnv(sessionEnv, brokerStateFilePath);
-      return;
-    }
+    // Authorize shared owner-file writes here. Session installs non-owner hooks
+    // after all environment overlays, so preparation need not generate them too.
+    if (!allowLocalAuth) return;
 
     if (shouldInjectBashEnvForGhShim()) {
       sessionEnv.BASH_ENV = ensureLodyBashEnvForGhShim(sessionEnv.BASH_ENV, brokerStateFilePath);

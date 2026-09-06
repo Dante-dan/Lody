@@ -231,20 +231,15 @@ const isManagedTokenValue = (token, marker) => {
   return fingerprintToken(String(token)) === String(marker);
 };
 
-const hasManagedEnvToken = (env) => {
-  const marker = env[MANAGED_TOKEN_MARKER_ENV];
-  return (
-    isManagedTokenValue(env.GH_TOKEN, marker) ||
-    isManagedTokenValue(env.GITHUB_TOKEN, marker)
-  );
-};
-
 const clearManagedTokenEnv = (env) => {
-  if (!hasManagedEnvToken(env)) return;
   const marker = env[MANAGED_TOKEN_MARKER_ENV];
-  if (isManagedTokenValue(env.GH_TOKEN, marker)) delete env.GH_TOKEN;
-  if (isManagedTokenValue(env.GITHUB_TOKEN, marker)) delete env.GITHUB_TOKEN;
-  delete env[MANAGED_TOKEN_MARKER_ENV];
+  if (!marker) return;
+  for (const key of ['GH_TOKEN', 'GITHUB_TOKEN']) {
+    if (isManagedTokenValue(env[key], marker)) {
+      delete env[key];
+      delete env[MANAGED_TOKEN_MARKER_ENV];
+    }
+  }
 };
 
 const injectGhToken = (env, token) => {
@@ -377,91 +372,43 @@ const getContextToken = () => {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 };
 
-const doBrokerRequest = async (baseUrl, brokerToken, endpoint, body, timeoutMs) => {
-  const fetchImpl = globalThis.fetch;
-  if (typeof fetchImpl !== 'function') return { unavailable: true };
-
+const requestBroker = async (endpoint, body, timeoutMs) => {
+  const config = getBrokerConfig();
+  if (!config || typeof globalThis.fetch !== 'function') return null;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(baseUrl + endpoint, {
+    return await fetch(config.url + endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: 'Bearer ' + brokerToken,
+        Authorization: 'Bearer ' + config.token,
       },
       body: JSON.stringify(body),
       signal: controller.signal,
     });
-    return { res };
-  } catch (error) {
-    return { error };
+  } catch {
+    return null;
   } finally {
     clearTimeout(timeoutId);
   }
 };
 
-const doFetchFromBroker = async (baseUrl, brokerToken, repoFullName, contextToken) => {
-  const reply = await doBrokerRequest(
-    baseUrl,
-    brokerToken,
-    '/github-token',
-    { repoFullName, ...(contextToken ? { contextToken } : {}) },
-    10000
-  );
-  if (reply.unavailable) return { result: null };
-  if (reply.error) return { error: reply.error };
-  if (!reply.res.ok) return { result: null };
-  const json = await reply.res.json().catch(() => null);
-  if (!json || typeof json.token !== 'string' || !json.token) {
-    return { result: null };
-  }
-  return { result: { token: json.token } };
-};
-
-const doRejectToBroker = async (
-  baseUrl,
-  brokerToken,
-  repoFullName,
-  invalidatedToken,
-  contextToken
-) => {
-  // Short timeout: the gh shim awaits this before exiting, so a slow broker would stall
-  // the user. The next gh invocation will re-trigger reject if delivery here fails.
-  const reply = await doBrokerRequest(
-    baseUrl,
-    brokerToken,
-    '/github-token/reject',
-    {
-      repoFullName,
-      ...(contextToken ? { contextToken } : {}),
-      ...(invalidatedToken ? { invalidatedToken } : {}),
-    },
-    2000
-  );
-  if (reply.unavailable) return { result: false };
-  if (reply.error) return { error: reply.error };
-  return { result: reply.res.ok };
-};
-
-const callBroker = async (action) => {
-  const config = getBrokerConfig();
-  return config ? await action(config.url, config.token) : null;
-};
-
 const fetchTokenFromBroker = async (repoFullName) => {
-  const contextToken = getContextToken();
-  const reply = await callBroker((url, token) =>
-    doFetchFromBroker(url, token, repoFullName, contextToken)
-  );
-  return reply && reply.result ? reply.result : null;
+  const response = await requestBroker('/github-token', {
+    repoFullName, contextToken: getContextToken(),
+  }, 10000);
+  if (!response || !response.ok) return null;
+  const body = await response.json().catch(() => null);
+  return body && typeof body.token === 'string' && body.token ? body.token : null;
 };
 
 const rejectTokenToBroker = async (repoFullName, invalidatedToken) => {
-  const contextToken = getContextToken();
-  await callBroker((url, token) =>
-    doRejectToBroker(url, token, repoFullName, invalidatedToken, contextToken)
-  );
+  // Short timeout: the gh shim awaits this before exiting, so a slow broker would stall
+  // the user. The next gh invocation will re-trigger reject if delivery here fails.
+  await requestBroker('/github-token/reject', {
+    repoFullName, contextToken: getContextToken(), invalidatedToken,
+  }, 2000);
 };
 
 const GH_AUTH_FAILURE_PHRASES = [
@@ -482,15 +429,12 @@ const mayUseLocalAuth = async () => {
   if (!contextToken) {
     throw new Error('GitHub credential context is required for this session.');
   }
-  const reply = await callBroker(async (url, token) => {
-    const response = await doBrokerRequest(url, token, '/github-auth-context', { contextToken }, 5000);
-    if (response.error) return { error: response.error };
-    if (!response.res || !response.res.ok) return { result: null };
-    const body = await response.res.json().catch(() => null);
-    return { result: body && typeof body.allowLocalAuth === 'boolean' ? body : null };
-  });
-  if (!reply || !reply.result) throw new Error('GitHub credential context is unavailable or expired.');
-  return reply.result.allowLocalAuth;
+  const response = await requestBroker('/github-auth-context', { contextToken }, 5000);
+  const body = response && response.ok ? await response.json().catch(() => null) : null;
+  if (!body || typeof body.allowLocalAuth !== 'boolean') {
+    throw new Error('GitHub credential context is unavailable or expired.');
+  }
+  return body.allowLocalAuth;
 };
 
 const buildGhEnv = async (ghCommand, args) => {
@@ -529,10 +473,10 @@ const buildGhEnv = async (ghCommand, args) => {
 
   // Lody's installation credentials belong exclusively to github.com.
   if (target.host === 'github.com' && target.repo) {
-    const result = await fetchTokenFromBroker(target.repo);
-    if (result && result.token) {
-      injectGhToken(env, result.token);
-      return { env, managed: { token: result.token, repoFullName: target.repo } };
+    const token = await fetchTokenFromBroker(target.repo);
+    if (token) {
+      injectGhToken(env, token);
+      return { env, managed: { token, repoFullName: target.repo } };
     }
   }
   if (!allowLocalAuth) throw new Error('No managed GitHub credential is available for this session.');

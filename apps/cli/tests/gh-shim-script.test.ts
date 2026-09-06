@@ -18,6 +18,7 @@ let fakeBinDir: string | null = null;
 let tokenBroker: http.Server | null = null;
 let brokerRequestCount = 0;
 let brokerRequests: unknown[] = [];
+let endpointRequests: { endpoint: string | undefined; body: unknown }[] = [];
 
 const originalPath = process.env.PATH ?? '';
 // Full workspace test runs can heavily delay Node child startup/close on CI.
@@ -31,6 +32,7 @@ beforeEach(() => {
   vi.stubEnv('PATH', `${fakeBinDir}${path.delimiter}${originalPath}`);
   brokerRequestCount = 0;
   brokerRequests = [];
+  endpointRequests = [];
 
   writeFakeGh(
     `#!/bin/sh
@@ -637,6 +639,90 @@ describe('ensureGhShimScript', () => {
   });
 });
 
+describe('broker failure contracts', () => {
+  it.each([
+    { contextRaw: '{' },
+    { contextRaw: '{"allowLocalAuth":"true"}' },
+    { contextRaw: 'null' },
+    { contextStatus: 500 },
+    { disconnect: '/github-auth-context' },
+  ])(
+    'fails closed on invalid context responses: %j',
+    async (options) => {
+      await startTokenBroker('managed-token', options);
+      ensureGhShimScript();
+      const result = await runShim({
+        GH_TOKEN: 'valid-owner-token',
+        LODY_GITHUB_REPO_FULL_NAME: 'loro-dev/lody',
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('context is unavailable or expired');
+      expect(endpointRequests.map((request) => request.endpoint)).toEqual(['/github-auth-context']);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
+
+  it.each([
+    { tokenRaw: '{' },
+    { tokenRaw: '{"token":7}' },
+    { tokenRaw: '{"token":""}' },
+    { status: 500 },
+    { disconnect: '/github-token' },
+  ])(
+    'fails closed when managed token retrieval fails: %j',
+    async (options) => {
+      await startTokenBroker('managed-token', options);
+      ensureGhShimScript();
+      const result = await runShim({
+        GH_TOKEN: 'valid-owner-token',
+        LODY_GITHUB_REPO_FULL_NAME: 'loro-dev/lody',
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('No managed GitHub credential');
+      expect(endpointRequests.map((request) => request.endpoint)).toEqual([
+        '/github-auth-context',
+        '/github-token',
+      ]);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
+
+  it.each([{}, { rejectStatus: 500 }, { disconnect: '/github-token/reject' }])(
+    'reports managed 401 once and preserves failure after rejection: %j',
+    async (options) => {
+      await startTokenBroker('expired-installation-token', options);
+      ensureGhShimScript();
+      const commandLog = path.join(tempHomeDir!, 'commands');
+      const result = await runShim({
+        LODY_GITHUB_REPO_FULL_NAME: 'loro-dev/lody',
+        FAKE_GH_COMMAND_ERROR: 'Bad credentials (HTTP 401)',
+        FAKE_GH_EXEC_LOG: commandLog,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe('Bad credentials (HTTP 401)');
+      expect(readFileSync(commandLog, 'utf8')).toBe('print-token\n');
+      expect(endpointRequests).toEqual([
+        { endpoint: '/github-auth-context', body: { contextToken: 'test-context' } },
+        {
+          endpoint: '/github-token',
+          body: { repoFullName: 'loro-dev/lody', contextToken: 'test-context' },
+        },
+        {
+          endpoint: '/github-token/reject',
+          body: {
+            repoFullName: 'loro-dev/lody',
+            contextToken: 'test-context',
+            invalidatedToken: 'expired-installation-token',
+          },
+        },
+      ]);
+    },
+    SHIM_INTEGRATION_TIMEOUT_MS
+  );
+});
+
 const writeFakeGh = (source: string): void => {
   writeFakeGhNamed('gh', source);
 };
@@ -728,7 +814,15 @@ const runShim = async (
 
 const startTokenBroker = async (
   token: string,
-  options?: { status?: number; allowLocalAuth?: boolean; contextStatus?: number }
+  options?: {
+    status?: number;
+    allowLocalAuth?: boolean;
+    contextStatus?: number;
+    contextRaw?: string;
+    tokenRaw?: string;
+    disconnect?: string;
+    rejectStatus?: number;
+  }
 ): Promise<{ url: string; authToken: string }> => {
   const authToken = 'broker-auth-token';
   tokenBroker = http.createServer((req, res) => {
@@ -737,13 +831,29 @@ const startTokenBroker = async (
       body += String(chunk);
     });
     req.on('end', () => {
+      endpointRequests.push({ endpoint: req.url, body: JSON.parse(body) });
+      if (options?.disconnect === req.url) {
+        req.socket.destroy();
+        return;
+      }
       res.setHeader('Connection', 'close');
       if (
         req.url === '/github-auth-context' &&
         req.headers.authorization === `Bearer ${authToken}`
       ) {
         res.writeHead(options?.contextStatus ?? 200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ allowLocalAuth: options?.allowLocalAuth ?? false }));
+        res.end(
+          options?.contextRaw ??
+            JSON.stringify({ allowLocalAuth: options?.allowLocalAuth ?? false })
+        );
+        return;
+      }
+      if (
+        req.url === '/github-token/reject' &&
+        req.headers.authorization === `Bearer ${authToken}`
+      ) {
+        res.writeHead(options?.rejectStatus ?? 204);
+        res.end();
         return;
       }
       if (req.method !== 'POST' || req.url !== '/github-token') {
@@ -764,7 +874,7 @@ const startTokenBroker = async (
         return;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ token }));
+      res.end(options?.tokenRaw ?? JSON.stringify({ token }));
     });
   });
 

@@ -165,7 +165,8 @@ Git HTTPS remains separate in `../lib/git-credential-helper-script.ts`; host-sid
 `Session` receives machine-owner identity from the daemon and scrubs GitHub tokens after all
 environment overlays for non-owners. `../lib/non-owner-shell-env.ts` supplies separate startup
 files that source no owner dotfiles and restore the managed gh PATH priority after system zsh
-profiles. Ownership is checked before startup-file generation: merely replacing BASH_ENV or
+profiles. These non-owner files are installed at the final Session boundary, not again during
+preparation. Owner-file generation still checks ownership first: merely replacing BASH_ENV or
 ZDOTDIR at spawn time would still let a teammate's earlier preparation overwrite files used by
 an owner's running shell. Requester handoffs replace ACP before prompt delivery; internal
 `acp-replacement` termination leaves turn finalization to execution.
