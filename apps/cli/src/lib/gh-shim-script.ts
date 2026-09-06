@@ -306,7 +306,54 @@ const commentFlags = ['edit-last create-if-none delete-last editor:e web:w yes',
 const editValues = 'add-assignee add-label add-project body:b body-file:F milestone:m remove-assignee remove-label remove-project title:t';
 const createValues = 'assignee:a attach body:b body-file:F label:l milestone:m project:p recover template:T title:t';
 const listValues = 'app assignee:a author:A json jq:q label:l limit:L search:S state:s template:t';
-const prIssueCommandFlags = {
+const repoCommandFlags = {
+  run: {
+    cancel: ['force', ''],
+    delete: ['', ''],
+    download: ['', 'dir:D name:n pattern:p'],
+    list: ['all:a', 'limit:L workflow:w branch:b user:u event:e created commit:c status:s json jq:q template:t'],
+    rerun: ['failed debug:d', 'job:j'],
+    view: ['verbose:v exit-status log log-failed web:w', 'job:j attempt:a json jq:q template:t'],
+    watch: ['exit-status compact', 'interval:i'],
+  },
+  workflow: {
+    disable: ['', ''],
+    enable: ['', ''],
+    list: ['all:a', 'limit:L json jq:q template:t'],
+    run: ['json', 'ref:r field:F raw-field:f'],
+    view: ['web:w yaml:y', 'ref:r'],
+  },
+  cache: {
+    delete: ['all:a succeed-on-no-caches', 'ref:r'],
+    list: ['', 'limit:L order:O sort:S key:k ref:r json jq:q template:t'],
+  },
+  release: {
+    create: ['draft:d prerelease:p generate-notes latest verify-tag notes-from-tag fail-on-no-commits', 'target title:t notes:n notes-file:F discussion-category notes-start-tag'],
+    delete: ['yes:y cleanup-tag', ''],
+    'delete-asset': ['yes:y', ''],
+    download: ['clobber skip-existing', 'output:O dir:D pattern:p archive:A'],
+    edit: ['draft prerelease latest verify-tag', 'notes:n title:t discussion-category target tag notes-file:F'],
+    list: ['exclude-drafts exclude-pre-releases', 'limit:L order:O json jq:q template:t'],
+    upload: ['clobber', ''],
+    verify: ['', 'format jq:q template:t custom-trusted-root'],
+    'verify-asset': ['', 'format jq:q template:t custom-trusted-root'],
+    view: ['web:w', 'json jq:q template:t'],
+  },
+  repo: {
+    view: ['web:w', 'branch:b json jq:q template:t'],
+    archive: ['confirm yes:y', ''],
+    delete: ['confirm yes', ''],
+    edit: ['template enable-issues enable-projects enable-wiki enable-discussions enable-merge-commit enable-squash-merge enable-rebase-merge enable-auto-merge enable-advanced-security enable-secret-scanning enable-secret-scanning-push-protection delete-branch-on-merge allow-forking allow-update-branch accept-visibility-change-consequences', 'description:d homepage:h default-branch visibility squash-merge-commit-message add-topic remove-topic'],
+    rename: ['confirm yes:y', ''],
+    // sync: ['force', 'source:s branch:b'], // OMIT: secondary repository --source
+  },
+  label: {
+    create: ['force:f', 'description:d color:c'],
+    delete: ['confirm yes', ''],
+    edit: ['', 'description:d color:c name:n'],
+    list: ['web:w', 'limit:L search:S order sort json jq:q template:t'],
+    // clone OMIT: positional source repository, --repo destination repository
+  },
   pr: {
     checkout: ['detach force:f recurse-submodules', 'branch:b worktree'],
     checks: ['fail-fast required watch web:w', 'interval:i json jq:q template:t'],
@@ -347,9 +394,9 @@ const prIssueCommandFlags = {
 };
 
 // null means ambiguous: local gh may handle it, but managed auth must not guess.
-const readPrIssueArgs = (args) => {
+const readRepoCommandArgs = (args) => {
   const isUrl = (value) => /^https?:/i.test(value || '');
-  const arity = new Map([['--repo', true], ['-R', true], ['--help', false]]);
+  const arity = new Map([['--repo', true], ['-R', true], ['--help', false], ['-h', false]]);
   const positionals = [];
   let command;
   let repo;
@@ -364,7 +411,7 @@ const readPrIssueArgs = (args) => {
       if (command) { positionals.push(arg); continue; }
       if (!options) return null;
       command = { new: 'create', ls: 'list', co: 'checkout' }[arg] || arg;
-      const flags = prIssueCommandFlags[args[0]]?.[command];
+      const flags = repoCommandFlags[args[0]]?.[command];
       if (!Array.isArray(flags)) return null;
       for (const [takesValue, descriptors] of [[false, flags[0]], [true, flags[1]]]) {
         for (const descriptor of descriptors.split(' ').filter(Boolean)) {
@@ -402,7 +449,9 @@ const readPrIssueArgs = (args) => {
       }
     }
   }
-  if (!command || (['create', 'list', 'status'].includes(command) && positionals.length)) return null;
+  if (!command) return null;
+  const subjectCommand = args[0] === 'pr' || args[0] === 'issue';
+  if (subjectCommand && ['create', 'list', 'status'].includes(command) && positionals.length) return null;
   let subject = positionals[0];
   if (args[0] === 'issue' && command === 'edit') {
     const urls = positionals.filter(isUrl);
@@ -419,7 +468,14 @@ const readPrIssueArgs = (args) => {
     }
     // Native gh applies the first URL's repository to every number in the batch.
     subject = urls[0] || subject;
-  } else if (positionals.slice(1).some(isUrl)) return null;
+  } else if (subjectCommand && positionals.slice(1).some(isUrl)) return null;
+  if (!subjectCommand) {
+    // These repo commands take a repository operand; other groups take IDs, tags or files.
+    if (args[0] === 'repo' && ['view', 'archive', 'delete', 'edit'].includes(command)) {
+      repo = subject || repo;
+    }
+    subject = undefined;
+  }
   // These commands also send authenticated requests to a secondary repository.
   // Native owner auth can handle other hosts; managed credentials must not reach them.
   if (issueRepo !== undefined && repo !== undefined) branchRepo = repo;
@@ -478,7 +534,7 @@ const readApiArgs = (args) => {
 };
 
 const readGitHubTarget = async (args) => {
-  // gh also accepts inherited repo flags before the pr/issue command group.
+  // gh also accepts inherited repo flags before repository command groups.
   let groupIndex = 0;
   while (groupIndex < args.length) {
     const arg = args[groupIndex];
@@ -486,12 +542,12 @@ const readGitHubTarget = async (args) => {
     if (arg.startsWith('--repo=') || (arg.startsWith('-R') && arg.length > 2)) { groupIndex++; continue; }
     break;
   }
-  if (groupIndex && (args[groupIndex] === 'pr' || args[groupIndex] === 'issue')) {
+  if (groupIndex && Object.hasOwn(repoCommandFlags, args[groupIndex])) {
     args = [args[groupIndex], ...args.slice(0, groupIndex), ...args.slice(groupIndex + 1)];
   }
-  const subjectCommand = args[0] === 'pr' || args[0] === 'issue';
+  const repoCommand = Object.hasOwn(repoCommandFlags, args[0]);
   const apiArgs = args[0] === 'api' ? readApiArgs(args) : undefined;
-  if (apiArgs === null || (!subjectCommand && !apiArgs)) return { host: null, repo: null };
+  if (apiArgs === null || (!repoCommand && !apiArgs)) return { host: null, repo: null };
   const host = String(apiArgs?.hostname || process.env.GH_HOST || 'github.com').toLowerCase();
   if (apiArgs) {
     const endpoint = apiArgs.endpoint;
@@ -514,7 +570,7 @@ const readGitHubTarget = async (args) => {
       (!match && !url ? process.env.LODY_GITHUB_REPO_FULL_NAME || null : null) };
   }
   // PR/Issue subjects override ambient repositories; option values do not.
-  const parsed = subjectCommand ? readPrIssueArgs(args) : undefined;
+  const parsed = repoCommand ? readRepoCommandArgs(args) : undefined;
   if (parsed === null) return { host: null, repo: null };
   const subject = parsed.subject;
   if (subject && /^https?:\\/\\//i.test(subject)) {

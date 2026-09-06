@@ -84,6 +84,44 @@ afterEach(async () => {
 
 describe('ensureGhShimScript', () => {
   it.each([
+    ['run', 'list', '--branch', 'main', '--limit', '5'],
+    ['workflow', 'run', 'build.yml', '--field', 'url=https://other.ghe.com/owner/decoy'],
+    ['release', 'upload', 'v1.0.0', 'https://other.ghe.com/owner/decoy.zip', '--clobber'],
+    ['cache', 'list', '--limit', '5'],
+    ['label', 'list', '--search', 'bug'],
+  ])('uses the ambient repository for managed repository commands: %j', async (...args) => {
+    await expectManagedTarget({ GH_REPO: 'github.com/owner/target' }, args);
+  });
+
+  it.each([
+    ['run', 'list', '-R', 'github.com/owner/target', '--workflow', 'build.yml', '-L5'],
+    ['repo', 'view', 'https://github.com/owner/target', '--json', 'name'],
+    ['repo', 'view', 'owner/target', '--json', 'name'],
+    ['repo', 'archive', 'owner/target', '--yes'],
+    ['repo', 'delete', 'owner/target', '--yes'],
+    ['repo', 'edit', 'owner/target', '--description', 'https://other.ghe.com/owner/decoy'],
+    ['repo', 'rename', 'new-name', '-Rgithub.com/owner/target', '--yes'],
+  ])('resolves explicit targets for managed repository commands: %j', async (...args) => {
+    await expectManagedTarget({ GH_REPO: 'other.ghe.com/ambient/repo' }, args);
+  });
+
+  it.each([
+    ['run', 'list', '-R', 'other.ghe.com/owner/target', '--branch', 'https://github.com/decoy'],
+    ['repo', 'view', 'https://other.ghe.com/owner/target', '--json', 'name'],
+    ['workflow', 'run', 'build.yml', '--field', 'url=https://github.com/owner/decoy'],
+    ['release', 'upload', 'v1.0.0', 'https://github.com/owner/decoy.zip', '--clobber'],
+  ])(
+    'keeps Enterprise repository command targets ahead of URL-valued arguments: %j',
+    async (...args) => {
+      await expectManagedDenied(
+        { GH_REPO: 'other.ghe.com/owner/target' },
+        args,
+        'No managed GitHub credential'
+      );
+    }
+  );
+
+  it.each([
     ['--help'],
     ['-h'],
     ['--help=true'],
@@ -685,7 +723,8 @@ printf '%s\\n' "$*"
 
   it.each(
     [
-      ['repo', 'view', '--json', 'name', 'https://other.ghe.com/owner/repo'],
+      ['repo', 'clone', 'https://other.ghe.com/owner/repo'],
+      ['repo', 'sync', 'owner/target', '--source', 'other.ghe.com/owner/source'],
       [
         'label',
         'clone',

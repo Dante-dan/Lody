@@ -41,7 +41,7 @@ control plane.
   workspace shims, even without repo/broker. Published bearers require context; host Git uses a private in-memory bearer.
 - Owner tokens/login precede requester-bound fallback only when missing/401. Never replay commands.
   Managed tokens require github.com and HTTPS API URLs; pin GH_HOST to github.com.
-- Parse API/PR/Issue flags by arity; values cannot select hosts, unknown flags fail closed.
+- Parse API/repository flags by arity; values cannot select hosts, unknown flags fail closed.
   Subject/endpoint URLs override ambient repos. Check secondary targets; issue edit uses the first
   URL and one repo. API help runs canonical arguments without credentials; values cannot enable it.
 - Only owners write shared BASH_ENV/ZDOTDIR. Non-owner hooks use separate paths, source no owner
