@@ -410,4 +410,26 @@ describe('history refresh with mixed hash versions', () => {
       })
     );
   });
+  it('pairs legacy doc hashes with their own version after conflict metadata advances', async () => {
+    const prefix = materialize(replayNotificationsPrefix());
+    const full = materialize(replayNotificationsFull());
+    const stored = v1Cursor(prefix.history);
+    const harness = createRefreshHarness({
+      storedCursor: { importedTurnHashes: stored.importedTurnHashes },
+      storedHistory: prefix.history,
+    });
+    vi.mocked(loadHistorySessionReplay).mockResolvedValue(replayNotificationsFull());
+    const result = await harness.refreshExistingSession(
+      refreshArgs({
+        ...v1ExternalHistory(stored, prefix.history.length),
+        hashVersion: HASH_VERSION,
+        replayDigest: prefix.replayDigest,
+        status: 'sync_conflict',
+      })
+    );
+    expect(result).toBe('refreshed');
+    expect(harness.getStoredHistory().slice(0, prefix.history.length)).toEqual(prefix.history);
+    expect(harness.getStoredHistory()).toHaveLength(full.history.length);
+    expect(harness.getStoredHistory().at(-1)?.items).toEqual(full.history.at(-1)?.items);
+  });
 });

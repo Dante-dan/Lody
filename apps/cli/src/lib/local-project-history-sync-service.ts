@@ -113,9 +113,14 @@ function emptySummary(): LocalProjectHistorySyncSummary {
 async function readSessionImportedTurnHashes(
   sessionDoc: SessionDocument,
   externalHistory: ExternalAcpHistorySyncMeta
-): Promise<readonly string[]> {
+): Promise<{ importedTurnHashes: readonly string[]; importedTurnHashVersion: number }> {
   const cursor = await sessionDoc.getExternalHistoryCursor();
-  return resolveImportedTurnHashes(externalHistory, cursor?.importedTurnHashes);
+  return {
+    importedTurnHashes: resolveImportedTurnHashes(externalHistory, cursor?.importedTurnHashes),
+    importedTurnHashVersion: resolveStoredHashVersion(
+      cursor?.importedTurnHashes !== undefined ? cursor : externalHistory
+    ),
+  };
 }
 
 async function writeSessionImportedTurnHashes(
@@ -144,9 +149,8 @@ async function writeSessionImportedTurnHashes(
  */
 function hashHistoryForStoredVersion(
   history: readonly SessionHistoryInput[],
-  externalHistory: ExternalAcpHistorySyncMeta
+  hashVersion: number
 ): string[] {
-  const hashVersion = resolveStoredHashVersion(externalHistory);
   return history.map((entry) => hashHistoryEntryForVersion(entry, hashVersion));
 }
 
@@ -434,13 +438,13 @@ export class LocalProjectHistorySyncService {
       throw new Error('Imported session metadata no longer matches the selected ACP history.');
     }
     if (existingExternalHistory.status !== 'sync_conflict') {
-      const importedTurnHashes = await readSessionImportedTurnHashes(
+      const { importedTurnHashes, importedTurnHashVersion } = await readSessionImportedTurnHashes(
         sessionDoc,
         existingExternalHistory
       );
       if (
         areStringArraysEqual(
-          hashHistoryForStoredVersion(currentHistoryBeforeReplay, existingExternalHistory),
+          hashHistoryForStoredVersion(currentHistoryBeforeReplay, importedTurnHashVersion),
           importedTurnHashes
         )
       ) {
@@ -485,16 +489,20 @@ export class LocalProjectHistorySyncService {
       throw new Error('Imported session metadata no longer matches the selected ACP history.');
     }
 
-    const latestImportedTurnHashes = await readSessionImportedTurnHashes(
-      sessionDoc,
-      latestExternalHistory
-    );
+    const {
+      importedTurnHashes: latestImportedTurnHashes,
+      importedTurnHashVersion: latestImportedTurnHashVersion,
+    } = await readSessionImportedTurnHashes(sessionDoc, latestExternalHistory);
     const latestHistory = await sessionDoc.getHistory();
     const decision = decideHistoryConflictResolution({
       externalHistory: latestExternalHistory,
       importedTurnHashes: latestImportedTurnHashes,
+      importedTurnHashVersion: latestImportedTurnHashVersion,
       materialized,
-      currentHistoryHashes: hashHistoryForStoredVersion(latestHistory, latestExternalHistory),
+      currentHistoryHashes: hashHistoryForStoredVersion(
+        latestHistory,
+        latestImportedTurnHashVersion
+      ),
       currentHistoryHasPendingDispatch: hasPendingDispatchHistory(latestHistory),
     });
     if (decision.status === 'blocked') {
@@ -517,8 +525,9 @@ export class LocalProjectHistorySyncService {
       const writeTimeDecision = decideHistoryConflictResolution({
         externalHistory: latestExternalHistory,
         importedTurnHashes: latestImportedTurnHashes,
+        importedTurnHashVersion: latestImportedTurnHashVersion,
         materialized,
-        currentHistoryHashes: hashHistoryForStoredVersion(history, latestExternalHistory),
+        currentHistoryHashes: hashHistoryForStoredVersion(history, latestImportedTurnHashVersion),
         currentHistoryHasPendingDispatch: hasPendingDispatchHistory(history),
       });
       if (writeTimeDecision.status !== 'replace') {
@@ -792,11 +801,15 @@ export class LocalProjectHistorySyncService {
       nowIso: new Date(getServerNow()).toISOString(),
     });
     const sessionDoc = await this.manager.getOrCreateSessionDoc(args.existing.sessionId);
-    const importedTurnHashes = await readSessionImportedTurnHashes(sessionDoc, externalHistory);
+    const { importedTurnHashes, importedTurnHashVersion } = await readSessionImportedTurnHashes(
+      sessionDoc,
+      externalHistory
+    );
 
     const replayDecision = decideHistoryRefresh({
       externalHistory,
       importedTurnHashes,
+      importedTurnHashVersion,
       replayDigest: materialized.replayDigest,
       turnHashes: materialized.turnHashes,
       materialized,
@@ -835,10 +848,11 @@ export class LocalProjectHistorySyncService {
     const appendDecision = decideHistoryRefresh({
       externalHistory,
       importedTurnHashes,
+      importedTurnHashVersion,
       replayDigest: materialized.replayDigest,
       turnHashes: materialized.turnHashes,
       materialized,
-      currentHistoryHashes: hashHistoryForStoredVersion(currentHistory, externalHistory),
+      currentHistoryHashes: hashHistoryForStoredVersion(currentHistory, importedTurnHashVersion),
     });
     if (appendDecision.status === 'conflicted') {
       await this.markConflict(

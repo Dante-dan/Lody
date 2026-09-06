@@ -37,7 +37,8 @@ and every clock read. Keep IO there.
   same before and after its tool_calls are sealed to skeletons. The exact
   dropped-key list lives in a comment above `VOLATILE_ITEM_KEYS_V2`.
 - Every comparison of a new replay against a stored cursor runs in the STORED
-  cursor's version (`ExternalAcpHistorySyncMeta.hashVersion`, absent = v1):
+  cursor's own version (absent = v1). A doc cursor's hashes and version
+  take precedence together; repo metadata can advance independently on conflict:
   `decideHistoryRefresh` / `decideHistoryConflictResolution` recompute the
   replay's hashes from `materialized.history` when the versions differ, so an
   upgrade never produces a false `sync_conflict`. Callers passing

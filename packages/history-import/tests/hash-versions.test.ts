@@ -359,3 +359,42 @@ describe('mixed-version comparison', () => {
     ).toThrow(/materialized replay history/);
   });
 });
+
+describe('independently persisted cursor versions', () => {
+  it('can append after conflict metadata advances while the doc cursor stays v1', () => {
+    const prefix = materialize(replayNotificationsPrefix());
+    const full = materialize(replayNotificationsFull());
+    const legacy = v1Cursor(prefix.history);
+    const meta = externalHistory({
+      hashVersion: HASH_VERSION_V2,
+      replayDigest: prefix.replayDigest,
+      importedTurnCount: prefix.history.length,
+      status: 'sync_conflict',
+    });
+    expect(
+      decideHistoryRefresh({
+        externalHistory: meta,
+        importedTurnHashes: legacy.importedTurnHashes,
+        importedTurnHashVersion: HASH_VERSION_V1,
+        replayDigest: full.replayDigest,
+        turnHashes: full.turnHashes,
+        materialized: full,
+        currentHistoryHashes: legacy.importedTurnHashes,
+      })
+    ).toEqual({
+      status: 'refreshed',
+      reason: 'prefix_append',
+      appendFromIndex: prefix.history.length,
+    });
+    expect(
+      decideHistoryRefresh({
+        externalHistory: meta,
+        importedTurnHashes: legacy.importedTurnHashes,
+        importedTurnHashVersion: HASH_VERSION_V1,
+        replayDigest: prefix.replayDigest,
+        turnHashes: prefix.turnHashes,
+        materialized: prefix,
+      })
+    ).toEqual({ status: 'skipped', reason: 'digest_match' });
+  });
+});

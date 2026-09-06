@@ -107,11 +107,12 @@ function resolveReplayHashesForStoredVersion(args: {
 export function decideHistoryRefresh(args: {
   externalHistory: ExternalAcpHistorySyncMeta;
   /**
-   * Stored cursor hashes, in the stored cursor's version
-   * (`externalHistory.hashVersion ?? 1`). The session doc cursor carries the
-   * same version in its own `hashVersion` field.
+   * Stored cursor hashes. Pass their own version alongside them when the
+   * hashes come from the session doc rather than the sync metadata.
    */
   importedTurnHashes?: readonly string[];
+  /** Version paired with the explicit cursor hashes; metadata may advance separately. */
+  importedTurnHashVersion?: number;
   replayDigest: string;
   turnHashes: readonly string[];
   /**
@@ -133,7 +134,8 @@ export function decideHistoryRefresh(args: {
    */
   currentHistoryHashes?: readonly string[];
 }): HistoryRefreshDecision {
-  const storedHashVersion = resolveStoredHashVersion(args.externalHistory);
+  const metadataHashVersion = resolveStoredHashVersion(args.externalHistory);
+  const storedHashVersion = args.importedTurnHashVersion ?? metadataHashVersion;
   const replay = resolveReplayHashesForStoredVersion({
     replayDigest: args.replayDigest,
     turnHashes: args.turnHashes,
@@ -143,7 +145,18 @@ export function decideHistoryRefresh(args: {
     replayHistory: args.materialized?.history,
   });
 
-  if (replay.replayDigest === args.externalHistory.replayDigest) {
+  const metadataReplay =
+    metadataHashVersion === storedHashVersion
+      ? replay
+      : resolveReplayHashesForStoredVersion({
+          replayDigest: args.replayDigest,
+          turnHashes: args.turnHashes,
+          replayHashVersion:
+            args.replayHashVersion ?? args.materialized?.hashVersion ?? metadataHashVersion,
+          storedHashVersion: metadataHashVersion,
+          replayHistory: args.materialized?.history,
+        });
+  if (metadataReplay.replayDigest === args.externalHistory.replayDigest) {
     return { status: 'skipped', reason: 'digest_match' };
   }
 
@@ -174,10 +187,11 @@ export function decideHistoryRefresh(args: {
 export function decideHistoryConflictResolution(args: {
   externalHistory: ExternalAcpHistorySyncMeta;
   /**
-   * Stored cursor hashes, in the stored cursor's version
-   * (`externalHistory.hashVersion ?? 1`).
+   * Stored cursor hashes, paired with importedTurnHashVersion when supplied.
    */
   importedTurnHashes?: readonly string[];
+  /** Version paired with the explicit cursor hashes; metadata may advance separately. */
+  importedTurnHashVersion?: number;
   materialized: Pick<
     MaterializedReplay,
     'history' | 'turnHashes' | 'replayDigest' | 'droppedNotifications'
@@ -200,7 +214,8 @@ export function decideHistoryConflictResolution(args: {
     return { status: 'blocked', reason: 'session_has_pending_local_turn' };
   }
 
-  const storedHashVersion = resolveStoredHashVersion(args.externalHistory);
+  const metadataHashVersion = resolveStoredHashVersion(args.externalHistory);
+  const storedHashVersion = args.importedTurnHashVersion ?? metadataHashVersion;
   const replay = resolveReplayHashesForStoredVersion({
     replayDigest: args.materialized.replayDigest,
     turnHashes: args.materialized.turnHashes,
@@ -213,10 +228,20 @@ export function decideHistoryConflictResolution(args: {
     args.externalHistory,
     args.importedTurnHashes
   );
+  const metadataReplay =
+    metadataHashVersion === storedHashVersion
+      ? replay
+      : resolveReplayHashesForStoredVersion({
+          replayDigest: args.materialized.replayDigest,
+          turnHashes: args.materialized.turnHashes,
+          replayHashVersion: args.materialized.hashVersion ?? storedHashVersion,
+          storedHashVersion: metadataHashVersion,
+          replayHistory: args.materialized.history,
+        });
   const alreadyResolved =
     args.externalHistory.status !== 'sync_conflict' &&
     (areStringArraysEqual(args.currentHistoryHashes, importedTurnHashes) ||
-      (args.externalHistory.replayDigest === replay.replayDigest &&
+      (args.externalHistory.replayDigest === metadataReplay.replayDigest &&
         areStringArraysEqual(args.currentHistoryHashes, replay.turnHashes)));
   if (alreadyResolved) {
     return { status: 'already_resolved' };
