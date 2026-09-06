@@ -115,6 +115,14 @@ html.light .underwater-bg {
   position: relative;
 }
 
+/* Below-fold marketing is not first-screen chrome. Skip its layout until
+   near the viewport so the hero/nav box cannot be delayed by 1,700 nodes.
+   First-screen rules above stay the painted look. */
+.uw-content {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 5200px;
+}
+
 .underwater-hero {
   position: relative;
   z-index: 10;
