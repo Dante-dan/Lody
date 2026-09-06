@@ -341,6 +341,11 @@ Two things the dev build does deliberately, both load-bearing:
   absolute broker state path is fixed by the daemon, never selected by child env. Ordinary
   local shells use native gh. `Session` receives machine-owner identity as a constructor
   dependency and strips all four GitHub token env vars after every overlay for non-owners.
+  `non-owner-shell-env.ts` then replaces BASH_ENV/ZDOTDIR with separate no-source
+  startup files, so Lody never replays owner dotfiles after the scrub. Their zsh hooks
+  restore the workspace gh shim ahead of system PATH entries. Owner files are never
+  rewritten by teammate sessions. This covers Lody's startup hooks, not native shell
+  modes that ignore/replace them (interactive Bash or profiles that change BASH_ENV).
   Requester changes replace ACP before prompt delivery; cross-requester steer queues a new
   turn. Internal replacement emits `acp-replacement`: execution retains turn ownership,
   and MessageHandler must not finalize the turn or release its presence/workspace watch.

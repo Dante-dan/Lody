@@ -51,6 +51,7 @@ import { truncateLogText } from '@/utils/log-format';
 import { createStdinWritableStream, createStdoutReadableStream } from '@/utils/stream';
 import { resolveSessionGitIdentity } from './git-identity';
 import { clearGitHubTokenEnv } from '@/lib/gh-token-env';
+import { applyNonOwnerShellEnv } from '@/lib/non-owner-shell-env';
 import {
   normalizeAcpSessionCapabilities,
   type AcpCapabilitiesResult,
@@ -459,6 +460,7 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
     // Only the trusted machine owner may inherit GitHub credentials from any source.
     if (!this.machineOwnerUserId || this.gitIdentity.id !== this.machineOwnerUserId) {
       clearGitHubTokenEnv(agentEnv);
+      applyNonOwnerShellEnv(agentEnv, configEnv.LODY_GIT_CRED_BROKER_STATE_FILE);
     }
     // The child talks to Lody's own loopback services (MCP HTTP host, preview
     // gateway); a proxy inherited from the host process or the login shell
