@@ -13,6 +13,8 @@
   visual tokens. Keep Schedule independent of delegated Task state.
 - Save requires explicit automation consent and Agent permission mode. Original
   local directories require scope consent; elevated modes stay visibly marked.
+  Every save blocker must have a visible, actionable reason above Save; use the same
+  blockers for button state and submission guards.
   Run now confirms saved configuration and may overlap existing work. Pause does
   not cancel an already submitted Session.
 - Owner-only reduction of authority (pause/delete) remains possible when the

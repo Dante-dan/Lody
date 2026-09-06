@@ -133,3 +133,26 @@ export const Due: Story = {
 export const Retrying: Story = {
   args: { runtimes: [{ ...Due.args!.runtimes![0]!, queueState: 'retrying' }] },
 };
+
+export const MissingRequirements: Story = {
+  render: () => (
+    <div className="h-dvh overflow-auto">
+      <ScheduleForm
+        initial={{
+          title: '',
+          prompt: '',
+          trigger: row.trigger,
+          misfire: 'run_once',
+          overlap: 'queue_one',
+        }}
+        saving={false}
+        saveBlockers={[
+          'Choose an available Agent.',
+          'Choose a Project. If none are listed, add a local Project or connect a GitHub repository.',
+        ]}
+        selectors={<p className="text-sm">Agent: Not selected · Project: Not selected</p>}
+        onSave={() => {}}
+      />
+    </div>
+  ),
+};

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react';
+import { useId, useMemo, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Clock3, Pause, Play, Plus, ShieldAlert } from 'lucide-react';
 import {
@@ -188,14 +188,14 @@ const localInput = (value: string): string => {
 export function ScheduleForm({
   initial,
   selectors,
-  disabled,
+  saveBlockers = [],
   saving,
   error,
   onSave,
 }: {
   initial: ScheduleFormValue;
   selectors: ReactNode;
-  disabled?: boolean;
+  saveBlockers?: string[];
   saving: boolean;
   error?: string;
   onSave: (value: ScheduleFormValue) => void;
@@ -210,6 +210,19 @@ export function ScheduleForm({
       return { times: [], error: t('schedules.invalidTime', 'Check the time rule and time zone.') };
     }
   }, [value.trigger, t]);
+  const requirementsId = useId();
+  const blockers = [
+    ...(!value.title.trim() ? [t('schedules.requireName', 'Enter a schedule name.')] : []),
+    ...(!value.prompt.trim()
+      ? [t('schedules.requirePrompt', 'Describe what the Agent should do.')]
+      : []),
+    ...(preview.error ? [preview.error] : []),
+    ...saveBlockers,
+    ...(!consent
+      ? [t('schedules.requireConsent', 'Check the box above to allow automatic runs.')]
+      : []),
+  ];
+  const canSave = !saving && blockers.length === 0;
   const trigger = value.trigger;
   const previewZone =
     trigger.kind === 'cron' ? trigger.timeZone : Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -219,7 +232,7 @@ export function ScheduleForm({
       className="mx-auto flex w-full max-w-3xl flex-col gap-5 px-5 py-6"
       onSubmit={(e) => {
         e.preventDefault();
-        if (consent && !preview.error) onSave(value);
+        if (canSave) onSave(value);
       }}
     >
       <label className="space-y-2 text-sm">
@@ -408,7 +421,23 @@ export function ScheduleForm({
           {error}
         </p>
       ) : null}
-      <Button type="submit" disabled={disabled || saving || !consent || !!preview.error}>
+      <div id={requirementsId} aria-live="polite" aria-atomic="true">
+        {blockers.length > 0 ? (
+          <div className="space-y-2 rounded-md border p-3 text-sm">
+            <p className="font-medium">{t('schedules.completeToSave', 'Before you can save:')}</p>
+            <ul className="list-disc space-y-1 pl-5">
+              {blockers.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+      <Button
+        type="submit"
+        disabled={!canSave}
+        aria-describedby={blockers.length ? requirementsId : undefined}
+      >
         {saving ? t('schedules.saving', 'Saving…') : t('schedules.save', 'Save schedule')}
       </Button>
     </form>

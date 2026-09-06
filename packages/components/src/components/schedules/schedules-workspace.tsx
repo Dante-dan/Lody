@@ -371,7 +371,13 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
           <ScheduleEditor
             key={`${runtime?.workspaceId}:${scheduleId}:${row.activationId}`}
             document={detail.document}
-            disabled={!canManage}
+            disabledReason={
+              !isOwner
+                ? t('schedules.ownerOnly', 'Only the schedule owner can save changes.')
+                : !canManage
+                  ? t('schedules.upgrade', 'Update the target machine’s CLI to edit schedules.')
+                  : undefined
+            }
             onSaved={open}
           />
           <ScheduleSessionHistory scheduleId={scheduleId} />
@@ -383,11 +389,11 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
 
 function ScheduleEditor({
   document,
-  disabled,
+  disabledReason,
   onSaved,
 }: {
   document?: ScheduleDocument;
-  disabled?: boolean;
+  disabledReason?: string;
   onSaved: (id: string) => void;
 }) {
   const { t } = useTranslation();
@@ -422,10 +428,70 @@ function ScheduleEditor({
     activityId: uuid(),
   }));
   const selected = agents.find((config) => config.id === agent?.agentConfigId);
-  const available =
-    !!selected &&
-    machines.get(selected.machineId)?.ownerUserId === user?.id &&
-    machineSupportsSchedulesProtocol(machines.get(selected.machineId));
+  const machine = selected ? machines.get(selected.machineId) : undefined;
+  const saveBlockers: string[] = [];
+  if (disabledReason) saveBlockers.push(disabledReason);
+  if (!runtime || !user)
+    saveBlockers.push(
+      t('schedules.workspaceNotReady', 'Wait for your workspace and account to finish loading.')
+    );
+  if (!selected || !agent) {
+    saveBlockers.push(t('schedules.requireAgent', 'Choose an available Agent.'));
+  } else {
+    if (!disabledReason) {
+      if (!machine)
+        saveBlockers.push(
+          t(
+            'schedules.machineMissing',
+            'The selected machine is unavailable. Start Lody on it and wait for it to sync, or choose another Agent.'
+          )
+        );
+      else if (user && machine.ownerUserId !== user.id)
+        saveBlockers.push(
+          t('schedules.requireOwnedMachine', 'Choose an Agent on a machine you own.')
+        );
+      else if (!machineSupportsSchedulesProtocol(machine))
+        saveBlockers.push(
+          t('schedules.upgrade', 'Update the target machine’s CLI to edit schedules.')
+        );
+    }
+    if (
+      !hasExplicitSchedulePermission(
+        agent,
+        machine?.acpCapabilities?.[getAcpCapabilityCacheKey(selected.id)] ??
+          getStaticBuiltinAcpCapabilities(
+            selected.cliType,
+            selected.agentType,
+            selected.runtimeOverrides
+          )
+      )
+    )
+      saveBlockers.push(t('schedules.choosePermission', 'Choose an explicit permission mode.'));
+  }
+  if (!project)
+    saveBlockers.push(
+      t(
+        'schedules.requireProject',
+        'Choose a Project. If none are listed, add a local Project or connect a GitHub repository.'
+      )
+    );
+  else if (project.kind === 'local') {
+    if (
+      selected &&
+      ![...local.projects.values()].some(
+        (entry) =>
+          entry.machineId === selected.machineId && entry.project.id === project.localProjectId
+      )
+    )
+      saveBlockers.push(t('schedules.projectMachine', 'Choose a Project on the selected machine.'));
+    if (!project.useWorktree && !directoryConsent)
+      saveBlockers.push(
+        t(
+          'schedules.requireDirectoryConsent',
+          'Use an isolated Git worktree, or allow this schedule to work in the original Project directory.'
+        )
+      );
+  }
   const initial: ScheduleFormValue = document
     ? {
         title: document.definition.title,
@@ -446,36 +512,11 @@ function ScheduleEditor({
         overlap: 'queue_one',
       };
   const save = async (value: ScheduleFormValue) => {
-    if (!runtime || !user || !selected || !agent || !project) return;
+    if (saving || saveBlockers.length || !runtime || !user || !selected || !agent || !project)
+      return;
     setSaving(true);
     setError(undefined);
     try {
-      if (!available)
-        throw new Error(
-          t('schedules.upgrade', 'Update the target machine’s CLI to edit schedules.')
-        );
-      if (
-        !hasExplicitSchedulePermission(
-          agent,
-          machines.get(selected.machineId)?.acpCapabilities?.[
-            getAcpCapabilityCacheKey(selected.id)
-          ] ??
-            getStaticBuiltinAcpCapabilities(
-              selected.cliType,
-              selected.agentType,
-              selected.runtimeOverrides
-            )
-        )
-      )
-        throw new Error(t('schedules.choosePermission', 'Choose an explicit permission mode.'));
-      if (
-        project.kind === 'local' &&
-        ![...local.projects.values()].some(
-          (entry) =>
-            entry.machineId === selected.machineId && entry.project.id === project.localProjectId
-        )
-      )
-        throw new Error(t('schedules.projectMachine', 'Choose a Project on the selected machine.'));
       await runtime.withScheduleStore(
         identity.scheduleId,
         () =>
@@ -514,13 +555,7 @@ function ScheduleEditor({
       initial={initial}
       saving={saving}
       error={error}
-      disabled={
-        disabled ||
-        !available ||
-        !project ||
-        !agent ||
-        (project?.kind === 'local' && !project.useWorktree && !directoryConsent)
-      }
+      saveBlockers={saveBlockers}
       onSave={(value) => void save(value)}
       selectors={
         <div className="space-y-4">
@@ -534,7 +569,7 @@ function ScheduleEditor({
               )
                 setProject(null);
             }}
-            disabled={disabled}
+            disabled={!!disabledReason}
           />
           <ProjectRefSelector
             value={project}
@@ -592,11 +627,6 @@ function ScheduleEditor({
                 'Allow this schedule to work in the original Project directory.'
               )}
             </label>
-          ) : null}
-          {selected && !available ? (
-            <p className="text-sm">
-              {t('schedules.ownedMachine', 'Choose your own machine with Schedule support.')}
-            </p>
           ) : null}
         </div>
       }
