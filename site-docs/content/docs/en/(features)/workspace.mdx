@@ -1,0 +1,84 @@
+---
+title: Multi-model Coding Agent Workspace
+description: Lody is a team workspace for Claude Code and other coding agents — isolated worktrees, shared live sessions, and multiple agent configs in one place.
+---
+
+# Multi-model coding agent workspace
+
+Searches for a **Claude Code team**, a **Claude Code workspace**, or a multi-model coding-agent team usually want the same thing: several agents working at once, in one place teammates can see, without colliding in a single checkout.
+
+Lody is that **workspace**. It is not a Claude-only product and not Anthropic’s Team plan. Claude Code is one [agent config](/docs/agents) you can run here, next to Codex, Kimi, DeepSeek, or any [ACP](/docs/cli-runtimes) runtime.
+
+This page is the hub. Membership and machine sharing live in [Team Features](/docs/team). Isolated parallel runs live in [Parallel Coding Agents](/docs/parallel-agents). Live continuation of one session lives in [Share a Coding Agent Session](/docs/session-handoff).
+
+<Callout title="Workspace vs Claude Code Team">
+**Settings** -> **Workspace** is Lody’s team container: members, roles, and the sessions those members can see. It is not Claude Code’s own team product. You invite people into a Lody workspace, then pick Claude Code (or another config) per session.
+</Callout>
+
+## What a Lody workspace is
+
+A workspace is the shared place where:
+
+- members are invited and given roles (**Settings** -> **Workspace** -> **General**)
+- each session picks a machine, [agent config](/docs/agents), model, and permission scope
+- Git-backed work gets an isolated [worktree](/docs/worktrees) so agents do not overwrite each other
+- the home-page list can show **All Tasks**, not only your own
+- a teammate can [open an existing session and continue it](/docs/session-handoff)
+
+Machines stay **private by default**. Joining a workspace does not expose your laptop. You share a machine (or use **Share with team…** on a session) when others should see those conversations. Details: [Team Machine Visibility](/docs/team#team-machine-visibility).
+
+## Multi-model in one workspace
+
+Each session chooses its own runtime. In one workspace you can run:
+
+- Claude Code or Codex from the machine’s subscription login
+- Kimi Code, DeepSeek Harness, and other built-in or Claude-compatible setups
+- Any runtime in the [ACP Registry](/docs/cli-runtimes), or a Custom ACP launch command
+
+Save a repeatable mix of machine, config, model, and permission as an [Agent Role](/docs/agent-roles) if the team starts the same setups often.
+
+How to add configs: [Agent Config](/docs/agents). When the question is specifically Kimi versus Claude Code, see [Parallel Coding Agents](/docs/parallel-agents) for the mixed-model workflow — the config catalog stays on Agent Config.
+
+## Isolated worktrees, shared visibility
+
+Parallel work needs two things that a single-user CLI does not provide:
+
+1. **Isolation** — a worktree (always for GitHub, available for local projects) so each agent has its own directory and branch. See [Worktrees](/docs/worktrees).
+2. **Visibility** — teammates can see running sessions on shared machines, then open one to review diffs or continue the chat.
+
+Starting another session is for a **new** isolated task. Handing off is for a teammate who should **continue** an existing one. Forking copies history into a new session; it does not add someone to the original. See [Fork a Session](/docs/session#fork-a-session).
+
+## How the pieces fit
+
+| Need | Where to go |
+| --- | --- |
+| Invite people, roles, token usage by member | [Team Features](/docs/team) |
+| Run several agents at once without file collisions | [Parallel Coding Agents](/docs/parallel-agents) |
+| Put a teammate inside one live session | [Share a Coding Agent Session](/docs/session-handoff) |
+| Add Claude Code, Kimi, Codex, ACP, … | [Agent Config](/docs/agents) and [CLI Runtime Types](/docs/cli-runtimes) |
+| Repeat the same machine + model + permission | [Agent Roles](/docs/agent-roles) |
+| One agent creating or steering others | [Agent Session Control](/docs/session-orchestration) |
+
+A practical split from the [recommended workflow](/docs/workflow): one home-page conversation per small feature or fix, review live [diffs](/docs/diff-viewer), open a PR from the session when the change is ready, then [archive](/docs/session#archive-sessions) so the worktree is reclaimed.
+
+## FAQ
+
+### Is Lody a Claude Code team or Claude Code workspace?
+
+Lody is a **team workspace for coding agents**. Claude Code is one runtime you can run in it. People searching for “Claude Code team” or “Claude Code workspace” usually want shared sessions, isolated worktrees, and more than one agent visible in one place — that is Lody, not a Claude-only product.
+
+### Can one workspace run Claude Code next to Kimi or Codex?
+
+Yes. Each session picks its own [agent config](/docs/agents). The membership rules, session list, and worktree isolation stay the same across those runtimes. See [Parallel Coding Agents](/docs/parallel-agents).
+
+### Does inviting someone to the workspace share my laptop?
+
+No. Machines stay private until you share them. Unshared machines never sync those conversations into other members’ sidebars. See [Team Features](/docs/team).
+
+### Should I start another session or hand off this one?
+
+Start another session for a **new** isolated task. [Hand off](/docs/session-handoff) when a teammate should continue the same conversation, diffs, and worktree. A transcript or share link is a record, not a handoff.
+
+### Where do I invite members?
+
+**Settings** -> **Workspace** -> **General** -> **Invite Member**. Steps: [Invite Members](/docs/team#invite-members).

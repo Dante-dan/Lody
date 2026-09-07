@@ -42,4 +42,17 @@ export const LLMS_ANSWERS = [
       { title: 'Team Features', sitePath: '/docs/team' },
     ],
   },
+  {
+    question: 'What is a Claude Code team workspace in Lody?',
+    answer: [
+      'Lody is a team workspace for coding agents. Claude Code is one agent config you can run there, next to Codex, Kimi, DeepSeek, or other ACP runtimes. People searching for a Claude Code team or Claude Code workspace usually want shared sessions, isolated Git worktrees, and more than one agent visible in one place.',
+      'Invite members under Settings -> Workspace. Machines stay private until you share them. Each session picks its own agent config. Starting another session is a new isolated task; handing off lets a teammate continue the existing one.',
+    ].join('\n\n'),
+    links: [
+      { title: 'Multi-model Coding Agent Workspace', sitePath: '/docs/workspace' },
+      { title: 'Team Features', sitePath: '/docs/team' },
+      { title: 'Agent Config', sitePath: '/docs/agents' },
+      { title: 'Worktrees', sitePath: '/docs/worktrees' },
+    ],
+  },
 ];

@@ -81,6 +81,16 @@ await test('session-handoff English FAQ matches the page and emits FAQPage JSON-
   );
 });
 
+await test('workspace English FAQ is a hub, not a Claude-only product claim', () => {
+  const fromMdx = extractFaqFromMdx(readDoc('content/docs/en/(features)/workspace.mdx'));
+  const items = docsFaqByPath['/docs/workspace'] ?? [];
+  assert.equal(items.length, 5);
+  assert.deepEqual(items, fromMdx);
+  assert.match(items[0]?.question ?? '', /Claude Code team or Claude Code workspace/u);
+  assert.match(items[0]?.answer ?? '', /not a Claude-only product/u);
+  assert.match(items[2]?.answer ?? '', /private until you share/u);
+});
+
 await test('session-handoff Chinese FAQ matches the page', () => {
   const fromMdx = extractFaqFromMdx(readDoc('content/docs/zh/(features)/session-handoff.mdx'));
   const items = docsFaqByPath['/zh/docs/session-handoff'] ?? [];

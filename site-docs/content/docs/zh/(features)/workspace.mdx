@@ -1,0 +1,84 @@
+---
+title: 多模型编程 Agent 工作空间
+description: Lody 是给 Claude Code 和其它编程 Agent 用的团队工作空间——隔离 Worktree、共享现场会话，以及在同一处使用多套 Agent Config。
+---
+
+# 多模型编程 Agent 工作空间
+
+搜 **Claude Code team**、**Claude Code workspace**，或「多模型编程 Agent 团队」的人，要的通常是同一件事：好几台 Agent 同时干活，同事看得到，而且不会挤在同一份检出里互相覆盖。
+
+Lody 就是这个**工作空间**。它不是 Claude 专用产品，也不是 Anthropic 的 Team 套餐。Claude Code 只是你可以在这里选用的一种 [Agent Config](/zh/docs/agents)，旁边还可以放 Codex、Kimi、DeepSeek，或任意 [ACP](/zh/docs/cli-runtimes) 运行时。
+
+这一页是枢纽。成员和机器共享见[团队功能](/zh/docs/team)。隔离的并行运行见[并行 Coding Agents](/zh/docs/parallel-agents)。让同事接着某一条会话往下做，见[共享并交接 Agent 会话](/zh/docs/session-handoff)。
+
+<Callout title="工作空间 vs Claude Code Team">
+**设置** -> **工作区** 是 Lody 的团队容器：成员、角色，以及这些成员能看到的会话。它不是 Claude Code 自己的团队产品。你把人请进 Lody 工作空间，再按会话选择 Claude Code（或其它配置）。
+</Callout>
+
+## Lody 工作空间是什么
+
+工作空间是大家共用的那一层：
+
+- 在 **设置** -> **工作区** -> **通用** 里邀请成员并分配角色
+- 每条会话自己选机器、[Agent Config](/zh/docs/agents)、模型和权限范围
+- Git 上的工作会有隔离的 [Worktree](/zh/docs/worktrees)，避免 Agent 互相覆盖
+- 主页列表可以看 **全部任务**，不只是自己的
+- 同事可以[打开已有会话接着做](/zh/docs/session-handoff)
+
+机器**默认私有**。加入工作空间不会把你的笔记本暴露出去。需要别人看到这些对话时，再共享机器，或在会话里使用 **Share with team…**。详见[团队机器可见性](/zh/docs/team#团队机器可见性)。
+
+## 同一个工作空间里的多模型
+
+每条会话自己选运行时。在一个工作空间里你可以跑：
+
+- 机器上已登录的 Claude Code 或 Codex 订阅
+- Kimi Code、DeepSeek Harness，以及其它内置或 Claude 兼容配置
+- [ACP Registry](/zh/docs/cli-runtimes) 里的运行时，或 Custom ACP 启动命令
+
+经常用同一套机器、配置、模型和权限时，可以存成 [Agent Role](/zh/docs/agent-roles)。
+
+怎么加配置见 [Agent Config](/zh/docs/agents)。如果问题正好是混用模型、并行开条，见[并行 Coding Agents](/zh/docs/parallel-agents)——配置目录仍以 Agent Config 为准。
+
+## 隔离的 Worktree，共享的可见性
+
+并行干活需要单人 CLI 通常不提供的两件事：
+
+1. **隔离** — Worktree（GitHub 会话总会用，本地项目也可以开），让每个 Agent 有自己的目录和分支。见[工作树](/zh/docs/worktrees)。
+2. **可见** — 同事能看到已共享机器上正在跑的会话，然后打开其中一条审阅 diff 或接着聊。
+
+再开一条会话，是为了做**新的**隔离任务。交接，是为了让同事**接着**已有的那一条。Fork 会把历史复制到新会话，并不会把人加进原来的会话。见 [Fork 会话](/zh/docs/session#fork-会话)。
+
+## 各页怎么分工
+
+| 需求 | 去哪一页 |
+| --- | --- |
+| 邀请成员、角色、按成员看用量 | [团队功能](/zh/docs/team) |
+| 同时跑多个 Agent 且不撞文件 | [并行 Coding Agents](/zh/docs/parallel-agents) |
+| 把同事请进一条现场会话 | [共享并交接 Agent 会话](/zh/docs/session-handoff) |
+| 添加 Claude Code、Kimi、Codex、ACP… | [Agent Config](/zh/docs/agents) 和 [CLI 类型支持](/zh/docs/cli-runtimes) |
+| 复用同一套机器 + 模型 + 权限 | [Agent Roles](/zh/docs/agent-roles) |
+| 让一个 Agent 去开或 steer 其它会话 | [Agent 对话控制](/zh/docs/session-orchestration) |
+
+一种实用拆法见[工作流推荐](/zh/docs/workflow)：每个小功能或小修复从主页开一条对话，用实时 [Diff](/zh/docs/diff-viewer) 审阅，改动就绪后从该会话开 PR，再[归档](/zh/docs/session#归档会话)以回收 Worktree。
+
+## 常见问题
+
+### Lody 是 Claude Code team 或 Claude Code workspace 吗？
+
+Lody 是给**编程 Agent 用的团队工作空间**。Claude Code 只是其中一种运行时。搜 “Claude Code team” 或 “Claude Code workspace” 的人，要的通常是共享会话、隔离 Worktree，以及在一个地方看到多台 Agent——那是 Lody，不是 Claude 专用产品。
+
+### 一个工作空间能同时跑 Claude Code 和 Kimi 或 Codex 吗？
+
+可以。每条会话自己选 [Agent Config](/zh/docs/agents)。成员规则、会话列表和 Worktree 隔离对这些运行时都一样。见[并行 Coding Agents](/zh/docs/parallel-agents)。
+
+### 把人请进工作空间，会不会把我的笔记本也共享出去？
+
+不会。机器在你主动共享之前都是私有的。未共享机器上的对话不会同步到其他成员的侧边栏。见[团队功能](/zh/docs/team)。
+
+### 该再开一条会话，还是交接这一条？
+
+要做**新的**隔离任务时，再开一条。[交接](/zh/docs/session-handoff)是让同事接着同一段对话、差异和工作树。对话记录或分享链接是留档，不是交接。
+
+### 在哪里邀请成员？
+
+**设置** -> **工作区** -> **通用** -> **邀请成员**。步骤见[邀请成员](/zh/docs/team#邀请成员)。
