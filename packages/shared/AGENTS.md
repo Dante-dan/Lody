@@ -26,5 +26,8 @@
   notices. Prepend copies to target initialization rows without replacing their containers;
   reject colliding ids. Rollback rejects intervening history changes except pending-to-seen
   read acknowledgement on newly inserted user rows. External ACP imports remain new input.
-- Tool status/request-only edits parse changed state fields, not untouched stored payloads.
-  Changing other tool fields still uses the complete item parser.
+- Tool status, permission and descriptive metadata (title/kind/locations) are independent
+  edits: derive their parsers from the tool message schema and validate changed fields,
+  not untouched stored payloads. Identity/content changes still use the complete item parser.
+- Steer provenance is a declared history input-config field, not an unknown extension.
+  Both new writes and read normalization must retain it for edit-and-resend checks.

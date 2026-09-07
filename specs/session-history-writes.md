@@ -37,9 +37,12 @@ That tolerance must not authorize creating new malformed items locally.
   External provider imports remain new inputs, not privileged stored-history copies.
 - Acceptance here means a local CRDT write. Existing repo persistence and transport
   still own durability, permissions, and remote synchronization.
-- Tool status/request-only edits parse changed state fields without reparsing untouched
-  tool payloads; outcome-only edits retain the existing request information. Other tool
-  edits still require complete item parsing.
+- Tool status, permission requests and descriptive metadata (title/kind/locations)
+  parse only changed fields without reparsing untouched tool payloads; outcome-only
+  edits retain existing request information. Identity/content changes still require
+  complete item parsing. Invalid new metadata rejects the command before any write.
+- Accepted steer provenance survives both writing and read normalization. Editing and
+  resending must not reinterpret a steer as an independently replayable user turn.
 
 ## Limits and review questions
 
@@ -59,5 +62,6 @@ Non-history control-field validation remains outside this HistoryWriter contract
 - `packages/shared/src/{history-writer,history-write-schema,session-mirror}.ts`
 - `packages/shared/tests/history-writer.test.ts` and `history-writer.contract.ts`
 - [Decision](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.md)
+- [Business-field repair and pending hash decision](../.agents/notes/implemented/bug-fix/2026-09-08-history-writer-business-fields.md)
 
 Draft for human review; implementation and passing tests do not grant Spec approval.

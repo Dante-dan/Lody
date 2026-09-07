@@ -137,6 +137,10 @@ Provider/磁盘操作仍是 stub。若 fork 显式修改已损坏 item（例如�
 本次提交前，完整 `pnpm check`、改动文件格式检查和 `pnpm run docs check` 均通过。
 独立审查仍待完成。
 
+后续审查发现的权限补字段和 steer 标记问题及修复，见
+[业务字段保留](../bug-fix/2026-09-08-history-writer-business-fields.zh.md)。
+其中也记录尚未解决的导入 hash 边界；上面的既有测试结果不代表整份 PR 已获兼容性认可。
+
 在此分支替代[临时关闭校验](../bug-fix/2026-09-07-temporary-session-validation-bypass.zh.md)中历史写入的部分。
 意图：[Spec 草稿](../../../../specs/session-history-writes.zh.md)。
 PR：[#460](https://github.com/LodyAI/Lody/pull/460)。

@@ -1622,5 +1622,8 @@ export type ACPSessionConfig = {
  * Persisted per-user-turn dispatch config.
  * Keep this looser than `ACPSessionConfig` so older docs and partial writes remain readable.
  */
-export type SessionTurnInputConfig = Partial<ACPSessionConfig>;
+export type SessionTurnInputConfig = Partial<ACPSessionConfig> & {
+  /** An accepted steer has no independently editable provider turn boundary. */
+  _lodyDeliveryKind?: import('./message-schemas').SessionHistoryDeliveryKind;
+};
 import type { OperationCompletionContent, OperationProgressContent } from './session-orchestration';

@@ -376,26 +376,15 @@ export const ACPSessionConfigSchema = z
   })
   .passthrough();
 
-const LooseSessionTurnInputConfigSchema = z
-  .object({
-    prompt: z.string().optional(),
-    inputBlocks: SessionInputBlocksSchema.optional(),
-    cliType: AgentConfigCliTypeSchema.optional(),
-    agentType: z.string().trim().min(1).optional(),
-    customAcp: CustomAcpLaunchSpecSchema.optional(),
-    runtimeOverrides: BuiltinRuntimeOverridesSchema.optional(),
-    modeId: z.string().optional(),
-    modelId: z.string().optional(),
-    configOptionValues: AcpConfigOptionValuesSchema.optional(),
-    mcpServerIds: z.array(z.string()).optional(),
-    taskToolsEnabled: z.boolean().optional(),
-    agentRoleId: z.string().trim().min(1).nullable().optional(),
-    agentRoleRevision: z.number().int().nonnegative().optional(),
-    issuePRMentions: z.array(IssuePRMentionSchema).optional(),
-    resume: ACPSessionIdSchema.optional(),
-    chainDepth: z.number().int().nonnegative().optional(),
-  })
-  .passthrough();
+/** Local history provenance, not an additional ACP request option. */
+export const SessionHistoryDeliveryKindSchema = z.literal('steer');
+export type SessionHistoryDeliveryKind = z.infer<typeof SessionHistoryDeliveryKindSchema>;
+
+export const SessionHistoryInputConfigSchema = ACPSessionConfigSchema.partial()
+  .extend({ _lodyDeliveryKind: SessionHistoryDeliveryKindSchema.optional() })
+  .strip();
+
+const LooseSessionTurnInputConfigSchema = SessionHistoryInputConfigSchema.passthrough();
 
 const trimOptionalString = (value: unknown): string | undefined => {
   if (typeof value !== 'string') {
@@ -521,6 +510,11 @@ export const normalizeSessionTurnInputConfig = (
   const chainDepth = maybeParseField(z.number().int().nonnegative(), record.chainDepth);
   if (chainDepth !== undefined) {
     normalized.chainDepth = chainDepth;
+  }
+
+  const deliveryKind = maybeParseField(SessionHistoryDeliveryKindSchema, record._lodyDeliveryKind);
+  if (deliveryKind !== undefined) {
+    normalized._lodyDeliveryKind = deliveryKind;
   }
 
   const looseParsed = LooseSessionTurnInputConfigSchema.safeParse(record);
@@ -3154,6 +3148,27 @@ export const ChatFailedMetaSchema = z.object({
   message: z.string().optional(),
 });
 
+export const ToolCallMessageSchema = z.object({
+  type: z.literal('tool_call'),
+  toolCallId: z.string(),
+  title: z.string().nullable().optional(),
+  status: ToolCallStatusSchema,
+  kind: ToolKindSchema.optional(),
+  content: z.array(ToolCallContentSchema).optional(),
+  locations: z.array(ToolCallLocationSchema).optional(),
+  rawInput: z.record(z.string(), z.unknown()).optional(),
+  rawOutput: z.record(z.string(), z.unknown()).optional(),
+  activityKind: z.enum(['context_compaction', 'codex_retry']).optional(),
+  // Canonical tool name, when the agent published one (ACP `title` is human-facing).
+  toolName: z.string().optional(),
+  // IANA timezone of the machine that ran a scheduling tool (cron is local-time to it).
+  schedulingTimeZone: z.string().optional(),
+  // Epoch ms when a scheduling tool call was first persisted (true creation moment;
+  // turn-level timestamps are not a safe proxy — see `recordedAtMs` in ai.ts).
+  recordedAtMs: z.number().optional(),
+  permissionRequest: PermissionRequestInfoSchema.optional(),
+});
+
 // Non-system notice MessageContent discriminated union
 export const NonSystemNoticeMessageContentSchema = z.discriminatedUnion('type', [
   z.object({
@@ -3202,26 +3217,7 @@ export const NonSystemNoticeMessageContentSchema = z.discriminatedUnion('type', 
     createdAt: z.number().optional(),
     updatedAt: z.number().optional(),
   }),
-  z.object({
-    type: z.literal('tool_call'),
-    toolCallId: z.string(),
-    title: z.string().nullable().optional(),
-    status: ToolCallStatusSchema,
-    kind: ToolKindSchema.optional(),
-    content: z.array(ToolCallContentSchema).optional(),
-    locations: z.array(ToolCallLocationSchema).optional(),
-    rawInput: z.record(z.string(), z.unknown()).optional(),
-    rawOutput: z.record(z.string(), z.unknown()).optional(),
-    activityKind: z.enum(['context_compaction', 'codex_retry']).optional(),
-    // Canonical tool name, when the agent published one (ACP `title` is human-facing).
-    toolName: z.string().optional(),
-    // IANA timezone of the machine that ran a scheduling tool (cron is local-time to it).
-    schedulingTimeZone: z.string().optional(),
-    // Epoch ms when a scheduling tool call was first persisted (true creation moment;
-    // turn-level timestamps are not a safe proxy — see `recordedAtMs` in ai.ts).
-    recordedAtMs: z.number().optional(),
-    permissionRequest: PermissionRequestInfoSchema.optional(),
-  }),
+  ToolCallMessageSchema,
   z.object({
     type: z.literal('available_commands'),
     commands: z.array(AvailableCommandSchema),

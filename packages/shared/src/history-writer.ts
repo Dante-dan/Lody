@@ -7,8 +7,7 @@ import type { PermissionOutcome } from './message';
 import {
   MessageContentSchema,
   PermissionOutcomeSchema,
-  PermissionRequestInfoSchema,
-  ToolCallStatusSchema,
+  ToolCallMessageSchema,
 } from './message-schemas';
 import {
   HistoryEntryWriteSchema,
@@ -93,30 +92,43 @@ function preserveUnknown(
 const cleanNew = (schema: z.ZodType, input: unknown, old?: unknown): unknown =>
   preserveUnknown(schema, old, input, parseHistoryWrite(schema, input));
 
-/** These independent tool state fields may change without rewriting an old payload. */
+// One independently editable group, derived from the message definition rather
+// than a second set of validators. Identity and content stay outside this group.
+const ToolStateWriteSchema = ToolCallMessageSchema.pick({
+  status: true,
+  title: true,
+  kind: true,
+  locations: true,
+  permissionRequest: true,
+});
+
+/** Permission producers also enrich descriptions; they do not author old content. */
 function prepareToolState(old: unknown, input: unknown): Record<string, unknown> | undefined {
   if (!record(old) || !record(input) || old.type !== 'tool_call' || input.type !== 'tool_call')
     return undefined;
-  const { status: oldStatus, permissionRequest: oldRequest, ...oldPayload } = old;
-  const { status, permissionRequest, ...payload } = input;
-  if (!historyValuesEqual(oldPayload, payload)) return undefined;
+  const payload = (value: Record<string, unknown>) =>
+    Object.fromEntries(
+      Object.entries(value).filter(([key]) => !Object.hasOwn(ToolStateWriteSchema.shape, key))
+    );
+  if (!historyValuesEqual(payload(old), payload(input))) return undefined;
   const result = { ...old };
-  if (!historyValuesEqual(oldStatus, status))
-    result.status = cleanNew(ToolCallStatusSchema, status);
-  if (!historyValuesEqual(oldRequest, permissionRequest)) {
+  for (const [key, schema] of Object.entries(ToolStateWriteSchema.shape)) {
+    if (historyValuesEqual(old[key], input[key])) continue;
+    const oldRequest = old.permissionRequest;
+    const permissionRequest = input.permissionRequest;
     // Answering an existing request does not author its options or tool content.
-    if (record(oldRequest) && record(permissionRequest)) {
+    if (key === 'permissionRequest' && record(oldRequest) && record(permissionRequest)) {
       const { outcome: _oldOutcome, ...oldInfo } = oldRequest;
       const { outcome, ...info } = permissionRequest;
       if (historyValuesEqual(oldInfo, info)) {
         const parsed = cleanNew(PermissionOutcomeSchema.optional(), outcome, oldRequest.outcome);
         result.permissionRequest = { ...oldRequest, outcome: parsed };
-        return result;
+        continue;
       }
     }
-    const parsed = cleanNew(PermissionRequestInfoSchema.optional(), permissionRequest, oldRequest);
-    if (parsed === undefined) delete result.permissionRequest;
-    else result.permissionRequest = parsed;
+    const parsed = cleanNew(schema, input[key], old[key]);
+    if (parsed === undefined) delete result[key];
+    else result[key] = parsed;
   }
   return result;
 }

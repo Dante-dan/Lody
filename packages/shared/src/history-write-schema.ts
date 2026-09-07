@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { ACPSessionConfigSchema, MessageContentSchema, PlanEntrySchema } from './message-schemas';
+import {
+  SessionHistoryInputConfigSchema,
+  MessageContentSchema,
+  PlanEntrySchema,
+} from './message-schemas';
 
 /** New writes only. Never parse/rewrite the stored history through this schema. */
 export const HistoryEntryWriteSchema = z.object({
@@ -16,7 +20,7 @@ export const HistoryEntryWriteSchema = z.object({
   status: z
     .enum(['pending', 'pending_apply', 'seen', 'processing', 'handled', 'failed', 'canceled'])
     .optional(),
-  inputConfig: ACPSessionConfigSchema.partial().strip().optional(),
+  inputConfig: SessionHistoryInputConfigSchema.optional(),
   read: z.boolean().optional(),
   userId: z.string().optional(),
   modelInfo: z

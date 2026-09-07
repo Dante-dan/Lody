@@ -28,8 +28,11 @@ Translation: current
   变成 seen/read，且其他字段完全不变；它不是崩溃恢复或分布式事务。
   外部 provider 导入仍是新输入，不能借用已存历史复制权限。
 - 这里的接受表示本地 CRDT 写入。持久化、权限和远端同步仍由原有 repo 和传输层负责。
-- 只修改工具状态/权限请求时，仅解析变化的状态字段，不重验未修改的工具内容；
-  只修改 outcome 时保留已有请求信息。其他工具字段修改仍需完整 item 解析。
+- 工具状态、权限请求与描述元数据（title/kind/locations）只解析本次变化的字段，
+  不重验未修改的工具内容；只修改 outcome 时保留已有请求信息。
+  修改工具身份或内容仍需完整 item 解析；新增元数据非法时，整条命令在写入前拒绝。
+- 已接受的 steer 标记在写入和读取归一化后都必须保留；编辑重发不能把 steer
+  当作可独立重放的普通用户轮次。
 
 ## 边界与待审事项
 
@@ -46,5 +49,6 @@ Translation: current
 - `packages/shared/src/{history-writer,history-write-schema,session-mirror}.ts`
 - `packages/shared/tests/history-writer.test.ts` 与 `history-writer.contract.ts`
 - [决策记录](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.zh.md)
+- [业务字段修复与待定 hash 决策](../.agents/notes/implemented/bug-fix/2026-09-08-history-writer-business-fields.zh.md)
 
 这是供人工审阅的草稿；实现和测试通过不代表 Spec 已获批准。

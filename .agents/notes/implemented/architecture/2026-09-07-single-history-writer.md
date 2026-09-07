@@ -168,6 +168,11 @@ PR #460 remains Draft. The independently based availability hotfix is
 Before committing this repair, full `pnpm check`, changed-file formatting, and
 `pnpm run docs check` passed. Independent review remains outstanding.
 
+Later review and repairs to permission enrichment and steer provenance are recorded
+in [business field preservation](../bug-fix/2026-09-08-history-writer-business-fields.md).
+That note also records the still-unresolved imported-history hash boundary; the
+earlier test results above are not whole-PR compatibility approval.
+
 On this branch, supersedes the history-write portion of the
 [temporary bypass](../bug-fix/2026-09-07-temporary-session-validation-bypass.md).
 Intent: [draft Spec](../../../../specs/session-history-writes.md).

@@ -12,6 +12,7 @@ import {
   type SessionMeta,
 } from '@lody/shared';
 import { SessionEditAndResendService } from './session-edit-and-resend-service';
+import { SessionExecutionService } from './session-execution-service';
 
 const sessionId = 'session-1' as SessionId;
 const machineId = 'machine-1' as MachineId;
@@ -119,7 +120,7 @@ function createHarness(
   } as SessionMeta;
   const sessionDoc = {
     getMetaState: vi.fn(async () => meta),
-    getHistory: vi.fn(async () => history),
+    getHistory: vi.fn(realDoc.getHistory.bind(realDoc)),
     updateHistoryWithRollback: vi.fn(
       async (update: (current: SessionHistoryInput[]) => SessionHistoryInput[]) => {
         events.push('history');
@@ -199,7 +200,15 @@ function createHarness(
     enqueueDispatch: () => events.push('dispatch'),
   });
 
-  return { agentClient, events, executionService, getHistory: () => history, repo, service };
+  return {
+    agentClient,
+    events,
+    executionService,
+    getHistory: () => history,
+    realDoc,
+    repo,
+    service,
+  };
 }
 
 const spec = {
@@ -316,6 +325,35 @@ describe('SessionEditAndResendService', () => {
       error: { code: 'USER_TURN_NOT_EDITABLE' },
     });
     expect(harness.agentClient.prepareReplacementSession).not.toHaveBeenCalled();
+  });
+
+  it('retains newly accepted steer provenance through the writer and actual reader before editing', async () => {
+    const harness = createHarness();
+    const execution = new SessionExecutionService({
+      logger: { debug: vi.fn() },
+      workspaceDocument: { repo: harness.repo },
+    } as never);
+    await execution['transitionDispatchOwnership']({
+      sessionId,
+      sessionDoc: harness.realDoc,
+      nextUserTurnId: 'user-2',
+    });
+    // Once settled, pending_apply no longer protects the steer from editing.
+    await execution['setUserTurnStatus'](harness.realDoc, 'user-2', 'handled');
+    const stored = harness.realDoc.mirror
+      ?.getState()
+      .history.find((entry) => entry.id === 'user-2');
+    expect(stored?.inputConfig?._lodyDeliveryKind).toBe('steer');
+    const read = await harness.realDoc.getHistory();
+    expect(read.find((entry) => entry.id === 'user-2')?.inputConfig?._lodyDeliveryKind).toBe(
+      'steer'
+    );
+    await expect(harness.service.editAndResend(spec)).resolves.toMatchObject({
+      success: false,
+      error: { code: 'USER_TURN_NOT_EDITABLE' },
+    });
+    expect(harness.agentClient.prepareReplacementSession).not.toHaveBeenCalled();
+    expect(harness.agentClient.adoptPreparedSession).not.toHaveBeenCalled();
   });
 
   it('requires a new logical user turn id', async () => {
