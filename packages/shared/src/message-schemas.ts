@@ -3277,6 +3277,12 @@ export const NonSystemNoticeMessageContentSchema = z.discriminatedUnion('type', 
 ]);
 
 // System notice message content schema
+export const SessionForkOriginMetaSchema = z.object({
+  sourceSessionId: SessionIdSchema,
+  sourceTurnId: z.string(),
+  sourceTitle: z.string(),
+});
+
 export const SystemNoticeSchema = z.discriminatedUnion('name', [
   z.object({
     type: z.literal('system_notice'),
@@ -3297,6 +3303,11 @@ export const SystemNoticeSchema = z.discriminatedUnion('name', [
     type: z.literal('system_notice'),
     name: z.literal('task_proposal'),
     meta: TaskProposalMetaSchema.optional(),
+  }),
+  z.object({
+    type: z.literal('system_notice'),
+    name: z.literal('session_fork_origin'),
+    meta: SessionForkOriginMetaSchema.optional(),
   }),
 ]);
 

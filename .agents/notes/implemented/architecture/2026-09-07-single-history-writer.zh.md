@@ -71,6 +71,24 @@ IPC 测试中遇到 `listen EPERM`，这组测试在沙箱外单独重跑 9/9 �
 类型检查和 `pnpm run docs check` 通过。这些是合成的本地测试，不是真实旧版本应用或桌面/
 移动端端到端验收。
 
+## 更正：fork notice 覆盖
+
+对 `f0c55094` 的审查发现真实路径回归：TypeScript 允许已有的 `session_fork_origin`，
+共享解析器却没有该 name。原有覆盖断言只检查 item `type`，漏掉了内层判别字段。
+27 个 fork 测试 mock 了 `updateHistory`，因此两条真实 fork 路径失败时测试仍然通过。
+
+本次补齐 fork-origin 关联的元数据 schema，不放宽未知新 notice name。编译期检查现在
+双向比较 notice name 和完整关联类型。普通/worktree 两条服务回归使用真实 SessionDocument、
+会话适配层和 Loro writer，修复前失败、修复后通过。Worktree 完成使用 fake immediate
+与明确的 marker 清理信号等待。Writer 测试验证错误元数据不产生 CRDT 修改，并检查合法
+notice 的写入回读。Provider 执行和磁盘持久化仍是 stub；这些测试证明本地写入边界，
+不是 fork 持久性的端到端验收。
+
+合入 main 时同时保留其 progress 无变化不写入的检查和共享 HistoryWriter 的写入职责。
+没有引入旧历史迁移或全状态校验。
+合入 `main@d366a5a6` 后，完整 `pnpm check` 和文档检查通过；fork/progress 专项测试
+49 项、writer 测试 14 项通过。
+
 替代[临时关闭校验](../bug-fix/2026-09-07-temporary-session-validation-bypass.zh.md)中历史写入的部分。
 意图：[Spec 草稿](../../../../specs/session-history-writes.zh.md)。
 PR：[#460](https://github.com/LodyAI/Lody/pull/460)。

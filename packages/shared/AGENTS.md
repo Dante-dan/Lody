@@ -18,3 +18,6 @@
   retain JSON data, not arbitrary JS objects. Storage layout stays separate: coordinate
   any `Any.storageSchema` adoption with its Mirror patch, including rollback.
   Rationale: [single writer](../../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.md).
+- Parser coverage must include nested discriminators (`system_notice.name`) and
+  correlated metadata, not just item `type`. Fork regression tests must cross the
+  actual SessionDocument/HistoryWriter boundary; a mock updateHistory cannot prove it.

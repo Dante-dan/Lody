@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import { LoroDoc } from 'loro-crdt';
+import { SessionDocument } from '../lib/loro/doc';
 import {
   getSessionRoomId,
+  createSessionMirror,
   SessionStatusFactory,
   type AgentConfigId,
   type MachineId,
@@ -91,7 +94,9 @@ function createForkHarness(
   };
   let forkOperation: unknown = options.forkOperation;
   const targetDoc = {
-    updateHistory: vi.fn(async () => undefined),
+    updateHistory: vi.fn(
+      async (_updater: (history: SessionHistoryInput[]) => SessionHistoryInput[]) => undefined
+    ),
     waitUntilSynced: vi.fn(async () => false),
     getMetaState: vi.fn(async () => options.targetMeta),
     getHistory: vi.fn(async () => options.targetHistory ?? []),
@@ -373,6 +378,66 @@ describe('cloneHistoryThroughTurn', () => {
 });
 
 describe('SessionForkService durability boundary', () => {
+  it.each(['regular', 'worktree'] as const)(
+    'writes %s fork history through the real session writer',
+    async (kind) => {
+      vi.useFakeTimers({ toFake: ['setImmediate'] });
+      const loro = new LoroDoc();
+      const mirror = createSessionMirror({
+        doc: loro,
+        initialState: { session: { id: targetSessionId }, history: [] },
+      });
+      const doc = new SessionDocument({} as never, targetSessionId, async () => {}, {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      } as never);
+      doc.mirror = mirror;
+      const harness = createForkHarness(
+        undefined,
+        kind === 'worktree' ? { worktree: { dirty: false, headSha: 'a'.repeat(40) } } : {}
+      );
+      harness.targetDoc.updateHistory.mockImplementation((updater) => doc.updateHistory(updater));
+      const settled = Promise.withResolvers<void>();
+      const clear = harness.forkOperationStore.clear.getMockImplementation();
+      if (!clear) throw new Error('Fork harness must provide marker cleanup');
+      harness.forkOperationStore.clear.mockImplementation(async (id) => {
+        await clear(id);
+        settled.resolve();
+      });
+      try {
+        const result = await harness.service.fork({
+          ...forkSpec,
+          ...(kind === 'worktree' ? { targetContext: { kind: 'new-worktree' as const } } : {}),
+        });
+        expect(result.success).toBe(true);
+        if (kind === 'worktree') {
+          await vi.runAllTimersAsync();
+          await settled.promise;
+        }
+        const stored = loro.getList('history').toJSON();
+        expect(stored.map((row) => row.id)).toEqual([
+          'user-1',
+          'assistant-1',
+          `session-fork-origin:${targetSessionId}`,
+        ]);
+        expect(stored[2].items).toEqual([
+          {
+            type: 'system_notice',
+            name: 'session_fork_origin',
+            meta: { sourceSessionId, sourceTurnId: 'assistant-1', sourceTitle: 'Original' },
+          },
+        ]);
+        expect(harness.targetDoc.getForkOperation()).toBeUndefined();
+        expect(harness.sessionManager.terminateSession).not.toHaveBeenCalled();
+      } finally {
+        mirror.dispose();
+        vi.useRealTimers();
+      }
+    }
+  );
+
   it('commits after local persistence without requiring a cloud sync acknowledgement', async () => {
     const harness = createForkHarness();
 

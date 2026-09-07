@@ -87,6 +87,27 @@ send/writer tests passed 32, and CLI startup/dispatch tests passed 5. Changed-fi
 formatting, typechecks and `pnpm run docs check` passed. These are synthetic local tests,
 not real old application builds or desktop/mobile end-to-end acceptance.
 
+## Correction: fork notice coverage
+
+Review of `f0c55094` found a production-path regression: TypeScript allowed the existing
+`session_fork_origin`, but the shared parser lacked that name. The original coverage
+assertion checked only item `type`, so it missed the nested discriminator. The 27
+fork tests mocked `updateHistory` and passed while both real fork paths failed.
+
+The repair adds the correlated fork-origin metadata schema without relaxing unknown
+new notice names. Compile-time checks now compare notice names and complete correlated
+notice types in both directions. Two service regressions use the real SessionDocument,
+session facade and Loro writer for regular/worktree forks; they failed before the
+repair and passed afterward. Worktree completion uses fake immediates and an explicit
+marker-cleanup signal. A writer test rejects malformed metadata without CRDT changes
+and checks a valid notice round trip. Provider execution and disk persistence remain
+stubbed; these tests establish the local write boundary, not end-to-end fork durability.
+
+The main merge preserves its progress no-op guard together with shared HistoryWriter
+ownership. No old history migration or whole-state validation is introduced.
+After merging `main@d366a5a6`, `pnpm check` and documentation checks passed; the
+focused fork/progress suite passed 49 tests and the writer suite passed 14.
+
 Supersedes the history-write portion of the
 [temporary bypass](../bug-fix/2026-09-07-temporary-session-validation-bypass.md).
 Intent: [draft Spec](../../../../specs/session-history-writes.md).

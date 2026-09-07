@@ -8,6 +8,14 @@ type AssertNever<T extends never> = T;
 export type AllHistoryVariantsHaveAParser = AssertNever<
   Exclude<MessageContent['type'], MessageContentValidated['type']>
 >;
+type Notice = Extract<MessageContent, { type: 'system_notice' }>;
+type ParsedNotice = Extract<MessageContentValidated, { type: 'system_notice' }>;
+export type AllNoticeNamesHaveAParser = AssertNever<Exclude<Notice['name'], ParsedNotice['name']>>;
+export type AllParsedNoticeNamesAreKnown = AssertNever<
+  Exclude<ParsedNotice['name'], Notice['name']>
+>;
+export type NoticeMetadataMatchesParser = AssertNever<Exclude<Notice, ParsedNotice>>;
+export type ParsedNoticeMetadataMatchesDomain = AssertNever<Exclude<ParsedNotice, Notice>>;
 export type AllHistoryFieldsHaveAParser = AssertNever<
   Exclude<keyof SessionHistory, '$cid' | keyof typeof HistoryEntryWriteSchema.shape>
 >;

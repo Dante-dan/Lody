@@ -17,6 +17,37 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it('checks fork-origin metadata before any write and preserves it on round trip', () => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    const notice = {
+      type: 'system_notice' as const,
+      name: 'session_fork_origin' as const,
+      meta: {
+        sourceSessionId: 'source' as SessionId,
+        sourceTurnId: 'turn',
+        sourceTitle: 'Synthetic',
+      },
+    };
+    const version = doc.version().toJSON();
+    for (const meta of [
+      { sourceSessionId: 'source' },
+      { ...notice.meta, sourceTitle: 42 },
+      { message: 'wrong notice metadata' },
+    ]) {
+      expect(() =>
+        mirror.historyWriter.append({
+          ...entry(),
+          items: [{ ...notice, meta }],
+        } as unknown as SessionHistory)
+      ).toThrow('Invalid history write');
+      expect(doc.version().toJSON()).toEqual(version);
+    }
+    mirror.historyWriter.append({ ...entry(), role: 'system', items: [notice] });
+    expect(doc.getList('history').toJSON()[0].items).toEqual([notice]);
+    mirror.dispose();
+  });
+
   it('keeps legacy primitive text primitive and retains it on an invalid item update', () => {
     const doc = new Loro();
     const mirror = open(doc);
