@@ -20,7 +20,7 @@ function productionSources(dir: string): string[] {
 }
 
 describe('Mirror construction sites', () => {
-  it('tolerates unknown root keys and bypasses session whole-state validation', () => {
+  it('tolerates unknown root keys and routes both session entrypoints through the shared writer', () => {
     const missing: string[] = [];
     const validatedSessions: string[] = [];
     const sessionRoots = new Set<string>();
@@ -29,6 +29,7 @@ describe('Mirror construction sites', () => {
     for (const root of searchRoots) {
       for (const file of productionSources(join(repoRoot, root))) {
         const source = readFileSync(file, 'utf8');
+        if (source.includes('createSessionMirror({')) sessionRoots.add(root);
         for (
           let at = source.indexOf('new Mirror(');
           at !== -1;
@@ -40,17 +41,20 @@ describe('Mirror construction sites', () => {
           const location = `${file.slice(repoRoot.length)}:${source.slice(0, at).split('\n').length}`;
           if (!options.includes('ignoreUnknownProperties')) missing.push(location);
           if (/schema:\s*sessionDocSchema\b/.test(options)) {
-            sessionRoots.add(root);
-            if (!/validateUpdates:\s*false\b/.test(options)) validatedSessions.push(location);
+            validatedSessions.push(location);
           }
         }
       }
     }
 
     expect(missing).toEqual([]);
-    // Temporary session-only bypass must cover both renderer and CLI entrypoints.
+    // A raw session Mirror bypasses HistoryWriter, even with validateUpdates:false.
     expect(validatedSessions).toEqual([]);
     expect([...sessionRoots]).toEqual(searchRoots);
+    const facade = readFileSync(join(repoRoot, 'packages/shared/src/session-mirror.ts'), 'utf8');
+    expect(facade).toContain('validateUpdates: false');
+    expect(facade).toContain('ignoreUnknownProperties: true');
+    expect(facade).toContain('createHistoryWriter(');
     // A scan that silently matched nothing would pass forever.
     expect(sites).toBeGreaterThan(0);
   });

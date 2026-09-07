@@ -1,0 +1,43 @@
+import type { HistoryWriter } from '../src/history-writer';
+import type { SessionHistory } from '../src/schema';
+import type { HistoryEntryWrite, HistoryEntryWriteSchema } from '../src/history-write-schema';
+import type { MessageContent } from '../src/ai';
+import type { MessageContentValidated } from '../src/message-schemas';
+
+type AssertNever<T extends never> = T;
+export type AllHistoryVariantsHaveAParser = AssertNever<
+  Exclude<MessageContent['type'], MessageContentValidated['type']>
+>;
+export type AllHistoryFieldsHaveAParser = AssertNever<
+  Exclude<keyof SessionHistory, '$cid' | keyof typeof HistoryEntryWriteSchema.shape>
+>;
+export type AllParserFieldsBelongToHistory = AssertNever<
+  Exclude<keyof typeof HistoryEntryWriteSchema.shape, keyof SessionHistory>
+>;
+
+// Included by the normal shared typecheck, not executed by the test runner.
+export function historyWriterTypeContract(writer: HistoryWriter, entry: SessionHistory) {
+  writer.append(entry);
+  writer.setField('turn', 'finished', true);
+  // @ts-expect-error missing required text
+  writer.append({ ...entry, items: [{ type: 'text' }] });
+  // @ts-expect-error unknown new item type
+  writer.append({ ...entry, items: [{ type: 'unknown' }] });
+  // @ts-expect-error invalid role
+  writer.append({ ...entry, role: 'invalid' });
+  // @ts-expect-error field value must match its field
+  writer.setField('turn', 'finished', 'yes');
+  writer.append({
+    ...entry,
+    // @ts-expect-error notice name determines metadata
+    items: [{ type: 'system_notice', name: 'agent_warning', meta: { truncated: true } }],
+  });
+  const malformed: HistoryEntryWrite = {
+    id: 'x',
+    role: 'user',
+    timestamp: 'now',
+    // @ts-expect-error runtime-schema-derived new inputs also require text
+    items: [{ type: 'text' }],
+  };
+  void malformed;
+}

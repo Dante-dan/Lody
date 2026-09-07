@@ -27,9 +27,15 @@ import {
   type TaskStatus,
   type TaskTimelineEntry,
   type SessionId,
+  type SessionHistory,
+  type TaskProposalMeta,
 } from '@lody/shared';
 import { userAtom } from '@/atoms';
-import { activeWorkspaceRuntimeAtom, type TaskDocStore, type WorkspaceRuntime } from '@/atoms/runtime';
+import {
+  activeWorkspaceRuntimeAtom,
+  type TaskDocStore,
+  type WorkspaceRuntime,
+} from '@/atoms/runtime';
 import { taskIndexRowsAtom, taskListAtom } from '@/atoms/tasks';
 
 export type CreateTaskInput = {
@@ -126,13 +132,10 @@ export function useTaskActions() {
     [publishIndexRow]
   );
 
-  const appendTimelineEntry = useCallback(
-    (draft: TaskDocInput, entry: TaskTimelineEntry) => {
-      const timeline = (draft as unknown as { timeline: TaskTimelineEntry[] }).timeline;
-      timeline.push(entry);
-    },
-    []
-  );
+  const appendTimelineEntry = useCallback((draft: TaskDocInput, entry: TaskTimelineEntry) => {
+    const timeline = (draft as unknown as { timeline: TaskTimelineEntry[] }).timeline;
+    timeline.push(entry);
+  }, []);
 
   const buildActivityEntry = useCallback(
     (activityType: TaskActivityType, activityData?: Record<string, string>): TaskTimelineEntry => ({
@@ -334,9 +337,7 @@ export function useTaskActions() {
       }
       await runtime.withTaskStore(taskId, async (store) => {
         const existing = (store.getState() as unknown as { links?: TaskLink[] }).links ?? [];
-        if (
-          existing.some((link) => link.sessionId === sessionId && link.removedAt === undefined)
-        ) {
+        if (existing.some((link) => link.sessionId === sessionId && link.removedAt === undefined)) {
           return;
         }
         store.setState((draft: TaskDocInput) => {
@@ -442,25 +443,25 @@ export function useTaskActions() {
       sessionId: SessionId,
       entryId: string,
       itemIndex: number,
-      nextMeta: Record<string, unknown>
+      nextMeta: TaskProposalMeta
     ): Promise<void> => {
       if (!runtime) {
         return;
       }
       const entry = await runtime.withSessionStore(sessionId, (sessionStore) =>
-        sessionStore.getState().history.find((item) => item.id === entryId)
+        (sessionStore.getState().history as SessionHistory[]).find((item) => item.id === entryId)
       );
       if (!entry) {
         return;
       }
-      const items = Array.isArray(entry.items) ? [...(entry.items as unknown[])] : [];
+      const items = Array.isArray(entry.items) ? [...entry.items] : [];
       const target = items[itemIndex];
-      if (!target || typeof target !== 'object') {
+      if (!target || target.type !== 'system_notice' || target.name !== 'task_proposal') {
         return;
       }
-      items[itemIndex] = { ...(target as Record<string, unknown>), meta: nextMeta };
+      items[itemIndex] = { ...target, meta: nextMeta };
       await runtime.writer.updateSessionHistory(sessionId, entryId, {
-        ...(entry as unknown as Record<string, unknown>),
+        ...entry,
         items,
       });
     },

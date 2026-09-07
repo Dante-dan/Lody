@@ -1,4 +1,9 @@
-import type { PreviewVisualCommentMutation, SessionId } from '@lody/shared';
+import type {
+  PreviewVisualCommentMutation,
+  SessionId,
+  SessionHistory,
+  PermissionOutcome,
+} from '@lody/shared';
 
 // # WorkspaceWriter — the renderer's authored-write seam
 //
@@ -21,7 +26,7 @@ export interface WorkspaceWriter {
   startSession(
     sessionId: string,
     meta: Record<string, unknown>,
-    entry: Record<string, unknown>,
+    entry: SessionHistory,
     dispatch: {
       userTurnId: string;
       userId: string;
@@ -54,7 +59,7 @@ export interface WorkspaceWriter {
    */
   appendSessionTurn(
     sessionId: string,
-    entry: Record<string, unknown>,
+    entry: SessionHistory,
     dispatch?: {
       userTurnId: string;
       userId: string;
@@ -64,18 +69,14 @@ export interface WorkspaceWriter {
   ): Promise<void>;
 
   /** Append a history entry without coupling it to dispatch. */
-  appendSessionHistory(sessionId: string, entry: Record<string, unknown>): Promise<void>;
+  appendSessionHistory(sessionId: string, entry: SessionHistory): Promise<void>;
 
   /**
    * Replace an existing history entry in place (resend resets a turn to
    * pending). Callers with a functional updater resolve it to the concrete
    * replacement entry before calling this.
    */
-  updateSessionHistory(
-    sessionId: string,
-    entryId: string,
-    entry: Record<string, unknown>
-  ): Promise<void>;
+  updateSessionHistory(sessionId: string, entryId: string, entry: SessionHistory): Promise<void>;
 
   /**
    * Author a permission response: locate the tool_call whose
@@ -85,7 +86,7 @@ export interface WorkspaceWriter {
   respondSessionPermission(
     sessionId: string,
     requestId: string,
-    outcome: Record<string, unknown>
+    outcome: PermissionOutcome
   ): Promise<void>;
 
   /** Message-queue mutations (durable CRDT on the session doc). */

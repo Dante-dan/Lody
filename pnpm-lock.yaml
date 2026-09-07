@@ -1420,6 +1420,9 @@ importers:
       effect:
         specifier: 'catalog:'
         version: 3.18.4
+      immer:
+        specifier: ^10.2.0
+        version: 10.2.0
       loro-crdt:
         specifier: 'catalog:'
         version: 1.15.1

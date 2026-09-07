@@ -23,6 +23,9 @@ Mirror 构造点设置 `validateUpdates: false`，其他文档不变。Schema �
 
 ## 替换条件与代价
 
+本临时决定中历史写入的部分已由[共享 HistoryWriter](../architecture/2026-09-07-single-history-writer.zh.md)
+替代。下列条目记录原先“仅关闭校验”的代价，不是新的写入契约。
+
 - 用明确类型的局部 HistoryWriter 操作替换，覆盖前端、CLI 和功能开关回退路径。
   不能只因主视图换了 writer，就恢复发送时的全历史校验。
 - 预计短期使用，但不设置按时间自动恢复的开关。

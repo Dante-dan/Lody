@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { SubagentTaskPayloadSchema } from './acp/claude-subagent-task';
 import {
   SESSION_FILE_MAX_COUNT,
   SESSION_FILE_MAX_SIZE_BYTES,
@@ -12,7 +13,7 @@ import {
 import type { AgentRoleId, SessionId } from './ids';
 import { MAX_MESSAGE_TEXT_SPAN_MARK_LENGTH, MESSAGE_TEXT_SPAN_KINDS } from './message-text-spans';
 import { RpcSecretPublicKeySchema } from './rpc-secret';
-import { LodyOperationIdSchema } from './session-orchestration';
+import { LodyOperationIdSchema, LodyOperationCompletionSchema } from './session-orchestration';
 import { isSensitiveAcpConfigOptionId } from './session-preparation';
 import { normalizeMcpServerIdSelection } from './workspace-mcp';
 import {
@@ -988,7 +989,8 @@ export const PermissionOptionSchema = z.object({
   optionId: z.string(),
   name: z.string(),
   description: z.string().optional(),
-  kind: z.enum(['allow_once', 'allow_always', 'deny', 'reject_once']).optional(),
+  kind: z.enum(['allow_once', 'allow_always', 'deny', 'reject_once', 'reject_always']).optional(),
+  _meta: PermissionMetaSchema.optional(),
 });
 
 export const RequestPermissionRequestSchema = z.object({
@@ -3053,6 +3055,8 @@ export const ToolCallContentSchema = z.union([
 
 export const ToolCallLocationSchema = z.object({
   path: z.string(),
+  line: z.number().nullable().optional(),
+  _meta: PermissionMetaSchema.optional(),
   startLine: z.number().optional(),
   endLine: z.number().optional(),
 });
@@ -3060,6 +3064,11 @@ export const ToolCallLocationSchema = z.object({
 export const AvailableCommandSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
+  input: z
+    .object({ hint: z.string(), _meta: PermissionMetaSchema.optional() })
+    .nullable()
+    .optional(),
+  _meta: PermissionMetaSchema.optional(),
 });
 
 export const PermissionRequestInfoSchema = z.object({
@@ -3150,7 +3159,11 @@ export const NonSystemNoticeMessageContentSchema = z.discriminatedUnion('type', 
   z.object({
     type: z.literal('text'),
     text: z.string(),
+    spans: z.array(MessageTextSpanSchema).optional(),
   }),
+  SubagentTaskPayloadSchema.extend({ type: z.literal('subagent_task') }),
+  SessionCommentReferenceInputBlockSchema,
+  SessionVisualAnnotationReferenceInputBlockSchema,
   SessionImageInputBlockSchema,
   SessionImageGroupContentSchema,
   SessionFileBlockObjectSchema,
@@ -3224,7 +3237,7 @@ export const NonSystemNoticeMessageContentSchema = z.discriminatedUnion('type', 
       'session_chat_many',
     ]),
     progressMessageId: z.string().trim().min(1).optional(),
-    completion: z.unknown(),
+    completion: LodyOperationCompletionSchema,
     continuation: z
       .object({
         status: z.literal('not_started'),
@@ -3303,11 +3316,11 @@ export const WorktreeScriptContentSchema = z.object({
 });
 
 // MessageContent union
-export const MessageContentSchema = z.union([
-  NonSystemNoticeMessageContentSchema,
-  SystemNoticeSchema,
-  WorktreeScriptContentSchema,
-]);
+export const MessageContentSchema = z
+  .union([NonSystemNoticeMessageContentSchema, SystemNoticeSchema, WorktreeScriptContentSchema])
+  .superRefine((item, ctx) => {
+    if (item.type === 'file') refineSessionFileBlock(item, ctx);
+  });
 
 export const MessageContentArraySchema = z.array(MessageContentSchema);
 

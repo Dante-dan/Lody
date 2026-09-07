@@ -29,6 +29,10 @@ existing HistoryWriter work proceeds; it does not wait for #443 or #359.
 
 ## Replacement condition and costs
 
+The history-write part of this temporary decision is superseded by the
+[shared HistoryWriter](../architecture/2026-09-07-single-history-writer.md).
+The following records the original bypass-only tradeoff, not the new write contract.
+
 - Replace the bypass with typed, local HistoryWriter operations covering renderer,
   CLI, and feature-flag fallback paths. Do not restore whole-history validation on
   sends merely because the main view path has switched writers.

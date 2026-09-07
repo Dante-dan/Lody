@@ -4,6 +4,7 @@ import { Loro, LoroList, LoroMap, LoroText } from 'loro-crdt';
 import { Mirror, schema, validateSchema } from 'loro-mirror';
 
 import { sessionDocSchema, sessionHistorySchema } from '../src/schema';
+import { createSessionMirror as createProductionSessionMirror } from '../src/session-mirror';
 import { MessageContentSchema } from '../src/message-schemas';
 import type { SessionId } from '../src/ids';
 
@@ -41,11 +42,8 @@ function createFutureDocSnapshot(): Uint8Array {
 }
 
 function createSessionMirror(doc: Loro) {
-  return new Mirror({
+  return createProductionSessionMirror({
     doc,
-    schema: sessionDocSchema,
-    validateUpdates: false,
-    ignoreUnknownProperties: true,
     initialState: { session: { id: sessionId }, history: [] },
   });
 }

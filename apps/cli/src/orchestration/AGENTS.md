@@ -61,7 +61,7 @@ Root and `apps/cli/AGENTS.md` apply. Normative behavior lives in
   `operation_completion` Turn and then the existing Session execution mutex.
 - Create Operations may also maintain one stable `role: system` `operation_progress`
   Turn in the requester Session, written only by the Host-lease Worker, never by MCP
-  replicas. Repair duplicate ids before keyed Mirror updates. It is durable UI state, never
+  replicas. Merge duplicate rows through HistoryWriter, without raw alias writes. It is durable UI state, never
   agent input or a dispatch pointer. Only emit navigable target cards for materialized
   target Session/UserTurn evidence (or an already-published target), merge status
   monotonically by exact target, and treat progress write failures as repairable: they

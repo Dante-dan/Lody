@@ -1509,10 +1509,12 @@ export type MessageContent =
       commands: AvailableCommand[];
     }
   | {
-      type: 'system_notice';
-      name: SystemNoticeName;
-      meta?: SystemNoticeMeta[SystemNoticeName];
-    }
+      [Name in SystemNoticeName]: {
+        type: 'system_notice';
+        name: Name;
+        meta?: SystemNoticeMeta[Name];
+      };
+    }[SystemNoticeName]
   | OperationCompletionContent
   | OperationProgressContent
   | {

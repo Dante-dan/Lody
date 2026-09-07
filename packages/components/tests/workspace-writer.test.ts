@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Flock } from '@loro-dev/flock-wasm';
+import { LoroDoc } from 'loro-crdt';
 import {
   createPreviewVisualComment,
   createPreviewVisualCommentDoc,
+  createSessionMirror,
+  type SessionHistory,
   type MinimalVisualAnnotationAnchor,
   type PreviewVisualCommentDocInput,
 } from '@lody/shared';
@@ -34,6 +37,45 @@ const anchor: MinimalVisualAnnotationAnchor = {
 };
 
 describe('createDirectWorkspaceWriter', () => {
+  it('routes renderer history writes through the real shared boundary', async () => {
+    const doc = new LoroDoc();
+    const mirror = createSessionMirror({
+      doc,
+      initialState: { session: { id: 'session-1' as never }, history: [] },
+    });
+    const writer = createDirectWorkspaceWriter({
+      repo: {} as never,
+      acquireSessionStore: async () => mirror as never,
+      releaseSessionStoreRef: () => {},
+      acquirePreviewVisualCommentStore: async () => {
+        throw new Error('not used');
+      },
+      releasePreviewVisualCommentStoreRef: () => {},
+    });
+    const entry: SessionHistory = {
+      id: 'turn',
+      role: 'user',
+      timestamp: 'synthetic',
+      items: [{ type: 'text', text: 'hello' }],
+      fileDiff: [],
+    };
+    const version = doc.version().toJSON();
+    await expect(
+      writer.appendSessionTurn('session-1', {
+        ...entry,
+        items: [{ type: 'text' }],
+      } as SessionHistory)
+    ).rejects.toThrow('Invalid history write');
+    expect(doc.version().toJSON()).toEqual(version);
+    await writer.appendSessionTurn('session-1', entry);
+    await writer.updateSessionHistory('session-1', 'turn', {
+      ...entry,
+      items: [{ type: 'text', text: 'updated' }],
+    });
+    expect(doc.toJSON().history[0].items).toEqual([{ type: 'text', text: 'updated' }]);
+    mirror.dispose();
+  });
+
   it('puts a Flock row only when the key is absent in the same synchronous transaction', async () => {
     const flock = new Flock('workspace-writer-test');
     const writer = createDirectWorkspaceWriter({
@@ -105,8 +147,14 @@ describe('createDirectWorkspaceWriter', () => {
       releasePreviewVisualCommentStoreRef: vi.fn(),
     });
 
-    await expect(writer.appendSessionTurn('session-1', { id: 'turn-1' })).rejects.toThrow(
-      'store unavailable'
-    );
+    await expect(
+      writer.appendSessionTurn('session-1', {
+        id: 'turn-1',
+        role: 'user',
+        timestamp: '2026-01-01',
+        items: [{ type: 'text', text: 'hello' }],
+        fileDiff: [],
+      })
+    ).rejects.toThrow('store unavailable');
   });
 });

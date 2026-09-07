@@ -7,7 +7,14 @@
 - Session history storage tolerates unknown string item types from newer peers without
   rewriting them or blocking unrelated writes. Keep known-type guards and external-input
   parsing; `tests/session-doc-forward-compat.test.ts` covers this separately from unknown root keys.
-- Session Mirrors temporarily use `validateUpdates: false` in both renderer and CLI.
-  Do not reintroduce whole-history validation on sends; replace this bypass only with
-  typed local writes covering all callers and fallback paths. External-input parsing stays.
-  Rationale: [temporary bypass](../../.agents/notes/implemented/bug-fix/2026-09-07-temporary-session-validation-bypass.md).
+- `createSessionMirror` is the renderer/CLI session entrypoint. Its `HistoryWriter`
+  owns local history writes, including legacy callback updates; no raw history writes
+  or second Mirror writer. Read-path feature flags must never change this owner.
+- Validate new turns and changed known fields/items before applying a command, never
+  unchanged history. Invalid commands preserve the old values and throw content-free
+  diagnostics; they must not leave partial history writes. Keep stored unknown fields
+  and unchanged opaque items; do not sanitize/rewrite a whole stored document.
+- New inputs use the shared message parsers. Known protocol extension dictionaries
+  retain JSON data, not arbitrary JS objects. Storage layout stays separate: coordinate
+  any `Any.storageSchema` adoption with its Mirror patch, including rollback.
+  Rationale: [single writer](../../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.md).
