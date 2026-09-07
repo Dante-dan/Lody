@@ -48,20 +48,29 @@ disappears. Same failure the geometric row band avoids on Y.
 ## Locality comes before orientation, and never becomes a partition
 
 A series is isolated first and its axis settled afterwards. Both orientations are
-hypothesised; a group is banded along each (centres within half a box share a band), a series
-takes at most ONE member per band, and lanes track across bands by nearest cross-axis
-distance bounded by the group's own band step. The wrong hypothesis then costs nothing — a
-toolbar collapses into one vertical band and dies as runs of one — and a run both produced is
-settled by its own spread. Asking a whole signature group for its axis is the failure this
-replaces: two side-by-side lists spread wider than either runs deep, so the page-wide answer
-was "horizontal", every grid row was mined as one series, and a regular grid manufactured a
-high-scoring Y deviation per row and a pitch deviation per column break.
+hypothesised; a group is banded along each, a series takes at most ONE member per band, and
+lanes track across bands by nearest cross-axis distance bounded by the group's own band step.
+The wrong hypothesis then costs nothing — a toolbar collapses into one vertical band and dies
+as runs of one — and a run both produced is settled by its own spread. Asking a whole
+signature group for its axis is the failure this replaces: two side-by-side lists spread wider
+than either runs deep, so the page-wide answer was "horizontal", every grid row was mined as
+one series, and a regular grid manufactured a high-scoring Y deviation per row and a pitch
+deviation per column break.
 
-Locality bounds grouping; it must never delete membership. A lane of one is not a lane, it is
-one box that left, so a lone residual rejoins the nearest real series and is mined there at
-whatever delta it has. Without that, the rule would punish the clearest defects hardest: the
-further a box flies, the more certainly it would become its own lane and vanish. Two boxes
-agreeing on a position are left alone — that is a sparse column, not a defect.
+A band is an OVERLAP question, never a centre distance: two boxes share a position when their
+intervals on that axis overlap by more than half the smaller one, tested against the band's
+anchor interval so shifting boxes cannot chain two positions into one. Centres are exactly
+what a variable-width column moves — six left-aligned labels share one left edge and one X
+interval, but their centres follow string length, and read as centres they became six X
+positions, which let a sidebar list be mined as a horizontal series against a header above it.
+
+Locality bounds grouping, and a lone residual may rejoin the nearest series — but only within
+that same band step, because membership needs evidence too. Unbounded, this fallback was the
+worst defect in the pass: a composer icon 849px below the top bar was folded into the top
+bar's icon series and ranked first in the whole report. Two identical boxes at opposite ends
+of a page are not a series with an exception in it, and nothing here can tell otherwise. The
+stated cost is that a box drifting more than one step off its series is no longer recovered.
+Two boxes agreeing on a position are left alone — that is a sparse column, not a defect.
 
 Do not keep only a series' best-agreeing alignment measure. `start`, `end` and `center` are
 three views, and a box that is only WIDER agrees on `start`; dropping the others buys silence
@@ -74,6 +83,13 @@ Nothing is dropped for looking weak. Candidates carry a `score` and are sorted; 
 threshold removes one. A legitimate indent ladder therefore comes back as deviations too,
 because without being told which level was intended it has to — it ranks low since `score`
 falls as a level's own support rises, so a value two boxes share outranks one forty share.
+
+But the EXPECTATION must exist before anything can deviate from it, and that is not a
+threshold. `expected` is mined from repetition, so a dominant level of one is a single box's
+own coordinate dressed up as an expectation, and a dominant that does not outnumber the level
+deviating from it is two positions with a winner picked by array order — three boxes here and
+three there is not a majority with an exception. Both were 43% of real output. Requiring a
+repeated, outnumbering dominant is the precondition of the comparison, not a filter on it.
 
 A missed misalignment is invisible forever; a false one costs a triage glance. Any tie
 breaks towards reporting more. Only the axis perpendicular to a run carries expectations
@@ -91,3 +107,13 @@ noisy screen cannot drain a quiet screen's only candidate. Never replace that bu
 confidence threshold. `visual-repetition.json` and "All raw deviations" keep everything; a
 candidate the budget withheld is unshown, never unfound, and neither an admitted nor a
 withheld one is a finding, ledger entry or gate verdict.
+
+## Measured limit: it compares across sections and cannot know not to
+
+On the 21-capture report, after the fixes above, 77% of deviations still have a witness in a
+different `sectionScope` — top bar icon against composer icon, sidebar row against panel
+header. Not a bug left to chase: locality is a proxy, and the discriminator a reviewer uses
+(same structural relationship) is what visual grouping discards on purpose. Some is the
+intended catch — two sidebar lists rendering one row at different pitches — and most is
+noise, and the card cannot say which. So this lane is an auxiliary candidate source; do not
+present it as, or promote it into, the baseline and regression rail.

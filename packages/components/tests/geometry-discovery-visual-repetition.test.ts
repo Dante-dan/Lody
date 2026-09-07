@@ -245,13 +245,13 @@ describe('mineVisualDeviations', () => {
     expect(deviations[0]).toMatchObject({ expected: 340, value: 348 });
   });
 
-  it.each([8, 16, 20, 28, 200])(
+  it.each([8, 16, 20, 28, 60])(
     'keeps a box that flew %ipx out of its series inside that series',
     (offset) => {
-      // The failure this guards is the tempting one: cut the series into
-      // spatial neighbourhoods and the clearest defects — the ones that flew
-      // furthest — are the ones cut loose and lost. Suspicion has to rise with
-      // the offset, never fall off a locality boundary.
+      // The tempting failure this guards: cut the series into spatial
+      // neighbourhoods and the clearest defects — the ones that flew furthest
+      // — are the ones cut loose. Within the series' own step (80px here),
+      // suspicion rises with the offset and never falls off a boundary.
       const deviations = leftEdgeDeviations(stackedRows([100, 100, 100, 100 + offset, 100, 100]));
 
       expect(deviations).toEqual([
@@ -259,6 +259,16 @@ describe('mineVisualDeviations', () => {
       ]);
     }
   );
+
+  it('stops claiming a box that left by more than the series step', () => {
+    // The deliberate limit, and the honest cost of not manufacturing evidence.
+    // Recovering a box this far out has to assert that it still belongs to
+    // this series, and nothing visual supports that: the same unbounded rule
+    // folded a composer icon into the top bar's icon row 849px above it and
+    // ranked that fabrication first in the whole report. A stray box is now
+    // simply not mined, rather than mined against an unrelated region.
+    expect(leftEdgeDeviations(stackedRows([100, 100, 100, 300, 100, 100]))).toEqual([]);
+  });
 
   it('sees a box that is only wider, whose left edge agrees', () => {
     // Width drift lives entirely in `end` and `center`. Keeping only the

@@ -98,8 +98,44 @@ function centerOn(atom: VisualAtom, axis: Axis): number {
   return axis === 'y' ? (atom.yStart + atom.yEnd) / 2 : (atom.xStart + atom.xEnd) / 2;
 }
 
-function extentOn(atom: VisualAtom, axis: Axis): number {
-  return axis === 'y' ? atom.yEnd - atom.yStart : atom.xEnd - atom.xStart;
+function startOn(atom: VisualAtom, axis: Axis): number {
+  return axis === 'y' ? atom.yStart : atom.xStart;
+}
+
+function endOn(atom: VisualAtom, axis: Axis): number {
+  return axis === 'y' ? atom.yEnd : atom.xEnd;
+}
+
+type Band = { readonly atoms: VisualAtom[]; readonly start: number; readonly end: number };
+
+/**
+ * The distinct positions a group occupies along one axis. Two boxes share a
+ * position when their intervals on that axis overlap by more than half of the
+ * smaller one, because "do these render side by side" is an overlap question.
+ *
+ * It is not a centre-distance question, and that was a real defect: six
+ * left-aligned sidebar labels share one left edge and one overlapping X
+ * interval, but their centres spread across the whole column because centres
+ * follow string length. Read as centres they became six separate X positions,
+ * which let a vertical list be mined as a horizontal series and compared on Y
+ * against a workspace header 300px above it.
+ *
+ * Membership is tested against the band's ANCHOR interval, never its last
+ * member, so gradually shifting boxes cannot chain two positions into one.
+ */
+function buildBands(atoms: readonly VisualAtom[], axis: Axis): Band[] {
+  const bands: Band[] = [];
+  for (const atom of [...atoms].sort((left, right) => startOn(left, axis) - startOn(right, axis))) {
+    const start = startOn(atom, axis);
+    const end = endOn(atom, axis);
+    const shared = bands.find((band) => {
+      const overlap = Math.min(end, band.end) - Math.max(start, band.start);
+      return overlap > Math.min(end - start, band.end - band.start) / 2;
+    });
+    if (shared) shared.atoms.push(atom);
+    else bands.push({ atoms: [atom], start, end });
+  }
+  return bands;
 }
 
 function median(values: readonly number[]): number {
@@ -165,11 +201,22 @@ function scoreLevels(
     level.atoms.length > best.atoms.length ? level : best
   );
   const dominantSupport = dominant.atoms.length;
+  // The expected coordinate is MINED FROM REPETITION, so there has to be a
+  // repetition. A level of one is a single box, and `expected` taken from it
+  // is that box's own coordinate dressed up as an expectation — every other
+  // member of the series then "deviates" from an arbitrary one of them. This
+  // is not a confidence threshold on a candidate; it is the precondition of
+  // the comparison existing at all.
+  if (dominantSupport < 2) return [];
   const expected = median(dominant.values);
   const deviations: VisualDeviation[] = [];
   for (const level of levels) {
     if (level === dominant) continue;
     const peerSupport = level.atoms.length;
+    // Same reason on the other side. Three boxes here and three there is not a
+    // majority with an exception, it is two positions; `reduce` would name a
+    // winner by array order and report the other half as broken.
+    if (peerSupport >= dominantSupport) continue;
     for (const [index, atom] of level.atoms.entries()) {
       const value = level.values[index]!;
       const delta = Math.abs(value - expected);
@@ -266,14 +313,14 @@ type Lane = { readonly atoms: VisualAtom[]; readonly across: number[]; anchor: n
  * otherwise walk one column into the next.
  */
 function laneSeries(group: readonly VisualAtom[], axis: Axis, minimumLength: number): VisualAtom[][] {
-  const bands = buildLevels(
-    group.map((atom) => ({ atom, value: centerOn(atom, axis) })),
-    median(group.map((atom) => extentOn(atom, axis))) / 2
-  );
+  const bands = buildBands(group, axis);
   // A lane holds at most one atom per band, so fewer bands than a series needs
   // members means this axis cannot carry a series at all.
   if (bands.length < Math.max(minimumLength, 2)) return [];
-  const step = median(bands.slice(1).map((band, index) => band.anchor - bands[index]!.anchor));
+  const positions = bands
+    .map((band) => median(band.atoms.map((atom) => centerOn(atom, axis))))
+    .sort((left, right) => left - right);
+  const step = median(positions.slice(1).map((position, index) => position - positions[index]!));
   if (!(step > 0)) return [];
 
   const cross = CROSS_AXIS[axis];
@@ -308,14 +355,19 @@ function laneSeries(group: readonly VisualAtom[], axis: Axis, minimumLength: num
 
   const series = lanes.filter((lane) => lane.atoms.length >= minimumLength);
   if (series.length === 0) return [];
-  // Recall fallback, and the reason locality here is not a partition. A lane of
-  // one is not evidence of a lane; it is one box that left. Left alone, the
-  // bound above would punish the clearest defects hardest — the further a box
-  // flies from its series, the more certainly it becomes its own lane and
-  // disappears — so a lone residual rejoins the nearest real series and is
-  // mined there at whatever delta it actually has. Two boxes agreeing on a
-  // position are left alone: that is a sparse column, and folding it back
-  // would report a whole second column as broken.
+  // A lane of one is not evidence of a lane; it is one box that left, and the
+  // greedy assignment above may simply have given its lane to a closer member.
+  // So a lone residual rejoins the nearest real series — but only within the
+  // same step that governs lane tracking, because membership needs evidence
+  // too.
+  //
+  // This bound is not tuning. Unbounded, this fallback WAS the worst defect in
+  // the pass: a composer's send icon 849px below the top bar was folded into
+  // the top bar's icon series and reported, at the highest score in the whole
+  // report, as being 849px out of line. Two visually identical boxes at
+  // opposite ends of a page are not a series with an exception in it, and
+  // nothing here can tell otherwise. The honest cost is stated in the tests: a
+  // box that drifts more than one step off its series is no longer recovered.
   for (const lane of lanes) {
     if (lane.atoms.length !== 1 || series.includes(lane)) continue;
     const nearest = series.reduce((best, candidate) =>
@@ -323,6 +375,7 @@ function laneSeries(group: readonly VisualAtom[], axis: Axis, minimumLength: num
         ? candidate
         : best
     );
+    if (Math.abs(lane.anchor - nearest.anchor) > step) continue;
     nearest.atoms.push(lane.atoms[0]!);
   }
   return series.map((lane) => lane.atoms);
