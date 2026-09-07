@@ -81,6 +81,9 @@ Root and `apps/cli/AGENTS.md` apply; `specs/session-orchestration.md` owns behav
   errors, and deadlines do not terminate targets. Delivery consumption does not end reconciliation:
   retain it through target terminal state and local Loro flush, and preserve it through SQLite
   cleanup/restart. Missing evidence or writes retain an owned retry and never wake the agent.
+  Unchanged progress must return before `updateHistory` / `Mirror.setState`: Mirror notifies
+  even for unchanged state, so nested A -> B -> C progress writes otherwise wake their own
+  coordinator forever. Test this with real Mirror subscriptions.
 - Missing Session metadata, a recoverable tombstone, or an unsynchronized
   Machine Flock document is uncertainty, not permanent deletion/configuration
   absence. Keep the item/Delivery pending until positive evidence or deadline.
