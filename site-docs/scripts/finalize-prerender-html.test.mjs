@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
-  deferNonCriticalStylesheets,
+  documentOwnsPageStylesheet,
   finalizePrerenderHtml,
   injectLandingFirstPaintStyle,
   isCriticalModulePreloadHref,
   isLandingDocument,
+  isLegalDocument,
   isPageOnlyStylesheetHref,
+  isPricingDocument,
   stripLandingImagePreloads,
   stripNonCriticalModulePreload,
 } from './finalize-prerender-html.mjs';
@@ -64,7 +69,26 @@ const landingHtml = `<!DOCTYPE html><html><head>
 const docsHtml = `<!DOCTYPE html><html><head>
 <link rel="stylesheet" href="/assets/index.css"/>
 <link rel="stylesheet" href="/assets/legal-abc.css"/>
+<link rel="stylesheet" href="/assets/pricing-abc.css"/>
 </head><body><article class="prose"><p>Handoff</p></article></body></html>`;
+
+const pricingHtml = `<!DOCTYPE html><html><head>
+<link rel="stylesheet" href="/assets/index.css"/>
+<link rel="stylesheet" href="/assets/pricing-abc.css"/>
+<link rel="stylesheet" href="/assets/legal-abc.css"/>
+</head><body>
+<main class="landing pricing-page">
+  <section class="pricing-hero"><h1>Pricing</h1></section>
+</main>
+</body></html>`;
+
+const legalHtml = `<!DOCTYPE html><html><head>
+<link rel="stylesheet" href="/assets/index.css"/>
+<link rel="stylesheet" href="/assets/legal-abc.css"/>
+<link rel="stylesheet" href="/assets/pricing-abc.css"/>
+</head><body>
+<main class="legal-page"><article class="legal-page__article">Privacy</article></main>
+</body></html>`;
 
 await test('landing documents are detected by the hero title', () => {
   assert.equal(isLandingDocument(landingHtml), true);
@@ -95,6 +119,62 @@ await test('docs keep index.css render-blocking so reading chrome cannot FOUC', 
   assert.match(next, /<link rel="stylesheet" href="\/assets\/index\.css"\/>/u);
   assert.match(next, /onload="this\.media='all'"/u);
   assert.match(next, /legal-abc\.css/u);
+  assert.match(next, /pricing-abc\.css/u);
+});
+
+await test('pricing and legal documents are detected by their page roots', () => {
+  assert.equal(isPricingDocument(pricingHtml), true);
+  assert.equal(isPricingDocument(legalHtml), false);
+  assert.equal(isPricingDocument(docsHtml), false);
+  assert.equal(isLegalDocument(legalHtml), true);
+  assert.equal(isLegalDocument(pricingHtml), false);
+  assert.equal(isLegalDocument(docsHtml), false);
+});
+
+await test('a document owns only its own page stylesheet', () => {
+  assert.equal(documentOwnsPageStylesheet(pricingHtml, '/assets/pricing-abc.css'), true);
+  assert.equal(documentOwnsPageStylesheet(pricingHtml, '/assets/legal-abc.css'), false);
+  assert.equal(documentOwnsPageStylesheet(legalHtml, '/assets/legal-abc.css'), true);
+  assert.equal(documentOwnsPageStylesheet(legalHtml, '/assets/pricing-abc.css'), false);
+  assert.equal(documentOwnsPageStylesheet(docsHtml, '/assets/pricing-abc.css'), false);
+});
+
+await test('pricing keeps its own sheet blocking and defers leaked legal CSS', () => {
+  const next = finalizePrerenderHtml(pricingHtml);
+  assert.match(next, /<link rel="stylesheet" href="\/assets\/index\.css"\/>/u);
+  assert.match(next, /<link rel="stylesheet" href="\/assets\/pricing-abc\.css"\/>/u);
+  assert.doesNotMatch(next, /<link media="print"[^>]*href="\/assets\/pricing-abc\.css"/u);
+  assert.doesNotMatch(next, /data-lody-defer-css/u);
+  assert.match(
+    next,
+    /<link media="print" onload="this\.media='all'" rel="stylesheet" href="\/assets\/legal-abc\.css"\/>/u
+  );
+});
+
+await test('legal keeps its own sheet blocking and defers leaked pricing CSS', () => {
+  const next = finalizePrerenderHtml(legalHtml);
+  assert.match(next, /<link rel="stylesheet" href="\/assets\/index\.css"\/>/u);
+  assert.match(next, /<link rel="stylesheet" href="\/assets\/legal-abc\.css"\/>/u);
+  assert.doesNotMatch(next, /<link media="print"[^>]*href="\/assets\/legal-abc\.css"/u);
+  assert.doesNotMatch(next, /data-lody-defer-css/u);
+  assert.match(
+    next,
+    /<link media="print" onload="this\.media='all'" rel="stylesheet" href="\/assets\/pricing-abc\.css"\/>/u
+  );
+});
+
+await test('landing first-paint sheet includes rotating-word and nav chrome', () => {
+  const css = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../app/landing-first-paint.css'), 'utf8');
+  assert.match(css, /\.rw-viewport\b/u);
+  assert.match(css, /\.rw-strip\b/u);
+  assert.match(css, /\.rw-word\b/u);
+  assert.match(css, /\.site-nav__link\b/u);
+  assert.match(css, /\.site-nav__theme-toggle\b/u);
+  assert.match(css, /\.site-nav__theme-track\b/u);
+  const next = finalizePrerenderHtml(landingHtml, css);
+  assert.match(next, /\.rw-viewport\{/u);
+  assert.match(next, /\.site-nav__link\{/u);
+  assert.match(next, /\.site-nav__theme-toggle\{/u);
 });
 
 await test('injectLandingFirstPaintStyle is a no-op off the landing', () => {

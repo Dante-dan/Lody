@@ -28,8 +28,10 @@ Root `AGENTS.md` and `site-docs/AGENTS.md` also apply.
   with unused route chunks. Keep only the hydration runtime (entry / react /
   jsx-runtime / rolldown-runtime / preload-helper). Do not add the landing or
   docs chunks back onto every page. Landing HTML inlines `landing-first-paint.css`
-  (final hero/nav layout, background, and type) and applies the shared bundle
-  after the first painted frame. Docs keep `index-*.css` render-blocking so
-  reading chrome cannot FOUC. Do not hide first-screen chrome and reveal it later.
+  (final hero/nav layout, including `.rw-*` and `.site-nav__link` / theme
+  controls) and applies the shared bundle after the first painted frame. Docs
+  keep `index-*.css` render-blocking. A pricing or legal document keeps its own
+  `pricing-*.css` / `legal-*.css` render-blocking; only leaked sibling sheets
+  are deferred. Do not hide first-screen chrome and reveal it later.
 - `generate:landing-agents` produces `components/landing-agents.generated.ts`; provider
   marks and the ACP wall must come from it rather than hand-written lists.

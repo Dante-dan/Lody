@@ -32,8 +32,25 @@ export function isLandingDocument(html) {
   return html.includes('underwater-hero__title');
 }
 
+export function isPricingDocument(html) {
+  return /\bpricing-page\b/.test(html) || /\bpricing-hero\b/.test(html);
+}
+
+export function isLegalDocument(html) {
+  return /\blegal-page\b/.test(html);
+}
+
+const PRICING_STYLESHEET = /(?:^|\/)pricing-[^/]+\.css(?:\?|$)/u;
+const LEGAL_STYLESHEET = /(?:^|\/)legal-[^/]+\.css(?:\?|$)/u;
+
 export function isPageOnlyStylesheetHref(href) {
-  return /(?:^|\/)(?:pricing|legal)-[^/]+\.css(?:\?|$)/u.test(href);
+  return PRICING_STYLESHEET.test(href) || LEGAL_STYLESHEET.test(href);
+}
+
+export function documentOwnsPageStylesheet(html, href) {
+  if (PRICING_STYLESHEET.test(href)) return isPricingDocument(html);
+  if (LEGAL_STYLESHEET.test(href)) return isLegalDocument(html);
+  return false;
 }
 
 function stylesheetHref(tag) {
@@ -46,9 +63,10 @@ function stylesheetHref(tag) {
  * match final hero/nav layout, background, and type — applying the bundle must
  * not restyle first-screen chrome.
  *
- * Docs and other pages: only unused page-only sheets are deferred, and they
- * apply on load. `index-*.css` stays render-blocking so reading chrome cannot
- * FOUC.
+ * Docs and other pages: only unused leaked page-only sheets are deferred, and
+ * they apply on load. A pricing or legal document keeps its own
+ * `pricing-*.css` / `legal-*.css` render-blocking. `index-*.css` stays
+ * render-blocking so reading chrome cannot FOUC.
  */
 export function deferStylesheetTag(tag, { applyAfterPaint } = { applyAfterPaint: false }) {
   if (/data-lody-defer-css/iu.test(tag) || /media=["']print["']/iu.test(tag)) return tag;
@@ -63,7 +81,8 @@ export function deferNonCriticalStylesheets(html) {
   const landing = isLandingDocument(html);
   return html.replace(/<link\b[^>]*\brel=["']stylesheet["'][^>]*>/giu, (tag) => {
     if (landing) return deferStylesheetTag(tag, { applyAfterPaint: true });
-    if (isPageOnlyStylesheetHref(stylesheetHref(tag))) {
+    const href = stylesheetHref(tag);
+    if (isPageOnlyStylesheetHref(href) && !documentOwnsPageStylesheet(html, href)) {
       return deferStylesheetTag(tag, { applyAfterPaint: false });
     }
     return tag;
