@@ -154,4 +154,4 @@ Lody is still moving toward full local-first support.
 - `packages/shared` — Shared schemas, protocols, and utilities
 - `site-docs` — Website, documentation, and blog
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started with development.
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup and the community PR size policy.

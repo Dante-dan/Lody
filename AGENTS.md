@@ -10,6 +10,13 @@ new scopes need `CLAUDE.md` symlinks). Per
 [document maintenance](.agents/README.md), Specs need human review while
 `.agents/` and directory READMEs explain. Private records stay private.
 
+## Community contributions
+
+One-shot: Lody team if the user says so or GitHub login is `zxch3n`,
+`Leeeon233`, or `wibus-wee`; otherwise community. Community PRs stay under
+1000 changed lines unless a maintainer assigned the linked Issue. Larger
+work: file an Issue with analysis; wait to be assigned. `.github/AGENTS.md`.
+
 ## Repository boundary
 
 Standalone public source tree: `apps/{cli,electron}` and the packages they
@@ -35,10 +42,11 @@ and Web/mobile app sources.
   not accept or discover staging/production deployment presets.
 - Local CLI, renderer, and Electron-main telemetry is hard-disabled even when
   unrelated PostHog variables exist in the caller's shell.
-- Client workflows that require daemon support negotiate integer protocol versions through
-  `MachineMeta.protocolCapabilities`; never infer support from the CLI release version. Missing
-  capabilities mean legacy/unsupported. Advertised set and version checks share one binding in
-  `packages/shared/src/machine-protocol-capabilities.ts` so a key never travels without its version.
+- Daemon-backed workflows negotiate versions through
+  `MachineMeta.protocolCapabilities`; never infer from the CLI release. Missing
+  capabilities mean unsupported. Set and version checks share one binding in
+  `packages/shared/src/machine-protocol-capabilities.ts` so a key never travels
+  without its version.
 - Managed runtime downloads default to the public R2-backed channel owned by
   `packages/platform/src/runtime-artifacts.ts`; local and cloud assembly must use that
   same constant. `LODY_RUNTIME_BASE_URL` is only an explicit mirror override.
@@ -94,15 +102,12 @@ bundled CLI), `packages/components` (shared UI), `packages/platform` (ports),
 
 ## Checks and commits
 
-Use Node.js 22+ and the pnpm version pinned in `package.json`. Install with
-`pnpm install`. A parent pnpm workspace owns nested checkouts; the public
-preinstall guard rejects a second install. Use a separate clone for standalone
-public development. `pnpm start:local` is the canonical desktop command; root
-`pnpm build` is the same local composition. Before committing, normally run
-`pnpm check` and `pnpm format`. If asked to skip tests, report the narrower
-type/build/static validation instead. Conventional Commits (`feat:`, `fix:`,
-`docs:`, `chore:`, `test:`); AI commits end with `Model: <runtime-model-id>`.
-CI uses `pnpm install --frozen-lockfile`, so manifest changes update
+Node.js 22+ and the pnpm in `package.json`. `pnpm install`; nested checkouts
+skip it. Standalone work uses a separate clone. `pnpm start:local` is desktop;
+root `pnpm build` is the same local composition. Before commit: `pnpm check`
+and `pnpm format` (if skipping tests, report type/build/static checks).
+Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`, `test:`); AI
+commits end with `Model: <runtime-model-id>`. Manifest changes update
 `pnpm-lock.yaml`.
 
 ## Test quality
@@ -114,9 +119,8 @@ Assert observable behavior, not mock call counts.
 ## Editing discipline
 
 Keep changes traceable to the request. Preserve unrelated user work. Prefer a
-small explicit contract over hidden fallbacks, and remove only code the change
-makes unused. Update the nearest public `AGENTS.md` when an invariant or
-repository boundary changes. Do not copy internal design records here.
+small explicit contract over hidden fallbacks; remove only unused code. Update
+the nearest public `AGENTS.md` when an invariant or boundary changes.
 
 ## Code Review Rules
 
@@ -126,5 +130,4 @@ P0/P1 remains, react 👍. See `.github/codex-review.md`.
 - P0: exploitable security, secret leak, auth/capability bypass, data loss, or
   a broken public/cloud/local boundary.
 - P1: likely shipped breakage or a durable catalog/session contract violation.
-- Skip style, nits, P2+, extreme edge cases, extra tests, and duplication
-  under 100 lines of near-identical code in this diff. Leave lint to CI.
+- Skip style, nits, P2+, extra tests, and duplication under 100 lines.
