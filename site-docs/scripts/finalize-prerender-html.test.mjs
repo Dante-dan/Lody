@@ -174,12 +174,15 @@ await test('landing first-paint sheet includes rotating-word and nav chrome', ()
   assert.match(css, /\.underwater-landing \.site-nav\b/u);
   assert.match(css, /backdrop-filter:\s*none/u);
   assert.match(css, /\.underwater-bg__overlay\b[\s\S]*radial-gradient/u);
+  assert.match(css, /\.underwater-btn__icon\b/u);
+  assert.match(css, /\.underwater-btn__icon\b[\s\S]*?width:\s*1\.05rem/u);
   const next = finalizePrerenderHtml(landingHtml, css);
   assert.match(next, /\.rw-viewport\{/u);
   assert.match(next, /\.site-nav__link\{/u);
   assert.match(next, /\.site-nav__theme-toggle\{/u);
   assert.match(next, /\.underwater-landing \.site-nav\{/u);
   assert.match(next, /\.underwater-bg__overlay\{[^}]*radial-gradient/u);
+  assert.match(next, /\.underwater-btn__icon\{[^}]*width:1\.05rem/u);
 });
 
 await test('injectLandingFirstPaintStyle is a no-op off the landing', () => {

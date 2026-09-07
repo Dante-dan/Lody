@@ -346,6 +346,14 @@ html.light .underwater-hero__title {
   border: 1px solid transparent;
 }
 
+/* GithubMark has no intrinsic size; pin it so the CTA cannot inflate
+   to the browser's 300×150 SVG default before deferred CSS arrives. */
+.underwater-btn__icon {
+  flex: none;
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
 .underwater-btn--primary {
   background: hsl(var(--landing-ink));
   color: hsl(var(--landing-surface-1));
