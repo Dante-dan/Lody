@@ -15,6 +15,7 @@ import {
   MachineId,
   ManagedBuiltinAgentType,
   SessionHistoryInput,
+  StoredHistorySnapshot,
   isCodeCollabFileIndexFlockDocId,
   isCodeCollabFileIndexSignalFlockDocId,
   CODE_COLLAB_FILE_INDEX_FLOCK_TTL_MS,
@@ -2473,6 +2474,23 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
     return ((this.mirror.getState().history as SessionHistoryInput[]) || []).map(
       normalizeSessionHistoryEntry
     );
+  }
+
+  captureStoredHistory(): StoredHistorySnapshot {
+    if (!this.mirror) throw new Error('Mirror not initialized');
+    return this.mirror.historyWriter.capture();
+  }
+
+  async copyStoredHistory(snapshot: StoredHistorySnapshot, history: SessionHistoryInput[]) {
+    if (!this.mirror) throw new Error('Mirror not initialized');
+    this.mirror.historyWriter.copyFrom(snapshot, history);
+  }
+
+  async updateHistoryWithRollback(
+    update: (history: SessionHistoryInput[]) => SessionHistoryInput[]
+  ): Promise<() => void> {
+    if (!this.mirror) throw new Error('Mirror not initialized');
+    return this.mirror.historyWriter.updateWithRollback(update);
   }
 
   async getPreviewState(): Promise<SessionPreviewDocState | undefined> {

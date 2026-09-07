@@ -25,6 +25,14 @@ That tolerance must not authorize creating new malformed items locally.
   unknown/damaged items; reading is not a migration or permission to scrub data.
 - Existing primitive strings remain primitive; existing Text edits retain their
   container identity. Storage-layout changes are separately reviewed.
+- Fork is a stored-history copy, not new-message authoring. Copy from a snapshot
+  captured by the writer into an empty target, retaining unchanged unknown fields
+  and opaque items. Explicit changes and new fork notices still require parsing.
+  Caller-created JSON cannot claim this provenance. Copying does not modify the source.
+- Failed edit-and-resend can restore captured old history without reparsing it as
+  new input. A one-use local rollback receipt must reject intervening history changes
+  rather than overwrite them. It is not crash recovery or a distributed transaction.
+  External provider imports remain new inputs, not privileged stored-history copies.
 - Acceptance here means a local CRDT write. Existing repo persistence and transport
   still own durability, permissions, and remote synchronization.
 

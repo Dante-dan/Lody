@@ -4,6 +4,7 @@ import { Mirror } from 'loro-mirror';
 import { createSessionMirror } from '../src/session-mirror';
 import { sessionDocSchema, type SessionHistory } from '../src/schema';
 import type { SessionId } from '../src/ids';
+import type { StoredHistorySnapshot } from '../src/history-writer';
 
 const id = 'synthetic-session' as SessionId;
 const entry = (turnId = 'turn'): SessionHistory => ({
@@ -17,6 +18,106 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it('copies opaque stored content without blessing new malformed input or changing the source', () => {
+    const source = new Loro();
+    const sourceMirror = open(source);
+    const map = source.getList('history').insertContainer(0, new LoroMap());
+    const stored = {
+      ...entry(),
+      futureTurn: { version: 3 },
+      items: [
+        { type: 'future_item', text: 42, payload: { nested: [null, 'opaque'] } },
+        { type: 'text', text: 42, futureField: 'keep' },
+        { type: 'text', text: 'valid', futureMetadata: { revision: 3 } },
+      ],
+    };
+    for (const [key, value] of Object.entries(stored)) map.set(key, value);
+    source.commit();
+    const snapshot = sourceMirror.historyWriter.capture();
+    const sourceVersion = source.version().toJSON();
+    // A consumer cannot mutate the private baseline, even through its returned view.
+    snapshot.history[0]!.items = [{ type: 'text', text: 'tampered' }];
+    const target = new Loro();
+    const targetMirror = open(target);
+    const version = target.version().toJSON();
+    expect(() =>
+      targetMirror.historyWriter.copyFrom(
+        { history: snapshot.history } as StoredHistorySnapshot,
+        snapshot.history
+      )
+    ).toThrow('invalid_snapshot');
+    const malformed = {
+      ...entry('new'),
+      items: [{ type: 'text', text: 42 }],
+    } as unknown as SessionHistory;
+    expect(() =>
+      targetMirror.historyWriter.copyFrom(snapshot, [...snapshot.history, malformed])
+    ).toThrow('Invalid history write');
+    expect(() =>
+      targetMirror.historyWriter.copyFrom(snapshot, [
+        { ...snapshot.history[0]!, finished: 'bad' } as unknown as SessionHistory,
+      ])
+    ).toThrow('Invalid history write');
+    expect(target.version().toJSON()).toEqual(version);
+    targetMirror.historyWriter.copyFrom(snapshot, [
+      { ...snapshot.history[0]!, read: true },
+      entry('new'),
+    ]);
+    expect(target.getList('history').toJSON()[0]).toEqual({ ...stored, read: true });
+    expect(source.getList('history').toJSON()).toEqual([stored]);
+    expect(source.version().toJSON()).toEqual(sourceVersion);
+    expect(() => targetMirror.historyWriter.copyFrom(snapshot, snapshot.history)).toThrow(
+      'copy_target_not_empty'
+    );
+    const reopened = new Loro();
+    reopened.import(target.export({ mode: 'snapshot' }));
+    expect(reopened.getList('history').toJSON()).toEqual(target.getList('history').toJSON());
+    targetMirror.historyWriter.replace('new', {
+      ...entry('new'),
+      items: [{ type: 'text', text: 'streamed' }],
+    });
+    expect(target.getList('history').toJSON()[0]).toEqual({ ...stored, read: true });
+    sourceMirror.dispose();
+    targetMirror.dispose();
+  });
+
+  it('restores deleted opaque history with a one-use receipt, refusing intervening peer edits', () => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    mirror.historyWriter.append(entry('prefix'));
+    const old = doc.getList('history').insertContainer(1, new LoroMap());
+    for (const [key, value] of Object.entries({
+      ...entry('old'),
+      items: [{ type: 'future_item', value: 42 }],
+    }))
+      old.set(key, value);
+    doc.commit();
+    const before = doc.getList('history').toJSON();
+    const prefixId = (doc.getList('history').get(0) as LoroMap).id;
+    const rollback = mirror.historyWriter.updateWithRollback((history) => [
+      history[0]!,
+      entry('replacement'),
+    ]);
+    rollback();
+    expect(doc.getList('history').toJSON()).toEqual(before);
+    expect((doc.getList('history').get(0) as LoroMap).id).toBe(prefixId);
+    expect(() => rollback()).toThrow('stale_rollback');
+    const stale = mirror.historyWriter.updateWithRollback((history) => [
+      history[0]!,
+      entry('replacement'),
+    ]);
+    const peer = new Loro();
+    peer.import(doc.export({ mode: 'snapshot' }));
+    const peerMirror = open(peer);
+    peerMirror.historyWriter.append(entry('peer'));
+    doc.import(peer.export({ mode: 'update', from: doc.version() }));
+    const withPeer = doc.getList('history').toJSON();
+    expect(() => stale()).toThrow('stale_rollback');
+    expect(doc.getList('history').toJSON()).toEqual(withPeer);
+    mirror.dispose();
+    peerMirror.dispose();
+  });
+
   it('checks fork-origin metadata before any write and preserves it on round trip', () => {
     const doc = new Loro();
     const mirror = open(doc);

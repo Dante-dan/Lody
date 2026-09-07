@@ -16,6 +16,14 @@ const immer = new Immer({ autoFreeze: false, useStrictShallowCopy: true });
 const record = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 
+declare const storedHistoryBrand: unique symbol;
+/** Provenance, not a way to bless caller-supplied JSON. history is a detached copy. */
+export interface StoredHistorySnapshot {
+  readonly [storedHistoryBrand]: true;
+  readonly history: SessionHistoryInput[];
+}
+const storedHistories = new WeakMap<StoredHistorySnapshot, SessionHistoryInput[]>();
+
 /** Ignore Mirror's transport identity, never the contents of a historical item. */
 export function historyValuesEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -124,6 +132,13 @@ function prepareReplacement(previous: unknown, incoming: unknown): Record<string
 }
 
 export interface HistoryWriter {
+  capture(): StoredHistorySnapshot;
+  /** Copy into an empty history; authored changes still pass the ordinary parser. */
+  copyFrom(snapshot: StoredHistorySnapshot, history: SessionHistoryInput[]): void;
+  /** A local rollback receipt, valid only while the written history is unchanged. */
+  updateWithRollback(
+    updater: (history: SessionHistoryInput[]) => SessionHistoryInput[]
+  ): () => void;
   append(entry: SessionHistory): void;
   replace(turnId: string, entry: SessionHistory): boolean;
   read(turnId: string): SessionHistory | undefined;
@@ -155,7 +170,15 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
   };
 
   // Preparation is separate so a malformed update cannot leave half-written CRDT ops.
-  const prepare = (previous: readonly SessionHistory[], next: readonly SessionHistory[]) => {
+  const planWrite = (
+    previous: readonly SessionHistory[],
+    next: readonly SessionHistory[],
+    prepareValue: (old: SessionHistory | undefined, value: SessionHistory) => unknown = (
+      old,
+      value
+    ) =>
+      old === undefined ? cleanNew(HistoryEntryWriteSchema, value) : prepareReplacement(old, value)
+  ) => {
     const used = new Set<number>();
     const byId = new Map<unknown, number[]>();
     const byRef = new Map<unknown, number>();
@@ -172,8 +195,7 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       const candidates = byId.get(record(entry) ? entry.id : undefined) ?? [];
       const index =
         ref !== undefined && !used.has(ref) ? ref : candidates.find((i) => !used.has(i));
-      if (index === undefined)
-        return { value: cleanNew(HistoryEntryWriteSchema, entry), index: -1 };
+      if (index === undefined) return { value: prepareValue(undefined, entry), index: -1 };
       if (index < last)
         throw new HistoryWriteError([{ path: ['history'], code: 'unsupported_reorder' }]);
       last = index;
@@ -182,7 +204,7 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       if (historyValuesEqual(previous[index], entry)) return { index, map };
       if (!isContainer(map) || map.kind() !== 'Map')
         throw new HistoryWriteError([{ path: ['history', index], code: 'invalid_stored_turn' }]);
-      return { index, map, value: prepareReplacement(previous[index], entry) };
+      return { index, map, value: prepareValue(previous[index], entry) };
     });
     return () => {
       for (let i = previous.length - 1; i >= 0; i--) if (!used.has(i)) list.delete(i, 1);
@@ -206,8 +228,50 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       doc.commit();
     };
   };
+  const prepare = (previous: readonly SessionHistory[], next: readonly SessionHistory[]) =>
+    planWrite(previous, next);
 
   const writer: HistoryWriter = {
+    capture() {
+      // Read the actual document, not a normalized projection or caller-owned array.
+      const history = list.toJSON() as SessionHistoryInput[];
+      const snapshot = Object.freeze({
+        get history() {
+          return structuredClone(history);
+        },
+      }) as StoredHistorySnapshot;
+      storedHistories.set(snapshot, history);
+      return snapshot;
+    },
+    copyFrom(snapshot, history) {
+      const source = storedHistories.get(snapshot);
+      if (!source) throw new HistoryWriteError([{ path: ['history'], code: 'invalid_snapshot' }]);
+      if (list.length !== 0)
+        throw new HistoryWriteError([{ path: ['history'], code: 'copy_target_not_empty' }]);
+      const used = new Set<number>();
+      const values = history.map((entry) => {
+        const index = source.findIndex((old, i) => !used.has(i) && old.id === entry.id);
+        if (index < 0) return cleanNew(HistoryEntryWriteSchema, entry);
+        used.add(index);
+        return prepareReplacement(source[index], entry);
+      });
+      // Values are either unchanged stored data or preflighted authored changes.
+      planWrite([], values as SessionHistory[], (_old, value) => value)();
+    },
+    updateWithRollback(updater) {
+      const before = list.toJSON() as SessionHistoryInput[];
+      writer.update(updater);
+      const after = list.toJSON();
+      let consumed = false;
+      return () => {
+        if (consumed || !historyValuesEqual(list.toJSON(), after))
+          throw new HistoryWriteError([{ path: ['history'], code: 'stale_rollback' }]);
+        // Only this closure can restore its captured values. Never reparse old data
+        // as new input, and never overwrite intervening local/remote history edits.
+        planWrite(list.toJSON() as SessionHistory[], before, (_old, value) => value)();
+        consumed = true;
+      };
+    },
     append(entry) {
       const value = cleanNew(HistoryEntryWriteSchema, entry);
       populateContainer(

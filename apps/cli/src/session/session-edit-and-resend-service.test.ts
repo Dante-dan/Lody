@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
+import { LoroDoc, LoroMap } from 'loro-crdt';
+import { SessionDocument } from '../lib/loro/doc';
 import {
+  createSessionMirror,
   SessionStatusFactory,
   type AgentConfigId,
   type MachineId,
@@ -73,6 +76,24 @@ function createHarness(
 ) {
   const events: string[] = [];
   let history = options.history ?? historyFixture();
+  const loro = new LoroDoc();
+  for (const entry of history) {
+    const map = loro
+      .getList('history')
+      .insertContainer(loro.getList('history').length, new LoroMap());
+    for (const [key, value] of Object.entries(entry)) if (value !== undefined) map.set(key, value);
+  }
+  loro.commit();
+  const realDoc = new SessionDocument({} as never, sessionId, async () => {}, {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  } as never);
+  realDoc.mirror = createSessionMirror({
+    doc: loro,
+    initialState: { session: { id: sessionId }, history: [] },
+  });
   const meta = {
     id: sessionId,
     machineId,
@@ -88,10 +109,15 @@ function createHarness(
   const sessionDoc = {
     getMetaState: vi.fn(async () => meta),
     getHistory: vi.fn(async () => history),
-    updateHistory: vi.fn(
+    updateHistoryWithRollback: vi.fn(
       async (update: (current: SessionHistoryInput[]) => SessionHistoryInput[]) => {
         events.push('history');
-        history = update(history);
+        const rollback = await realDoc.updateHistoryWithRollback(update);
+        history = await realDoc.getHistory();
+        return () => {
+          rollback();
+          history = loro.getList('history').toJSON() as SessionHistoryInput[];
+        };
       }
     ),
   };
@@ -174,7 +200,7 @@ const spec = {
   inputConfig: {
     prompt: 'new prompt',
     inputBlocks: [
-      { type: 'image', key: 'image-1', mimeType: 'image/png' },
+      { type: 'image', imageId: 'image-1', mimeType: 'image/png', sizeBytes: 1 },
       { type: 'text', text: 'new prompt' },
     ],
     cliType: 'builtin' as const,
@@ -186,7 +212,8 @@ describe('SessionEditAndResendService', () => {
   it('forks before cancelling, then atomically replaces the history tail', async () => {
     const harness = createHarness({ active: true });
 
-    await expect(harness.service.editAndResend(spec)).resolves.toMatchObject({ success: true });
+    const result = await harness.service.editAndResend(spec);
+    expect(result, JSON.stringify(result)).toMatchObject({ success: true });
 
     expect(harness.agentClient.prepareReplacementSession).toHaveBeenCalledWith('provider-turn-1');
     expect(harness.events).toEqual([
@@ -295,7 +322,13 @@ describe('SessionEditAndResendService', () => {
   });
 
   it('restores the old history tail when the durable commit fails', async () => {
-    const harness = createHarness({ persistError: new Error('disk unavailable') });
+    const history = historyFixture();
+    const opaqueItems = [
+      { type: 'future_item', value: 42 },
+      { type: 'text', text: 42, futureField: 'keep' },
+    ];
+    history[3] = { ...history[3]!, items: opaqueItems } as unknown as SessionHistoryInput;
+    const harness = createHarness({ persistError: new Error('disk unavailable'), history });
 
     await expect(harness.service.editAndResend(spec)).resolves.toMatchObject({
       success: false,
@@ -308,6 +341,7 @@ describe('SessionEditAndResendService', () => {
       'assistant-2',
     ]);
     expect(harness.events).toContain('persist-rollback');
+    expect(harness.getHistory()).toEqual(history);
     expect(harness.agentClient.adoptPreparedSession).not.toHaveBeenCalled();
   });
 });

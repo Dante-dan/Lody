@@ -89,6 +89,34 @@ notice 的写入回读。Provider 执行和磁盘持久化仍是 stub；这些�
 合入 `main@d366a5a6` 后，完整 `pnpm check` 和文档检查通过；fork/progress 专项测试
 49 项、writer 测试 14 项通过。
 
+## 更正：复制已存历史不是创建新输入
+
+在 `cf0af8b4`，含未知 item 的历史可以继续追加消息，但 fork 仍会失败：目标为空，
+复制来的每轮都被当成新消息。已知 item 的未知字段也会在目标中被静默裁掉。
+编辑后重发回滚重新插入旧尾部时有同类问题。源文档并没有被重写。
+
+同一个 HistoryWriter 现在直接从真实文档捕获进程内快照。私有 WeakMap 验证其来源，
+公开的 history getter 返回独立副本，调用者修改它不能改变私有基线。`copyFrom` 对照
+基线预检改动，再用既有 materializer 写入空目标：保留已存未知数据，解析新写字段、
+item 和 notice。两种 fork 沿用原有持久化流程，传递冻结的源快照。
+没有增加宽松解析开关、任意 trusted 数组构造器或第二个 writer。
+
+`updateWithRollback` 捕获写入前后历史，返回一次性的本地回滚凭据。它不把旧值当新输入
+重验，保留仍存活的轮次容器，并拒绝覆盖期间发生的历史修改。已删除轮次恢复时会获得
+新容器。这不修复并发元数据回滚，也不提供崩溃恢复。外部 ACP 导入继续走严格的新输入路径。
+
+真实 Loro 回归覆盖不透明复制、非法新增/修改不留下部分写入、伪造/修改快照、非空目标、
+重开、源文档不变及远端修改使回滚失效。普通/worktree fork 和编辑后重发测试现在经过
+真实 SessionDocument/适配层/writer，包含提交失败后的恢复。旧编辑测试的新图片输入
+只有 `key`，缺少 `imageId`/`sizeBytes`；集成测试改用真实输入契约，保留不透明旧历史 fixture。
+Provider/磁盘操作仍是 stub。若 fork 显式修改已损坏 item（例如附件元数据），该 item
+仍需通过解析；这不是任意 reader 兼容。快照/复制仍处理完整历史，不是 3000 轮性能验收，
+也不保证跨文档保留容器 ID。
+
+本次更正验证：`pnpm check` 通过，包括 shared/CLI/components 类型检查与仓库全量测试。
+专项覆盖为 writer 16 项、fork/编辑服务 35 项。这不证明真实 provider 执行、磁盘故障恢复，
+或真实旧版本应用间的兼容性。
+
 替代[临时关闭校验](../bug-fix/2026-09-07-temporary-session-validation-bypass.zh.md)中历史写入的部分。
 意图：[Spec 草稿](../../../../specs/session-history-writes.zh.md)。
 PR：[#460](https://github.com/LodyAI/Lody/pull/460)。

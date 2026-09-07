@@ -108,6 +108,43 @@ ownership. No old history migration or whole-state validation is introduced.
 After merging `main@d366a5a6`, `pnpm check` and documentation checks passed; the
 focused fork/progress suite passed 49 tests and the writer suite passed 14.
 
+## Correction: copying stored history is not authoring new input
+
+At `cf0af8b4`, appending to a history with unknown items worked, but forking that
+history still failed: an empty target made every copied turn look new. Known items'
+unknown fields were silently filtered in the target. Edit-and-resend rollback had
+the same problem when reinserting a removed tail. Source documents were not rewritten.
+
+The same HistoryWriter now captures raw document history into an in-process snapshot.
+A private WeakMap authenticates the handle; its public history getter returns a detached
+copy, so caller mutation cannot change the trusted baseline. `copyFrom` preflights
+changes against that baseline and uses the existing materializer on an empty target.
+It retains stored unknown data but parses newly authored fields/items/notices. Both
+fork paths carry the frozen source snapshot through their existing durability saga.
+No permissive parser flag, arbitrary trusted-array constructor, or second writer is added.
+
+`updateWithRollback` captures the before/after history and returns a one-use local
+receipt. It restores old values without new-input parsing, retains surviving turn
+containers, and refuses to overwrite intervening history edits. Removed turns get new
+containers when restored. This does not repair concurrent metadata rollback or provide
+crash recovery. External ACP materialization/import remains on the strict authoring path.
+
+Real Loro regressions cover opaque copy, invalid new/changed input with no partial writes,
+forged/mutated snapshot handles, non-empty targets, reopen, unchanged source, and peer
+edits invalidating rollback. Regular/worktree fork and edit-and-resend tests now cross
+the real SessionDocument/facade/writer boundary, including failed-commit restoration.
+The old edit test supplied an invalid new image input (`key` without `imageId`/`sizeBytes`);
+the integrated test uses the actual input contract while retaining opaque old fixtures.
+Provider/disk operations remain stubbed. Copying a damaged item that the fork explicitly
+modifies (for example attachment metadata) still requires that changed item to parse;
+this is not arbitrary reader compatibility. Snapshots/copies are full-history work,
+not the 3000-round performance acceptance, and container IDs are not portable between docs.
+
+Validation for this correction: `pnpm check` passed, including shared/CLI/component
+typechecks and the full repository test suite. Focused coverage passed 16 writer tests
+and 35 fork/edit service tests. These results do not establish real provider execution,
+disk-failure recovery, or old application build interoperability.
+
 Supersedes the history-write portion of the
 [temporary bypass](../bug-fix/2026-09-07-temporary-session-validation-bypass.md).
 Intent: [draft Spec](../../../../specs/session-history-writes.md).

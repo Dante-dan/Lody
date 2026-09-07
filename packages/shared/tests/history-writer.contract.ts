@@ -26,6 +26,8 @@ export type AllParserFieldsBelongToHistory = AssertNever<
 // Included by the normal shared typecheck, not executed by the test runner.
 export function historyWriterTypeContract(writer: HistoryWriter, entry: SessionHistory) {
   writer.append(entry);
+  // @ts-expect-error plain caller-owned data cannot mint stored-history provenance
+  writer.copyFrom({ history: [entry] }, [entry]);
   writer.setField('turn', 'finished', true);
   // @ts-expect-error missing required text
   writer.append({ ...entry, items: [{ type: 'text' }] });

@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { LoroDoc } from 'loro-crdt';
+import { LoroDoc, LoroMap } from 'loro-crdt';
 import { SessionDocument } from '../lib/loro/doc';
 import {
   getSessionRoomId,
   createSessionMirror,
+  createHistoryWriter,
+  type StoredHistorySnapshot,
   SessionStatusFactory,
   type AgentConfigId,
   type MachineId,
@@ -88,14 +90,23 @@ function createForkHarness(
         }
       : {}),
   } as unknown as SessionMeta;
+  const sourceLoro = new LoroDoc();
+  for (const entry of options.sourceHistory ?? sourceHistory) {
+    const map = sourceLoro
+      .getList('history')
+      .insertContainer(sourceLoro.getList('history').length, new LoroMap());
+    for (const [key, value] of Object.entries(entry)) if (value !== undefined) map.set(key, value);
+  }
+  sourceLoro.commit();
   const sourceDoc = {
     getMetaState: vi.fn(async () => sourceMeta),
     getHistory: vi.fn(async () => options.sourceHistory ?? sourceHistory),
+    captureStoredHistory: () => createHistoryWriter(sourceLoro).capture(),
   };
   let forkOperation: unknown = options.forkOperation;
   const targetDoc = {
-    updateHistory: vi.fn(
-      async (_updater: (history: SessionHistoryInput[]) => SessionHistoryInput[]) => undefined
+    copyStoredHistory: vi.fn(
+      async (_snapshot: StoredHistorySnapshot, _history: SessionHistoryInput[]) => undefined
     ),
     waitUntilSynced: vi.fn(async () => false),
     getMetaState: vi.fn(async () => options.targetMeta),
@@ -394,11 +405,25 @@ describe('SessionForkService durability boundary', () => {
         error: vi.fn(),
       } as never);
       doc.mirror = mirror;
-      const harness = createForkHarness(
-        undefined,
-        kind === 'worktree' ? { worktree: { dirty: false, headSha: 'a'.repeat(40) } } : {}
+      const opaqueItems = [
+        { type: 'text', text: 'answer', futureMetadata: { revision: 3 } },
+        { type: 'future_item', payload: [1, null, { future: true }] },
+        { type: 'text', text: 42 },
+      ];
+      const harness = createForkHarness(undefined, {
+        ...(kind === 'worktree' ? { worktree: { dirty: false, headSha: 'a'.repeat(40) } } : {}),
+        sourceHistory: [
+          sourceHistory[0]!,
+          {
+            ...sourceHistory[1]!,
+            items: opaqueItems,
+            futureTurn: 'keep',
+          },
+        ] as unknown as SessionHistoryInput[],
+      });
+      harness.targetDoc.copyStoredHistory.mockImplementation((snapshot, history) =>
+        doc.copyStoredHistory(snapshot, history)
       );
-      harness.targetDoc.updateHistory.mockImplementation((updater) => doc.updateHistory(updater));
       const settled = Promise.withResolvers<void>();
       const clear = harness.forkOperationStore.clear.getMockImplementation();
       if (!clear) throw new Error('Fork harness must provide marker cleanup');
@@ -429,6 +454,8 @@ describe('SessionForkService durability boundary', () => {
             meta: { sourceSessionId, sourceTurnId: 'assistant-1', sourceTitle: 'Original' },
           },
         ]);
+        expect(stored[1].items).toEqual(opaqueItems);
+        expect(stored[1].futureTurn).toBe('keep');
         expect(harness.targetDoc.getForkOperation()).toBeUndefined();
         expect(harness.sessionManager.terminateSession).not.toHaveBeenCalled();
       } finally {
@@ -651,7 +678,7 @@ describe('SessionForkService durability boundary', () => {
     await vi.waitFor(() =>
       expect(harness.persistPendingChanges).toHaveBeenCalledWith('session-fork-commit')
     );
-    expect(harness.targetDoc.updateHistory).toHaveBeenCalledTimes(1);
+    expect(harness.targetDoc.copyStoredHistory).toHaveBeenCalledTimes(1);
     expect(harness.targetDoc.setForkOperation).toHaveBeenLastCalledWith(undefined);
     // The recovery marker lives exactly as long as the durable preparing operation.
     expect(harness.forkOperationStore.record).toHaveBeenCalledWith(

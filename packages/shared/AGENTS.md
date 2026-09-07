@@ -21,3 +21,7 @@
 - Parser coverage must include nested discriminators (`system_notice.name`) and
   correlated metadata, not just item `type`. Fork regression tests must cross the
   actual SessionDocument/HistoryWriter boundary; a mock updateHistory cannot prove it.
+- Copying stored history uses a writer-captured snapshot, never a caller-supplied
+  "trusted" array. Preserve unchanged opaque content; parse authored changes and new
+  notices. Copy targets must be empty. Rollback receipts must not overwrite intervening
+  history changes; external ACP imports remain new input, not stored-history copies.
