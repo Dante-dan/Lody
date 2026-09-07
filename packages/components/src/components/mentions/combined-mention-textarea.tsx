@@ -962,6 +962,19 @@ export const CombinedMentionTextarea = React.forwardRef<
     const [instanceKey, setInstanceKey] = React.useState(0);
     const prevValueRef = React.useRef(value);
     const shouldRefocusRef = React.useRef(false);
+    // The cleared-input reset remounts the tree, which replaces the textarea
+    // node and drops focus. Restoring it cannot depend on the caller passing a
+    // ref — the settings template editor does not — so keep our own and hand
+    // the node to the forwarded ref as well.
+    const inputRef = React.useRef<HTMLTextAreaElement | null>(null);
+    const composedInputRef = React.useCallback(
+      (node: HTMLTextAreaElement | null) => {
+        inputRef.current = node;
+        if (typeof ref === 'function') ref(node);
+        else if (ref) (ref as React.MutableRefObject<HTMLTextAreaElement | null>).current = node;
+      },
+      [ref]
+    );
 
     // A draft swap, applied during render so the outgoing draft's ranges are
     // never painted over the incoming text — not even for one frame. Remounting
@@ -987,8 +1000,7 @@ export const CombinedMentionTextarea = React.forwardRef<
       if (!resetOnEmpty) return;
       if (prevValue !== '' && value === '') {
         // Track whether the textarea had focus before the reset so we can restore it
-        const textarea = ref && typeof ref === 'object' && 'current' in ref ? ref.current : null;
-        if (textarea && document.activeElement === textarea) {
+        if (inputRef.current && document.activeElement === inputRef.current) {
           shouldRefocusRef.current = true;
         }
         setInternalMentions([]);
@@ -1013,9 +1025,8 @@ export const CombinedMentionTextarea = React.forwardRef<
     React.useEffect(() => {
       if (!shouldRefocusRef.current) return;
       shouldRefocusRef.current = false;
-      const textarea = ref && typeof ref === 'object' && 'current' in ref ? ref.current : null;
-      textarea?.focus();
-    }, [instanceKey, ref]);
+      inputRef.current?.focus();
+    }, [instanceKey]);
 
     const enableCommandMentions =
       !templateScope && Boolean(availableCommands && availableCommands.length > 0);
@@ -1065,7 +1076,7 @@ export const CombinedMentionTextarea = React.forwardRef<
     if (!enableMentions) {
       const textarea = (
         <Textarea
-          ref={ref}
+          ref={composedInputRef}
           // Marks the message composer so the ⇧Tab "cycle mode" command can scope
           // itself to the composer and not hijack reverse-Tab elsewhere.
           data-lody-composer-input=""
@@ -1156,7 +1167,7 @@ export const CombinedMentionTextarea = React.forwardRef<
         ) : null}
         <MentionLabel className="sr-only">{label}</MentionLabel>
         <MentionInput
-          ref={ref}
+          ref={composedInputRef}
           // See the data attribute note above — scopes the ⇧Tab mode cycle.
           data-lody-composer-input=""
           value={value}

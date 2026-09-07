@@ -10,8 +10,10 @@ import {
   getShortcutIndexStreamId,
   getShortcutMentionGate,
   getShortcutMentionScopeIssues,
+  isShortcutChipText,
   parsePromptShortcut,
   projectShortcutIndex,
+  shortcutChipText,
   PromptShortcutDocument,
   PromptShortcutError,
   resolveShortcutAvailability,
@@ -52,6 +54,42 @@ function errorCode(run: () => unknown): string {
 }
 
 describe('shortcut template and scope', () => {
+  it('labels a chip with its filled values, capped on code points', () => {
+    const body = {
+      v: 1 as const,
+      id: 's',
+      workspaceId: 'w',
+      ownerUserId: 'u',
+      visibility: 'private' as const,
+      name: 'Review',
+      slug: 'review',
+      prompt: 'Review !{topic} for !{focus}',
+      mentions: [],
+      variables: [{ name: 'topic' }, { name: 'focus' }],
+      scope: {},
+      revision: 'r',
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const invocation = createShortcutInvocation('one', body);
+    // Nothing filled yet: the chip is the bare command.
+    expect(shortcutChipText(invocation)).toBe('/review');
+    expect(isShortcutChipText('/review', invocation)).toBe(true);
+
+    const filled = { ...invocation, values: { topic: '  auth\n flow ', focus: 'tests' } };
+    expect(shortcutChipText(filled)).toBe('/review auth flow · tests');
+    expect(isShortcutChipText('/review auth flow · tests', filled)).toBe(true);
+    // The bare form stays valid so a draft stored before its values restores.
+    expect(isShortcutChipText('/review', filled)).toBe(true);
+    expect(isShortcutChipText('/review stale', filled)).toBe(false);
+
+    // Capped by code points, so a truncation never splits a surrogate pair.
+    const long = { ...invocation, values: { topic: '👩‍💻'.repeat(20) } };
+    const label = shortcutChipText(long).slice('/review '.length);
+    expect(Array.from(label)).toHaveLength(24);
+    expect(label.endsWith('…')).toBe(true);
+  });
+
   it('derives required variables in first occurrence order and removes obsolete defaults', () => {
     expect(
       deriveShortcutVariables('!{b} !{a} !{b} \\!{literal}', [

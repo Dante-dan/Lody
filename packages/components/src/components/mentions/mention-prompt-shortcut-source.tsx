@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import {
+  getShortcutEmoji,
   resolveShortcutAvailability,
   type PromptShortcutIndexEntry,
   type ShortcutAvailability,
@@ -107,6 +108,9 @@ export function selectPromptShortcutCandidates(
           insertText: `/${entry.slug}`,
           kind: 'prompt_shortcut',
           icon: 'prompt_shortcut',
+          // Replaces the category glyph on the row, the way a Role's does: the
+          // header already says these are Prompt Shortcuts.
+          iconEmoji: getShortcutEmoji(entry),
           title: `/${entry.slug}`,
           subtitle: entry.description,
           trailing: `${visibility} · ${owner}`,

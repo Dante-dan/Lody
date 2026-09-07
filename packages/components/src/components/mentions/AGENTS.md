@@ -74,6 +74,12 @@ hydration, persisted ranges, session/Role addressing, or transcript semantics.
   must keep the original invocation data. Accepted sends clear before promotion.
   Landing/session owners mask Shortcut-bearing cached
   text from foreign account/workspace domains without replacing normal caches.
+- A chip carries its filled values in its own text (`shortcutChipText`), applied
+  on tray close through `applyShortcutChipLabel` — a draft of three identical
+  `/review` chips is not something anyone can check before sending. Capped by
+  CODE POINTS so a truncation cannot split a surrogate pair. Both forms of the
+  text are valid (`isShortcutChipText`): bare before any value exists, labelled
+  after, so a stored draft written before its values still restores.
 - A chip with missing values is coloured, nothing more: no badge painted over
   the text. The tray names the values, and two markers for one fact is one too
   many. While the tray is open the composer stops reserving its blank writing

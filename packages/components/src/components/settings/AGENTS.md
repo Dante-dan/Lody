@@ -46,6 +46,9 @@ to read as one drift apart a padding value at a time.
 - A row's warning line is derived from the index alone (saved dependencies vs
   saved scope). It is not live availability — there is no dependency resolver
   yet — so it says what to repair and never claims a Shortcut is `Available`.
+  It is the ONLY status a row carries: publication state is deliberately absent,
+  because a local save is already durable and the runtime retries on its own. A
+  row must never report a background upload, and never lose an action over one.
 - A pending publication is durable but not yet advertised. Do not call it synced.
   Save/Delete remain available: the runtime separates the local working head from
   immutable in-flight publication jobs. Only local I/O (`saving`/`busy`) disables

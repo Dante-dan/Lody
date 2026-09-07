@@ -145,6 +145,40 @@ const invocationSchema = z
   })
   .strict();
 
+/**
+ * What one invocation reads as in the composer.
+ *
+ * The chip is a compressed reference, so once the caller has filled values in
+ * it says which ones — a row of identical `/review` chips is not a draft anyone
+ * can check before sending. Capped by CODE POINTS so a truncation can never
+ * split a surrogate pair and leave a range on a half character.
+ */
+export const PROMPT_SHORTCUT_CHIP_VALUE_LENGTH = 24;
+
+export function shortcutChipText(invocation: ShortcutInvocation): string {
+  const slug = `/${invocation.snapshot.slug}`;
+  const filled = invocation.snapshot.variables
+    .map(({ name }) => invocation.values[name]?.trim())
+    .filter((value): value is string => !!value);
+  if (!filled.length) return slug;
+  const joined = filled.join(' · ').replace(/\s+/gu, ' ');
+  const points = Array.from(joined);
+  const capped =
+    points.length > PROMPT_SHORTCUT_CHIP_VALUE_LENGTH
+      ? `${points.slice(0, PROMPT_SHORTCUT_CHIP_VALUE_LENGTH - 1).join('')}…`
+      : joined;
+  return `${slug} ${capped}`;
+}
+
+/**
+ * Both forms a committed chip may hold: bare while it has no values yet, and
+ * labelled once the caller has filled them. A stored draft written before its
+ * values existed must still restore.
+ */
+export function isShortcutChipText(text: string, invocation: ShortcutInvocation): boolean {
+  return text === shortcutChipText(invocation) || text === `/${invocation.snapshot.slug}`;
+}
+
 export function parseShortcutInvocation(value: unknown): ShortcutInvocation {
   const parsed = invocationSchema.safeParse(value);
   if (!parsed.success)

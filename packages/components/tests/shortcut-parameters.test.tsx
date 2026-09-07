@@ -2,7 +2,11 @@
 import React, { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import { createShortcutInvocation, type PromptShortcut } from '@lody/shared/prompt-shortcuts';
+import {
+  shortcutChipText,
+  createShortcutInvocation,
+  type PromptShortcut,
+} from '@lody/shared/prompt-shortcuts';
 import { Mention, MentionInput, useMentionContext } from '../src/ui/mention';
 import { ShortcutInvocationEditor } from '../src/components/mentions/shortcut-parameters';
 import {
@@ -121,7 +125,9 @@ it('retains multiline literal input and returns focus to the chip boundary on cl
   const field = type('first\n$literal !{not-a-variable}');
   const bubble = vi.fn();
   document.addEventListener('keydown', bubble, { once: true });
-  act(() => { field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+  act(() => {
+    field.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  });
   expect(bubble).not.toHaveBeenCalled();
   document.removeEventListener('keydown', bubble);
   expect(context.mentions.filter(isShortcutMention)[0]!.data.values.topic).toBe(
@@ -133,7 +139,12 @@ it('retains multiline literal input and returns focus to the chip boundary on cl
       .click()
   );
   const input = container.querySelector('textarea')!;
+  const chip = context.mentions.filter(isShortcutMention)[0]!;
   expect(document.activeElement).toBe(input);
-  expect(input.selectionStart).toBe(7);
+  // Closing writes the filled values into what the chip reads as, so the caret
+  // lands after the LABELLED chip rather than at its old width.
+  expect(context.inputValue.slice(chip.start, chip.end)).toBe(shortcutChipText(chip.data));
+  expect(context.inputValue.slice(chip.start, chip.end)).toContain('first $literal');
+  expect(input.selectionStart).toBe(chip.end);
   expect(shortcutDraftMissingVariables(context.mentions)).toEqual([]);
 });

@@ -5,6 +5,7 @@ import { shortcutAvailabilityMessage } from './mention-prompt-shortcut-source';
 import { applyTextRewrites, type TextRewrite } from '@lody/shared';
 import {
   expandShortcut,
+  isShortcutChipText,
   parseShortcutInvocation,
   PromptShortcutError,
   PROMPT_SHORTCUT_LIMITS,
@@ -41,7 +42,7 @@ export function compileShortcutPrompt(input: {
     if (
       chip.value !== invocation.id ||
       ids.has(invocation.id) ||
-      input.text.slice(chip.start, chip.end) !== `/${invocation.snapshot.slug}`
+      !isShortcutChipText(input.text.slice(chip.start, chip.end), invocation)
     )
       throw new PromptShortcutError('invalid_ranges', 'Incomplete or stale invocation range');
     ids.add(invocation.id);

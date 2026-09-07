@@ -109,8 +109,6 @@ const meta = {
     entries,
     options,
     currentUserId: 'me',
-    pendingIds: [],
-    errorIds: [],
     loading: false,
     busy: false,
     canCreate: true,
@@ -127,11 +125,6 @@ export const Catalog: Story = {};
 export const Empty: Story = { args: { entries: [] } };
 
 export const Loading: Story = { args: { entries: [], loading: true } };
-
-/** Durable locally, publication still in flight — nothing is disabled by it. */
-export const PublicationPending: Story = {
-  args: { pendingIds: ['review-pr'], errorIds: ['bench'] },
-};
 
 export const ReadOnlyShared: StoryObj<typeof PromptShortcutReadOnlyView> = {
   render: () => (

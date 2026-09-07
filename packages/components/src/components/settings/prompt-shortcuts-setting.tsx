@@ -10,7 +10,7 @@ import {
   type PromptShortcut,
   type PromptShortcutIndexEntry,
 } from '@lody/shared/prompt-shortcuts';
-import { CloudUpload, Loader2, Plus, SquareSlash, Trash2 } from 'lucide-react';
+import { Loader2, Plus, SquareSlash, Trash2 } from 'lucide-react';
 import { getAllAgentConfigAtom } from '@/atoms/agents';
 import { cloudOperations } from '@/lib/cloud-api-operations';
 import { cn } from '@/lib/utils';
@@ -68,7 +68,7 @@ function PromptShortcutsSettingContent({
 }) {
   const { t } = useTranslation();
   const isMobile = useIsMobile();
-  const { runtime, entries, loading, pendingIds, errors, retry } = state;
+  const { runtime, entries, loading, errors, retry } = state;
   const scope = useShortcutScopeOptions(runtime?.workspaceId);
   const [editor, setEditor] = useState<{
     value: PromptShortcut;
@@ -126,8 +126,6 @@ function PromptShortcutsSettingContent({
         entries={entries}
         options={scope.options}
         currentUserId={runtime?.userId ?? null}
-        pendingIds={pendingIds}
-        errorIds={Object.keys(errors)}
         loading={loading}
         busy={busy}
         canCreate={!!runtime}
@@ -291,8 +289,6 @@ export function PromptShortcutsList({
   entries,
   options,
   currentUserId,
-  pendingIds,
-  errorIds,
   loading,
   busy,
   canCreate,
@@ -303,9 +299,6 @@ export function PromptShortcutsList({
   entries: readonly PromptShortcutIndexEntry[];
   options?: ShortcutScopeOptions;
   currentUserId: string | null;
-  /** Saved locally, publication still in flight. Never a reason to disable. */
-  pendingIds: readonly string[];
-  errorIds: readonly string[];
   loading: boolean;
   busy: boolean;
   canCreate: boolean;
@@ -376,8 +369,6 @@ export function PromptShortcutsList({
               entry={entry}
               options={options}
               canManage={entry.ownerUserId === currentUserId}
-              pending={pendingIds.includes(entry.id)}
-              failed={errorIds.includes(entry.id)}
               busy={busy}
               onOpen={() => onOpen(entry)}
               onDelete={() => onDelete(entry)}
@@ -401,8 +392,6 @@ export function PromptShortcutRow({
   entry,
   options,
   canManage,
-  pending,
-  failed,
   busy,
   onOpen,
   onDelete,
@@ -410,8 +399,6 @@ export function PromptShortcutRow({
   entry: PromptShortcutIndexEntry;
   options?: ShortcutScopeOptions;
   canManage: boolean;
-  pending: boolean;
-  failed: boolean;
   busy: boolean;
   onOpen: () => void;
   onDelete: () => void;
@@ -477,38 +464,25 @@ export function PromptShortcutRow({
                 ) : null}
               </span>
             </span>
-            {entry.description || outOfScope || failed || pending ? (
+            {entry.description || outOfScope ? (
               <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
                 {entry.description ? (
                   <span className="min-w-0 truncate text-[11px] leading-tight text-muted-foreground">
                     {entry.description}
                   </span>
                 ) : null}
-                {/* Short status phrases, so several can share the line and still
-                    sit against the right edge. */}
-                <span className="ms-auto flex shrink-0 items-center gap-x-3 gap-y-1">
-                  {outOfScope ? (
-                    <span className="text-[11px] leading-tight text-status-warning">
-                      {t(
-                        'settings.promptShortcuts.needsAttention',
-                        'A reference is outside this scope'
-                      )}
-                    </span>
-                  ) : null}
-                  {failed ? (
-                    <span className="text-[11px] leading-tight text-status-warning">
-                      {t(
-                        'settings.promptShortcuts.publishFailed',
-                        'Publishing failed · will retry'
-                      )}
-                    </span>
-                  ) : pending ? (
-                    <span className="flex items-center gap-1 text-[11px] leading-tight text-muted-foreground/80">
-                      <CloudUpload className="size-3 shrink-0" aria-hidden="true" />
-                      {t('settings.promptShortcuts.pending', 'Publishing in the background')}
-                    </span>
-                  ) : null}
-                </span>
+                {/* The one status worth a row: the Shortcut's own references no
+                    longer fit the scope it was saved with, which only its author
+                    can repair. Publication state is deliberately absent — a local
+                    save is already durable and the runtime retries on its own. */}
+                {outOfScope ? (
+                  <span className="ms-auto shrink-0 text-[11px] leading-tight text-status-warning">
+                    {t(
+                      'settings.promptShortcuts.needsAttention',
+                      'A reference is outside this scope'
+                    )}
+                  </span>
+                ) : null}
               </span>
             ) : null}
           </span>

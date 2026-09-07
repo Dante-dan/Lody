@@ -3,7 +3,10 @@ import type { Meta, StoryObj } from '@storybook/react';
 import { createShortcutInvocation, type PromptShortcut } from '@lody/shared/prompt-shortcuts';
 import { Mention, MentionInput, useMentionContext } from '@/ui/mention';
 import { getComposerMentionChip } from '@/components/mentions/mention-chips';
-import { ShortcutParameters } from '@/components/mentions/shortcut-parameters';
+import {
+  applyShortcutChipLabel,
+  ShortcutParameters,
+} from '@/components/mentions/shortcut-parameters';
 import { isShortcutMention } from '@/components/mentions/shortcut-composer-state';
 const body: PromptShortcut = {
   v: 1,
@@ -42,7 +45,7 @@ function Editor({
           mobile={mobile}
           onClose={() => {
             onActive(null);
-            context.inputRef.current?.focus();
+            if (!applyShortcutChipLabel(context, chip)) context.inputRef.current?.focus();
           }}
           onChange={(name, value) =>
             context.onMentionsChange((ranges) =>

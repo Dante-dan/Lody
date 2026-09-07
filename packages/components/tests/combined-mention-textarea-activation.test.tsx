@@ -315,6 +315,32 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
     expect(commands.execute('mention.toggleSessionProjectScope')).toBe(false);
   });
 
+  it('keeps focus in the prompt after clearing it to empty', async () => {
+    // Clearing remounts the mention tree to re-arm the hydrators, which replaces
+    // the textarea node. Restoring focus must not depend on the caller passing a
+    // ref — the settings template editor does not pass one.
+    function Controlled() {
+      const [value, setValue] = React.useState('hello');
+      return <CombinedMentionTextarea value={value} onValueChange={setValue} />;
+    }
+    await act(async () => root.render(<Controlled />));
+    const before = container.querySelector('textarea')!;
+    before.focus();
+    expect(document.activeElement).toBe(before);
+
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!.call(
+        before,
+        ''
+      );
+      before.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+
+    const after = container.querySelector('textarea')!;
+    expect(after.value).toBe('');
+    expect(document.activeElement).toBe(after);
+  });
+
   it('does not scan skills until something asks for them', async () => {
     await render({ value: '', skillAgent: { machineId: 'machine-1' } });
 

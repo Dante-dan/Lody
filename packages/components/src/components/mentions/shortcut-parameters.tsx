@@ -7,15 +7,21 @@ import { useTranslation } from 'react-i18next';
 import {
   PROMPT_SHORTCUT_LIMITS,
   shortcutByteLength,
+  shortcutChipText,
   type ShortcutInvocation,
 } from '@lody/shared/prompt-shortcuts';
 import { cn } from '@/lib/utils';
 import { useMentionContext } from '@/ui/mention';
+import type { Mention as MentionRange } from '@/ui/mention/index';
 import { Button } from '@/ui/button';
 import { AutoGrowTextarea } from '../settings/form-primitives';
 import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
-import { isShortcutMention, missingShortcutVariables } from './shortcut-composer-state';
+import {
+  isShortcutMention,
+  missingShortcutVariables,
+  type ShortcutMention,
+} from './shortcut-composer-state';
 
 /**
  * The values one invocation needs, asked for where the invocation is.
@@ -25,6 +31,37 @@ import { isShortcutMention, missingShortcutVariables } from './shortcut-composer
  * token rather than adding an asterisk, so the thing you have to fix is the
  * thing that is marked.
  */
+/**
+ * Write an invocation's filled values into what its chip reads as.
+ *
+ * A draft with three identical `/review` chips is not something anyone can
+ * check before sending. Applied on close rather than per keystroke: the
+ * replacement moves the caret and writes an undo entry. Returns false when the
+ * chip already says the right thing, so the caller can restore focus itself.
+ */
+export function applyShortcutChipLabel(
+  context: {
+    inputValue: string;
+    onMentionReplace: (request: {
+      start: number;
+      end: number;
+      text: string;
+      mentions: MentionRange[];
+    }) => void;
+  },
+  chip: ShortcutMention
+): boolean {
+  const label = shortcutChipText(chip.data);
+  if (label === context.inputValue.slice(chip.start, chip.end)) return false;
+  context.onMentionReplace({
+    start: chip.start,
+    end: chip.end,
+    text: label,
+    mentions: [{ ...chip, start: 0, end: label.length }],
+  });
+  return true;
+}
+
 export function ShortcutParameters({
   invocation,
   mobile,
@@ -180,6 +217,7 @@ export function ShortcutInvocationEditor({
   }, [chips, onActiveIdChange]);
   const close = () => {
     onActiveIdChange(null);
+    if (active && applyShortcutChipLabel(context, active)) return;
     context.inputRef.current?.focus();
     if (active)
       context.onPendingSelectionChange({

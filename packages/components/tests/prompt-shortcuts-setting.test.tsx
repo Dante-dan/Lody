@@ -118,16 +118,17 @@ async function open(name: string) {
   });
 }
 describe('Prompt Shortcut settings identity fencing', () => {
-  it('allows editing and deleting locally while publication is pending', async () => {
-    state = { ...state, pendingIds: [shortcut.id] };
+  it('stays optimistic about publication and keeps the local actions', async () => {
+    state = {
+      ...state,
+      pendingIds: [shortcut.id],
+      errors: { [shortcut.id]: new Error('offline') },
+    };
     await render();
-    expect(container.textContent).toContain('Publishing in the background');
-
-    // A failed publication is reported as a fact about this device's copy; it
-    // still never takes the local actions away.
-    state = { ...state, errors: { [shortcut.id]: new Error('offline') } };
-    await render();
-    expect(container.textContent).toContain('Publishing failed');
+    // A local save is already durable and the runtime retries on its own, so a
+    // row says nothing about either; what must never happen is losing the
+    // actions over a background upload.
+    expect(container.textContent).not.toContain('Publishing');
     expect(
       container.querySelector<HTMLButtonElement>('button[aria-label="Delete shortcut"]')?.disabled
     ).toBe(false);

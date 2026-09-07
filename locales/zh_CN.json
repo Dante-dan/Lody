@@ -10,8 +10,6 @@
   "settings.promptShortcuts.variableCount_one": "{{count}} 个变量",
   "settings.promptShortcuts.variableCount_other": "{{count}} 个变量",
   "settings.promptShortcuts.needsAttention": "有引用超出适用范围",
-  "settings.promptShortcuts.pending": "正在后台发布",
-  "settings.promptShortcuts.publishFailed": "发布失败 · 稍后重试",
   "settings.promptShortcuts.retryHelp": "部分内容未能加载或发布。本地保存的内容仍然保留，你可以继续编辑。",
   "settings.promptShortcuts.delete": "删除 Shortcut",
   "settings.promptShortcuts.deleteTitle": "删除 Prompt Shortcut",
