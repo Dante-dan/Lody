@@ -331,7 +331,12 @@ const historyMessageItemSchema = schema
               ? true
               : 'Missing visual annotation reference metadata';
           default:
-            return `Unknown type: ${type}`;
+            // Synced history may contain variants written by newer peers.
+            // Rejecting one here blocks every subsequent Mirror.setState,
+            // including unrelated user messages and control-field updates.
+            // Preserve the opaque item without extending MessageContentSchema's
+            // accepted input types. Known variants keep their existing guards.
+            return true;
         }
       },
     }
