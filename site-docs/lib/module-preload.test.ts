@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import {
   isCriticalModulePreloadHref,
   resolveModulePreloadDependencies,
-} from './module-preload.mjs';
+} from './module-preload.ts';
 
 const pricingRouteDeps = [
   'assets/pricing-B2h.js',

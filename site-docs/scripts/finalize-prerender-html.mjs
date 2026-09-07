@@ -1,11 +1,15 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { isCriticalModulePreloadHref } from './module-preload.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-export { isCriticalModulePreloadHref };
+/** Keep in sync with `lib/module-preload.ts`. */
+export function isCriticalModulePreloadHref(href) {
+  return /(?:^|\/)(?:index|rolldown-runtime|react-dom|react|jsx-runtime|preload-helper)-[^/]+\.js(?:\?|$)/u.test(
+    href
+  );
+}
 
 /**
  * Vite / TanStack prerender injects `<link rel="modulepreload">` for every

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { NodeRequest, sendNodeResponse } from 'srvx/node';
 import type { DevEnvironment, Plugin, RunnableDevEnvironment } from 'vite';
 import { defineConfig } from 'vite';
-import { resolveModulePreloadDependencies } from './scripts/module-preload.mjs';
+import { resolveModulePreloadDependencies } from './lib/module-preload';
 import { collectSitePaths } from './scripts/site-paths.mjs';
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));

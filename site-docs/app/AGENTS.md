@@ -18,5 +18,7 @@ Root `AGENTS.md` and `site-docs/AGENTS.md` also apply.
 - `landing-first-paint.css` is the inlined first-screen sheet (`finalize-prerender-html.mjs`).
   Keep it system-font-only and visually identical to the final hero/nav layout,
   background, and type in `underwater.css` / `site-nav.css` (dark default).
-  Include `.rw-*` (clip to one rotating word) and `.site-nav__link` / theme-control
-  rules so deferred CSS cannot FOUC those nodes. Only WebGL may fade in.
+  Include `.rw-*`, `.site-nav__link` / theme-control rules, the
+  `.underwater-landing .site-nav` surface (gradient, no divider/blur), and the
+  final dark `.underwater-bg__overlay`. Deferred CSS must not restyle that
+  chrome; only WebGL may fade in.

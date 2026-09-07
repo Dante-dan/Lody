@@ -23,9 +23,11 @@ Root `AGENTS.md` and `site-docs/AGENTS.md` also apply.
   TanStack prerender.
 - `finalize-404-html.mjs` runs after prerender and strips app hydration from
   `404.html` so a junk URL cannot boot the client router and blank the page.
-- `module-preload.mjs` is the HTML-only `modulepreload` allowlist used by
-  `vite.config.ts`. JS hosts (lazy route imports) keep every dependency so
-  client nav still loads `pricing-*.css` / `legal-*.css`.
+- `../lib/module-preload.ts` is the typed HTML-only `modulepreload` allowlist
+  used by `vite.config.ts`. JS hosts keep every dependency so client nav still
+  loads `pricing-*.css` / `legal-*.css`. The same href allowlist is copied in
+  `finalize-prerender-html.mjs` so the post-prerender strip stays a plain
+  Node script.
 - `finalize-prerender-html.mjs` runs after prerender and strips non-critical
   `modulepreload` from every other HTML document so first paint does not compete
   with unused route chunks. Keep only the hydration runtime (entry / react /
