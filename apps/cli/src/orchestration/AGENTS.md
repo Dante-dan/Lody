@@ -33,18 +33,12 @@ Root and `apps/cli/AGENTS.md` apply; `specs/session-orchestration.md` owns behav
 - Reconciliation is level-checked. Loro subscriptions and SQLite directory
   watch events are hints; startup/lease acquisition scans active Operations and
   pending Deliveries and unsettled progress once. The watcher never carries result data.
-- The coordinator holds ONE store connection from start to stop. Closing the
-  last SQLite connection deletes the WAL/SHM sidecars, so per-reconcile
-  open/close makes the directory watcher observe its own churn and wake itself
-  in a CPU-starving loop (per-workspace coordinators share the machine-level
-  store and amplify it). Watch wakes are leading-edge coalesced; never do
-  store work per raw fs event.
-- The MCP server process also holds ONE store connection (lazy singleton),
-  opened with `maintenance: false` so non-owner opens are not themselves write
-  transactions; current-schema detection is read-only and migration takes the
-  writer lock only when that probe finds work. The daemon coordinator owns
-  open-time repair/cleanup. Do not reintroduce per-call open/close: each close
-  checkpoints WAL and each default open writes, causing "database is locked".
+- The coordinator holds ONE store connection from start to stop. Watch wakes are
+  leading-edge coalesced; never do store work per raw fs event.
+- The MCP server holds ONE lazy store connection with `maintenance: false`.
+  Current-schema detection is read-only; migration locks only when needed.
+  The daemon owns open-time repair/cleanup. Never reopen per call.
+  See [connection and notification rationale](README.md).
 - WAL allows one writer machine-wide. Every writing store transaction runs
   `BEGIN IMMEDIATE` (deferred read→write upgrades fail with
   `SQLITE_BUSY_SNAPSHOT`, which `busy_timeout` cannot wait out). Subprocess
@@ -81,6 +75,9 @@ Root and `apps/cli/AGENTS.md` apply; `specs/session-orchestration.md` owns behav
   errors, and deadlines do not terminate targets. Delivery consumption does not end reconciliation:
   retain it through target terminal state and local Loro flush, and preserve it through SQLite
   cleanup/restart. Missing evidence or writes retain an owned retry and never wake the agent.
+  Unchanged progress must return before `updateHistory` / `Mirror.setState`: Mirror notifies
+  even for unchanged state, so nested A -> B -> C progress writes otherwise wake their own
+  coordinator forever. Test this with real Mirror subscriptions.
 - Missing Session metadata, a recoverable tombstone, or an unsynchronized
   Machine Flock document is uncertainty, not permanent deletion/configuration
   absence. Keep the item/Delivery pending until positive evidence or deadline.
