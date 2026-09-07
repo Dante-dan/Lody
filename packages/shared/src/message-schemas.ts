@@ -3240,10 +3240,14 @@ export const NonSystemNoticeMessageContentSchema = z.discriminatedUnion('type', 
     completion: LodyOperationCompletionSchema,
     continuation: z
       .object({
-        status: z.literal('not_started'),
+        status: z.enum(['not_started', 'uncertain']),
         reason: z
           .object({
-            code: z.literal('CONFIGURATION_UNAVAILABLE'),
+            code: z.enum([
+              'CONFIGURATION_UNAVAILABLE',
+              'DELIVERY_ATTEMPTS_EXHAUSTED',
+              'DELIVERY_EXECUTION_UNCERTAIN',
+            ]),
             message: z.string(),
           })
           .strict(),
