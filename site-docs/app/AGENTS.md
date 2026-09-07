@@ -18,8 +18,7 @@ Root `AGENTS.md` and `site-docs/AGENTS.md` also apply.
 - `landing-first-paint.css` is the inlined first-screen sheet (`finalize-prerender-html.mjs`).
   Keep it system-font-only and visually identical to the final hero/nav layout,
   background, and type in `underwater.css` / `site-nav.css` (dark default).
-  Include `.rw-*`, `.site-nav__link` / theme-control rules, the
-  `.underwater-landing .site-nav` surface (gradient, no divider/blur), the
-  final dark `.underwater-bg__overlay`, and `.underwater-btn__icon` (1.05rem)
-  so GithubMark cannot use the 300×150 SVG default. Deferred CSS must not
-  restyle that chrome; only WebGL may fade in.
+  Include the final hero/nav chrome: `.rw-*`, nav links/theme/toggle fill,
+  landing nav surface, dark overlay, `.underwater-btn__icon`, dark lead
+  treatment, and the desktop scroll hint (hidden ≤768px). Deferred CSS must
+  not restyle that chrome; only WebGL / chevron motion may start later.

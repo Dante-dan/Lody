@@ -176,6 +176,9 @@ await test('landing first-paint sheet includes rotating-word and nav chrome', ()
   assert.match(css, /\.underwater-bg__overlay\b[\s\S]*radial-gradient/u);
   assert.match(css, /\.underwater-btn__icon\b/u);
   assert.match(css, /\.underwater-btn__icon\b[\s\S]*?width:\s*1\.05rem/u);
+  assert.match(css, /\.underwater-hero__scroll-hint\b[\s\S]*?display:\s*inline-flex/u);
+  assert.match(css, /\.underwater-hero__lead\b[\s\S]*?203 46% 86%/u);
+  assert.match(css, /\.site-nav__toggle\b[\s\S]*?landing-surface-2/u);
   const next = finalizePrerenderHtml(landingHtml, css);
   assert.match(next, /\.rw-viewport\{/u);
   assert.match(next, /\.site-nav__link\{/u);
@@ -183,6 +186,9 @@ await test('landing first-paint sheet includes rotating-word and nav chrome', ()
   assert.match(next, /\.underwater-landing \.site-nav\{/u);
   assert.match(next, /\.underwater-bg__overlay\{[^}]*radial-gradient/u);
   assert.match(next, /\.underwater-btn__icon\{[^}]*width:1\.05rem/u);
+  assert.match(next, /\.underwater-hero__scroll-hint\{[^}]*display:inline-flex/u);
+  assert.match(next, /\.underwater-hero__lead\{[^}]*203 46% 86%/u);
+  assert.match(next, /\.site-nav__toggle\{[^}]*landing-surface-2/u);
 });
 
 await test('injectLandingFirstPaintStyle is a no-op off the landing', () => {

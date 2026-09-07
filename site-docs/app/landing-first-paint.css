@@ -61,6 +61,7 @@ body.flex-col {
   --landing-ink-muted: 203 38% 78%;
   --landing-border: 200 70% 72%;
   --landing-surface-1: 213 62% 9%;
+  --landing-surface-2: 211 56% 14%;
   --landing-primary: 195 100% 64%;
   --ocean-aqua: 195 100% 66%;
 }
@@ -71,6 +72,7 @@ html.light .underwater-landing {
   --landing-ink-muted: 207 38% 24%;
   --landing-border: 205 45% 38%;
   --landing-surface-1: 190 52% 97%;
+  --landing-surface-2: 190 42% 93%;
   --landing-primary: 192 74% 40%;
   --ocean-aqua: 205 95% 28%;
 }
@@ -299,7 +301,14 @@ html.light .underwater-hero__title {
   font-family: var(--lody-docs-font-sans);
   font-size: clamp(1rem, 2.2vw, 1.22rem);
   line-height: 1.6;
+  /* Dark-first: match `.dark .underwater-hero__lead`. */
+  color: hsl(203 46% 86% / 0.92);
+  text-shadow: 0 1px 16px hsl(214 90% 4% / 0.55);
+}
+
+html.light .underwater-hero__lead {
   color: hsl(var(--landing-ink-muted));
+  text-shadow: none;
 }
 
 .underwater-hero__cta-wrap {
@@ -322,12 +331,23 @@ html.light .underwater-hero__title {
   gap: 0.85rem;
 }
 
+.underwater-hero__cta-links {
+  gap: 0.4rem 0.55rem;
+}
+
 .underwater-hero__more {
   color: hsl(var(--landing-ink-muted));
   font-family: var(--lody-docs-font-sans);
   font-size: 0.85rem;
   font-weight: 500;
   text-decoration: none;
+  white-space: nowrap;
+}
+
+.underwater-hero__link-dot {
+  color: hsl(var(--landing-ink-muted) / 0.65);
+  font-size: 0.85rem;
+  user-select: none;
 }
 
 .underwater-btn {
@@ -341,6 +361,7 @@ html.light .underwater-hero__title {
   font-family: var(--lody-docs-font-sans);
   font-size: 0.97rem;
   font-weight: 600;
+  letter-spacing: -0.01em;
   text-decoration: none;
   white-space: nowrap;
   border: 1px solid transparent;
@@ -367,7 +388,37 @@ html.light .underwater-hero__title {
 }
 
 .underwater-hero__scroll-hint {
-  display: none;
+  position: absolute;
+  left: max(0px, calc((100% - var(--site-content-width)) / 2));
+  bottom: clamp(1.75rem, 5vh, 3.25rem);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: hsl(var(--landing-ink-muted));
+}
+
+.underwater-hero__scroll-label {
+  font-family: var(--lody-docs-font-sans);
+  font-size: 0.8rem;
+  font-weight: 500;
+  line-height: 18px;
+  letter-spacing: -0.01em;
+}
+
+.underwater-hero__scroll-icon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+}
+
+.underwater-hero__scroll-chevron {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg);
 }
 
 .site-nav {
@@ -496,7 +547,24 @@ html.light .underwater-hero__title {
   background: hsl(var(--landing-border));
 }
 
-.site-nav__toggle,
+.site-nav__toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid hsl(var(--landing-border));
+  border-radius: 10px;
+  background: hsl(var(--landing-surface-2) / 0.72);
+  color: hsl(var(--landing-ink));
+}
+
+.site-nav__toggle svg {
+  width: 1.2rem;
+  height: 1.2rem;
+}
+
 .site-nav__menu,
 .site-nav__backdrop {
   display: none;
@@ -538,21 +606,34 @@ html.light .underwater-hero__title {
     line-height: 1.55;
   }
 
+  .underwater-hero__cta-wrap {
+    margin-top: 0.2rem;
+    gap: 0.5rem;
+  }
+
+  .underwater-hero__scroll-hint {
+    display: none;
+  }
+
+  .underwater-btn {
+    height: 2.85rem;
+    padding: 0 1.35rem;
+  }
+
   .site-nav__links,
   .site-nav__desktop {
     display: none;
   }
 
+  .site-nav__right {
+    gap: 0.6rem;
+  }
+
+  .site-nav__actions {
+    gap: 0.55rem;
+  }
+
   .site-nav__toggle {
     display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 38px;
-    height: 38px;
-    padding: 0;
-    border: 1px solid hsl(var(--landing-border));
-    border-radius: 10px;
-    background: transparent;
-    color: inherit;
   }
 }
