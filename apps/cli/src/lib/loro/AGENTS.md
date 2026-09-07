@@ -10,6 +10,9 @@ build does not declare; without the flag loro-mirror rejects the entire state
 with `Unknown property: <key>`, so the older client can never write to that doc
 again. Contract test: `packages/shared/tests/session-doc-forward-compat.test.ts`.
 
+Session Mirrors temporarily require `validateUpdates: false`; keep external parsing.
+Replacement contract: [shared rules](../../../../../packages/shared/AGENTS.md#session-history).
+
 ## Opening a doc pulls its stream
 
 `LoroDocumentManager.getOrCreateSessionDoc()` is not a cheap read.

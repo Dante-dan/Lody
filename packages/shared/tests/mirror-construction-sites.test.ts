@@ -20,8 +20,10 @@ function productionSources(dir: string): string[] {
 }
 
 describe('Mirror construction sites', () => {
-  it('always opt into tolerating unknown root keys', () => {
+  it('tolerates unknown root keys and bypasses session whole-state validation', () => {
     const missing: string[] = [];
+    const validatedSessions: string[] = [];
+    const sessionRoots = new Set<string>();
     let sites = 0;
 
     for (const root of searchRoots) {
@@ -34,14 +36,21 @@ describe('Mirror construction sites', () => {
         ) {
           sites++;
           // Options are top level in the call, so the first `});` ends it.
-          if (source.slice(at, source.indexOf('});', at)).includes('ignoreUnknownProperties'))
-            continue;
-          missing.push(`${file.slice(repoRoot.length)}:${source.slice(0, at).split('\n').length}`);
+          const options = source.slice(at, source.indexOf('});', at));
+          const location = `${file.slice(repoRoot.length)}:${source.slice(0, at).split('\n').length}`;
+          if (!options.includes('ignoreUnknownProperties')) missing.push(location);
+          if (/schema:\s*sessionDocSchema\b/.test(options)) {
+            sessionRoots.add(root);
+            if (!/validateUpdates:\s*false\b/.test(options)) validatedSessions.push(location);
+          }
         }
       }
     }
 
     expect(missing).toEqual([]);
+    // Temporary session-only bypass must cover both renderer and CLI entrypoints.
+    expect(validatedSessions).toEqual([]);
+    expect([...sessionRoots]).toEqual(searchRoots);
     // A scan that silently matched nothing would pass forever.
     expect(sites).toBeGreaterThan(0);
   });

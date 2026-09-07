@@ -3658,6 +3658,9 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     const mirror = new Mirror({
       doc: persistedDoc.doc as LoroDoc,
       schema: sessionDocSchema,
+      // Temporary (#460): old history must not block unrelated writes.
+      // Replace with typed HistoryWriter operations, not whole-state validation.
+      validateUpdates: false,
       // Tolerate root keys written by peers running a newer schema version.
       ignoreUnknownProperties: true,
       // Plan is now stored per-turn on history entries, not at root level

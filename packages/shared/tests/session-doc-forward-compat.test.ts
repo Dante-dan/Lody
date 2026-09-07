@@ -44,6 +44,7 @@ function createSessionMirror(doc: Loro) {
   return new Mirror({
     doc,
     schema: sessionDocSchema,
+    validateUpdates: false,
     ignoreUnknownProperties: true,
     initialState: { session: { id: sessionId }, history: [] },
   });
@@ -51,7 +52,7 @@ function createSessionMirror(doc: Loro) {
 
 // Synthetic future peer: raw Loro writes model a type this reader was built
 // before. No cast makes that type part of the application's MessageContent.
-function createFutureHistoryDoc() {
+function createFutureHistoryDoc(kind: 'future' | 'future-object-text' | 'malformed-known') {
   const doc = new Loro();
   doc.setPeerId('100');
   const mirror = createSessionMirror(doc);
@@ -62,7 +63,10 @@ function createFutureHistoryDoc() {
   turn.set('timestamp', '2026-01-01T00:00:00.000Z');
   const items = turn.setContainer('items', new LoroList());
   const future = items.pushContainer(new LoroMap());
-  future.set('type', 'future_operation_progress');
+  future.set('type', kind === 'malformed-known' ? 'text' : 'future_operation_progress');
+  if (kind !== 'future') {
+    future.setContainer('text', new LoroMap()).set('futureValue', 42);
+  }
   const payload = future.setContainer('payload', new LoroMap());
   const label = payload.setContainer('label', new LoroText());
   label.insert(0, 'created');
@@ -74,58 +78,59 @@ function createFutureHistoryDoc() {
 }
 
 describe('session doc forward compatibility', () => {
-  it.each(['live import', 'snapshot reopen'] as const)(
-    'keeps sending and editing around a future history item after %s',
-    (mode) => {
-      const peer = createFutureHistoryDoc();
-      const snapshot = peer.doc.export({ mode: 'snapshot' });
-      const doc = new Loro();
-      doc.setPeerId('200');
-      if (mode === 'snapshot reopen') doc.import(snapshot);
-      const beforeOpen = doc.version().toJSON();
-      const mirror = createSessionMirror(doc);
-      if (mode === 'snapshot reopen') expect(doc.version().toJSON()).toEqual(beforeOpen);
-      if (mode === 'live import') doc.import(snapshot);
-      const version = doc.version().toJSON();
-      const original = doc.toJSON().history[0];
-      expect(mirror.getState().history[0]?.items?.[0]?.type).toBe('future_operation_progress');
-      expect(doc.version().toJSON()).toEqual(version);
+  it.each(
+    (['live import', 'snapshot reopen'] as const).flatMap((mode) =>
+      (['future', 'future-object-text', 'malformed-known'] as const).map((kind) => ({ mode, kind }))
+    )
+  )('keeps sending and editing around $kind history after $mode', ({ mode, kind }) => {
+    const peer = createFutureHistoryDoc(kind);
+    const snapshot = peer.doc.export({ mode: 'snapshot' });
+    const doc = new Loro();
+    doc.setPeerId('200');
+    if (mode === 'snapshot reopen') doc.import(snapshot);
+    const beforeOpen = doc.version().toJSON();
+    const mirror = createSessionMirror(doc);
+    if (mode === 'snapshot reopen') expect(doc.version().toJSON()).toEqual(beforeOpen);
+    if (mode === 'live import') doc.import(snapshot);
+    const version = doc.version().toJSON();
+    const original = doc.toJSON().history[0];
+    expect(mirror.getState().history[0]?.items?.[0]?.type).toBe(original.items[0].type);
+    expect(doc.version().toJSON()).toEqual(version);
 
-      mirror.setState((state) => ({
-        ...state,
-        history: [
-          ...state.history,
-          {
-            id: 'new-user-turn',
-            role: 'user',
-            timestamp: '2026-01-01T00:00:01.000Z',
-            items: [{ type: 'text', text: 'hello' }],
-          },
-        ],
-      }));
-      expect(doc.toJSON().history[0]).toEqual(original);
-      mirror.setState({ externalHistoryCursor: { importedTurnHashes: ['still-writable'] } });
-      mirror.setState((state) => {
-        state.history[0]!.items![1]!.text = 'after';
-      });
-      // Concurrent future-field edits must survive this reader's local writes.
-      peer.label.update('running');
-      peer.doc.commit();
-      doc.import(peer.doc.export({ mode: 'update', from: doc.version() }));
-      peer.doc.import(doc.export({ mode: 'update', from: peer.doc.version() }));
+    mirror.setState((state) => ({
+      ...state,
+      history: [
+        ...state.history,
+        {
+          id: 'new-user-turn',
+          role: 'user',
+          timestamp: '2026-01-01T00:00:01.000Z',
+          items: [{ type: 'text', text: 'hello' }],
+        },
+      ],
+    }));
+    expect(doc.toJSON().history[0]).toEqual(original);
+    mirror.setState({ externalHistoryCursor: { importedTurnHashes: ['still-writable'] } });
+    mirror.setState((state) => {
+      state.history[0]!.items![1]!.text = 'after';
+    });
+    // Concurrent future-field edits must survive this reader's local writes.
+    peer.label.update('running');
+    peer.doc.commit();
+    doc.import(peer.doc.export({ mode: 'update', from: doc.version() }));
+    peer.doc.import(doc.export({ mode: 'update', from: peer.doc.version() }));
 
-      expect(doc.toJSON()).toEqual(peer.doc.toJSON());
-      expect(doc.toJSON().history).toHaveLength(2);
-      expect(doc.toJSON().externalHistoryCursor.importedTurnHashes).toEqual(['still-writable']);
-      expect(doc.toJSON().history[0].items[1].text).toBe('after');
-      expect(doc.getContainerById(peer.future.id)?.toJSON()).toEqual({
-        type: 'future_operation_progress',
-        payload: { label: 'running' },
-      });
-      expect(doc.getContainerById(peer.label.id)?.toJSON()).toBe('running');
-      mirror.dispose();
-    }
-  );
+    expect(doc.toJSON()).toEqual(peer.doc.toJSON());
+    expect(doc.toJSON().history).toHaveLength(2);
+    expect(doc.toJSON().externalHistoryCursor.importedTurnHashes).toEqual(['still-writable']);
+    expect(doc.toJSON().history[0].items[1].text).toBe('after');
+    expect(doc.getContainerById(peer.future.id)?.toJSON()).toEqual({
+      ...original.items[0],
+      payload: { label: 'running' },
+    });
+    expect(doc.getContainerById(peer.label.id)?.toJSON()).toBe('running');
+    mirror.dispose();
+  });
 
   it('keeps malformed known items and untyped items invalid', () => {
     for (const item of [{ type: 'text' }, { type: 42 }, {}]) {
@@ -141,6 +146,9 @@ describe('session doc forward compatibility', () => {
     expect(MessageContentSchema.safeParse({ type: 'future_operation_progress' }).success).toBe(
       false
     );
+    expect(
+      MessageContentSchema.safeParse({ type: 'text', text: { futureValue: 42 } }).success
+    ).toBe(false);
   });
 
   it('keeps writing after a newer peer adds an undeclared root key', () => {
