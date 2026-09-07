@@ -2,6 +2,7 @@
 
 Status: implemented
 Translation: current
+PR: https://github.com/LodyAI/Lody/pull/473
 
 English | [中文](2026-09-08-scoped-agent-instructions.zh.md)
 
