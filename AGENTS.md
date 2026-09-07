@@ -49,9 +49,6 @@ and Web/mobile app sources.
   `LodyAI/acp-extension-core`. Keep shared ACP extension contracts there and consume
   them through the root pnpm workspace; do not duplicate those contracts locally.
 - Never commit captured user/agent transcripts; fixtures must be synthetic.
-- Session history storage tolerates unknown string item types from newer peers without
-  rewriting them or blocking unrelated writes. Keep known-type guards and external-input
-  parsing; `session-doc-forward-compat.test.ts` covers this separately from unknown root keys.
 - Workspace MCP has exactly two durable layers: catalog entries in the workspace Flock
   document and selected ids in each user turn input config. Do not add machine bindings.
   Preserve `mcpServerIds: []` as an explicit empty selection; dispatch must carry the
