@@ -1,8 +1,11 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { isCriticalModulePreloadHref } from './module-preload.mjs';
 
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+export { isCriticalModulePreloadHref };
 
 /**
  * Vite / TanStack prerender injects `<link rel="modulepreload">` for every
@@ -14,12 +17,6 @@ const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
  * loads; the browser fetches the current route through the module graph.
  * Client navigation keeps `defaultPreload: 'intent'`.
  */
-const CRITICAL_MODULEPRELOAD =
-  /(?:^|\/)(?:index|rolldown-runtime|react-dom|react|jsx-runtime|preload-helper)-[^/]+\.js(?:\?|$)/u;
-
-export function isCriticalModulePreloadHref(href) {
-  return CRITICAL_MODULEPRELOAD.test(href);
-}
 
 export function stripNonCriticalModulePreload(html) {
   return html.replace(/<link\b[^>]*\brel=["']modulepreload["'][^>]*>/giu, (tag) => {
