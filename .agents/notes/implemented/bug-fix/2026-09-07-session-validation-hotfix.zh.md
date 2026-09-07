@@ -2,6 +2,7 @@
 
 Status: implemented
 Translation: current
+PR: https://github.com/LodyAI/Lody/pull/463
 
 [English](2026-09-07-session-validation-hotfix.md)
 
