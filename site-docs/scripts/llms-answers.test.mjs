@@ -14,6 +14,7 @@ await test('llms answer blocks cover the GEO questions and only link live docs',
   const questions = LLMS_ANSWERS.map((block) => block.question);
 
   assert.ok(questions.some((question) => /hand off a coding agent session/iu.test(question)));
+  assert.ok(questions.some((question) => /Lore share link/iu.test(question)));
   assert.ok(questions.some((question) => /parallel/iu.test(question)));
   assert.ok(questions.some((question) => /Claude.*Kimi.*DeepSeek|ACP/iu.test(question)));
 
@@ -48,7 +49,13 @@ await test('llms answer blocks cover the GEO questions and only link live docs',
     }
   }
 
-  const handoff = LLMS_ANSWERS.find((block) => /hand off/iu.test(block.question));
+  const handoff = LLMS_ANSWERS.find((block) => /hand off a coding agent session/iu.test(block.question));
   assert.ok(handoff?.links.some((link) => link.sitePath === '/docs/session-handoff'));
+  assert.ok(handoff?.links.some((link) => link.sitePath === '/docs/lody-vs-lore'));
   assert.ok(existsSync(path.join(docsEnRoot, '(features)', 'session-handoff.mdx')));
+  assert.ok(existsSync(path.join(docsEnRoot, '(features)', 'lody-vs-lore.mdx')));
+
+  const lore = LLMS_ANSWERS.find((block) => /Lore share link/iu.test(block.question));
+  assert.ok(lore?.links.some((link) => link.sitePath === '/docs/lody-vs-lore'));
+  assert.ok(lore?.links.some((link) => link.sitePath === '/docs/session-handoff'));
 });

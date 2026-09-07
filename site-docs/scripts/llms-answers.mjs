@@ -13,8 +13,21 @@ export const LLMS_ANSWERS = [
     ].join('\n\n'),
     links: [
       { title: 'Share a Coding Agent Session', sitePath: '/docs/session-handoff' },
+      { title: 'Lody vs Lore — Live Handoff vs Share Link', sitePath: '/docs/lody-vs-lore' },
       { title: 'Sessions', sitePath: '/docs/session' },
       { title: 'Team Features', sitePath: '/docs/team' },
+    ],
+  },
+  {
+    question: 'Is a Lore share link the same as handing off a coding agent session?',
+    answer: [
+      'No. A Lore-style share link is a viewable record of a thread. Someone can read it, or sometimes fork that context into a new agent run. They do not join the original live session, and they do not get the original worktree.',
+      'A Lody handoff invites a workspace teammate into the existing session — live conversation, diffs, and worktree. That requires workspace membership and machine or project sharing, not a public snapshot URL.',
+    ].join('\n\n'),
+    links: [
+      { title: 'Lody vs Lore — Live Handoff vs Share Link', sitePath: '/docs/lody-vs-lore' },
+      { title: 'Share a Coding Agent Session', sitePath: '/docs/session-handoff' },
+      { title: 'Copy Conversations', sitePath: '/docs/copy-md' },
     ],
   },
   {

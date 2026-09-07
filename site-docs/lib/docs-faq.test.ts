@@ -81,6 +81,16 @@ await test('session-handoff English FAQ matches the page and emits FAQPage JSON-
   );
 });
 
+await test('lody-vs-lore English FAQ matches the page and stays a definition contrast', () => {
+  const fromMdx = extractFaqFromMdx(readDoc('content/docs/en/(features)/lody-vs-lore.mdx'));
+  const items = docsFaqByPath['/docs/lody-vs-lore'] ?? [];
+  assert.equal(items.length, 5);
+  assert.deepEqual(items, fromMdx);
+  assert.equal(items[0]?.question, 'Is a Lore share link the same as handing off a Lody session?');
+  assert.match(items[0]?.answer ?? '', /viewable record/u);
+  assert.doesNotMatch(items[2]?.answer ?? '', /replace Lore/iu);
+});
+
 await test('session-handoff Chinese FAQ matches the page', () => {
   const fromMdx = extractFaqFromMdx(readDoc('content/docs/zh/(features)/session-handoff.mdx'));
   const items = docsFaqByPath['/zh/docs/session-handoff'] ?? [];
