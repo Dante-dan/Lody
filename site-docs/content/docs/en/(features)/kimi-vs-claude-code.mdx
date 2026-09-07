@@ -1,0 +1,107 @@
+---
+title: Kimi vs Claude Code
+description: When to use Kimi Code or Claude Code, and how to run both in one Lody workspace with separate agent configs — not a benchmark, not a brand war.
+---
+
+# Kimi vs Claude Code in Lody
+
+**Kimi** and **Claude Code** are different coding agents. **Lody** is the team workspace where you can run either one — or both at once — without picking a single vendor for the whole repo.
+
+This page is not a model bake-off. There are no latency charts, win rates, or “better than” scores here. The useful question is *when to reach for which*, and how [Agent Config](/docs/agents) lets a team keep both in the same workspace.
+
+See also [CLI Runtime Types](/docs/cli-runtimes), [Parallel Coding Agents](/docs/parallel-agents), and [Agent Roles](/docs/agent-roles).
+
+<Callout title="Lody is the workspace layer">
+Claude Code is one agent config. Kimi Code is another. Isolated [worktrees](/docs/worktrees), the team session list, and [live handoff](/docs/session-handoff) stay the same whichever runtime you pick for a given session.
+</Callout>
+
+## What each one is (in Lody)
+
+### Claude Code
+
+Claude Code is Anthropic’s coding CLI. In Lody it is a first-class [agent config](/docs/agents):
+
+- By default, Lody uses the Claude Code subscription login already on the machine that runs the Lody CLI.
+- You can also add a **Claude** config for Claude-compatible API endpoints (including third-party providers that speak that protocol).
+- Lody exposes Claude-specific UI when the runtime advertises it — steering, slash commands, Fast Mode, and other capabilities described in [Claude & Codex Capabilities](/docs/claude-codex-capabilities).
+
+Setup details and environment-variable examples: [Agent Config -> Claude](/docs/agents#claude).
+
+### Kimi
+
+Kimi here means Moonshot’s coding agent, used in Lody in two supported ways:
+
+- **Kimi Code** — a managed Agent provider. Create or edit an Agent Config, choose Kimi Code, and complete its sign-in. Lody manages the supported runtime on that machine; you do not install or maintain a separate Kimi command.
+- **Kimi through a Claude-compatible endpoint** — still available if you want Kimi behind `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY`. That is a Claude-protocol config pointing at Kimi’s coding API, not the managed Kimi Code provider.
+
+Setup details: [Agent Config -> Kimi](/docs/agents#kimi). Upstream reference: [Kimi Code third-party agents](https://www.kimi.com/code/docs/en/more/third-party-agents.html).
+
+### Other runtimes in the same workspace
+
+The choice is not only these two. The same workspace can also run Codex, DeepSeek Harness, GLM / MiniMax / Qwen presets, any [ACP Registry](/docs/cli-runtimes) runtime, or a Custom ACP launch command. This page focuses on the `kimi vs claude code` question; the config catalog is on [Agent Config](/docs/agents).
+
+## When to use which
+
+These are setup and workflow reasons, not quality rankings.
+
+**Reach for Claude Code** when:
+
+- the machine already has a Claude Code / Anthropic subscription login you want to use
+- the task depends on Claude Code–specific capabilities Lody surfaces (steer, Fast Mode, and the rest of [Claude & Codex Capabilities](/docs/claude-codex-capabilities))
+- the team already standardizes on Claude Code prompts, skills, or slash-command habits for that kind of change
+
+**Reach for Kimi Code** when:
+
+- you want Lody’s managed Kimi Code provider (sign-in, Lody-managed runtime — no separate CLI install)
+- the work should run on Kimi’s coding agent / Moonshot account rather than an Anthropic subscription
+- you are comparing an approach in a **second** session while Claude Code keeps working in the first
+
+**Use both** when:
+
+- different tasks fit different accounts or runtimes
+- two people on the team already pay for different subscriptions
+- you want a second isolated [worktree](/docs/worktrees) to try the same ticket with the other agent
+
+Do not treat “the workspace picked a winner.” Each [session](/docs/session) chooses its own agent config, model, and permission scope in the composer.
+
+## How to run both in one Lody workspace
+
+1. Open **Settings** -> **Agent Config**.
+2. Keep or create the Claude Code config (subscription login on the machine, or a Claude-compatible endpoint).
+3. Add a Kimi Code config and finish its sign-in — or add a Claude-compatible Kimi endpoint config if that is the setup you want.
+4. From the home-page composer, start one session with Claude Code and another with Kimi. Give each task its own worktree so the two agents do not edit the same checkout.
+5. If you start the same mix often, save machine + config + model + permission as an [Agent Role](/docs/agent-roles).
+
+Team-visible parallel work: [Parallel Coding Agents](/docs/parallel-agents). Sharing a live session with a teammate (same conversation, not a new agent): [Share a Coding Agent Session](/docs/session-handoff).
+
+Machines stay **private by default**. Teammates see sessions only after the machine (and local project, if any) is shared. See [Team Features](/docs/team).
+
+## What this page will not claim
+
+- No benchmark numbers, leaderboards, or “Kimi beats Claude Code on X.”
+- No price comparison. Billing lives with each provider’s own plan and with Lody [usage](/docs/usage-and-quota).
+- No claim that Lody is Claude Code, or that Kimi is a Claude Code skin. Managed Kimi Code is its own provider. “Kimi over Claude-compatible endpoint” is a different config.
+
+If a capability is missing after you change an agent setup, refresh that config from **Settings** -> **Agent Config**, or run `lody agent-config refresh-capabilities <idOrName>` on the machine that owns it.
+
+## FAQ
+
+### Kimi vs Claude Code — which should I use in Lody?
+
+Use the agent that matches the account and workflow you already have for that task. Claude Code if you are on the Anthropic / Claude Code subscription path and want Claude-specific UI. Kimi Code if you want Lody’s managed Kimi provider. You do not have to standardize the whole workspace on one of them.
+
+### Can I run Kimi and Claude Code in the same Lody workspace?
+
+Yes. Create both [agent configs](/docs/agents), then start separate sessions. Isolated [worktrees](/docs/worktrees) keep their file changes apart. That is the same multi-agent setup described in [Parallel Coding Agents](/docs/parallel-agents).
+
+### Is Kimi Code the same as routing Claude Code to Kimi’s API?
+
+No. **Kimi Code** is a managed provider with its own sign-in. The environment-variable setup (`ANTHROPIC_BASE_URL=https://api.kimi.com/coding/`) is a Claude-compatible endpoint config. Both are documented on [Agent Config](/docs/agents#kimi).
+
+### Does Lody pick a default winner between Kimi and Claude Code?
+
+No. The default on a machine is often the Claude Code / Codex subscription login already present there. That is a convenience, not a ranking. You choose the config per session.
+
+### Where do I add a Kimi or Claude Code config?
+
+**Settings** -> **Agent Config**. Registry and custom ACP runtimes: [CLI Runtime Types](/docs/cli-runtimes). Repeatable mixes: [Agent Roles](/docs/agent-roles).

@@ -16,6 +16,7 @@ await test('llms answer blocks cover the GEO questions and only link live docs',
   assert.ok(questions.some((question) => /hand off a coding agent session/iu.test(question)));
   assert.ok(questions.some((question) => /parallel/iu.test(question)));
   assert.ok(questions.some((question) => /Claude.*Kimi.*DeepSeek|ACP/iu.test(question)));
+  assert.ok(questions.some((question) => /Kimi vs Claude Code/iu.test(question)));
 
   for (const block of LLMS_ANSWERS) {
     assert.ok(block.answer.length > 80, `answer too short: ${block.question}`);
@@ -51,4 +52,9 @@ await test('llms answer blocks cover the GEO questions and only link live docs',
   const handoff = LLMS_ANSWERS.find((block) => /hand off/iu.test(block.question));
   assert.ok(handoff?.links.some((link) => link.sitePath === '/docs/session-handoff'));
   assert.ok(existsSync(path.join(docsEnRoot, '(features)', 'session-handoff.mdx')));
+
+  const kimiVsClaude = LLMS_ANSWERS.find((block) => /Kimi vs Claude Code/iu.test(block.question));
+  assert.ok(kimiVsClaude?.links.some((link) => link.sitePath === '/docs/kimi-vs-claude-code'));
+  assert.ok(kimiVsClaude?.links.some((link) => link.sitePath === '/docs/agents'));
+  assert.ok(existsSync(path.join(docsEnRoot, '(features)', 'kimi-vs-claude-code.mdx')));
 });

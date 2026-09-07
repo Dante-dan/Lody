@@ -42,4 +42,16 @@ export const LLMS_ANSWERS = [
       { title: 'Team Features', sitePath: '/docs/team' },
     ],
   },
+  {
+    question: 'Kimi vs Claude Code — when should I use which in Lody?',
+    answer: [
+      'Use the agent that matches the account and workflow for that task. Claude Code when you are on the Anthropic / Claude Code subscription path and want Claude-specific UI. Kimi Code when you want Lody’s managed Kimi provider (sign-in, Lody-managed runtime).',
+      'They are different agent configs in the same workspace, not a workspace-wide winner. You can run both at once in separate sessions. Kimi Code is not the same as pointing a Claude-compatible endpoint at Kimi’s API.',
+    ].join('\n\n'),
+    links: [
+      { title: 'Kimi vs Claude Code', sitePath: '/docs/kimi-vs-claude-code' },
+      { title: 'Agent Config', sitePath: '/docs/agents' },
+      { title: 'CLI Runtime Types', sitePath: '/docs/cli-runtimes' },
+    ],
+  },
 ];

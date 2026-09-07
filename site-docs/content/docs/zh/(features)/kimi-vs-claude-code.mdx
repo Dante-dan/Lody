@@ -1,0 +1,107 @@
+---
+title: Kimi vs Claude Code
+description: 什么时候用 Kimi Code，什么时候用 Claude Code，以及如何在同一个 Lody 工作空间里用不同 Agent Config 同时跑两者——不是评测，也不是品牌对打。
+---
+
+# 在 Lody 里看 Kimi vs Claude Code
+
+**Kimi** 和 **Claude Code** 是不同的编程 Agent。**Lody** 是团队工作空间：你可以只用其中一个，也可以同时跑两个，而不必让整个仓库绑定一家厂商。
+
+这一页不是模型评测。没有延迟表、胜率和「谁更好」的分数。有用的问题是*什么时候用哪一个*，以及 [Agent Config](/zh/docs/agents) 如何让团队在同一个工作空间里同时留着两套。
+
+另见 [CLI 类型支持](/zh/docs/cli-runtimes)、[并行 Coding Agents](/zh/docs/parallel-agents) 和 [Agent Roles](/zh/docs/agent-roles)。
+
+<Callout title="Lody 是工作空间这一层">
+Claude Code 是一种 Agent Config。Kimi Code 是另一种。隔离的 [Worktree](/zh/docs/worktrees)、团队会话列表和[现场交接](/zh/docs/session-handoff)不随你为某条会话选的运行时而改变。
+</Callout>
+
+## 在 Lody 里，它们分别是什么
+
+### Claude Code
+
+Claude Code 是 Anthropic 的编程 CLI。在 Lody 里它是一等的 [Agent Config](/zh/docs/agents)：
+
+- 默认使用运行 Lody CLI 的那台机器上已有的 Claude Code 订阅登录。
+- 也可以新增 **Claude** 配置，对接 Claude 兼容的 API 端点（包括走该协议的第三方）。
+- 运行时若声明了相应能力，Lody 会露出 Claude 专用界面——Steer、斜杠命令、Fast Mode 等，见 [Claude & Codex 能力](/zh/docs/claude-codex-capabilities)。
+
+配置细节和环境变量示例见 [Agent Config -> Claude](/zh/docs/agents#claude)。
+
+### Kimi
+
+这里的 Kimi 指月之暗面的编程 Agent。Lody 支持两种用法：
+
+- **Kimi Code** — 托管的 Agent Provider。新建或编辑 Agent Config，选择 Kimi Code，完成登录即可。Lody 在该机器上管理受支持的 Runtime，不必单独安装或维护 Kimi 命令。
+- **通过 Claude 兼容端点使用 Kimi** — 如果你希望把 Kimi 接在 `ANTHROPIC_BASE_URL` / `ANTHROPIC_API_KEY` 后面，这条路仍然可用。那是指向 Kimi coding API 的 Claude 协议配置，不是托管的 Kimi Code Provider。
+
+配置细节见 [Agent Config -> Kimi](/zh/docs/agents#kimi)。上游说明：[Kimi Code 第三方 Agent](https://www.kimi.com/code/docs/more/third-party-agents.html)。
+
+### 同一个工作空间里的其它运行时
+
+选择并不只有这两个。同一个工作空间还可以跑 Codex、DeepSeek Harness、GLM / MiniMax / Qwen 预设、任意 [ACP Registry](/zh/docs/cli-runtimes) 运行时，或 Custom ACP 启动命令。这一页只回答 `kimi vs claude code`；完整目录在 [Agent Config](/zh/docs/agents)。
+
+## 什么时候用哪一个
+
+下面是配置和工作流上的理由，不是质量排名。
+
+**更适合用 Claude Code** 的情况：
+
+- 机器上已经有你想用的 Claude Code / Anthropic 订阅登录
+- 任务依赖 Lody 为 Claude Code 露出的能力（Steer、Fast Mode，以及 [Claude & Codex 能力](/zh/docs/claude-codex-capabilities) 里的其余项）
+- 团队已经用 Claude Code 的提示词、Skills 或斜杠命令习惯来做这类改动
+
+**更适合用 Kimi Code** 的情况：
+
+- 你想用 Lody 托管的 Kimi Code Provider（登录即可，Runtime 由 Lody 管理，不必另装 CLI）
+- 这次工作应该跑在 Kimi 的编程 Agent / 月之暗面账号上，而不是 Anthropic 订阅
+- 你想用**第二条**会话换一种走法，同时让 Claude Code 继续跑第一条
+
+**两者都用** 的情况：
+
+- 不同任务适合不同账号或运行时
+- 团队里本来就有人付的是不同订阅
+- 你想再开一个隔离 [Worktree](/zh/docs/worktrees)，用另一个 Agent 试同一张工单
+
+不要把「工作空间选定了赢家」当成前提。每条[会话](/zh/docs/session)都在主页输入框里自己选 Agent Config、模型和权限范围。
+
+## 如何在同一个 Lody 工作空间里同时跑
+
+1. 打开 **设置** -> **Agent 配置**。
+2. 保留或创建 Claude Code 配置（机器上的订阅登录，或 Claude 兼容端点）。
+3. 添加 Kimi Code 配置并完成登录——如果要用的是 Claude 兼容的 Kimi 端点，就建那种配置。
+4. 从主页输入框分别用 Claude Code 和 Kimi 各开一条会话。给每个任务独立 Worktree，避免两个 Agent 改同一份检出。
+5. 经常用同一套组合时，把机器 + 配置 + 模型 + 权限存成 [Agent Role](/zh/docs/agent-roles)。
+
+团队可见的并行工作见[并行 Coding Agents](/zh/docs/parallel-agents)。把现场会话交给同事（同一段对话，不是再开一个 Agent）见[共享并交接 Agent 会话](/zh/docs/session-handoff)。
+
+机器**默认私有**。只有机器（以及本地项目，如有）共享之后，同事才看得到这些会话。见[团队功能](/zh/docs/team)。
+
+## 这一页不会声称什么
+
+- 没有评测数字、榜单，也没有「Kimi 在 X 上胜过 Claude Code」。
+- 没有比价。账单在各提供商自己的套餐里，以及 Lody 的[用量](/zh/docs/usage-and-quota)。
+- 不声称 Lody 就是 Claude Code，也不声称 Kimi 是 Claude Code 的套皮。托管的 Kimi Code 是独立 Provider。「Kimi 走 Claude 兼容端点」是另一种配置。
+
+改完 Agent 设置后如果缺了某项能力，到 **设置** -> **Agent 配置** 刷新该配置的能力，或在拥有该配置的机器上运行 `lody agent-config refresh-capabilities <idOrName>`。
+
+## 常见问题
+
+### Kimi vs Claude Code——在 Lody 里该用哪个？
+
+用和这次任务的账号、工作流匹配的那一个。走 Anthropic / Claude Code 订阅、并且需要 Claude 专用界面时，用 Claude Code。想用 Lody 托管的 Kimi Provider 时，用 Kimi Code。不必让整个工作空间只留一种。
+
+### 能不能在同一个 Lody 工作空间里同时跑 Kimi 和 Claude Code？
+
+可以。建好两套 [Agent Config](/zh/docs/agents)，再分别开会话。隔离的 [Worktree](/zh/docs/worktrees) 会把文件改动分开。这就是[并行 Coding Agents](/zh/docs/parallel-agents) 里的同一套 multi-agent 做法。
+
+### Kimi Code 和「让 Claude Code 走 Kimi 的 API」是一回事吗？
+
+不是。**Kimi Code** 是带自己登录流程的托管 Provider。环境变量方案（`ANTHROPIC_BASE_URL=https://api.kimi.com/coding/`）是 Claude 兼容端点配置。两种都写在 [Agent Config](/zh/docs/agents#kimi)。
+
+### Lody 会不会在 Kimi 和 Claude Code 之间默认定一个赢家？
+
+不会。一台机器上的默认常常是已经登录好的 Claude Code / Codex 订阅。那是方便，不是排名。配置按会话选。
+
+### 在哪里添加 Kimi 或 Claude Code 配置？
+
+**设置** -> **Agent 配置**。Registry 和自定义 ACP 见 [CLI 类型支持](/zh/docs/cli-runtimes)。可复用的组合见 [Agent Roles](/zh/docs/agent-roles)。
