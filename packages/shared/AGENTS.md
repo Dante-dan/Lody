@@ -23,5 +23,8 @@
   actual SessionDocument/HistoryWriter boundary; a mock updateHistory cannot prove it.
 - Copying stored history uses a writer-captured snapshot, never a caller-supplied
   "trusted" array. Preserve unchanged opaque content; parse authored changes and new
-  notices. Copy targets must be empty. Rollback receipts must not overwrite intervening
-  history changes; external ACP imports remain new input, not stored-history copies.
+  notices. Prepend copies to target initialization rows without replacing their containers;
+  reject colliding ids. Rollback rejects intervening history changes except pending-to-seen
+  read acknowledgement on newly inserted user rows. External ACP imports remain new input.
+- Tool status/request-only edits parse changed state fields, not untouched stored payloads.
+  Changing other tool fields still uses the complete item parser.

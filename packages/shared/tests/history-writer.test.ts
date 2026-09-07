@@ -67,7 +67,7 @@ describe('single history writer', () => {
     expect(source.getList('history').toJSON()).toEqual([stored]);
     expect(source.version().toJSON()).toEqual(sourceVersion);
     expect(() => targetMirror.historyWriter.copyFrom(snapshot, snapshot.history)).toThrow(
-      'copy_target_not_empty'
+      'copy_target_conflict'
     );
     const reopened = new Loro();
     reopened.import(target.export({ mode: 'snapshot' }));
@@ -79,6 +79,56 @@ describe('single history writer', () => {
     expect(target.getList('history').toJSON()[0]).toEqual({ ...stored, read: true });
     sourceMirror.dispose();
     targetMirror.dispose();
+  });
+
+  it('updates tool permission and status without reparsing untouched opaque content', () => {
+    const peer = new Loro();
+    const row = peer.getList('history').pushContainer(new LoroMap());
+    const tool = {
+      type: 'tool_call',
+      toolCallId: 'tool',
+      status: 'pending',
+      content: [{ type: 'future_tool_content', data: { value: 42 } }],
+      permissionRequest: {
+        requestId: 'request',
+        options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+      },
+    };
+    for (const [key, value] of Object.entries({ ...entry(), role: 'assistant', items: [tool] }))
+      row.set(key, value);
+    peer.commit();
+    const doc = new Loro();
+    doc.import(peer.export({ mode: 'snapshot' }));
+    const mirror = open(doc);
+    expect(
+      mirror.historyWriter.respondPermission('request', { outcome: 'selected', optionId: 'allow' })
+    ).toBe(true);
+    mirror.historyWriter.update((history) => {
+      const item = history[0]!.items![0]!;
+      if (item.type === 'tool_call') item.status = 'completed';
+      return history;
+    });
+    const stored = doc.getList('history').toJSON()[0].items[0];
+    expect(stored.content).toEqual(tool.content);
+    expect(stored.status).toBe('completed');
+    expect(stored.permissionRequest.outcome).toEqual({ outcome: 'selected', optionId: 'allow' });
+    const version = doc.version().toJSON();
+    expect(() =>
+      mirror.historyWriter.replace('turn', {
+        ...mirror.historyWriter.read('turn')!,
+        items: [{ ...stored, status: 42 }],
+      } as unknown as SessionHistory)
+    ).toThrow('Invalid history write');
+    expect(() =>
+      mirror.historyWriter.replace('turn', {
+        ...mirror.historyWriter.read('turn')!,
+        items: [{ ...stored, content: [{ type: 'future_tool_content', data: 'new' }] }],
+      } as unknown as SessionHistory)
+    ).toThrow('Invalid history write');
+    expect(doc.version().toJSON()).toEqual(version);
+    peer.import(doc.export({ mode: 'update', from: peer.version() }));
+    expect(peer.getList('history').toJSON()).toEqual(doc.getList('history').toJSON());
+    mirror.dispose();
   });
 
   it('restores deleted opaque history with a one-use receipt, refusing intervening peer edits', () => {

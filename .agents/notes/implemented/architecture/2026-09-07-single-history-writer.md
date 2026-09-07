@@ -145,7 +145,30 @@ typechecks and the full repository test suite. Focused coverage passed 16 writer
 and 35 fork/edit service tests. These results do not establish real provider execution,
 disk-failure recovery, or old application build interoperability.
 
-Supersedes the history-write portion of the
+## Correction: initialization, read acknowledgement, and tool state
+
+Review of `d3f91aad` exposed omitted production side effects. Worktree setup can
+write a script log before fork copying, so requiring an empty target rejected a
+valid fork. Auto-read changes a new pending replacement to seen/read before an
+edit-and-resend persistence failure, invalidating the rollback receipt. Tool state
+updates also reparsed untouched opaque content inside an existing tool call.
+
+The pending repair prepends copied history while preserving target rows/containers
+and rejecting id collisions. Rollback permits only the new pending user row's read
+acknowledgement, with all other fields unchanged. Tool state-only edits parse the
+changed status/request/outcome, retaining untouched payloads; other tool edits
+still parse the complete item. Tests now install the real setup recorder and
+auto-read subscriber, and exercise opaque tool content with two real Loro replicas.
+
+These regressions failed before the repair and passed afterward (17 writer tests,
+35 fork/edit service tests). They do not replace independent multi-round review,
+negative rollback-case coverage, real provider execution, or disk-failure acceptance.
+PR #460 remains Draft. The independently based availability hotfix is
+[#463](https://github.com/LodyAI/Lody/pull/463); it does not include this writer.
+Before committing this repair, full `pnpm check`, changed-file formatting, and
+`pnpm run docs check` passed. Independent review remains outstanding.
+
+On this branch, supersedes the history-write portion of the
 [temporary bypass](../bug-fix/2026-09-07-temporary-session-validation-bypass.md).
 Intent: [draft Spec](../../../../specs/session-history-writes.md).
 PR: [#460](https://github.com/LodyAI/Lody/pull/460).

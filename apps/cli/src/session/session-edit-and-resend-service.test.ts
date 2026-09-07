@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LoroDoc, LoroMap } from 'loro-crdt';
 import { SessionDocument } from '../lib/loro/doc';
+import { attachAutoMarkLatestUserHistoryAsRead } from '../lib/loro/history-auto-read';
 import {
   createSessionMirror,
   SessionStatusFactory,
@@ -14,6 +15,10 @@ import { SessionEditAndResendService } from './session-edit-and-resend-service';
 
 const sessionId = 'session-1' as SessionId;
 const machineId = 'machine-1' as MachineId;
+const cleanups: (() => void)[] = [];
+afterEach(() => {
+  for (const cleanup of cleanups.splice(0)) cleanup();
+});
 
 const historyFixture = (): SessionHistoryInput[] => [
   {
@@ -93,6 +98,12 @@ function createHarness(
   realDoc.mirror = createSessionMirror({
     doc: loro,
     initialState: { session: { id: sessionId }, history: [] },
+  });
+  const mirror = realDoc.mirror;
+  const autoRead = attachAutoMarkLatestUserHistoryAsRead(mirror);
+  cleanups.push(() => {
+    autoRead.dispose();
+    mirror.dispose();
   });
   const meta = {
     id: sessionId,
@@ -235,7 +246,8 @@ describe('SessionEditAndResendService', () => {
     ]);
     expect(harness.getHistory().at(-1)).toMatchObject({
       userId: 'original-author',
-      status: 'pending',
+      status: 'seen',
+      read: true,
       inputConfig: {
         modelId: 'model-1',
         configOptionValues: {

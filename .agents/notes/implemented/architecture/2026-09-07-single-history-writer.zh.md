@@ -117,6 +117,26 @@ Provider/磁盘操作仍是 stub。若 fork 显式修改已损坏 item（例如�
 专项覆盖为 writer 16 项、fork/编辑服务 35 项。这不证明真实 provider 执行、磁盘故障恢复，
 或真实旧版本应用间的兼容性。
 
-替代[临时关闭校验](../bug-fix/2026-09-07-temporary-session-validation-bypass.zh.md)中历史写入的部分。
+## 更正：初始化、已读确认和工具状态
+
+对 `d3f91aad` 的审查发现测试遗漏了生产副作用。Worktree setup 会在 fork 复制之前
+写入脚本日志，因此空目标限制会拒绝合法 fork。自动已读会在编辑重发落盘失败之前，
+把新增 pending 轮次改为 seen/read，让回滚凭据失效。工具状态更新还会重验未改动的
+工具调用内部未知内容。
+
+待审修复将复制历史插在目标轮次之前，保留已有轮次和容器，拒绝 id 冲突。
+回滚只允许本次新增 pending 用户轮次的已读确认，其他字段必须完全不变。
+工具状态更新仅解析变化的 status/request/outcome，保留未改内容；其他工具字段修改
+仍需完整 item 解析。测试现在安装真实 setup recorder 和自动已读订阅，并使用两个
+真实 Loro 副本检查工具未知内容。
+
+这些回归在修复前失败、修复后通过（writer 17 项，fork/编辑服务 35 项）。
+它们不能替代多轮独立审查、回滚拒绝条件的补充覆盖、真实 provider 执行或磁盘故障验收。
+#460 继续保持 Draft。独立止血补丁是 [#463](https://github.com/LodyAI/Lody/pull/463)，
+不包含本 writer。
+本次提交前，完整 `pnpm check`、改动文件格式检查和 `pnpm run docs check` 均通过。
+独立审查仍待完成。
+
+在此分支替代[临时关闭校验](../bug-fix/2026-09-07-temporary-session-validation-bypass.zh.md)中历史写入的部分。
 意图：[Spec 草稿](../../../../specs/session-history-writes.zh.md)。
 PR：[#460](https://github.com/LodyAI/Lody/pull/460)。

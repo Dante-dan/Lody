@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { LoroDoc, LoroMap } from 'loro-crdt';
 import { SessionDocument } from '../lib/loro/doc';
+import { createWorktreeScriptHistoryRecorder } from './worktree/worktree-script-history';
 import {
   getSessionRoomId,
   createSessionMirror,
@@ -424,6 +425,30 @@ describe('SessionForkService durability boundary', () => {
       harness.targetDoc.copyStoredHistory.mockImplementation((snapshot, history) =>
         doc.copyStoredHistory(snapshot, history)
       );
+      let setupRow: LoroMap | undefined;
+      if (kind === 'worktree') {
+        const create = harness.sessionManager.createSession.getMockImplementation();
+        if (!create) throw new Error('Missing createSession implementation');
+        harness.sessionManager.createSession.mockImplementation(async (...args) => {
+          const result = await create(...args);
+          const recorder = createWorktreeScriptHistoryRecorder({
+            sessionDoc: doc,
+            sessionId: targetSessionId,
+            phase: 'setup',
+            logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+          });
+          await recorder.onStart?.({
+            phase: 'setup',
+            shell: 'bash',
+            displayCommand: 'echo synthetic',
+            command: 'bash',
+            args: [],
+            workdir: '/synthetic',
+          });
+          setupRow = loro.getList('history').get(0) as LoroMap;
+          return result;
+        });
+      }
       const settled = Promise.withResolvers<void>();
       const clear = harness.forkOperationStore.clear.getMockImplementation();
       if (!clear) throw new Error('Fork harness must provide marker cleanup');
@@ -446,7 +471,12 @@ describe('SessionForkService durability boundary', () => {
           'user-1',
           'assistant-1',
           `session-fork-origin:${targetSessionId}`,
+          ...(setupRow ? [setupRow.get('id')] : []),
         ]);
+        if (setupRow) {
+          expect((loro.getList('history').get(3) as LoroMap).id).toBe(setupRow.id);
+          expect(stored[3].items[0].type).toBe('worktree_script');
+        }
         expect(stored[2].items).toEqual([
           {
             type: 'system_notice',

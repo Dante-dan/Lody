@@ -4,7 +4,12 @@ import { z } from 'zod';
 import type { SessionHistory, SessionHistoryInput } from './schema';
 import { sessionHistorySchema } from './schema';
 import type { PermissionOutcome } from './message';
-import { MessageContentSchema, PermissionOutcomeSchema } from './message-schemas';
+import {
+  MessageContentSchema,
+  PermissionOutcomeSchema,
+  PermissionRequestInfoSchema,
+  ToolCallStatusSchema,
+} from './message-schemas';
 import {
   HistoryEntryWriteSchema,
   HistoryWriteError,
@@ -88,6 +93,62 @@ function preserveUnknown(
 const cleanNew = (schema: z.ZodType, input: unknown, old?: unknown): unknown =>
   preserveUnknown(schema, old, input, parseHistoryWrite(schema, input));
 
+/** These independent tool state fields may change without rewriting an old payload. */
+function prepareToolState(old: unknown, input: unknown): Record<string, unknown> | undefined {
+  if (!record(old) || !record(input) || old.type !== 'tool_call' || input.type !== 'tool_call')
+    return undefined;
+  const { status: oldStatus, permissionRequest: oldRequest, ...oldPayload } = old;
+  const { status, permissionRequest, ...payload } = input;
+  if (!historyValuesEqual(oldPayload, payload)) return undefined;
+  const result = { ...old };
+  if (!historyValuesEqual(oldStatus, status))
+    result.status = cleanNew(ToolCallStatusSchema, status);
+  if (!historyValuesEqual(oldRequest, permissionRequest)) {
+    // Answering an existing request does not author its options or tool content.
+    if (record(oldRequest) && record(permissionRequest)) {
+      const { outcome: _oldOutcome, ...oldInfo } = oldRequest;
+      const { outcome, ...info } = permissionRequest;
+      if (historyValuesEqual(oldInfo, info)) {
+        const parsed = cleanNew(PermissionOutcomeSchema.optional(), outcome, oldRequest.outcome);
+        result.permissionRequest = { ...oldRequest, outcome: parsed };
+        return result;
+      }
+    }
+    const parsed = cleanNew(PermissionRequestInfoSchema.optional(), permissionRequest, oldRequest);
+    if (parsed === undefined) delete result.permissionRequest;
+    else result.permissionRequest = parsed;
+  }
+  return result;
+}
+
+/** Only a read acknowledgement on a newly inserted pending user row is benign. */
+function matchesRollbackReceipt(before: unknown[], after: unknown[], current: unknown[]): boolean {
+  const previousIds = new Set(before.filter(record).map((entry) => entry.id));
+  return (
+    after.length === current.length &&
+    after.every((expected, i) => {
+      const actual = current[i];
+      if (historyValuesEqual(expected, actual)) return true;
+      if (
+        !record(expected) ||
+        !record(actual) ||
+        previousIds.has(expected.id) ||
+        expected.role !== 'user' ||
+        expected.status !== 'pending' ||
+        (expected.read !== undefined && expected.read !== false) ||
+        actual.status !== 'seen' ||
+        actual.read !== true
+      )
+        return false;
+      return historyValuesEqual(expected, {
+        ...actual,
+        status: expected.status,
+        read: expected.read,
+      });
+    })
+  );
+}
+
 function prepareReplacement(previous: unknown, incoming: unknown): Record<string, unknown> {
   if (!record(previous) || !record(incoming))
     throw new HistoryWriteError([{ path: [], code: 'invalid_turn' }]);
@@ -116,6 +177,8 @@ function prepareReplacement(previous: unknown, incoming: unknown): Record<string
         const nextAnchor = anchors.slice(i + 1).find((index) => index >= 0) ?? oldItems.length;
         const oldIndex = oldStart + i - newStart;
         const old = oldIndex < nextAnchor ? oldItems[oldIndex] : undefined;
+        const toolState = prepareToolState(old, item);
+        if (toolState !== undefined) return toolState;
         return cleanNew(
           MessageContentSchema,
           item,
@@ -133,9 +196,9 @@ function prepareReplacement(previous: unknown, incoming: unknown): Record<string
 
 export interface HistoryWriter {
   capture(): StoredHistorySnapshot;
-  /** Copy into an empty history; authored changes still pass the ordinary parser. */
+  /** Prepend copied history, retaining target initialization rows; ids must not collide. */
   copyFrom(snapshot: StoredHistorySnapshot, history: SessionHistoryInput[]): void;
-  /** A local rollback receipt, valid only while the written history is unchanged. */
+  /** Reject intervening edits, except read acknowledgement of a newly added pending user row. */
   updateWithRollback(
     updater: (history: SessionHistoryInput[]) => SessionHistoryInput[]
   ): () => void;
@@ -246,8 +309,13 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
     copyFrom(snapshot, history) {
       const source = storedHistories.get(snapshot);
       if (!source) throw new HistoryWriteError([{ path: ['history'], code: 'invalid_snapshot' }]);
-      if (list.length !== 0)
-        throw new HistoryWriteError([{ path: ['history'], code: 'copy_target_not_empty' }]);
+      const previous = list.toJSON() as SessionHistory[];
+      const ids = new Set(previous.filter(record).map((entry) => entry.id));
+      for (const entry of history) {
+        if (ids.has(entry.id))
+          throw new HistoryWriteError([{ path: ['history'], code: 'copy_target_conflict' }]);
+        ids.add(entry.id);
+      }
       const used = new Set<number>();
       const values = history.map((entry) => {
         const index = source.findIndex((old, i) => !used.has(i) && old.id === entry.id);
@@ -256,7 +324,7 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
         return prepareReplacement(source[index], entry);
       });
       // Values are either unchanged stored data or preflighted authored changes.
-      planWrite([], values as SessionHistory[], (_old, value) => value)();
+      planWrite(previous, [...values, ...previous] as SessionHistory[], (_old, value) => value)();
     },
     updateWithRollback(updater) {
       const before = list.toJSON() as SessionHistoryInput[];
@@ -264,10 +332,11 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       const after = list.toJSON();
       let consumed = false;
       return () => {
-        if (consumed || !historyValuesEqual(list.toJSON(), after))
+        if (consumed || !matchesRollbackReceipt(before, after, list.toJSON()))
           throw new HistoryWriteError([{ path: ['history'], code: 'stale_rollback' }]);
         // Only this closure can restore its captured values. Never reparse old data
-        // as new input, and never overwrite intervening local/remote history edits.
+        // as new input, and never overwrite intervening local/remote history edits
+        // other than the discarded replacement's automatic read acknowledgement.
         planWrite(list.toJSON() as SessionHistory[], before, (_old, value) => value)();
         consumed = true;
       };
