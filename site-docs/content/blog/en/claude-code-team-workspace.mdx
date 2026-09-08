@@ -1,0 +1,215 @@
+---
+title: 'Claude Code Team Workspace: Parallel Multi-Model Agents'
+date: 2026-09-08
+author: Lody Team
+authorLink: https://lody.ai
+description: 'A team plan sells seats, not a shared session surface. How a multi-model coding agent workspace works: worktree isolation, mixed Claude Code configs, live handoff.'
+tag: Engineering
+sidebar: false
+aside: false
+---
+
+Two different things get called "a Claude Code team".
+
+One is a billing arrangement: seats on a plan, one invoice, an admin who can add and remove people. It answers *who may run the CLI and who pays for the tokens*.
+
+The other is what engineers actually search for around week two of agent-heavy work: somewhere **several coding agents run at once**, where teammates can **see** what is running, and where someone else can **pick up** a session that is already half done. No plan answers that, because a CLI session lives in one terminal, on one working copy, on one laptop.
+
+This post is about the second one — how a multi-model coding-agent workspace is actually assembled, with [Lody](https://lody.ai) as the concrete implementation: the mechanics underneath, the exact settings paths, and the parts that bite.
+
+## A Lody workspace is not Anthropic's Claude Code Team plan
+
+Worth stating plainly, because search results blur it. Lody does not resell Anthropic seats, does not proxy your tokens, and is not Claude-only. Claude Code is *one* [agent config](/docs/agents) you select per session, next to Codex, Kimi Code, DeepSeek Harness, and anything in the [ACP registry](/docs/cli-runtimes). Credentials stay where they already are: the subscription login on the machine running the Lody CLI, or API keys you paste into a config.
+
+Three layers, often mashed into one question:
+
+| Layer | What it owns | What it never handles |
+| --- | --- | --- |
+| Vendor plan (Anthropic, OpenAI, Moonshot, DeepSeek…) | Seats, quota windows, billing, model access | Where a session lives, or who else can open it |
+| Coding CLI (Claude Code, Codex, Kimi Code…) | One conversation, one working directory, one terminal | Isolation between concurrent tasks, team visibility, handoff |
+| Workspace (Lody) | Sessions, worktrees, machines, members, visibility | Selling tokens or replacing your CLI |
+
+Keep those straight and most "can Claude Code do teams?" confusion dissolves: it can be on a team *plan*; the shared session surface is a different layer you have to bring.
+
+## Four coordination shapes, and when each is wrong
+
+Almost every real multi-agent setup is one of four shapes. Picking the wrong one is the usual cause of "the agents fought each other" or "I had to re-explain everything".
+
+| Shape | Isolation | Shared | Reach for it when | Fails when |
+| --- | --- | --- | --- | --- |
+| **Parallel sessions** — several home-page conversations | Own worktree, branch, conversation | Repo history, machine | Work items are independent and each maps to one PR | Two items touch the same files and both open PRs from stale bases |
+| **Child tab / Side Chat** — extra chats inside one session | Own conversation history | **Same working directory** | Reviewing or questioning the change the main tab is producing | You treat it as isolation — it is not; both tabs see each other's edits |
+| **Handoff** — teammate continues your session | Nothing; that's the point | Conversation, diffs, worktree, branch | Context is expensive and the work is unfinished | Two people steer the same live turn without agreeing who drives |
+| **Delegated fan-out** — one agent drives other sessions | Own worktrees | Requesting conversation keeps the thread | A single prompt should split into focused conversations and report back | You expect a background scheduler; it is bounded to Lody conversation data |
+
+The distinction people get wrong most often is the second row. A [child tab](/docs/session-tabs) inherits the parent's machine, project, branch, agent config, model, and permission defaults, and keeps its own history — but it works in the **same directory**. Same for **Side Chat** in the right sidebar. They are review surfaces, not sandboxes. Isolation only comes from a session with its own [worktree](/docs/worktrees) (or a **New worktree** fork).
+
+## Isolation is a directory, not a promise
+
+The reason parallel agents can coexist at all is boring and physical: each session gets its own checkout.
+
+When a session uses a worktree — always for GitHub-backed work, optionally for [local projects](/docs/local-project) — Lody creates a branch (default `session/<shortSessionId>`), checks it out under `~/.lody/repos/<repoId>/worktrees/<sessionId>/`, runs the project setup script, then hands the agent its first prompt. Git history is shared through one bare repo; working files are not shared at all.
+
+Two consequences that decide whether a fleet of five agents is pleasant or miserable:
+
+**1. The setup script is your concurrency budget.** It runs after the worktree exists and *before* the first prompt, so whatever it does happens N times for N sessions. A naive `pnpm install` per worktree means N `node_modules` trees on disk. Point package managers at a shared store or cache instead, and put teardown in the cleanup script, which runs when a conversation is archived, before the directory is removed. Both live in **Settings → Projects** → **Worktree setup** / **Worktree cleanup**.
+
+**2. Files are isolated; ports and databases are not.** Five agents each running `pnpm dev` on port 3000 collide even though their files never touch. Lody exports `LODY_SESSION_ID`, `LODY_WORKTREE_PATH`, `LODY_WORKTREE_BRANCH`, `LODY_WORKTREE_SCRIPT_PHASE`, plus `LODY_GITHUB_REPO` or `LODY_LOCAL_PROJECT_ID`, into both scripts — so derive per-session resources from the session id rather than hardcoding them:
+
+```bash
+# Worktree setup: give every session its own port and database name.
+offset=$(( $(printf '%s' "$LODY_SESSION_ID" | cksum | cut -d' ' -f1) % 900 ))
+echo "PORT=$((4000 + offset))" >> .env.local
+echo "DATABASE_URL=postgres://localhost/app_${LODY_SESSION_ID:0:8}" >> .env.local
+```
+
+Anything a script exports lives only for that script process. Environment variables the *agent* needs belong in [Agent Config](/docs/agents) instead.
+
+Archiving a session commits outstanding changes to its branch, then removes the worktree directory to reclaim disk; the conversation and branch survive, and the worktree is recreated if you restore it. That makes archive-on-merge the natural end of a parallel task — **Settings → General** has auto-archive rules for PR-linked sessions.
+
+## "Multi-model" is two different mechanisms
+
+This is the part most comparison posts flatten. In Lody an agent config is a **CLI type plus environment variables**, which means "running DeepSeek" can mean two structurally different things:
+
+- **Another endpoint behind the same CLI.** The `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` presets — *DeepSeek over Claude Code*, *GLM over Claude Code*, *MiniMax over Claude Code*, *MiMo over Claude Code*, Kimi or Qwen via a Claude-compatible endpoint — all run the Claude Code binary against someone else's Anthropic-compatible API. Same tool surface, different weights and different bill.
+- **A genuinely different runtime.** Codex, **Kimi Code** (managed by Lody, so you don't install its command), **DeepSeek Harness** (built-in ACP provider; `DEEPSEEK_BASE_URL` / `DEEPSEEK_API_KEY`, no standalone `dsh` needed), any [ACP registry](/docs/cli-runtimes) entry, or **Custom ACP** with your own stdio launch command.
+
+Why the difference matters operationally: **capabilities are discovered per config, not assumed**. Lody reads what a runtime advertises when you press **Test** in **Settings → Agent Config** (or run `lody agent-config refresh-capabilities <idOrName>` on that machine), and the conversation UI then exposes only what that runtime actually supports. Concretely:
+
+- **Fork** and therefore **Side Chat** appear only when the active agent reports native session forking. A runtime without it cannot be your "spin off a review thread" agent.
+- Slash commands come from capability discovery, so `/review` or `/compact` exist per config and per installed version.
+- **Fast Mode** shows up only when the selected config advertises it; the tooltip states the tradeoff (roughly 2.5× faster at a higher cost per token).
+- **Steer** — redirecting a running task instead of cancelling it — works with Claude Code and Codex: set **Settings → General** → **Queued message behavior** so queued messages steer the active turn, or pick **Steer** on the first queued message.
+
+So the useful question when composing a mixed fleet is not "which model is smartest", it is: *for the seat this agent takes in my workflow, does it advertise the controls that seat needs?* An implementation agent needs steering and slash commands. A review agent benefits from forking. A batch agent needs neither.
+
+### Rate limits are the real concurrency ceiling
+
+Fleet size is bounded by three things, in this order: your subscription's rate windows, host CPU/RAM/disk, and how many conversations a human can actually review. The first one is invisible until it isn't — **Settings → Agent Config → Machines** shows remaining quota and refresh times for supported subscription windows (for example 5-hour and 7-day).
+
+The practical arrangement that falls out of this: keep the subscription config for the one deep session you are actively steering, and put parallel breadth on metered API-key configs where a burst costs money instead of blocking your main tool. Lody does not load-balance across configs for you — you choose per session, which is exactly why saving the choice as a role is worth the two minutes.
+
+Attribution afterwards lives in **Settings → AI Usage**, including a **By member** breakdown.
+
+## Make the setup reproducible: Agent Roles
+
+A team's real problem is not starting one agent, it's that "the reviewer setup" exists only in one engineer's head. An [Agent Role](/docs/agent-roles) pins the whole thing — machine, agent config, model, reasoning level, permission mode, and an optional default instruction — behind one name you can click in the composer's **Role** row or invoke with `@` to start a *new* conversation on it.
+
+What makes roles trustworthy rather than another layer of indirection:
+
+- A role binds **one machine and one agent config exactly** and never quietly substitutes another. If its machine goes offline or its config is deleted, the role stays listed with the precise reason and refuses to run. No silent fallback onto a different model than the one your review standard assumed.
+- It stores **no API keys and no MCP selection** — those stay with the agent config.
+- What a role said at the moment you mentioned it is **frozen into that request**, so editing or deleting the role afterwards cannot rewrite work already accepted.
+- **Share with workspace** makes it visible, mentionable, and runnable for everyone; it still runs on its own machine, so members need access to that machine.
+
+Two behaviors worth knowing before you rely on them: inside an already-created conversation, the Role row only applies a run configuration — the role's default instruction is *not* injected retroactively, and only roles bound to the same agent type are offered. And the composer footer drops the role's name as soon as you hand-edit the model, because it will not claim a role that is not what will run.
+
+## The unit of visibility is the machine, not the session
+
+This is the single most useful thing to internalize before inviting anyone. Every machine you register is **private by default**; joining a workspace does not expose your laptop, and only a machine's owner can change its sharing state. Sessions on an unshared machine never sync into other members' sidebars — and **Share with team…** on a session may share the underlying machine (and, for a local project, the project) with the whole workspace, which can make *other* conversations on that device visible too. The confirmation dialog states the scope first.
+
+The architecture that follows: if you want durable team visibility without publishing everyone's laptop, run team-visible work on a **dedicated shared machine**. Any server joins the workspace by running the CLI over SSH:
+
+```bash
+# On the shared runner. Token from Settings → Account → CLI Token.
+lody login --auth "$LODY_AUTH" --machine-name team-runner
+lody daemon start
+```
+
+Then share exactly that machine from **Settings → Machines** → **Share machine**, and leave laptops private. Members select the shared runner when creating a session; the home-page sidebar filter (**All Tasks** by default, versus **My Tasks**, or **Team Tasks** on mobile) shows who is running what, with avatars per session.
+
+Handoff into a live session is then a two-minute action: invite the person under **Settings → Workspace → General** → **Members** → **Invite Member**, make the session team-visible, and have them open *that* session rather than forking it. The full permission surface and its edge cases live in [Share a Coding Agent Session](/docs/session-handoff).
+
+One coordination rule the product cannot enforce for you: a shared session has no exclusive driver, so agree who sends the next prompt. Handoff moves context, not a lock.
+
+### The first-hour setup, in order
+
+1. **Settings → Machines** — decide which machine hosts team-visible work, register it (`lody daemon start` on a server if it isn't a laptop), and share only that one.
+2. **Settings → Workspace → General** → **Members** → **Invite Member** — membership comes first; without it nothing else is reachable.
+3. **Settings → Agent Config** — one config per *credential source*, each verified with **Test** so its capabilities are cached. Name them after where the money comes from (`claude-sub`, `deepseek-api`), not after the task.
+4. **Settings → Agent Roles** — wrap the two or three setups you actually repeat, then **Share with workspace** so a teammate runs the same thing you do.
+5. **Settings → Projects** → **Worktree setup** / **Worktree cleanup** — make N checkouts cheap and per-session ports unique before you run five agents, not after.
+6. **Settings → General** — queued-message behavior, and auto-archive for PR-linked sessions so finished parallel work leaves the sidebar on its own.
+
+## Scripted fan-out, when you don't want to click
+
+For repeatable batches — a lint rule across packages, a dependency bump per service, the same refactor on twenty files — the [CLI](/docs/cli) is a better interface than twenty composer clicks. A `lody session create` against a GitHub repo gets its own worktree and branch exactly like a UI session (for a local project, ask for one with `--worktree`), so the isolation story is unchanged:
+
+```bash
+# One session per work item, alternating configs to spread quota.
+i=0
+while IFS= read -r task; do
+  config=$([ $((i % 2)) -eq 0 ] && echo claude-sub || echo deepseek-api)
+  lody session create \
+    --workspace my-team \
+    --repo owner/repo \
+    --branch main \
+    --agent-config "$config" \
+    "$task"
+  i=$((i + 1))
+done < tasks.txt
+
+lody session list --workspace my-team --json |
+  jq -r '.sessions[] | "\(.id)  \(.status.type // "unknown")  \(.title // "untitled")"'
+```
+
+Requirements that will trip you up otherwise: `session create`, `session chat`, and `session cancel` need `lody start` or `lody daemon start` live on that machine, while `list` / `show` / `history` only need login; `--repo` and `--local-project` are mutually exclusive; `--mode` and `--model` override ACP selections; and `lody machine list --json --include-acp-capabilities` is how you check what a fleet machine can actually run before dispatching to it.
+
+If instead you want *one agent* to do the splitting and summarize back, that is [Agent Session Control](/docs/session-orchestration) — available with **Developer mode** and the **Tasks** beta on (**Settings → About**). Use it for judgement-driven decomposition; use the CLI when the task list is already known and you want it in CI.
+
+## Decision guide
+
+**One model or several?**
+
+- One config, several sessions: the default. Same tool surface everywhere, one quota pool, easiest to reason about.
+- Split configs when you hit a rate window, when cost per token justifies moving breadth off a subscription, or when one seat in the workflow needs a capability another runtime doesn't advertise.
+- Do not split configs to "get a second opinion" on the same file at the same time. Two agents editing one working directory is the collision case; give the second one its own session and let it read the diff.
+
+**Parallel or handoff?**
+
+- Parallel when the work is *new* and independent — one item, one session, one PR.
+- Handoff when the work is *unfinished* and the expensive part is context the agent already has.
+- Child tab when you want a second angle on the change happening right now and you accept shared files.
+- Delegated fan-out when the split itself needs judgement and the results should come back to one thread.
+
+## Honest limits
+
+- Visibility is machine-scoped (plus local-project grants). There is no per-session allowlist, and sharing a session can widen a device's other conversations.
+- Session control is deliberately bounded to Lody conversation data — not a general background scheduler. A delegated task may finish after its deadline; its output stays in that conversation even if the requester already got a timeout.
+- The Claude Code background-task panel reports progress only; you cannot cancel individual background tasks from it, and the scheduled-task panel is read-only.
+- `/compact` runs, but Lody does not yet render the resulting update, so you will not see agent replies for that command.
+- DeepSeek Harness has a known upstream inheritance limitation: with a non-`DeepSeek-V4-Pro` session model, delegated subagents may still use the creation-time `DeepSeek-V4-Pro` seed, which can raise usage cost.
+- Roles carry no secrets, no MCP selection, and no role-level auto-approval policy; permission is pinned as a run configuration value, not as a team policy engine.
+- Local (non-GitHub) projects support chat, file lists, diff review, mobile, and preview, but not PR and CI automation.
+- Archived sessions keep their conversation history and Git branch on the machine until you delete them — parallel work still needs periodic cleanup.
+
+## FAQ
+
+### Is a Lody workspace the same as a Claude Code Team plan?
+
+No. A vendor plan governs seats, quota, and billing for a CLI. A Lody workspace governs sessions, worktrees, machines, and who can see or continue them. You can use one, the other, or both; Lody works from the subscription login already on the machine, or from API keys in an agent config.
+
+### Do all my teammates need Claude Code installed to share a workspace?
+
+No. Sessions run on the machine that hosts the Lody CLI and its credentials, so a teammate who opens a shared session is driving *that* machine's runtime. What they need is workspace membership plus access to the machine (and local project, if any) the session uses.
+
+### How many parallel agents is reasonable?
+
+The binding constraint is usually review bandwidth, not compute: one session per PR-sized item, and no more open than you can read diffs for. Before that, check your subscription's rate window in **Settings → Agent Config → Machines** and your disk headroom, since each worktree is a real checkout with real build artifacts.
+
+### Can two agents work in the same repository at the same time without conflicts?
+
+Yes, when each has its own worktree — separate sessions, or a **New worktree** fork. They share Git history and nothing else, so uncommitted work stays with the task that produced it. **Current workspace** forks, Side Chats, and child tabs deliberately share the source directory and can see each other's edits.
+
+### Can a teammate take over a session while an agent is mid-task?
+
+They can open the session and continue it — same conversation, diffs, worktree, and branch. Agree on who drives, though: handoff transfers context, not exclusivity. A message sent while a turn is running is queued, and whether it steers that turn or waits depends on the sender's queued-message behavior.
+
+### Does sharing one session expose my whole laptop?
+
+It can expose that machine's other conversations, which is why the dialog names the scope before you confirm. Machines are private until their owner shares them, and you can turn **Share machine** back off in **Settings → Machines**. If you want permanently team-visible agent work, put it on a dedicated shared runner instead of a personal machine.
+
+## Where to go next
+
+- Product guides: [Parallel Coding Agents](/docs/parallel-agents), [Worktrees](/docs/worktrees), [Agent Roles](/docs/agent-roles), [Share a Coding Agent Session](/docs/session-handoff)
+- [Download Lody](/download)
