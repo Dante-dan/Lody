@@ -27,7 +27,6 @@ import {
   type TaskStatus,
   type TaskTimelineEntry,
   type SessionId,
-  type SessionHistory,
   type TaskProposalMeta,
 } from '@lody/shared';
 import { userAtom } from '@/atoms';
@@ -442,27 +441,16 @@ export function useTaskActions() {
     async (
       sessionId: SessionId,
       entryId: string,
-      itemIndex: number,
+      _itemIndex: number,
       nextMeta: TaskProposalMeta
     ): Promise<void> => {
-      if (!runtime) {
+      if (!runtime || !nextMeta.outcome) {
         return;
       }
-      const entry = await runtime.withSessionStore(sessionId, (sessionStore) =>
-        (sessionStore.getState().history as SessionHistory[]).find((item) => item.id === entryId)
-      );
-      if (!entry) {
-        return;
-      }
-      const items = Array.isArray(entry.items) ? [...entry.items] : [];
-      const target = items[itemIndex];
-      if (!target || target.type !== 'system_notice' || target.name !== 'task_proposal') {
-        return;
-      }
-      items[itemIndex] = { ...target, meta: nextMeta };
-      await runtime.writer.updateSessionHistory(sessionId, entryId, {
-        ...entry,
-        items,
+      // The rendered index/body may already be stale when the store is acquired.
+      await runtime.writer.resolveSessionTaskProposal(sessionId, entryId, nextMeta.proposalId, {
+        outcome: nextMeta.outcome,
+        ...(nextMeta.taskId !== undefined ? { taskId: nextMeta.taskId } : {}),
       });
     },
     [runtime]

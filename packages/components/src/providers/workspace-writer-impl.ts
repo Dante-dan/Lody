@@ -137,6 +137,25 @@ export function createDirectWorkspaceWriter(deps: DirectWorkspaceWriterDeps): Wo
       });
     },
 
+    async resolveSessionTaskProposal(sessionId, entryId, proposalId, resolution) {
+      await withSessionStore(sessionId, (store) => {
+        store.historyWriter.update((history) => {
+          const entry = history.find((item) => item.id === entryId);
+          const target = entry?.items?.find(
+            (item) =>
+              item?.type === 'system_notice' &&
+              item.name === 'task_proposal' &&
+              item.meta?.proposalId === proposalId
+          );
+          if (target?.type === 'system_notice' && target.name === 'task_proposal' && target.meta) {
+            target.meta.outcome = resolution.outcome;
+            if (resolution.taskId !== undefined) target.meta.taskId = resolution.taskId;
+          }
+          return history;
+        });
+      });
+    },
+
     async respondSessionPermission(sessionId, requestId, outcome) {
       await withSessionStore(sessionId, (store) => {
         store.historyWriter.respondPermission(requestId, outcome);

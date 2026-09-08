@@ -12,6 +12,8 @@ again. Contract test: `packages/shared/tests/session-doc-forward-compat.test.ts`
 
 Session docs use `createSessionMirror`; only its HistoryWriter writes history.
 Replacement contract: [shared rules](../../../shared/AGENTS.md#session-history).
+Task-proposal decisions locate the current item by proposal id after store acquisition
+and update only decision fields through HistoryWriter; never replace a rendered entry.
 
 ## Streams connection cardinality
 
