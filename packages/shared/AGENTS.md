@@ -45,3 +45,7 @@
 - Target-local streaming uses `updateEntry`; it must not produce/plan the entire history.
   Resolve the live turn on each call, preserve immutable ids, and preflight before writing.
   Generic history updates remain for operations with cross-turn ownership or structural edits.
+- The pinned Mirror text-event patch copies only an existing single text leaf's path.
+  Preserve descriptors, old snapshots and subscriber delivery; structural/multi-event/tree
+  paths retain the general reader. Future Mirror patches must compose with this patch,
+  never silently replace it. No storage schema or write validation depends on this optimization.
