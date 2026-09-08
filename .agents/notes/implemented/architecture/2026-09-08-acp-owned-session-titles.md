@@ -8,10 +8,11 @@ Translation: pending
 Lody wanted every builtin agent to stop carrying its own `titleGeneration`
 session config and take the session title from the ACP adapter instead. An audit
 of all five builtin adapters shows only acp-extension-claude and
-acp-extension-codex surface a usable title today, so the isolated generator and
-its config must stay for Grok, Kimi and the DeepSeek Harness — though for all
-three the gap is ours rather than a missing upstream feature, most sharply for
-Grok, whose official runtime generates titles inside its own ACP session impl.
+acp-extension-codex are wired up today, so the isolated generator and its config
+must stay for Grok, Kimi and the DeepSeek Harness. For all three the gap is ours,
+not a missing upstream feature — most sharply for Grok, which a live probe shows
+already pushes a real generated title that Lody receives and then discards for
+carrying no `titleSource`.
 Codex was the one adapter doing the work twice, since Lody spawned an isolated
 codex ACP session for the title while the adapter independently generated and
 pushed its own, so Codex now joins Claude as an ACP-owned title provider. That
@@ -29,7 +30,7 @@ Each adapter was read at the commit this repository pins.
 | --- | --- | --- | --- | --- |
 | `acp-extension-claude` | 0.70.0 | yes | no `_meta` at all | yes — SDK `generate_session_title` control request |
 | `acp-extension-codex` | 1.10.0 (since 1.8.0) | yes | yes, generated titles are `explicit` | yes — cheap-model turn on an ephemeral thread |
-| `acp-extension-grok` | 0.1.0 | no (adapter); the official runtime does generate titles | no | not in the adapter — upstream `title_refresh.rs` does |
+| `acp-extension-grok` | 0.1.0 | yes — the runtime pushes it and the proxy forwards it | no `_meta` at all | yes — upstream `title_refresh.rs` |
 | `acp-extension-kimi` | acp-server 0.0.1 | yes, but the title is the first prompt truncated to 200 chars | no `_meta` at all | no |
 | `acp-extension-dsh` | 0.1.1 | no | no | no |
 
@@ -58,16 +59,33 @@ inside the ACP session implementation, alongside `goal.rs`, `mcp.rs` and
 `prompt_build.rs` — so it is not TUI-only, and the runtime's ACP `SessionUpdate`
 enum includes `session_info_update` with `title` and `updatedAt`.
 
-What remains unverified is whether that title reaches the ACP wire as a pushed
-`session_info_update` or only as a field of the `x.ai/session/info` response. It
-could not be settled on the machine used for this audit: there are no Grok
-credentials there (`~/.grok/auth.json` is absent) so no turn could be run, and all
-1375 stored Grok sessions are zero-message Lody capability probes with an empty
-`session_summary`. Both candidate paths are already within reach of existing code:
-`handleRuntimeMethod` in `packages/acp-extension-grok/src/proxy.js` ends in a
-verbatim `passthrough`, so a pushed update already flows to Lody and is dropped
-only for lacking `_meta.lody.titleSource`; and the adapter already issues
-`x.ai/session/info` every turn but consumes only `sessionInfo?.context`.
+That title does reach the ACP wire, as a pushed notification. A probe run on a
+credentialed machine against runtime 1.0.13 — one short turn, then a 25s wait —
+produced exactly one push per run, both talking straight to `grok agent stdio`
+and routing through `acp-extension-grok`:
+
+```json
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"01a08127-...",
+ "update":{"sessionUpdate":"session_info_update","title":"Reply with single word ok"}}}
+```
+
+The same title landed in the session's on-disk `summary.json` (`session_summary`
+non-empty, so generation genuinely ran), and the proxy filtered nothing — the two
+paths differed only in generated wording. Crucially the message carries **no
+`_meta` at all**, so Grok has the same shape as Claude: one authoritative pushed
+title with no `titleSource` to gate on. Lody therefore already receives Grok's
+title today and discards it in `handleAgentSessionTitleUpdate` for want of a tag.
+Only one push was observed, with no `fallback`-style preview beforehand.
+
+The pull path does not exist in the mode Lody runs: `x.ai/session/info` answers
+`-32601 Method not found` under `grok agent stdio`, direct and through the proxy
+alike. The literal string is present in the shipped binary, so the method is
+presumably registered on some other channel, but not on the ACP agent one. That
+has a consequence beyond titles, recorded here because the evidence is in hand:
+`proxy.js` issues `internalRequest('context', ...)` after `model_changed` and at
+session start, and drops the reply when it is an error, so builtin Grok's
+context-window usage notification is silently dead against this runtime. Fixing
+that is separate work and is not attempted here.
 
 ## Decision
 

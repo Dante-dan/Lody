@@ -194,13 +194,11 @@ Grok, Kimi and the DeepSeek Harness deliver no title Lody can currently use, so 
 using `title-generator.ts` / `response-utils.ts` and the `titleGeneration` config. In all
 three cases the gap is on our side, not a missing upstream feature:
 
-- **Grok**: the official runtime generates titles itself, from
-  `xai-grok-shell/src/session/acp_session_impl/title_refresh.rs` — inside its ACP session
-  impl, so it runs under `grok acp`, not only in the TUI. `acp-extension-grok` adds no title
-  handling: an emitted `session_info_update` would reach Lody untouched through
-  `handleRuntimeMethod`'s default passthrough and then be dropped for lacking
-  `_meta.lody.titleSource`. The adapter also already calls `x.ai/session/info` every turn but
-  keeps only `.context`.
+- **Grok**: verified by live probe to already push one real generated
+  `session_info_update` title per session, which `acp-extension-grok` forwards untouched.
+  It carries no `_meta`, so Lody receives it and discards it for lacking
+  `_meta.lody.titleSource` — the same untagged shape as Claude. Enabling it is a tagging
+  decision, not missing upstream support.
 - **Kimi**: its `session_info_update` carries the first prompt truncated to 200 chars with no
   `_meta`, while the engine's real `SessionTitleService` stays reachable only from kap-server
   and the node SDK. `SessionMeta.titleKind` is discarded at the ACP boundary.
