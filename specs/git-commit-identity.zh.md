@@ -20,8 +20,8 @@ owner 的身份。
 中的 author 或 committer。
 
 ACP 进程会在启动时快照环境。如果复用 session 时有效 Git identity 发生变化，Lody 必须在提交
-下一个 prompt 前终止旧进程，并使用新环境恢复同一个 ACP session；不得把该 prompt 提交给旧
-进程。identity 未变化时无需重启。
+下一个 prompt 前在内部终止旧进程，并使用新环境恢复同一个 ACP session；这个替换不得发布
+session termination 生命周期，也不得把该 prompt 提交给旧进程。identity 未变化时无需重启。
 
 ## 证据
 

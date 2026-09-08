@@ -22,9 +22,10 @@ GitHub authentication remains a separate requester-bound decision and does not c
 object's author or committer.
 
 An ACP process snapshots its environment at launch. If the effective Git identity changes while
-reusing a session, Lody must terminate the stale process and resume the same ACP session with the
-new environment before submitting the next prompt. It must not submit that prompt to the stale
-process. An unchanged identity does not require a restart.
+reusing a session, Lody must internally terminate the stale process and resume the same ACP
+session with the new environment before submitting the next prompt. This replacement must not
+publish the session termination lifecycle or submit that prompt to the stale process. An
+unchanged identity does not require a restart.
 
 ## Evidence
 

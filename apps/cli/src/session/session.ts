@@ -244,7 +244,19 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
   }
 
   async terminate(force: boolean = false): Promise<void> {
-    this.logger.debug(`[${this.sessionId}] Terminating session${force ? ' (force)' : ''}`);
+    await this.terminateInternal(force, true);
+  }
+
+  async terminateForRestart(force: boolean = true): Promise<void> {
+    await this.terminateInternal(force, false);
+  }
+
+  private async terminateInternal(force: boolean, publishLifecycle: boolean): Promise<void> {
+    this.logger.debug(
+      `[${this.sessionId}] Terminating session${force ? ' (force)' : ''}${
+        publishLifecycle ? '' : ' for internal restart'
+      }`
+    );
     this.status = 'stopping';
 
     if (this.acpSessionId && this.terminalManager.disposeAll) {
@@ -308,11 +320,13 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
 
     this.status = 'terminated';
 
-    const event: SessionExitEvent = {
-      sessionId: this.sessionId,
-      exitCode: activeProcess?.child.exitCode ?? 0,
-    };
-    this.emit('terminated', event);
+    if (publishLifecycle) {
+      const event: SessionExitEvent = {
+        sessionId: this.sessionId,
+        exitCode: activeProcess?.child.exitCode ?? 0,
+      };
+      this.emit('terminated', event);
+    }
   }
 
   /**

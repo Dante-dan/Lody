@@ -1194,6 +1194,7 @@ describe('SessionExecutionService', () => {
       }),
     };
     const terminateSession = vi.fn(async () => {});
+    const terminateSessionForRestart = vi.fn(async () => {});
     const createSession = vi.fn(async () => restoredSession);
     const deps = createBaseDeps({
       sessionManager: {
@@ -1202,6 +1203,7 @@ describe('SessionExecutionService', () => {
         createSession,
         setSessionError: vi.fn(),
         terminateSession,
+        terminateSessionForRestart,
         refreshGhTokenForSession: vi.fn(async () => {}),
       } as unknown as SessionManager,
       workspaceDocument: {
@@ -1229,7 +1231,8 @@ describe('SessionExecutionService', () => {
       userEmail: 'teammate@example.com',
     });
 
-    expect(terminateSession).toHaveBeenCalledWith(sessionId, true);
+    expect(terminateSessionForRestart).toHaveBeenCalledWith(sessionId);
+    expect(terminateSession).not.toHaveBeenCalled();
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({
         requesterUserId: 'user-2',
@@ -1239,7 +1242,7 @@ describe('SessionExecutionService', () => {
     );
     expect(oldPrompt).not.toHaveBeenCalled();
     expect(restoredPrompt).toHaveBeenCalledOnce();
-    expect(terminateSession.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(terminateSessionForRestart.mock.invocationCallOrder[0]).toBeLessThan(
       restoredPrompt.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
     );
   });

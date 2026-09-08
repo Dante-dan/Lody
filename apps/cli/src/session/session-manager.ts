@@ -2091,6 +2091,25 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     this.logger.debug(`[${sessionId}] Session terminated`);
   }
 
+  /**
+   * Dispose a stale runtime so the same durable session can be restored without
+   * publishing the user-visible termination lifecycle for the in-flight turn.
+   */
+  async terminateSessionForRestart(sessionId: SessionId): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      this.logger.debug(`Session ${sessionId} not found for internal restart`);
+      return;
+    }
+
+    await session.terminateForRestart(true);
+    if (this.sessions.get(sessionId) === session) {
+      this.sessions.delete(sessionId);
+    }
+    await this.rebalanceSessionSandboxes();
+    this.logger.debug(`[${sessionId}] Session runtime terminated for internal restart`);
+  }
+
   async cleanUp(options: { keepWorkspaceDocumentOpen?: boolean } = {}) {
     this.preparationRecoveryGeneration += 1;
     this.detachPreparationRecovery?.();

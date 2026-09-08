@@ -27,9 +27,10 @@ identity。这样既保留 owner 明确配置的仓库身份，也避免团队�
 绑定请求者的 GitHub token 控制。
 
 ACP 子进程会在启动时快照环境，因此只更新 host 侧 Session 配置无法改变后续工具子进程。
-Session 会记录启动快照中的 identity；新 turn 解析出不同 identity 时，执行层会先终止旧子进程，
-再以重新构建的环境恢复同一个 ACP session，之后才发送 prompt。这样无需增加 adapter 特定的
-可变环境协议，并且只有 identity 变化时才承担重启成本。
+Session 会记录启动快照中的 identity；新 turn 解析出不同 identity 时，执行层会在内部终止旧
+子进程，再以重新构建的环境恢复同一个 ACP session，之后才发送 prompt。这个内部替换不会发布
+SessionManager termination 生命周期，因此当前 turn 的状态、presence 和 ACP 输出路由得以保留。
+这样无需增加 adapter 特定的可变环境协议，并且只有 identity 变化时才承担重启成本。
 
 ## 备选方案
 

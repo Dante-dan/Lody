@@ -218,6 +218,31 @@ describe('SessionManager cleanup phases', () => {
   });
 });
 
+describe('SessionManager internal restart', () => {
+  it('removes the stale runtime without publishing session termination', async () => {
+    const manager = new SessionManager(
+      createLogger(),
+      'token',
+      'machine-1' as MachineId,
+      'workspace-1' as WorkspaceId,
+      createWorkspaceDocument(new Map()),
+      {
+        sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
+      }
+    );
+    const sessionId = 'identity-restart-session' as SessionId;
+    await createSessionInner(manager, createSessionConfig({ sessionId }));
+    const terminated = vi.fn();
+    manager.on('terminated', terminated);
+
+    await manager.terminateSessionForRestart(sessionId);
+
+    expect(manager.getSession(sessionId)).toBeNull();
+    expect(terminated).not.toHaveBeenCalled();
+  });
+});
+
 describe('SessionManager child session workdir resolution', () => {
   let tempHome: string;
 

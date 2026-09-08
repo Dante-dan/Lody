@@ -4316,7 +4316,7 @@ export class SessionExecutionService {
               `[${sessionId}] Restarting ACP process to apply the turn Git identity before prompt`
             );
             yield* self.tryPromise(() =>
-              self.deps.sessionManager.terminateSession(sessionId, true)
+              self.deps.sessionManager.terminateSessionForRestart(sessionId)
             );
             session = null;
             resolvedSession = yield* restoreMissingSession(ctx);
