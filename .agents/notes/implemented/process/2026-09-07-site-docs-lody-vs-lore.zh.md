@@ -24,4 +24,4 @@ Translation: current
 
 ## 限制
 
-Lore 和 SpecStory 的产品细节仅限于 Lody 现有文档已经写过的内容，加上它们公开的分享 / 文档 URL。若任一产品日后提供真正的现场会话加入，应修订本页，而不是硬撑。后续同样改 Features `meta.json` 或 `llms-answers.mjs` 的文档 PR 合并时需要 rebase。
+Lore 和 SpecStory 的产品细节仅限于 Lody 现有文档已经写过的内容，加上它们公开的分享 / 文档 URL。若任一产品日后提供真正的现场会话加入，应修订本页，而不是硬撑。同批对比 PR 会共享 `generate-llms.mjs` 的 extras 列举和 `llms-answers.mjs`，合并顺序需要对这两处 rebase。

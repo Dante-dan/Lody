@@ -24,4 +24,4 @@ Rejected: putting the page in Features sidebar next to product docs; renaming th
 
 ## Limits
 
-Lore and SpecStory product details are limited to what the existing Lody docs already state plus their public share/docs URLs. If either product later offers true live-session join, this page must be revised rather than stretched. Merge of later docs PRs that also edit Features `meta.json` or `llms-answers.mjs` will need a rebase.
+Lore and SpecStory product details are limited to what the existing Lody docs already state plus their public share/docs URLs. If either product later offers true live-session join, this page must be revised rather than stretched. Sibling compare PRs share `generate-llms.mjs` extras listing and `llms-answers.mjs`; merge order will need a rebase of those files.
