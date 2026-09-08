@@ -2,7 +2,7 @@
 
 Status: implemented
 Translation: current
-PR: not created
+PR: https://github.com/LodyAI/Lody/pull/520
 
 [English](2026-09-08-required-pr-visual-explanations.md)
 
