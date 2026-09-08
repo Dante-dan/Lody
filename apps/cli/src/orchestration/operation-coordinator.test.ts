@@ -381,6 +381,86 @@ afterEach(async () => {
 });
 
 describe('LodyOperationCoordinator', () => {
+  it('retries failed input settlement without submitting the result again', async () => {
+    const harness = await makeHarness();
+    const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
+    try {
+      store.finish(harness.requesterSessionId, 'review-round-1', { type: 'cancelled' });
+      harness.coordinator.deferSessionDeliveries(harness.requesterSessionId, 'old-human');
+      harness.coordinator.start();
+      await harness.coordinator.idle();
+      const input = harness.coordinator.startDeferredInput(
+        harness.requesterSessionId,
+        'new-human',
+        'user-1',
+        1
+      );
+      vi.spyOn(LodyOperationStore.prototype, 'settleDeferredInput').mockImplementationOnce(() => {
+        throw new Error('temporary store failure');
+      });
+      input?.settle('handled');
+      expect(store.getDelivery(harness.requesterSessionId, 'review-round-1').state).toBe('pending');
+      await harness.coordinator.wake('settlement-retry');
+      await harness.coordinator.idle();
+      expect(store.getDelivery(harness.requesterSessionId, 'review-round-1').state).toBe(
+        'consumed'
+      );
+      expect(harness.continueSession).not.toHaveBeenCalled();
+    } finally {
+      harness.coordinator.stop();
+      store.close();
+    }
+  });
+  it('holds startup backlog without appending cards and hands the snapshot to one human input', async () => {
+    const harness = await makeHarness();
+    const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
+    try {
+      store.finish(harness.requesterSessionId, 'review-round-1', { type: 'cancelled' });
+      harness.coordinator.deferSessionDeliveries(harness.requesterSessionId, 'old-human');
+      harness.coordinator.start();
+      await harness.coordinator.idle();
+      expect(harness.histories.get(harness.requesterSessionId)).toEqual([]);
+      expect(store.getDelivery(harness.requesterSessionId, 'review-round-1').state).toBe('pending');
+      const input = harness.coordinator.startDeferredInput(
+        harness.requesterSessionId,
+        'new-human',
+        'user-1',
+        1
+      );
+      expect(input?.text).toContain('review-round-1');
+      input?.settle('handled');
+      await harness.coordinator.idle();
+      expect(store.getDelivery(harness.requesterSessionId, 'review-round-1').state).toBe(
+        'consumed'
+      );
+      expect(harness.continueSession).not.toHaveBeenCalled();
+    } finally {
+      harness.coordinator.stop();
+      store.close();
+    }
+  });
+
+  it('rechecks a durable stop after asynchronous continuation configuration resolution', async () => {
+    let stop: () => void = () => {};
+    const harness = await makeHarness({ beforeTurnClaim: async () => stop() });
+    stop = () =>
+      harness.coordinator.deferSessionDeliveries(harness.requesterSessionId, 'old-human');
+    const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
+    try {
+      store.finish(harness.requesterSessionId, 'review-round-1', { type: 'cancelled' });
+      harness.coordinator.start();
+      await harness.coordinator.idle();
+      expect(harness.histories.get(harness.requesterSessionId)).toEqual([]);
+      expect(store.getDelivery(harness.requesterSessionId, 'review-round-1')).toMatchObject({
+        state: 'pending',
+        executionPhase: 'ready',
+        attemptCount: 0,
+      });
+    } finally {
+      harness.coordinator.stop();
+      store.close();
+    }
+  });
   it('retries transient target materialization on its own bounded timer', async () => {
     vi.useFakeTimers();
     const harness = await makeHarness({

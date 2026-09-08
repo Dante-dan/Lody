@@ -14,6 +14,7 @@ import {
 
 import {
   canonicalizeLodyCommand,
+  DEFERRED_INPUT_MAX_BYTES,
   isOperationStoreBusyError,
   LodyOperationStore,
   LodyOperationStoreError,
@@ -59,6 +60,224 @@ afterEach(async () => {
 });
 
 describe('LodyOperationStore', () => {
+  it('keeps old work held across restart, including late acceptance, while new work runs normally', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'lody-delivery-stop-'));
+    roots.add(root);
+    const dbPath = path.join(root, 'operations.sqlite3');
+    const input = baseInput();
+    let store = new LodyOperationStore(dbPath);
+    store.accept(input);
+    store.deferSessionDeliveries(input.workspaceId, input.requesterSessionId, 'source-turn-1');
+    store.close();
+    store = new LodyOperationStore(dbPath);
+    try {
+      store.finish(input.requesterSessionId, input.operationId, { type: 'cancelled' });
+      store.accept({ ...input, operationId: 'late-acceptance' });
+      store.accept({
+        ...input,
+        operationId: 'new-work',
+        frozenContinuationConfig: {
+          ...input.frozenContinuationConfig,
+          sourceTurnId: 'new-human-turn',
+        },
+      });
+      // Retrying the old stop must not hold newly accepted work.
+      store.deferSessionDeliveries(input.workspaceId, input.requesterSessionId, 'source-turn-1');
+      expect(store.isDeliveryDeferred(input.requesterSessionId, input.operationId)).toBe(true);
+      expect(store.isDeliveryDeferred(input.requesterSessionId, 'late-acceptance')).toBe(true);
+      expect(store.isDeliveryDeferred(input.requesterSessionId, 'new-work')).toBe(false);
+      expect(
+        store.claimDeliveryExecution(input.requesterSessionId, input.operationId, {
+          workerBootId: 'boot',
+          claimId: 'auto',
+        }).status
+      ).toBe('deferred');
+      expect(store.get(input.requesterSessionId, input.operationId).completion).toEqual({
+        type: 'cancelled',
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it('fences a stop between preparation and provider start without spending another attempt', async () => {
+    const store = await makeStore();
+    const input = baseInput();
+    try {
+      store.accept(input);
+      store.finish(input.requesterSessionId, input.operationId, { type: 'cancelled' });
+      store.claimDeliveryExecution(input.requesterSessionId, input.operationId, {
+        workerBootId: 'boot',
+        claimId: 'auto',
+      });
+      store.prepareClaimedDeliveryExecution(
+        input.requesterSessionId,
+        input.operationId,
+        'boot',
+        'auto'
+      );
+      store.deferSessionDeliveries(input.workspaceId, input.requesterSessionId, 'source-turn-1');
+      expect(
+        store.markClaimedDeliveryExecutionStarted(
+          input.requesterSessionId,
+          input.operationId,
+          'boot',
+          'auto'
+        )
+      ).toBe(false);
+      store.releaseDeliveryClaim(input.requesterSessionId, input.operationId, 'boot', 'auto');
+      expect(store.getDelivery(input.requesterSessionId, input.operationId)).toMatchObject({
+        executionPhase: 'ready',
+        attemptCount: 1,
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it('attaches a ready snapshot once, preserves late results and releases confirmed rejected input', async () => {
+    const store = await makeStore();
+    const input = baseInput();
+    const args = {
+      workspaceId: input.workspaceId,
+      sessionId: input.requesterSessionId,
+      userTurnId: 'human-next',
+      stopVersion: 1,
+      userId: input.requesterUserId,
+      workerBootId: 'boot',
+    };
+    try {
+      for (const id of ['first', 'second', 'late']) store.accept({ ...input, operationId: id });
+      store.deferSessionDeliveries(input.workspaceId, input.requesterSessionId, 'source-turn-1');
+      for (const id of ['first', 'second'])
+        store.finish(input.requesterSessionId, id, { type: 'cancelled' });
+      expect(store.startDeferredInput({ ...args, userId: 'other-user' })).toBeUndefined();
+      expect(store.startDeferredInput({ ...args, stopVersion: 0 })).toBeUndefined();
+      expect(store.startDeferredInput({ ...args, stopVersion: undefined })).toBeUndefined();
+      const first = store.startDeferredInput(args);
+      if (!first) throw new Error('expected deferred input');
+      expect(first.operationIds).toEqual(['first', 'second']);
+      expect(first.text).toContain('CURRENT user message');
+      expect(store.startDeferredInput(args)).toBeUndefined();
+      store.finish(input.requesterSessionId, 'late', { type: 'cancelled' });
+      expect(
+        store
+          .listDeferredDeliveries(input.workspaceId, input.requesterSessionId)
+          .map((d) => d.operationId)
+      ).toEqual(['late']);
+      store.settleDeferredInput(input.requesterSessionId, 'boot', first, 'not_started');
+      const retry = store.startDeferredInput(args);
+      if (!retry) throw new Error('expected retry input');
+      expect(retry.operationIds).toEqual(['first', 'second', 'late']);
+      // A stale rejection cannot release the replacement claim (ABA race).
+      store.settleDeferredInput(input.requesterSessionId, 'boot', first, 'not_started');
+      expect(store.getDelivery(input.requesterSessionId, 'first').activeClaimId).toBe(
+        retry.claimId
+      );
+      expect(store.startDeferredInput(args)).toBeUndefined();
+      store.settleDeferredInput(input.requesterSessionId, 'boot', retry, 'cancelled');
+      expect(store.listPendingDeliveries(input.workspaceId, input.requesterSessionId)).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it('never replays a deferred input after a worker crash', async () => {
+    const store = await makeStore();
+    const input = baseInput();
+    const args = {
+      workspaceId: input.workspaceId,
+      sessionId: input.requesterSessionId,
+      userTurnId: 'human-next',
+      stopVersion: 1,
+      userId: input.requesterUserId,
+      workerBootId: 'boot',
+    };
+    try {
+      store.accept(input);
+      store.finish(input.requesterSessionId, input.operationId, { type: 'cancelled' });
+      store.deferSessionDeliveries(input.workspaceId, input.requesterSessionId, 'source-turn-1');
+      expect(store.startDeferredInput(args)).toBeDefined();
+      store.recoverOrphanedDeliveryClaims(input.workspaceId, 'replacement');
+      expect(store.getDelivery(input.requesterSessionId, input.operationId).executionPhase).toBe(
+        'uncertain'
+      );
+      expect(store.startDeferredInput({ ...args, workerBootId: 'replacement' })).toBeUndefined();
+      expect(
+        store.startDeferredInput({
+          ...args,
+          userTurnId: 'another-human',
+          workerBootId: 'replacement',
+        })
+      ).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+  it('does not let a user message queued before a second Stop drain its backlog', async () => {
+    const store = await makeStore();
+    const input = baseInput();
+    try {
+      store.accept(input);
+      store.finish(input.requesterSessionId, input.operationId, { type: 'cancelled' });
+      store.deferSessionDeliveries(input.workspaceId, input.requesterSessionId, 'source-turn-1');
+      store.deferSessionDeliveries(input.workspaceId, input.requesterSessionId, 'human-2');
+      const args = {
+        workspaceId: input.workspaceId,
+        sessionId: input.requesterSessionId,
+        userTurnId: 'queued',
+        userId: input.requesterUserId,
+        workerBootId: 'boot',
+        stopVersion: 1,
+      };
+      expect(store.getDeliveryStopVersion(input.requesterSessionId)).toBe(2);
+      expect(store.startDeferredInput(args)).toBeUndefined();
+      expect(store.startDeferredInput({ ...args, stopVersion: 2 })?.operationIds).toEqual([
+        input.operationId,
+      ]);
+    } finally {
+      store.close();
+    }
+  });
+  it('summarizes large backlogs in one bounded input without changing saved outputs', async () => {
+    const store = await makeStore();
+    const input = baseInput();
+    try {
+      for (const id of ['large-a', 'large-b', 'large-c']) {
+        store.accept({ ...input, operationId: id });
+        store.finish(input.requesterSessionId, id, {
+          type: 'result',
+          value: {
+            items: [
+              {
+                status: 'succeeded',
+                target: { sessionId: 'target' as SessionId, userTurnId: 'target-turn' },
+                assistantTurnId: 'assistant:target-turn',
+                output: { text: 'x'.repeat(60_000) },
+              },
+            ],
+          },
+        });
+      }
+      store.deferSessionDeliveries(input.workspaceId, input.requesterSessionId, 'source-turn-1');
+      const attached = store.startDeferredInput({
+        workspaceId: input.workspaceId,
+        sessionId: input.requesterSessionId,
+        userTurnId: 'human',
+        userId: input.requesterUserId,
+        workerBootId: 'boot',
+        stopVersion: 1,
+      });
+      expect(attached?.operationIds).toEqual(['large-a', 'large-b', 'large-c']);
+      expect(Buffer.byteLength(attached?.text ?? '')).toBeLessThanOrEqual(DEFERRED_INPUT_MAX_BYTES);
+      expect(attached?.text).toContain('"truncated":true');
+      expect(JSON.stringify(store.get(input.requesterSessionId, 'large-a').completion)).toContain(
+        'x'.repeat(60_000)
+      );
+    } finally {
+      store.close();
+    }
+  });
   it('restricts the store directory and database to the local account', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'lody-operation-store-permissions-'));
     roots.add(root);

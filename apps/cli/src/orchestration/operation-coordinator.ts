@@ -171,6 +171,74 @@ const completionText = (operation: StoredLodyOperation): string =>
   ].join('\n\n');
 
 export class LodyOperationCoordinator {
+  private readonly blockedSessions = new Set<SessionId>();
+  private readonly projectedDeferredInputs = new Map<SessionId, string>();
+  private readonly deferredInputSettlements = new Map<
+    string,
+    { sessionId: SessionId; run: () => void }
+  >();
+
+  deferSessionDeliveries(sessionId: SessionId, sourceTurnId: string): void {
+    this.blockedSessions.add(sessionId);
+    this.withStore((store) =>
+      store.deferSessionDeliveries(this.options.workspaceId, sessionId, sourceTurnId)
+    );
+    this.blockedSessions.delete(sessionId);
+    this.options.logger.debug(`[orchestration] Deferred old operation results for ${sessionId}`);
+    void this.wake('user-stop');
+  }
+
+  startDeferredInput(
+    sessionId: SessionId,
+    userTurnId: string,
+    userId: string,
+    stopVersion?: number
+  ) {
+    if (!this.started || this.blockedSessions.has(sessionId)) return undefined;
+    const input = this.withStore((store) =>
+      store.startDeferredInput({
+        workspaceId: this.options.workspaceId,
+        sessionId,
+        userTurnId,
+        userId,
+        workerBootId: this.workerBootId,
+        stopVersion,
+      })
+    );
+    if (!input) return undefined;
+    this.options.logger.debug(
+      `[orchestration] Attached ${input.operationIds.length} deferred results to ${userTurnId}`
+    );
+    void this.wake('user-input');
+    return {
+      text: input.text,
+      settle: (outcome: 'handled' | 'cancelled' | 'uncertain' | 'not_started') => {
+        this.deferredInputSettlements.set(input.claimId, {
+          sessionId,
+          run: () =>
+            this.withStore((store) =>
+              store.settleDeferredInput(sessionId, this.workerBootId, input, outcome)
+            ),
+        });
+        this.flushDeferredInputSettlements();
+        void this.wake('user-input-settled');
+      },
+    };
+  }
+
+  private flushDeferredInputSettlements(): void {
+    for (const [claimId, settlement] of this.deferredInputSettlements) {
+      try {
+        settlement.run();
+        this.deferredInputSettlements.delete(claimId);
+      } catch (error) {
+        this.options.logger.warn(
+          `[orchestration] Deferred input settlement failed: ${String(error)}`
+        );
+        if (this.started) this.armConfigurationRetry(settlement.sessionId);
+      }
+    }
+  }
   private readonly storeFactory: () => LodyOperationStore;
   private readonly now: () => number;
   private readonly targetSubscriptions = new Map<string, TargetSubscription>();
@@ -202,6 +270,7 @@ export class LodyOperationCoordinator {
 
   start(): void {
     if (this.started) return;
+    this.projectedDeferredInputs.clear();
     this.started = true;
     this.metaWatch = this.options.workspaceDocument.repo.watch(
       (event) => {
@@ -349,6 +418,7 @@ export class LodyOperationCoordinator {
 
   private async reconcile(reason: string): Promise<void> {
     if (!this.started) return;
+    this.flushDeferredInputSettlements();
     const active = this.withStore((store) =>
       store.listActive(this.options.workspaceId, this.options.machineId)
     );
@@ -380,6 +450,44 @@ export class LodyOperationCoordinator {
       this.progressRetryTimer = null;
     }
 
+    for (const sessionId of this.withStore((store) =>
+      store.listHeldSessionIds(this.options.workspaceId)
+    )) {
+      const counts = this.withStore((store) =>
+        store.getDeferredDeliveryCounts(this.options.workspaceId, sessionId)
+      );
+      const count = Object.values(counts).reduce((sum, value) => sum + value, 0);
+      const stopVersion = this.withStore((store) => store.getDeliveryStopVersion(sessionId));
+      const projectionKey = `${stopVersion}:${JSON.stringify(counts)}`;
+      if (this.projectedDeferredInputs.get(sessionId) === projectionKey) continue;
+      try {
+        const meta = await this.options.workspaceDocument.repo.getDocMeta(
+          getSessionRoomId(sessionId)
+        );
+        if (!this.started) return;
+        if (
+          meta?.meta &&
+          !isLoroRepoDocDeleted(meta) &&
+          (meta.meta as SessionMeta).machineId === this.options.machineId &&
+          ((meta.meta as SessionMeta).deferredOperationResultCount !== count ||
+            (meta.meta as SessionMeta).deferredOperationStopVersion !== stopVersion ||
+            JSON.stringify((meta.meta as SessionMeta).deferredOperationResultCounts) !==
+              JSON.stringify(counts))
+        ) {
+          await this.options.workspaceDocument.repo.upsertDocMeta?.(getSessionRoomId(sessionId), {
+            deferredOperationResultCount: count,
+            deferredOperationStopVersion: stopVersion,
+            deferredOperationResultCounts: counts,
+          });
+        }
+        if (meta?.meta) this.projectedDeferredInputs.set(sessionId, projectionKey);
+      } catch (error) {
+        this.options.logger.warn(
+          `[orchestration] Deferred result display failed: ${String(error)}`
+        );
+        this.armConfigurationRetry(sessionId);
+      }
+    }
     const pendingDeliveries = this.withStore((store) =>
       store.listPendingDeliveries(this.options.workspaceId)
     );
@@ -1062,6 +1170,7 @@ export class LodyOperationCoordinator {
 
   private async deliverIfRunnable(delivery: StoredLodyDelivery, reason: string): Promise<void> {
     if (!this.started) return;
+    if (this.blockedSessions.has(delivery.requesterSessionId)) return;
     delivery = this.withStore((store) =>
       store.getDelivery(delivery.requesterSessionId, delivery.operationId)
     );
@@ -1085,6 +1194,13 @@ export class LodyOperationCoordinator {
       return;
     }
     this.observedDeliverySettlements.delete(delivery.deliveryId);
+    if (
+      delivery.executionPhase !== 'uncertain' &&
+      this.withStore((store) =>
+        store.isDeliveryDeferred(delivery.requesterSessionId, delivery.operationId)
+      )
+    )
+      return;
     const metaRecord = await this.options.workspaceDocument.repo.getDocMeta(
       getSessionRoomId(delivery.requesterSessionId)
     );
@@ -1208,7 +1324,7 @@ export class LodyOperationCoordinator {
       {
         dispatchSource: 'delivery',
         onTurnClaimed: async () => {
-          if (!this.started) return false;
+          if (!this.started || this.blockedSessions.has(delivery.requesterSessionId)) return false;
           const claim = this.withStore((store) =>
             store.claimDeliveryExecution(delivery.requesterSessionId, delivery.operationId, {
               claimId: attemptId,

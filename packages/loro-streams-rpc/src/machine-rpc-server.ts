@@ -340,6 +340,7 @@ type RpcServerDeps = {
     requestToken: string;
   }) => Promise<MachineBugReportResponse>;
   cancelSession?: (args: {
+    turnOnly?: boolean;
     sessionId: SessionId;
     turnId: string;
   }) => Promise<SessionCancelResponse>;
@@ -1049,6 +1050,7 @@ export class LoroStreamsMachineRpcServer {
             return;
           }
           const response = await this.deps.cancelSession({
+            ...(request.params.turnOnly !== undefined ? { turnOnly: request.params.turnOnly } : {}),
             sessionId: request.params.sessionId,
             turnId: request.params.turnId,
           });

@@ -2,6 +2,10 @@
 
 Root and `apps/cli/AGENTS.md` apply; `specs/session-orchestration.md` owns behavior.
 
+- User Stop durably defers old work; only a matching stop-version human input may
+  carry it. Never clear holds on send or wake. Internal cancels stay turn-only.
+  Contract and recovery: [README.md](README.md#deferred-results).
+
 - `operation-store.ts` is the shared machine-local WAL SQLite source of truth.
   The key is `(requesterSessionId, operationId)`; foreign Session lookup must be
   indistinguishable from absence. Operation finalization and Delivery insertion
@@ -47,7 +51,7 @@ Root and `apps/cli/AGENTS.md` apply; `specs/session-orchestration.md` owns behav
   paths must not add blocking waits on top of the driver's `busy_timeout`.
 - `operation-model.ts` is the reduced executable race model. Update its bounded
   exploration and concrete traces whenever scheduling semantics change.
-- Delivery never writes user dispatch pointers; pending users win idle boundaries. Completion owns
+- Automatic Delivery never writes user dispatch pointers; pending users win idle boundaries. Completion owns
   one stable system Turn under the Session mutex and Assistant `assistant:<systemTurnId>`;
   `finished`/`endedAt` is not evidence because teardown writes it too. Host lease, Worker boot id,
   and attempt token fence execution. Fields remain in `delivery_execution_state` because stable

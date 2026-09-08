@@ -372,6 +372,8 @@ export const ACPSessionConfigSchema = z
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
+    includeDeferredOperationResults: z.boolean().optional(),
+    deferredOperationStopVersion: z.number().int().nonnegative().optional(),
   })
   .passthrough();
 
@@ -393,6 +395,8 @@ const LooseSessionTurnInputConfigSchema = z
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
+    includeDeferredOperationResults: z.boolean().optional(),
+    deferredOperationStopVersion: z.number().int().nonnegative().optional(),
   })
   .passthrough();
 
@@ -630,6 +634,7 @@ export const SessionChatAckSchema = z
 
 export const SessionCancelRequestSchema = z
   .object({
+    turnOnly: z.boolean().optional(),
     type: z.literal('session/cancel'),
     sessionId: SessionIdSchema,
     machineId: MachineIdSchema,

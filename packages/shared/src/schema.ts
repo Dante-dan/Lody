@@ -489,6 +489,8 @@ const acpSessionConfigSchema = schema
       agentRoleId: agentRoleIdSchema,
       agentRoleRevision: schema.Number({ required: false }),
       chainDepth: schema.Number({ required: false }),
+      includeDeferredOperationResults: schema.Boolean({ required: false }),
+      deferredOperationStopVersion: schema.Number({ required: false }),
     },
     { required: false }
   )
@@ -880,6 +882,10 @@ export type SessionMeta = {
   /** Goal thread id the user dismissed from the banner after it reached a terminal state.
    *  The banner stays hidden until a goal with a different threadId arrives. */
   dismissedGoalThreadId?: string;
+  /** CLI-owned display projection; execution authority remains in the machine operation store. */
+  deferredOperationResultCount?: number;
+  deferredOperationStopVersion?: number;
+  deferredOperationResultCounts?: Record<string, number>;
   // 当前 codespace 相比基础分支(默认main)的代码变更统计
   diffStats?: SessionDiffStats;
   /** True if workspace has uncommitted changes (staged or unstaged) */

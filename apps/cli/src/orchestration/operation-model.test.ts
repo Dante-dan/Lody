@@ -12,6 +12,42 @@ const trace = (...actions: Parameters<typeof stepOrchestrationModel>[1][]) =>
   actions.reduce(stepOrchestrationModel, initialOrchestrationModelState());
 
 describe('Operation delivery executable model', () => {
+  it('does not treat a pre-stop queued message as a new human input', () => {
+    const stale = trace(
+      'accept',
+      'materialize_success',
+      'finish',
+      'enqueue_user',
+      'user_stop',
+      'schedule',
+      'attach_to_user'
+    );
+    expect(stale).toMatchObject({ delivery: 'pending', activeTurn: 'user', attachedToUser: false });
+  });
+  it('holds old work through stop and restart, then supplies it only inside a user turn', () => {
+    const held = trace(
+      'accept',
+      'materialize_success',
+      'user_stop',
+      'finish',
+      'restart',
+      'schedule'
+    );
+    expect(held).toMatchObject({ deferred: true, delivery: 'pending', activeTurn: 'none' });
+    const user = stepOrchestrationModel(stepOrchestrationModel(held, 'enqueue_user'), 'schedule');
+    const attached = stepOrchestrationModel(user, 'attach_to_user');
+    expect(attached).toMatchObject({
+      delivery: 'started',
+      activeTurn: 'user',
+      attachedToUser: true,
+    });
+    expect(stepOrchestrationModel(attached, 'complete_turn').delivery).toBe('consumed');
+    const crashed = stepOrchestrationModel(
+      stepOrchestrationModel(attached, 'restart'),
+      'recover_orphans'
+    );
+    expect(crashed.delivery).toBe('uncertain');
+  });
   it('exhaustively preserves safety over bounded race traces', () => {
     expect(enumerateOrchestrationModel(9).length).toBeGreaterThan(50);
   });

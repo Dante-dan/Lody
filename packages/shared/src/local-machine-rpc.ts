@@ -154,6 +154,7 @@ export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
     method: z.literal('session/cancel'),
     params: z
       .object({
+        turnOnly: z.boolean().optional(),
         sessionId: SessionIdSchema,
         turnId: z.string().trim().min(1),
       })

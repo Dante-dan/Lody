@@ -66,6 +66,7 @@ import {
 import { useSessionMcpSelection } from '@/hooks/use-session-mcp-selection';
 import { MessageQueueDisplay, shouldRequestNativeQueueSteer } from './message-queue';
 import { useTranslation } from 'react-i18next';
+import { DeferredOperationResults } from './deferred-operation-results';
 import { useRouter } from '@tanstack/react-router';
 import { toast } from 'sonner';
 import type {
@@ -1877,6 +1878,7 @@ export type SessionChatInterfaceHandle = {
 };
 
 export type DispatchInputBlocksOptions = {
+  includeDeferredOperationResults?: boolean;
   forceQueue?: boolean;
   forceDirect?: boolean;
   modeIdOverride?: string | null;
@@ -2354,6 +2356,7 @@ export const SessionChatInterface = memo(
       threadId: string;
       command: GoalCommand;
     } | null>(null);
+    const [includeDeferredResults, setIncludeDeferredResults] = useState(true);
     const chatStreamRef = useRef<SessionChatStreamHandle>(null);
     const shareSelection = useMessageSelection(session.id);
     const inputAreaRef = useRef<SessionChatInputAreaHandle>(null);
@@ -3571,6 +3574,7 @@ export const SessionChatInterface = memo(
       async (
         inputBlocks: SessionInputBlock[],
         options?: {
+          includeDeferredOperationResults?: boolean;
           createHistory?: boolean;
           existingUserTurnId?: string;
           requestDispatch?: boolean;
@@ -3602,6 +3606,8 @@ export const SessionChatInterface = memo(
             issuePRMentions,
             mcpServerIds: mcpSelection.selectedIds,
             taskToolsEnabled: tasksEnabled,
+            includeDeferredOperationResults: options?.includeDeferredOperationResults === true,
+            deferredOperationStopVersion: session.deferredOperationStopVersion ?? 0,
             agentRoleId:
               options?.agentRole?.agentRoleId ?? (options?.agentRole === null ? null : undefined),
             agentRoleRevision: options?.agentRole?.agentRoleRevision,
@@ -3701,6 +3707,7 @@ export const SessionChatInterface = memo(
         selectedModeId,
         selectedModelId,
         session.acpSessionId,
+        session.deferredOperationStopVersion,
         session.agentType,
         session.cliType,
         session.id,
@@ -3719,7 +3726,11 @@ export const SessionChatInterface = memo(
         inputBlocks: SessionInputBlock[],
         options?: Pick<
           DispatchInputBlocksOptions,
-          'modeIdOverride' | 'modelIdOverride' | 'configOptionValuesOverride' | 'agentRole'
+          | 'modeIdOverride'
+          | 'modelIdOverride'
+          | 'configOptionValuesOverride'
+          | 'agentRole'
+          | 'includeDeferredOperationResults'
         >
       ): Promise<boolean> => {
         try {
@@ -3743,6 +3754,8 @@ export const SessionChatInterface = memo(
             issuePRMentions,
             mcpServerIds: mcpSelection.selectedIds,
             taskToolsEnabled: tasksEnabled,
+            includeDeferredOperationResults: options?.includeDeferredOperationResults === true,
+            deferredOperationStopVersion: session.deferredOperationStopVersion ?? 0,
             agentRoleId:
               options?.agentRole?.agentRoleId ?? (options?.agentRole === null ? null : undefined),
             agentRoleRevision: options?.agentRole?.agentRoleRevision,
@@ -3759,6 +3772,8 @@ export const SessionChatInterface = memo(
             issuePRMentions: inputConfig.issuePRMentions ?? undefined,
             mcpServerIds: [...mcpSelection.selectedIds],
             taskToolsEnabled: inputConfig.taskToolsEnabled,
+            includeDeferredOperationResults: inputConfig.includeDeferredOperationResults,
+            deferredOperationStopVersion: inputConfig.deferredOperationStopVersion,
             agentRoleId: inputConfig.agentRoleId,
             agentRoleRevision: inputConfig.agentRoleRevision,
             resume: inputConfig.resume ?? undefined,
@@ -3802,6 +3817,7 @@ export const SessionChatInterface = memo(
         selectedModeId,
         selectedModelId,
         session.acpSessionId,
+        session.deferredOperationStopVersion,
         session.agentType,
         session.cliType,
         session.userId,
@@ -3816,7 +3832,11 @@ export const SessionChatInterface = memo(
         inputBlocks: SessionInputBlock[],
         options?: Pick<
           DispatchInputBlocksOptions,
-          'modeIdOverride' | 'modelIdOverride' | 'configOptionValuesOverride' | 'agentRole'
+          | 'modeIdOverride'
+          | 'modelIdOverride'
+          | 'configOptionValuesOverride'
+          | 'agentRole'
+          | 'includeDeferredOperationResults'
         >
       ): Promise<boolean> => {
         const turnConfigOptionValues = options?.configOptionValuesOverride ?? configOptionValues;
@@ -3827,6 +3847,7 @@ export const SessionChatInterface = memo(
           modelIdOverride: options?.modelIdOverride,
           configOptionValuesOverride: turnConfigOptionValues,
           agentRole: options?.agentRole,
+          includeDeferredOperationResults: options?.includeDeferredOperationResults,
         });
       },
       [configOptionValues, enqueueInputBlocks]
@@ -3892,6 +3913,7 @@ export const SessionChatInterface = memo(
             modelIdOverride: turnModelId,
             configOptionValuesOverride: turnConfigOptionValues,
             agentRole: options?.agentRole,
+            includeDeferredOperationResults: options?.includeDeferredOperationResults,
           });
           captureSessionEvent(
             accepted ? 'session/message_queued' : 'session/message_submit_failed',
@@ -3913,6 +3935,7 @@ export const SessionChatInterface = memo(
             modelIdOverride: turnModelId,
             configOptionValuesOverride: turnConfigOptionValues,
             agentRole: options?.agentRole,
+            includeDeferredOperationResults: options?.includeDeferredOperationResults,
           });
           captureSessionEvent(
             accepted ? 'session/message_guide_requested' : 'session/message_submit_failed',
@@ -3942,6 +3965,7 @@ export const SessionChatInterface = memo(
           modelIdOverride: turnModelId,
           configOptionValuesOverride: turnConfigOptionValues,
           agentRole: options?.agentRole,
+          includeDeferredOperationResults: options?.includeDeferredOperationResults,
         });
         if (!accepted) {
           captureSessionEvent('session/message_submit_failed', {
@@ -4005,9 +4029,14 @@ export const SessionChatInterface = memo(
         inputBlocks: SessionInputBlock[],
         agentRole?: SessionTurnAgentRoleSelection
       ): Promise<boolean> => {
-        return await dispatchInputBlocks(inputBlocks, { agentRole });
+        const accepted = await dispatchInputBlocks(inputBlocks, {
+          agentRole,
+          includeDeferredOperationResults: includeDeferredResults,
+        });
+        if (accepted) setIncludeDeferredResults(true);
+        return accepted;
       },
-      [dispatchInputBlocks]
+      [dispatchInputBlocks, includeDeferredResults]
     );
 
     const capacityRetry = useCapacityAutoRetry({
@@ -6051,6 +6080,26 @@ export const SessionChatInterface = memo(
                       the bottom surface; chat queue is bypassed for the same reason. */}
                   <MessageSelectionToolbar selection={shareSelection} />
                   <div className={shareSelection.active ? 'hidden' : 'contents'}>
+                    <DeferredOperationResults
+                      count={
+                        session.deferredOperationResultCounts?.[
+                          currentUser?.id ?? session.userId
+                        ] ?? 0
+                      }
+                      included={includeDeferredResults}
+                      onIncludedChange={setIncludeDeferredResults}
+                      disabled={
+                        isAgentBusy ||
+                        !sessionDocReady ||
+                        isArchivedSession ||
+                        isExternalHistoryRefreshing
+                      }
+                      onProcess={() => {
+                        void dispatchPrompt(t('sessions.deferredOperations.prompt'), {
+                          includeDeferredOperationResults: true,
+                        });
+                      }}
+                    />
                     {shouldReplaceComposerWithPermission ? null : (
                       <SessionChatInputArea
                         claimNavigationFocus={isVisible ? claimNavigationFocus : undefined}

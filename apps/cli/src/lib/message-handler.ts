@@ -3071,6 +3071,12 @@ export class MessageHandler {
       runAutoPrompt: async (ctx) => await this.autoPromptRunner.run(ctx),
     });
     this.executionService = new SessionExecutionService({
+      deferredOperations: {
+        stop: (sessionId, sourceTurnId) =>
+          this.operationCoordinator.deferSessionDeliveries(sessionId, sourceTurnId),
+        startInput: (sessionId, userTurnId, userId, stopVersion) =>
+          this.operationCoordinator.startDeferredInput(sessionId, userTurnId, userId, stopVersion),
+      },
       logger: this.logger,
       sessionManager: this.sessionManager,
       workspaceDocument: this.workspaceDocument,
@@ -3361,14 +3367,17 @@ export class MessageHandler {
             machineUserId: this.userId,
           });
         },
-        cancelSession: async ({ sessionId, turnId }) => {
-          const result = await this.executionService.cancelSession({
-            type: 'session/cancel',
-            machineId: this.machineId,
-            workspaceId: this.workspaceId,
-            sessionId,
-            turnId,
-          });
+        cancelSession: async ({ sessionId, turnId, turnOnly }) => {
+          const result = await this.executionService.cancelSession(
+            {
+              type: 'session/cancel',
+              machineId: this.machineId,
+              workspaceId: this.workspaceId,
+              sessionId,
+              turnId,
+            },
+            { deferOperations: turnOnly !== true }
+          );
           return {
             type: 'session/cancel_response' as const,
             sessionId,
@@ -6611,13 +6620,16 @@ export class MessageHandler {
             };
       }
       case 'session/cancel': {
-        const result = await this.executionService.cancelSession({
-          type: 'session/cancel',
-          machineId: request.machineId as MachineId,
-          workspaceId: request.workspaceId as WorkspaceId,
-          sessionId: request.params.sessionId,
-          turnId: request.params.turnId,
-        });
+        const result = await this.executionService.cancelSession(
+          {
+            type: 'session/cancel',
+            machineId: request.machineId as MachineId,
+            workspaceId: request.workspaceId as WorkspaceId,
+            sessionId: request.params.sessionId,
+            turnId: request.params.turnId,
+          },
+          { deferOperations: request.params.turnOnly !== true }
+        );
         return {
           type: 'session/cancel_response' as const,
           sessionId: request.params.sessionId,
@@ -8046,7 +8058,9 @@ export class MessageHandler {
     dispatchContext: MessageDispatchContext = this.createRuntimeDispatchContext()
   ): Promise<void> {
     const { sessionId } = message;
-    const result = await this.executionService.cancelSession(message);
+    const result = await this.executionService.cancelSession(message, {
+      deferOperations: message.turnOnly !== true,
+    });
     dispatchContext.send({
       type: 'session/cancel_response',
       sessionId,

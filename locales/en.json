@@ -3945,5 +3945,10 @@
   "sessions.fileViewer.previousPage": "Previous page",
   "sessions.fileViewer.nextPage": "Next page",
   "sessions.fileViewer.page": "Page",
-  "sessions.fileViewer.pageUnavailable": "File changed or is unavailable. Reopen the preview."
+  "sessions.fileViewer.pageUnavailable": "File changed or is unavailable. Reopen the preview.",
+  "sessions.deferredOperations.include": "Include {{count}} saved results with the next message",
+  "sessions.deferredOperations.include_one": "Include {{count}} saved result with the next message",
+  "sessions.deferredOperations.include_other": "Include {{count}} saved results with the next message",
+  "sessions.deferredOperations.process": "Process results",
+  "sessions.deferredOperations.prompt": "Summarize the saved operation results. Do not resume earlier implementation work unless I ask."
 }

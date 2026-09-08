@@ -6,6 +6,10 @@ import { LODY_MAX_CHAIN_DEPTH } from '@lody/shared';
  * safety or liveness decision. Tests exhaustively explore bounded traces.
  */
 export type OrchestrationModelState = {
+  deferred: boolean;
+  attachedToUser: boolean;
+  queuedInputEligibility: boolean[];
+  activeInputEligible: boolean;
   operation: 'absent' | 'active' | 'finished';
   targetInput: 'absent' | 'missing' | 'retry_scheduled' | 'durable';
   delivery:
@@ -31,6 +35,8 @@ export type OrchestrationModelState = {
 };
 
 export type OrchestrationModelAction =
+  | 'user_stop'
+  | 'attach_to_user'
   | 'accept'
   | 'materialize_fail'
   | 'materialization_retry'
@@ -56,6 +62,10 @@ export type OrchestrationModelAction =
   | 'delete_configuration';
 
 export const initialOrchestrationModelState = (): OrchestrationModelState => ({
+  deferred: false,
+  attachedToUser: false,
+  queuedInputEligibility: [],
+  activeInputEligible: false,
   operation: 'absent',
   targetInput: 'absent',
   delivery: 'absent',
@@ -75,8 +85,25 @@ export const stepOrchestrationModel = (
   state: OrchestrationModelState,
   action: OrchestrationModelAction
 ): OrchestrationModelState => {
-  const next = { ...state };
+  const next = { ...state, queuedInputEligibility: [...state.queuedInputEligibility] };
   switch (action) {
+    case 'user_stop':
+      next.deferred = true;
+      next.queuedInputEligibility = next.queuedInputEligibility.map(() => false);
+      next.activeInputEligible = false;
+      return stepOrchestrationModel(next, 'interrupt_turn');
+    case 'attach_to_user':
+      if (
+        next.activeTurn === 'user' &&
+        next.activeInputEligible &&
+        next.deferred &&
+        next.delivery === 'pending'
+      ) {
+        next.delivery = 'started';
+        next.deliveryClaimOwner = 'current';
+        next.attachedToUser = true;
+      }
+      break;
     case 'accept':
       if (next.operation === 'absent' && next.chainDepth < LODY_MAX_CHAIN_DEPTH) {
         next.operation = 'active';
@@ -124,17 +151,19 @@ export const stepOrchestrationModel = (
         next.progress = 'settled';
       break;
     case 'enqueue_user':
+      if (next.queuedUsers < 2) next.queuedInputEligibility.push(true);
       next.queuedUsers = Math.min(2, next.queuedUsers + 1);
       break;
     case 'schedule':
       if (next.archived || next.activeTurn !== 'none') break;
       if (next.queuedUsers > 0) {
         next.queuedUsers -= 1;
+        next.activeInputEligible = next.queuedInputEligibility.shift() ?? false;
         next.activeTurn = 'user';
       } else if (next.delivery === 'uncertain') {
         next.delivery = 'uncertain_finalizing';
         next.deliveryClaimOwner = 'current';
-      } else if (next.delivery === 'pending') {
+      } else if (next.delivery === 'pending' && !next.deferred) {
         if (!next.configurationAvailable || next.deliveryAttempts >= 2) {
           next.delivery = 'finalizing';
           next.deliveryClaimOwner = 'current';
@@ -182,7 +211,7 @@ export const stepOrchestrationModel = (
       break;
     case 'complete_turn':
       if (
-        next.activeTurn === 'delivery' &&
+        (next.activeTurn === 'delivery' || (next.activeTurn === 'user' && next.attachedToUser)) &&
         (next.delivery === 'prepared' || next.delivery === 'started')
       ) {
         next.delivery = 'consumed';
@@ -191,7 +220,7 @@ export const stepOrchestrationModel = (
       next.activeTurn = 'none';
       break;
     case 'interrupt_turn':
-      if (next.activeTurn === 'delivery' && next.delivery === 'started') {
+      if ((next.activeTurn === 'delivery' || next.attachedToUser) && next.delivery === 'started') {
         next.delivery = 'uncertain';
         next.deliveryClaimOwner = 'none';
       } else if (
@@ -205,7 +234,7 @@ export const stepOrchestrationModel = (
       break;
     case 'cancel_turn':
       if (
-        next.activeTurn === 'delivery' &&
+        (next.activeTurn === 'delivery' || (next.activeTurn === 'user' && next.attachedToUser)) &&
         (next.delivery === 'claimed' || next.delivery === 'prepared' || next.delivery === 'started')
       ) {
         next.delivery = 'consumed';
@@ -274,6 +303,9 @@ export const stepOrchestrationModel = (
 };
 
 export const assertOrchestrationModelSafety = (state: OrchestrationModelState): void => {
+  if (state.deferred && state.activeTurn === 'delivery') {
+    throw new Error('stopped work started an automatic continuation');
+  }
   if (state.progress === 'settled' && state.targetInput === 'durable' && !state.targetTerminal) {
     throw new Error('progress ownership ended before the published target was terminal');
   }
@@ -320,6 +352,8 @@ export const assertOrchestrationModelSafety = (state: OrchestrationModelState): 
 
 export const enumerateOrchestrationModel = (maxDepth: number): OrchestrationModelState[] => {
   const actions: OrchestrationModelAction[] = [
+    'user_stop',
+    'attach_to_user',
     'accept',
     'materialize_fail',
     'materialization_retry',

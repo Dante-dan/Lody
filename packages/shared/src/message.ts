@@ -125,6 +125,8 @@ export type SessionChatAck = {
 };
 
 export interface SessionCancelRequest {
+  /** Internal cancellation preserves other operations; user Stop defaults to false. */
+  turnOnly?: boolean;
   type: 'session/cancel';
   sessionId: SessionId;
   machineId: MachineId;

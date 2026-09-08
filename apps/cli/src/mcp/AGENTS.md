@@ -53,8 +53,9 @@ Parent instructions apply.
   Create/chat Commands require a caller-chosen Operation id, and Create persists the Operation
   before its fallible availability step: a transient post-accept failure returns the active fixed
   target for daemon replay, and `session_create({ operationId, resume: true })` recovers it without
-  the prompt. Completion is delivered automatically — no public wait tool — and legacy `wait=true`
+  the prompt. Completion is automatic unless user Stop defers it to human input — no public wait tool — and legacy `wait=true`
   is a temporary adapter new callers must not use.
+- MCP cancellation passes `session cancel --turn-only`; only human Stop defers unrelated completions.
 - `lody_session_create_options` publishes valid run-config values per agent config and stays
   sparse by default (online Machines, one agent config, the current local project, no GitHub
   fetch), expanding only through explicit query inputs.

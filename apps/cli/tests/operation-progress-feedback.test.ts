@@ -82,6 +82,7 @@ describe('nested operation progress feedback', () => {
       },
       listPendingProgress: () => pending.filter((op) => !settled.has(op.operationId)),
       listPendingDeliveries: () => [],
+      listHeldSessionIds: () => [],
       close: () => {},
       settleProgress: (_requester: unknown, id: string) => settled.add(id),
     };

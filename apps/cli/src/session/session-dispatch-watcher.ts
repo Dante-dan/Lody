@@ -1868,13 +1868,16 @@ export class SessionDispatchWatcher {
       return;
     }
     this.cancelSeenTurn.set(sessionId, action.turnId);
-    await this.deps.executionService.cancelSession({
-      type: 'session/cancel',
-      sessionId,
-      machineId: this.deps.machineId,
-      workspaceId: this.deps.workspaceId,
-      turnId: action.turnId,
-    });
+    await this.deps.executionService.cancelSession(
+      {
+        type: 'session/cancel',
+        sessionId,
+        machineId: this.deps.machineId,
+        workspaceId: this.deps.workspaceId,
+        turnId: action.turnId,
+      },
+      { deferOperations: true }
+    );
     if (!isActive()) {
       return;
     }
@@ -1970,6 +1973,9 @@ export class SessionDispatchWatcher {
         configOptionValues: entry.inputConfig?.configOptionValues,
         mcpServerIds: entry.inputConfig?.mcpServerIds ?? [],
         taskToolsEnabled: entry.inputConfig?.taskToolsEnabled === true,
+        chainDepth: entry.inputConfig?.chainDepth,
+        includeDeferredOperationResults: entry.inputConfig?.includeDeferredOperationResults,
+        deferredOperationStopVersion: entry.inputConfig?.deferredOperationStopVersion,
         agentRoleId: entry.inputConfig?.agentRoleId,
         agentRoleRevision: entry.inputConfig?.agentRoleRevision,
         issuePRMentions: entry.inputConfig?.issuePRMentions,
@@ -2014,6 +2020,9 @@ export class SessionDispatchWatcher {
         configOptionValues: entry.inputConfig?.configOptionValues,
         mcpServerIds: entry.inputConfig?.mcpServerIds ?? [],
         taskToolsEnabled: entry.inputConfig?.taskToolsEnabled === true,
+        chainDepth: entry.inputConfig?.chainDepth,
+        includeDeferredOperationResults: entry.inputConfig?.includeDeferredOperationResults,
+        deferredOperationStopVersion: entry.inputConfig?.deferredOperationStopVersion,
         agentRoleId: entry.inputConfig?.agentRoleId,
         agentRoleRevision: entry.inputConfig?.agentRoleRevision,
         issuePRMentions: entry.inputConfig?.issuePRMentions,
@@ -2113,6 +2122,8 @@ export class SessionDispatchWatcher {
         mcpServerIds:
           normalizeMcpServerIdSelection(queuedItem.acpSessionConfig?.mcpServerIds) ?? [],
         taskToolsEnabled: queuedItem.acpSessionConfig?.taskToolsEnabled === true,
+        includeDeferredOperationResults:
+          queuedItem.acpSessionConfig?.includeDeferredOperationResults,
         agentRoleId: queuedItem.acpSessionConfig?.agentRoleId,
         agentRoleRevision: queuedItem.acpSessionConfig?.agentRoleRevision,
         issuePRMentions: queuedItem.acpSessionConfig?.issuePRMentions,

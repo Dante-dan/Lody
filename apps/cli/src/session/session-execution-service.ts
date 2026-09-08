@@ -101,6 +101,7 @@ import type { SessionConfig } from './types';
 import type { ISession, SessionManager } from './session-manager';
 import type { LoroDocumentManager, SessionDocument } from '@/lib/loro/doc';
 import { buildPrompt, normalizeSessionInputBlocks } from './session-execution-helpers';
+import type { DeferredOperationControl, DeferredOperationInput } from './deferred-operation-input';
 import type { MemoryPressureEvictionResult } from '@/lib/session-gc-manager';
 import { resolveResumableAcpSessionId } from './session-dispatch-logic';
 import { resolveSessionLaunchConfig } from './session-launch-config-resolver';
@@ -220,6 +221,8 @@ type TurnInvocation = {
 };
 
 type TurnRuntimeState = {
+  deferredOperationInput?: DeferredOperationInput;
+  deferredOperationInputChecked?: boolean;
   sessionId: SessionId;
   /** Logical chain tail exposed to Web, cancel, and optimistic steer validation. */
   turnId: string;
@@ -450,6 +453,7 @@ function truncateAnalyticsString(value: string, maxLength = 1_000): string {
 }
 
 export type SessionExecutionServiceDeps = {
+  deferredOperations?: DeferredOperationControl;
   logger: Logger;
   sessionManager: SessionManager;
   workspaceDocument: LoroDocumentManager;
@@ -1282,6 +1286,7 @@ export class SessionExecutionService {
     // Everything up to `steerPrompt` returning is provably undelivered; after
     // that only the agent's own inject-or-refuse verdict can say so.
     let submittedToAgent = false;
+    let deferredInput: DeferredOperationInput | undefined;
     try {
       const sessionDoc = await this.deps.workspaceDocument.getOrCreateSessionDoc(options.sessionId);
       const inputBlocks = normalizeSessionInputBlocks(
@@ -1319,9 +1324,30 @@ export class SessionExecutionService {
 
       const previousTurnId = runtime.turnId;
       const previousUserTurnId = runtime.userTurnId;
-      const steerRun = agentClient.steerPrompt(acpSessionId, promptBlocks);
+      if (
+        options.userId &&
+        (options.inputConfig.chainDepth ?? 0) === 0 &&
+        options.inputConfig.includeDeferredOperationResults !== false
+      ) {
+        deferredInput = this.deps.deferredOperations?.startInput(
+          options.sessionId,
+          options.userTurnId,
+          options.userId,
+          options.inputConfig.deferredOperationStopVersion
+        );
+      }
+      const steerRun = agentClient.steerPrompt(
+        acpSessionId,
+        deferredInput ? [{ type: 'text', text: deferredInput.text }, ...promptBlocks] : promptBlocks
+      );
       submittedToAgent = true;
       const application = await steerRun.applied;
+      try {
+        deferredInput?.settle('handled');
+      } catch (error) {
+        this.deps.logger.warn(`Deferred steer settlement failed: ${formatErrorMessage(error)}`);
+      }
+      deferredInput = undefined;
       try {
         if (
           this.turnRuntimeBySession.get(options.sessionId) !== runtime ||
@@ -1339,6 +1365,18 @@ export class SessionExecutionService {
           requesterUserId: options.userId,
           inputConfig: options.inputConfig,
         };
+        // An acknowledged handoff settles the original input independently of
+        // any later failure or cancellation of the successor turn.
+        const previousDeferredInput = runtime.deferredOperationInput;
+        runtime.deferredOperationInput = undefined;
+        runtime.deferredOperationInputChecked = true;
+        try {
+          previousDeferredInput?.settle('handled');
+        } catch (error) {
+          this.deps.logger.warn(
+            `Deferred input handoff settlement failed: ${formatErrorMessage(error)}`
+          );
+        }
         // Provider acceptance hands the original dispatch forward. A later
         // user-owned steer turn must not cancel or reopen that responsibility.
         await this.settleVisibleTurn(runtime, 'handled', { force: true });
@@ -1409,6 +1447,15 @@ export class SessionExecutionService {
       }
     } catch (error) {
       const notDelivered = !submittedToAgent || error instanceof AgentSteerNotDeliveredError;
+      if (deferredInput) {
+        try {
+          deferredInput.settle(notDelivered ? 'not_started' : 'uncertain');
+        } catch (settlementError) {
+          this.deps.logger.warn(
+            `Deferred steer input settlement failed: ${formatErrorMessage(settlementError)}`
+          );
+        }
+      }
       if (!notDelivered) {
         return reject('error', formatErrorMessage(error));
       }
@@ -2888,9 +2935,33 @@ export class SessionExecutionService {
                             promptBlocks: promptBlocks.length,
                           },
                           async () => {
+                            if (signal.aborted || runtime.cancelRequested) {
+                              throw new SessionTurnCancelled({ sessionId, turnId: runtime.turnId });
+                            }
+                            const invocation = runtime.invocation;
+                            if (
+                              !runtime.deferredOperationInputChecked &&
+                              runtime.userTurnId &&
+                              invocation?.requesterUserId &&
+                              (invocation.inputConfig.chainDepth ?? 0) === 0 &&
+                              invocation.inputConfig.includeDeferredOperationResults !== false
+                            ) {
+                              runtime.deferredOperationInputChecked = true;
+                              runtime.deferredOperationInput =
+                                self.deps.deferredOperations?.startInput(
+                                  sessionId,
+                                  runtime.userTurnId,
+                                  invocation.requesterUserId,
+                                  invocation.inputConfig.deferredOperationStopVersion
+                                );
+                            }
+                            const input = runtime.deferredOperationInput;
+                            const submittedBlocks: ContentBlock[] = input
+                              ? [{ type: 'text', text: input.text }, ...promptBlocks]
+                              : promptBlocks;
                             const initialRun = self.createPromptHandoffRun({
                               turnId: runtime.turnId,
-                              promptPromise: agentClient.prompt(acpSessionId, promptBlocks, {
+                              promptPromise: agentClient.prompt(acpSessionId, submittedBlocks, {
                                 signal,
                               }),
                             });
@@ -2996,6 +3067,21 @@ export class SessionExecutionService {
     }
     if (settlement) {
       await this.settleVisibleTurn(runtime, settlement);
+    }
+    if (runtime.deferredOperationInput) {
+      try {
+        runtime.deferredOperationInput.settle(
+          runtime.cancelRequested
+            ? 'cancelled'
+            : runtime.promptFailed || !settlement
+              ? 'uncertain'
+              : 'handled'
+        );
+      } catch (error) {
+        this.deps.logger.warn(
+          `[${sessionId}] Deferred operation input settlement failed: ${formatErrorMessage(error)}`
+        );
+      }
     }
     return outcome;
   }
@@ -4856,7 +4942,10 @@ export class SessionExecutionService {
     };
   }
 
-  async cancelSession(message: SessionCancelRequestValidated): Promise<{
+  async cancelSession(
+    message: SessionCancelRequestValidated,
+    options?: { deferOperations?: boolean }
+  ): Promise<{
     success: boolean;
     error?: string;
   }> {
@@ -4871,6 +4960,29 @@ export class SessionExecutionService {
     const currentTurnId = activeTurnId ?? this.currentTurnBySession.get(sessionId);
     // Cancel is exact-match only: a stale stop request must not interrupt a newer assistant turn.
     if (!isPrompting && !isCurrentExecutionTurn) {
+      if (options?.deferOperations && !currentTurnId) {
+        // The displayed turn can finish while the stop request is in transit.
+        // Accept only the latest history entry; a newer user input is a boundary too.
+        const history = await sessionDoc.getHistory();
+        const tail = history
+          .filter((entry) => entry.role === 'user' || entry.role === 'assistant')
+          .at(-1);
+        if (
+          tail?.role === 'assistant' &&
+          tail.id === turnId &&
+          !this.deps.getActiveTurnId(sessionId) &&
+          !this.currentTurnBySession.get(sessionId)
+        ) {
+          try {
+            this.deps.deferredOperations?.stop(sessionId, tail.userTurnId ?? turnId);
+          } catch (error) {
+            return {
+              success: false,
+              error: `Could not persist delivery pause: ${formatErrorMessage(error)}`,
+            };
+          }
+        }
+      }
       this.deps.logger.debug(
         `[${sessionId}] Ignoring stop request for stale turn ${turnId} (current=${currentTurnId ?? 'none'})`
       );
@@ -4879,8 +4991,27 @@ export class SessionExecutionService {
       return { success: true };
     }
 
-    this.markTurnCancelled(sessionId, turnId);
     const runtime = this.getTurnRuntime(sessionId, turnId);
+    if (options?.deferOperations) {
+      try {
+        this.deps.deferredOperations?.stop(sessionId, runtime?.invocation?.sourceTurnId ?? turnId);
+      } catch (error) {
+        // The coordinator retains its in-memory gate after a store failure.
+        // Still stop current execution, but do not acknowledge a durable pause.
+        this.markTurnCancelled(sessionId, turnId);
+        if (runtime) {
+          runtime.cancelRequested = true;
+          this.requestTurnInterrupt(runtime);
+          if (runtime.promptInFlight || runtime.autoPromptInFlight)
+            this.requestAgentCancelInBackground(runtime, 'active');
+        }
+        return {
+          success: false,
+          error: `Could not persist delivery pause: ${formatErrorMessage(error)}`,
+        };
+      }
+    }
+    this.markTurnCancelled(sessionId, turnId);
     if (runtime) {
       runtime.cancelRequested = true;
       if (runtime.finalizeStarted) {

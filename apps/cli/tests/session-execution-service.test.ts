@@ -213,6 +213,153 @@ const createBaseDeps = (
   return deps;
 };
 
+describe('deferred operation input at the provider boundary', () => {
+  it.each([
+    { include: true, chainDepth: 0, attached: true },
+    { include: false, chainDepth: 0, attached: false },
+    { include: undefined, chainDepth: 0, attached: true },
+    { include: true, chainDepth: 1, attached: false },
+  ])(
+    'honors explicit human intent: $include, depth $chainDepth',
+    async ({ include, chainDepth, attached }) => {
+      const sessionId = 'deferred-input-session' as SessionId;
+      const submitted: ContentBlock[][] = [];
+      const outcomes: string[] = [];
+      const agentClient = {
+        isCreated: () => true,
+        prompt: async (_id: string, blocks: ContentBlock[]) => {
+          submitted.push(blocks);
+          return {};
+        },
+        currentModel: undefined,
+      };
+      const activeSession = {
+        sessionId,
+        acpSessionId: 'acp-deferred' as ACPSessionId,
+        agentClient,
+        terminalManager: {},
+        getWorkdir: () => '/tmp',
+        getHostWorkdir: () => '/tmp',
+        getParentSessionId: () => undefined,
+        exec: async () => '',
+        terminate: async () => {},
+        updateGitIdentity: () => {},
+        createAgent: async () => 'acp-deferred',
+        applyExecutionPlaneLimits: async () => {},
+      };
+      let history: Array<Record<string, unknown>> = [
+        { id: 'human-1', role: 'user', status: 'pending' },
+      ];
+      const doc = {
+        getMetaState: async () => ({ isArchived: false }),
+        setStatus: async () => {},
+        setLastMessageAt: async () => {},
+        getHistory: async () => history,
+        updateHistory: async (update: (h: typeof history) => typeof history) => {
+          history = update(history);
+        },
+      };
+      const deps = createBaseDeps({
+        deferredOperations: {
+          stop: () => {},
+          startInput: () => ({
+            text: 'Saved results A and B',
+            settle: (outcome) => {
+              outcomes.push(outcome);
+            },
+          }),
+        },
+        sessionManager: {
+          createSession: vi.fn(),
+          setSessionError: vi.fn(),
+          terminateSession: vi.fn(),
+          getSession: () => activeSession,
+          getPendingSession: () => null,
+          refreshGhTokenForSession: async () => {},
+        } as unknown as SessionManager,
+        workspaceDocument: {
+          ...createBaseDeps({}).workspaceDocument,
+          getOrCreateSessionDoc: async () => doc,
+          getOrOpenSessionCode: async () => null,
+        } as unknown as LoroDocumentManager,
+      });
+      const service = new SessionExecutionService(deps);
+      await service.continueSession({
+        type: 'session/chat',
+        sessionId,
+        machineId: 'machine-1',
+        workspaceId: 'workspace-1' as WorkspaceId,
+        userTurnId: 'human-1',
+        userId: 'user-1',
+        acpSessionConfig: {
+          prompt: 'Only summarize',
+          cliType: 'builtin',
+          agentType: 'codex',
+          includeDeferredOperationResults: include,
+          chainDepth,
+        },
+      });
+      expect(submitted).toEqual([
+        attached
+          ? [
+              { type: 'text', text: 'Saved results A and B' },
+              { type: 'text', text: 'hello' },
+            ]
+          : [{ type: 'text', text: 'hello' }],
+      ]);
+      expect(outcomes).toEqual(attached ? ['handled'] : []);
+    }
+  );
+
+  it('persists explicit Stop before cancellation and excludes stale and internal cancels', async () => {
+    const sessionId = 'stop-deliveries' as SessionId;
+    const effects: string[] = [];
+    const deps = createBaseDeps({
+      getActiveTurnId: () => 'current',
+      deferredOperations: {
+        stop: (_sessionId, sourceTurnId) => {
+          effects.push(`held:${sourceTurnId}`);
+        },
+        startInput: () => undefined,
+      },
+      workspaceDocument: {
+        ...createBaseDeps({}).workspaceDocument,
+        getOrCreateSessionDoc: async () => ({
+          getMetaState: async () => ({}),
+          updateHistory: async () => {},
+          setStatus: async () => {},
+        }),
+      } as unknown as LoroDocumentManager,
+    });
+    const service = new SessionExecutionService(deps);
+    const runtime = {
+      sessionId,
+      turnId: 'current',
+      invocation: { sourceTurnId: 'human-1' },
+      promptInFlight: false,
+      cancelRequested: false,
+    };
+    (
+      service as unknown as { turnRuntimeBySession: Map<SessionId, typeof runtime> }
+    ).turnRuntimeBySession.set(sessionId, runtime);
+    const request = {
+      type: 'session/cancel' as const,
+      sessionId,
+      turnId: 'stale',
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+    };
+    await service.cancelSession(request, { deferOperations: true });
+    expect(effects).toEqual([]);
+    await service.cancelSession({ ...request, turnId: 'current' });
+    expect(effects).toEqual([]);
+    runtime.cancelRequested = false;
+    await service.cancelSession({ ...request, turnId: 'current' }, { deferOperations: true });
+    expect(effects).toEqual(['held:human-1']);
+    expect(runtime.cancelRequested).toBe(true);
+  });
+});
+
 describe('SessionExecutionService', () => {
   it('advances one session owner through consecutive prompt handoffs', async () => {
     const steerPrompt = vi.fn(() => ({
@@ -269,7 +416,14 @@ describe('SessionExecutionService', () => {
       promptPromise: new Promise(() => {}),
     });
     const onTurnSettled = vi.fn(async () => {});
+    const deferredOutcomes: string[] = [];
     const runtime = {
+      deferredOperationInput: {
+        text: 'earlier results',
+        settle: (outcome: string) => {
+          deferredOutcomes.push(outcome);
+        },
+      },
       sessionId,
       turnId: 'assistant:user-1',
       userTurnId: 'user-1',
@@ -300,6 +454,8 @@ describe('SessionExecutionService', () => {
         inputConfig: { prompt: 'change direction' },
       })
     ).resolves.toMatchObject({ applied: true, disposition: 'applied' });
+    expect(deferredOutcomes).toEqual(['handled']);
+    expect(runtime.deferredOperationInput).toBeUndefined();
     expect(onTurnSettled).toHaveBeenCalledOnce();
     expect(onTurnSettled).toHaveBeenCalledWith('handled');
 
@@ -2001,9 +2157,13 @@ describe('SessionExecutionService', () => {
     expect(activeClearedAt).toBeGreaterThan(finalizeStartedAt);
   });
 
-  it.each([undefined, 'delivery'] as const)(
-    'restores a stale ACP session without repeating the start fence for %s dispatch',
-    async (dispatchSource) => {
+  it.each([
+    { dispatchSource: undefined, resultsReady: true },
+    { dispatchSource: undefined, resultsReady: false },
+    { dispatchSource: 'delivery' as const, resultsReady: true },
+  ])(
+    'restores stale ACP with a fixed result snapshot ($dispatchSource, ready=$resultsReady)',
+    async ({ dispatchSource, resultsReady }) => {
       const sessionId = 'session-stale-acp' as SessionId;
       const acpSessionId = 'acp-stale' as ACPSessionId;
       const restoredAcpSessionId = 'acp-restored' as ACPSessionId;
@@ -2015,10 +2175,13 @@ describe('SessionExecutionService', () => {
           read: false,
         },
       ];
+      let ready = resultsReady;
+      const deferredOutcomes: string[] = [];
       const agentClient = {
         isCreated: vi.fn(() => true),
         cancel: vi.fn(async () => {}),
         prompt: vi.fn(async () => {
+          ready = true;
           throw new Error('ACP connection closed');
         }),
         currentModel: undefined,
@@ -2064,7 +2227,20 @@ describe('SessionExecutionService', () => {
           history = updater(history);
         }),
       };
-      const deps = createBaseDeps({});
+      const deps = createBaseDeps({
+        deferredOperations: {
+          stop: () => {},
+          startInput: () =>
+            ready
+              ? {
+                  text: 'saved result',
+                  settle: (outcome) => {
+                    deferredOutcomes.push(outcome);
+                  },
+                }
+              : undefined,
+        },
+      });
       const sessionManager = deps.sessionManager as unknown as {
         getSession: ReturnType<typeof vi.fn>;
         terminateSession: ReturnType<typeof vi.fn>;
@@ -2091,7 +2267,12 @@ describe('SessionExecutionService', () => {
           machineId: 'machine-1',
           workspaceId: 'workspace-1' as WorkspaceId,
           project: undefined,
-          acpSessionConfig: { prompt: 'hi', cliType: 'builtin', agentType: 'codex' },
+          acpSessionConfig: {
+            prompt: 'hi',
+            cliType: 'builtin',
+            agentType: 'codex',
+            chainDepth: dispatchSource ? 1 : 0,
+          },
           userTurnId: 'turn-user-1',
           userId: 'user-1',
           userName: 'User',
@@ -2100,22 +2281,22 @@ describe('SessionExecutionService', () => {
         dispatchSource ? { dispatchSource, onTurnStarted, onTurnSettled } : undefined
       );
 
-      expect(agentClient.prompt).toHaveBeenCalledWith(
-        'acp-stale',
-        [{ type: 'text', text: 'hello' }],
-        {
-          signal: expect.any(AbortSignal),
-        }
-      );
+      const expectsResults = resultsReady && !dispatchSource;
+      const expectedBlocks = expectsResults
+        ? [
+            { type: 'text', text: 'saved result' },
+            { type: 'text', text: 'hello' },
+          ]
+        : [{ type: 'text', text: 'hello' }];
+      expect(deferredOutcomes).toEqual(expectsResults ? ['handled'] : []);
+      expect(agentClient.prompt).toHaveBeenCalledWith('acp-stale', expectedBlocks, {
+        signal: expect.any(AbortSignal),
+      });
       expect(sessionManager.terminateSession).toHaveBeenCalledWith(sessionId, true);
       expect(sessionManager.createSession).toHaveBeenCalled();
-      expect(restoredAgentClient.prompt).toHaveBeenCalledWith(
-        'acp-restored',
-        [{ type: 'text', text: 'hello' }],
-        {
-          signal: expect.any(AbortSignal),
-        }
-      );
+      expect(restoredAgentClient.prompt).toHaveBeenCalledWith('acp-restored', expectedBlocks, {
+        signal: expect.any(AbortSignal),
+      });
       expect(deps.recordChatFailure).not.toHaveBeenCalled();
       expect(history[0]?.status).toBe(dispatchSource === 'delivery' ? 'pending' : 'handled');
       if (dispatchSource === 'delivery') {

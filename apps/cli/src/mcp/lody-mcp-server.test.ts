@@ -1010,6 +1010,7 @@ describe('session MCP input schemas', () => {
     ).toEqual([
       'session',
       'cancel',
+      '--turn-only',
       '--workspace',
       'workspace-1',
       '--json',

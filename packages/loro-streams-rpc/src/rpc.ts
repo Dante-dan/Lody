@@ -425,6 +425,7 @@ export const LoroSessionCancelRpcRequestSchema = BaseRpcRequestSchema.extend({
   method: z.literal('session/cancel'),
   params: z
     .object({
+      turnOnly: z.boolean().optional(),
       sessionId: SessionIdSchema,
       turnId: z.string().trim().min(1),
     })
@@ -2602,6 +2603,7 @@ export class LoroStreamsMachineRpcClient {
   }
 
   async requestSessionCancel(options: {
+    turnOnly?: boolean;
     sessionId: SessionId;
     turnId: string;
     timeoutMs?: number;
@@ -2610,6 +2612,7 @@ export class LoroStreamsMachineRpcClient {
       method: 'session/cancel',
       timeoutMs: options.timeoutMs ?? 2_000,
       params: {
+        ...(options.turnOnly !== undefined ? { turnOnly: options.turnOnly } : {}),
         sessionId: options.sessionId,
         turnId: options.turnId,
       },

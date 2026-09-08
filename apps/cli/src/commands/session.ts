@@ -39,6 +39,7 @@ import {
   getMachineFlockDocId,
   getMachineFlockLocalProjects,
   getMachineRoomId,
+  machineSupportsDeferredOperationInputs,
   machineFlockKeys,
   machineDeleteCommandToQueueItem,
   readMachineFlockRowsFromFlock,
@@ -1299,6 +1300,7 @@ async function appendUserPromptHistory(args: {
 }
 
 function buildCliHistoryInputConfig(args: {
+  deferredOperationStopVersion?: number;
   prompt: string;
   cliType: SessionMeta['cliType'];
   agentType: SessionMeta['agentType'];
@@ -1322,6 +1324,9 @@ function buildCliHistoryInputConfig(args: {
     taskToolsEnabled: args.taskToolsEnabled === true,
     resume: args.resume,
     chainDepth: args.chainDepth,
+    ...(args.deferredOperationStopVersion !== undefined
+      ? { deferredOperationStopVersion: args.deferredOperationStopVersion }
+      : {}),
   };
 }
 
@@ -3268,6 +3273,9 @@ export async function sendSessionChatResult(
       taskToolsEnabled: effectiveDispatchConfig.taskToolsEnabled,
       resume: session.acpSessionId ?? undefined,
       chainDepth: orchestration?.chainDepth,
+      deferredOperationStopVersion: orchestration
+        ? undefined
+        : session.deferredOperationStopVersion,
     }),
     preallocatedId: orchestration?.userTurnId,
     knownHistory: quotaHistory,
@@ -4027,11 +4035,15 @@ const sessionCancelCommand = new Command('cancel')
   .description('Cancel the current running turn for a session')
   .option('--workspace <selector>', 'Target workspace id, slug, or name')
   .option('--turn-id <turnId>', 'Cancel only when this exact assistant turn is active')
+  .option('--turn-only', 'Cancel this turn without deferring operation results')
   .option('--json', 'Print JSON output')
   .option('--debug', 'Enable debug output')
   .argument('[sessionId]', 'Session ID; falls back to LODY_SESSION_ID')
   .action(
-    async (sessionIdArg: string | undefined, options: CommonOptions & { turnId?: string }) => {
+    async (
+      sessionIdArg: string | undefined,
+      options: CommonOptions & { turnId?: string; turnOnly?: boolean }
+    ) => {
       await runSessionCommand(options, async () => {
         const auth = getAuthContextOrThrow();
         const sessionId = (normalizeCliValue(sessionIdArg) ??
@@ -4085,11 +4097,18 @@ const sessionCancelCommand = new Command('cancel')
 
           await ensureTargetMachineOnline({ auth, workspaceId, machineId: session.machineId });
 
+          const cancelMachine = (await manager.repo.getDocMeta(getMachineRoomId(session.machineId)))
+            ?.meta as MachineMeta | undefined;
+          const cancelIntent =
+            options.turnOnly && machineSupportsDeferredOperationInputs(cancelMachine)
+              ? { turnOnly: true }
+              : {};
           const response =
             session.machineId === auth.machineId
               ? extractCancelResponse(
                   await dispatchLocalControl({
                     type: 'session/cancel',
+                    ...cancelIntent,
                     sessionId,
                     machineId: auth.machineId,
                     workspaceId,
@@ -4099,7 +4118,12 @@ const sessionCancelCommand = new Command('cancel')
               : await withMachineRpcClient(
                   { auth, workspaceId, machineId: session.machineId },
                   async (client) =>
-                    await client.requestSessionCancel({ sessionId, turnId, timeoutMs: 10_000 })
+                    await client.requestSessionCancel({
+                      sessionId,
+                      turnId,
+                      ...cancelIntent,
+                      timeoutMs: 10_000,
+                    })
                 );
 
           if (!response) {

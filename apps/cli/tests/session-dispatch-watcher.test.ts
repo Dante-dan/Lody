@@ -1780,7 +1780,8 @@ describe('SessionDispatchWatcher', () => {
         type: 'session/cancel',
         sessionId,
         turnId: 'assistant-turn-2',
-      })
+      }),
+      { deferOperations: true }
     );
   });
 
@@ -1873,7 +1874,8 @@ describe('SessionDispatchWatcher', () => {
         type: 'session/cancel',
         sessionId,
         turnId: 'assistant-turn-2b',
-      })
+      }),
+      { deferOperations: true }
     );
 
     resolveContinue?.();

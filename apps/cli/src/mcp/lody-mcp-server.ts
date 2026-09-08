@@ -3047,6 +3047,7 @@ const buildOperationTargetCancelArgs = (
 ): string[] => [
   'session',
   'cancel',
+  '--turn-only',
   '--workspace',
   workspaceId,
   '--json',
@@ -4517,6 +4518,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
           await runLodyCliJson([
             'session',
             'cancel',
+            '--turn-only',
             '--workspace',
             getMcpWorkspaceId(ctx),
             '--json',
