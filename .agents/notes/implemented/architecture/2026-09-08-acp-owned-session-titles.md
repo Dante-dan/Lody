@@ -7,14 +7,16 @@ Translation: pending
 
 Lody wanted every builtin agent to stop carrying its own `titleGeneration`
 session config and take the session title from the ACP adapter instead. An audit
-of all five builtin adapters shows that only acp-extension-claude and
-acp-extension-codex actually generate titles; Grok, Kimi and the DeepSeek Harness
-publish nothing usable, so the isolated generator and its config must stay for
-them. Codex was the one adapter doing the work twice — Lody spawned an isolated
+of all five builtin adapters shows only acp-extension-claude and
+acp-extension-codex surface a usable title today, so the isolated generator and
+its config must stay for Grok, Kimi and the DeepSeek Harness — though for all
+three the gap is ours rather than a missing upstream feature, most sharply for
+Grok, whose official runtime generates titles inside its own ACP session impl.
+Codex was the one adapter doing the work twice, since Lody spawned an isolated
 codex ACP session for the title while the adapter independently generated and
-pushed its own — so Codex now joins Claude as an ACP-owned title provider. Doing
-that required splitting the single `usesAcpProvidedSessionTitle()` predicate,
-because the two adapters need opposite trust rules and conflating them would have
+pushed its own, so Codex now joins Claude as an ACP-owned title provider. That
+required splitting the single `usesAcpProvidedSessionTitle()` predicate, because
+the two adapters need opposite trust rules and conflating them would have
 promoted Codex's first-prompt preview to the session title. Branch naming still
 falls back to the isolated generator when no ACP title has landed yet, so this
 reduces title work but does not yet eliminate the isolated session.
@@ -27,7 +29,7 @@ Each adapter was read at the commit this repository pins.
 | --- | --- | --- | --- | --- |
 | `acp-extension-claude` | 0.70.0 | yes | no `_meta` at all | yes — SDK `generate_session_title` control request |
 | `acp-extension-codex` | 1.10.0 (since 1.8.0) | yes | yes, generated titles are `explicit` | yes — cheap-model turn on an ephemeral thread |
-| `acp-extension-grok` | 0.1.0 | no | no | no |
+| `acp-extension-grok` | 0.1.0 | no (adapter); the official runtime does generate titles | no | not in the adapter — upstream `title_refresh.rs` does |
 | `acp-extension-kimi` | acp-server 0.0.1 | yes, but the title is the first prompt truncated to 200 chars | no `_meta` at all | no |
 | `acp-extension-dsh` | 0.1.1 | no | no | no |
 
@@ -39,8 +41,33 @@ endpoint) — but the generator is reachable only from the kap-server HTTP route
 the node SDK, and the kind is discarded at the ACP boundary in
 `packages/acp-server/src/events-map.ts`. The DeepSeek Harness pins
 `@deepseek-ai/dsh-session-title` in its dependency closure but never mounts it in
-`createDeepSeekHarnessCordisConfig`, so the plugin is inert. Grok is a pure stdio
-proxy with no title code of any kind and no upstream title capability to forward.
+`createDeepSeekHarnessCordisConfig`, so the plugin is inert.
+
+Grok is the sharpest correction to an earlier reading of this audit. The adapter
+is a pure stdio proxy with no title code, which is easy to mistake for "Grok has
+no titles". The official `@xai-official/grok` 1.0.13 runtime pinned by
+`runtime-manifest.json` in fact ships a full automatic title generator: strings in
+the shipped binary include the `session_title` tool-call prompt ("Final session
+title, just 5-10 word descriptive title for the session"), the failure path
+"session title generation failed, falling back to truncated user text", and user
+documentation stating the title is generated right after the first prompt,
+regenerated over a couple of early turns, then frozen, with `/rename` and
+`/rename --auto` as manual overrides. Decisively, the logic lives at
+`crates/codegen/xai-grok-shell/src/session/acp_session_impl/title_refresh.rs` —
+inside the ACP session implementation, alongside `goal.rs`, `mcp.rs` and
+`prompt_build.rs` — so it is not TUI-only, and the runtime's ACP `SessionUpdate`
+enum includes `session_info_update` with `title` and `updatedAt`.
+
+What remains unverified is whether that title reaches the ACP wire as a pushed
+`session_info_update` or only as a field of the `x.ai/session/info` response. It
+could not be settled on the machine used for this audit: there are no Grok
+credentials there (`~/.grok/auth.json` is absent) so no turn could be run, and all
+1375 stored Grok sessions are zero-message Lody capability probes with an empty
+`session_summary`. Both candidate paths are already within reach of existing code:
+`handleRuntimeMethod` in `packages/acp-extension-grok/src/proxy.js` ends in a
+verbatim `passthrough`, so a pushed update already flows to Lody and is dropped
+only for lacking `_meta.lody.titleSource`; and the adapter already issues
+`x.ai/session/info` every turn but consumes only `sessionInfo?.context`.
 
 ## Decision
 

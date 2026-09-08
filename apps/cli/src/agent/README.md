@@ -190,7 +190,19 @@ a bare `session_info_update` with no `_meta`, so it needs the `trustsUntaggedAcp
 allowlist. Codex tags every title and emits a first-prompt `fallback` preview before its
 generated `explicit` one, so it must stay outside that allowlist or the preview would win.
 
-Grok, Kimi and the DeepSeek Harness publish no usable ACP title — Grok has no title code at
-all, Kimi's `session_info_update` carries the first prompt truncated to 200 chars with no
-`_meta`, and the DeepSeek Harness never mounts its upstream `dsh-session-title` plugin — so
-they keep using `title-generator.ts` / `response-utils.ts` and the `titleGeneration` config.
+Grok, Kimi and the DeepSeek Harness deliver no title Lody can currently use, so they keep
+using `title-generator.ts` / `response-utils.ts` and the `titleGeneration` config. In all
+three cases the gap is on our side, not a missing upstream feature:
+
+- **Grok**: the official runtime generates titles itself, from
+  `xai-grok-shell/src/session/acp_session_impl/title_refresh.rs` — inside its ACP session
+  impl, so it runs under `grok acp`, not only in the TUI. `acp-extension-grok` adds no title
+  handling: an emitted `session_info_update` would reach Lody untouched through
+  `handleRuntimeMethod`'s default passthrough and then be dropped for lacking
+  `_meta.lody.titleSource`. The adapter also already calls `x.ai/session/info` every turn but
+  keeps only `.context`.
+- **Kimi**: its `session_info_update` carries the first prompt truncated to 200 chars with no
+  `_meta`, while the engine's real `SessionTitleService` stays reachable only from kap-server
+  and the node SDK. `SessionMeta.titleKind` is discarded at the ACP boundary.
+- **DeepSeek Harness**: pins `@deepseek-ai/dsh-session-title` in its dependency closure but
+  never mounts it in `createDeepSeekHarnessCordisConfig`.
