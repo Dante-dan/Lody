@@ -23,7 +23,7 @@ import { TooltipProvider } from '../src/ui/tooltip';
 
 const machineId = 'machine-test' as MachineId;
 const claudeConfigId = 'claude-config' as AgentConfigId;
-const codexConfigId = 'codex-config' as AgentConfigId;
+const kimiConfigId = 'kimi-config' as AgentConfigId;
 type RefreshCapabilities = ComponentProps<typeof AgentConfigDialog>['onRefreshCapabilities'];
 
 /** Omits `protocolCapabilities` by default, so the machine reads as legacy. */
@@ -53,14 +53,17 @@ const createMachine = (
   },
 });
 
-const createCodexMachine = (): MachineViewMeta => ({
-  ...createMachine('Codex workstation'),
+const createKimiMachine = (): MachineViewMeta => ({
+  ...createMachine('Kimi workstation'),
   acpCapabilities: {
-    [getAcpCapabilityCacheKey(codexConfigId)]: {
+    [getAcpCapabilityCacheKey(kimiConfigId)]: {
       cliType: 'builtin',
-      agentType: 'codex',
+      agentType: 'kimi',
       cacheVersion: ACP_CAPABILITY_CACHE_VERSION,
-      sourceVersion: 'codex@1.0.0',
+      sourceVersion: 'kimi-code@1.0.0',
+      // Builtin Kimi is the one agent the dialog holds to an authoritative
+      // (real runtime probe) cache entry before it renders config selectors.
+      provenance: 'runtime',
       modes: [],
       models: [],
       configOptions: [
@@ -69,10 +72,10 @@ const createCodexMachine = (): MachineViewMeta => ({
           name: 'Model',
           category: 'model',
           type: 'select',
-          currentValue: 'gpt-5.6-sol',
+          currentValue: 'kimi-k2',
           options: [
-            { value: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' },
-            { value: 'gpt-5.6-other', name: 'GPT-5.6 Other' },
+            { value: 'kimi-k2', name: 'Kimi K2' },
+            { value: 'kimi-k2-turbo', name: 'Kimi K2 Turbo' },
           ],
         },
         {
@@ -89,6 +92,11 @@ const createCodexMachine = (): MachineViewMeta => ({
           ],
         },
       ],
+      // The title model's ladder omits `ultra`, so a stored `ultra` effort is
+      // invalid for it and must normalize to the selector's current value.
+      // Codex resolves its ladder through a dedicated branch; every other agent
+      // goes through this map.
+      modelReasoningEfforts: { 'kimi-k2-turbo': ['low', 'medium'] },
       availableCommands: [],
       fetchedAt: Date.now(),
     },
@@ -1012,25 +1020,46 @@ describe('AgentConfigDialog', () => {
     expect(findSignInAgainButton()).toBeUndefined();
   });
 
+  // Claude, Codex and Grok generate their own title over ACP, so the setting is
+  // obsolete for them. Kimi keeps it (covered by the normalization test below).
+  it.each(['claude', 'codex', 'grok'])(
+    'hides the title generation section for builtin %s',
+    async (agentType) => {
+      const config = {
+        id: kimiConfigId,
+        machineId,
+        name: 'ACP-owned',
+        description: undefined,
+        cliType: 'builtin',
+        agentType,
+        env: {},
+      } as AgentConfigMeta;
+
+      await renderDialog({ kind: 'edit', config }, createKimiMachine());
+
+      expect(document.body.textContent).not.toContain('Title generation');
+    }
+  );
+
   it('saves a normalized title reasoning effort after the title model changes', async () => {
     const onSubmit = vi.fn(async () => {});
     const config = {
-      id: codexConfigId,
+      id: kimiConfigId,
       machineId,
-      name: 'Codex',
+      name: 'Kimi',
       description: undefined,
       cliType: 'builtin',
-      agentType: 'codex',
+      agentType: 'kimi',
       env: {},
       titleGeneration: {
         configOptionValues: {
-          model: 'gpt-5.6-other',
+          model: 'kimi-k2-turbo',
           reasoning_effort: 'ultra',
         },
       },
     } as AgentConfigMeta;
 
-    await renderDialog({ kind: 'edit', config }, createCodexMachine(), onSubmit);
+    await renderDialog({ kind: 'edit', config }, createKimiMachine(), onSubmit);
 
     expect(document.body.textContent).toContain('Title generation');
 
@@ -1046,7 +1075,7 @@ describe('AgentConfigDialog', () => {
       expect.objectContaining({
         titleGeneration: {
           configOptionValues: {
-            model: 'gpt-5.6-other',
+            model: 'kimi-k2-turbo',
             reasoning_effort: 'medium',
           },
         },
