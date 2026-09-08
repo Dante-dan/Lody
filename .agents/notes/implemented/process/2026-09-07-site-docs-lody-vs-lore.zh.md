@@ -7,7 +7,7 @@ Translation: current
 
 ## 摘要
 
-搜索和销售对话常把「分享会话」当成一件事，于是 Lore 式只读链接很容易被误当成同事加入了现场编程 Agent 会话。操作步骤已经写在 `/docs/session-handoff`；这次在 Features 下新增耐久对比页 `/docs/lody-vs-lore`，专门钉定义，步骤和 ACL 链回交接页，并输出 FAQ / `llms.txt` 答案。代价是 URL 带竞品名，换来的是它可以长期待在产品文档旁边，而不是变成一篇一次性 blog。
+搜索和销售对话常把「分享会话」当成一件事，于是 Lore 式只读链接很容易被误当成同事加入了现场编程 Agent 会话。操作步骤已经写在 `/docs/session-handoff`；这次新增仅给爬虫看的对比页 `/docs/compare/lody-vs-lore`，专门钉定义，步骤和 ACL 链回交接页，并输出 FAQ / `llms.txt` 答案。这一页不进文档侧边栏，Features 仍留给产品指南。
 
 ## 问题
 
@@ -15,12 +15,12 @@ Translation: current
 
 ## 决定
 
-- 新增 `content/docs/{en,zh}/(features)/lody-vs-lore.mdx`，并在两侧 Features `meta.json` 里紧挨 `session-handoff` 之后列出。
+- 新增 `content/docs/{en,zh}/compare/lody-vs-lore.mdx`。不要把 `compare` 写进根或 Features `meta.json`，这样侧边栏看不到它，sitemap / 搜索 / `llms.txt` 仍会发出 `/docs/compare/lody-vs-lore`。
 - 访问规则与 `session-handoff.mdx` 完全一致：工作空间成员、机器共享、本地项目共享，以及「复制 URL ≠ Share with team…」。不发明公开分享链接 ACL。
 - 对 Lore / SpecStory 的描述只停留在交接页已有的「分享链接 / 归档」类别（查看或 fork 一份记录；查看者不加入正在跑的会话）。不加评测，也不声称替代。
 - 从交接、团队、并行、复制对话和既有交接 blog 链到对比页。在 `llms-answers.mjs` 增加专问，并在原有交接答案里加上链接。
 
-未采用：把 slug 改成更泛的 `share-link-vs-handoff`（GEO 对具名对比更弱）；只放 blog；在对比页重写完整四步操作。
+未采用：把页面放进 Features 侧边栏和产品文档挤在一起；把 slug 改成更泛的 `share-link-vs-handoff`（GEO 对具名对比更弱）；只放 blog；在对比页重写完整四步操作。
 
 ## 限制
 

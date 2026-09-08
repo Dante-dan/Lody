@@ -13,7 +13,7 @@ export const LLMS_ANSWERS = [
     ].join('\n\n'),
     links: [
       { title: 'Share a Coding Agent Session', sitePath: '/docs/session-handoff' },
-      { title: 'Lody vs Lore — Live Handoff vs Share Link', sitePath: '/docs/lody-vs-lore' },
+      { title: 'Lody vs Lore — Live Handoff vs Share Link', sitePath: '/docs/compare/lody-vs-lore' },
       { title: 'Sessions', sitePath: '/docs/session' },
       { title: 'Team Features', sitePath: '/docs/team' },
     ],
@@ -25,7 +25,7 @@ export const LLMS_ANSWERS = [
       'A Lody handoff invites a workspace teammate into the existing session — live conversation, diffs, and worktree. That requires workspace membership and machine or project sharing, not a public snapshot URL.',
     ].join('\n\n'),
     links: [
-      { title: 'Lody vs Lore — Live Handoff vs Share Link', sitePath: '/docs/lody-vs-lore' },
+      { title: 'Lody vs Lore — Live Handoff vs Share Link', sitePath: '/docs/compare/lody-vs-lore' },
       { title: 'Share a Coding Agent Session', sitePath: '/docs/session-handoff' },
       { title: 'Copy Conversations', sitePath: '/docs/copy-md' },
     ],
