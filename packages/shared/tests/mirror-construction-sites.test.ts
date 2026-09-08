@@ -42,6 +42,9 @@ describe('Mirror construction sites', () => {
           if (!options.includes('ignoreUnknownProperties')) missing.push(location);
           if (/schema:\s*sessionDocSchema\b/.test(options)) {
             validatedSessions.push(location);
+          } else {
+            // The session facade's bypass must not spread to other stores.
+            expect(options, location).not.toMatch(/validateUpdates:\s*false\b/);
           }
         }
       }
