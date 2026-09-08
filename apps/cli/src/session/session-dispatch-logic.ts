@@ -77,7 +77,7 @@ export type DispatchAction =
 
 export type CancelAction =
   | { type: 'noop'; reason: 'not-owned' | 'archived' | 'no-cancel-turn' | 'already-seen' }
-  | { type: 'cancel'; turnId: string };
+  | { type: 'cancel'; turnId: string; turnOnly?: true };
 
 export type DispatchTurnInput = {
   inputBlocks: SessionInputBlock[];
@@ -243,15 +243,17 @@ export function resolveSessionCancelAction(
     return { type: 'noop', reason: 'archived' };
   }
 
-  const lastCanceledTurn = meta.lastCanceledTurn;
-  if (typeof lastCanceledTurn !== 'string' || !lastCanceledTurn) {
+  const request = meta.lastCanceledTurn;
+  const turnId = typeof request === 'string' ? request : request?.turnId;
+  const turnOnly = typeof request === 'object' && request?.turnOnly === true;
+  if (typeof turnId !== 'string' || !turnId) {
     return { type: 'noop', reason: 'no-cancel-turn' };
   }
-  if (lastCanceledTurn === lastSeenCancelTurn) {
+  const key = turnOnly ? JSON.stringify([turnId, true]) : turnId;
+  if (key === lastSeenCancelTurn) {
     return { type: 'noop', reason: 'already-seen' };
   }
-
-  return { type: 'cancel', turnId: lastCanceledTurn };
+  return { type: 'cancel', turnId, ...(turnOnly ? { turnOnly: true as const } : {}) };
 }
 
 // ── Turn finding ────────────────────────────────────────────────────────────

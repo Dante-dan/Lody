@@ -285,7 +285,7 @@ export type WorkspaceRuntime = {
     machineId: MachineId,
     sessionId: SessionId,
     turnId: string,
-    options?: { timeoutMs?: number }
+    options?: { timeoutMs?: number; turnOnly?: boolean }
   ) => Promise<SessionCancelResponse | null>;
   requestSessionSteer: (
     machineId: MachineId,

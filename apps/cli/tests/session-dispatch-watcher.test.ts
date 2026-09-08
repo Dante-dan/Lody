@@ -1707,86 +1707,93 @@ describe('SessionDispatchWatcher', () => {
     });
   });
 
-  it('reacts to lastCanceledTurn metadata for an owned session', async () => {
-    const continueSession = vi.fn(async () => {});
-    const startSession = vi.fn(async () => {});
-    const cancelSession = vi.fn(async () => ({ success: true }));
-    const sessionId = 'session-2' as SessionId;
-    const roomId = `session-${sessionId}`;
-    const sessionDoc = {
-      mirror: {
-        subscribe: vi.fn(() => vi.fn()),
-      },
-      getMetaState: vi.fn(async () => ({
-        id: sessionId,
+  it.each([false, true])(
+    'restores durable cancel intent for an owned session (turnOnly=%s)',
+    async (turnOnly) => {
+      const continueSession = vi.fn(async () => {});
+      const startSession = vi.fn(async () => {});
+      const cancelSession = vi.fn(async () => ({ success: true }));
+      const sessionId = 'session-2' as SessionId;
+      const roomId = `session-${sessionId}`;
+      const sessionDoc = {
+        mirror: {
+          subscribe: vi.fn(() => vi.fn()),
+        },
+        getMetaState: vi.fn(async () => ({
+          id: sessionId,
+          machineId: 'machine-1',
+          userId: 'user-1',
+          createdAt: new Date().toISOString(),
+          cliType: 'builtin',
+          agentType: 'codex',
+          status: { type: 'idle' },
+          lastCanceledTurn: turnOnly
+            ? { turnId: 'assistant-turn-2', turnOnly: true }
+            : 'assistant-turn-2',
+        })),
+        getHistory: vi.fn(async () => []),
+        setStatus: vi.fn(async () => {}),
+        waitForRemoteSync: vi.fn(async () => {}),
+      };
+
+      const workspaceDocument = {
+        repo: {
+          getMeta: () => ({
+            scan: vi.fn(async () => [{ key: ['e', roomId], value: true }]),
+          }),
+          getDocMeta: vi.fn(async () => ({
+            meta: {
+              id: sessionId,
+              machineId: 'machine-1',
+              userId: 'user-1',
+              createdAt: new Date().toISOString(),
+              cliType: 'builtin',
+              agentType: 'codex',
+              status: { type: 'idle' },
+              lastCanceledTurn: turnOnly
+                ? { turnId: 'assistant-turn-2', turnOnly: true }
+                : 'assistant-turn-2',
+            },
+          })),
+          watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
+        },
+        getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+        onMetaRoomSynced: vi.fn(() => vi.fn()),
+      } as unknown as LoroDocumentManager;
+
+      const watcher = createWatcher({
+        logger: createSilentLogger(),
         machineId: 'machine-1',
-        userId: 'user-1',
-        createdAt: new Date().toISOString(),
-        cliType: 'builtin',
-        agentType: 'codex',
-        status: { type: 'idle' },
-        lastCanceledTurn: 'assistant-turn-2',
-      })),
-      getHistory: vi.fn(async () => []),
-      setStatus: vi.fn(async () => {}),
-      waitForRemoteSync: vi.fn(async () => {}),
-    };
+        workspaceId: 'workspace-1' as WorkspaceId,
+        workspaceDocument,
+        executionService: {
+          getExecutionSnapshot: vi.fn(() => ({
+            hasActiveTurn: false,
+            hasBlockingPendingCreate: false,
+            hasReusableSession: false,
+          })),
+          continueSession,
+          startSession,
+          cancelSession,
+        } as unknown as SessionExecutionService,
+        canUseMachine: createAllowMachineAccess(),
+      });
 
-    const workspaceDocument = {
-      repo: {
-        getMeta: () => ({
-          scan: vi.fn(async () => [{ key: ['e', roomId], value: true }]),
+      await watcher.start();
+
+      await vi.waitFor(() => {
+        expect(cancelSession).toHaveBeenCalledTimes(1);
+      });
+      expect(cancelSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'session/cancel',
+          sessionId,
+          turnId: 'assistant-turn-2',
         }),
-        getDocMeta: vi.fn(async () => ({
-          meta: {
-            id: sessionId,
-            machineId: 'machine-1',
-            userId: 'user-1',
-            createdAt: new Date().toISOString(),
-            cliType: 'builtin',
-            agentType: 'codex',
-            status: { type: 'idle' },
-            lastCanceledTurn: 'assistant-turn-2',
-          },
-        })),
-        watch: vi.fn(() => ({ unsubscribe: vi.fn() })),
-      },
-      getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
-      onMetaRoomSynced: vi.fn(() => vi.fn()),
-    } as unknown as LoroDocumentManager;
-
-    const watcher = createWatcher({
-      logger: createSilentLogger(),
-      machineId: 'machine-1',
-      workspaceId: 'workspace-1' as WorkspaceId,
-      workspaceDocument,
-      executionService: {
-        getExecutionSnapshot: vi.fn(() => ({
-          hasActiveTurn: false,
-          hasBlockingPendingCreate: false,
-          hasReusableSession: false,
-        })),
-        continueSession,
-        startSession,
-        cancelSession,
-      } as unknown as SessionExecutionService,
-      canUseMachine: createAllowMachineAccess(),
-    });
-
-    await watcher.start();
-
-    await vi.waitFor(() => {
-      expect(cancelSession).toHaveBeenCalledTimes(1);
-    });
-    expect(cancelSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'session/cancel',
-        sessionId,
-        turnId: 'assistant-turn-2',
-      }),
-      { deferOperations: true }
-    );
-  });
+        { deferOperations: !turnOnly }
+      );
+    }
+  );
 
   it('handles cancel metadata without waiting for an in-flight dispatch to finish', async () => {
     let resolveContinue: (() => void) | undefined;

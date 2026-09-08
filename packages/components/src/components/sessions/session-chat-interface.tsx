@@ -3606,7 +3606,8 @@ export const SessionChatInterface = memo(
             issuePRMentions,
             mcpServerIds: mcpSelection.selectedIds,
             taskToolsEnabled: tasksEnabled,
-            includeDeferredOperationResults: options?.includeDeferredOperationResults === true,
+            includeDeferredOperationResults:
+              options?.includeDeferredOperationResults ?? includeDeferredResults,
             agentRoleId:
               options?.agentRole?.agentRoleId ?? (options?.agentRole === null ? null : undefined),
             agentRoleRevision: options?.agentRole?.agentRoleRevision,
@@ -3703,6 +3704,7 @@ export const SessionChatInterface = memo(
         repoFullName,
         requestSessionDispatch,
         scrollChatToBottom,
+        includeDeferredResults,
         selectedModeId,
         selectedModelId,
         session.acpSessionId,
@@ -3752,7 +3754,8 @@ export const SessionChatInterface = memo(
             issuePRMentions,
             mcpServerIds: mcpSelection.selectedIds,
             taskToolsEnabled: tasksEnabled,
-            includeDeferredOperationResults: options?.includeDeferredOperationResults === true,
+            includeDeferredOperationResults:
+              options?.includeDeferredOperationResults ?? includeDeferredResults,
             agentRoleId:
               options?.agentRole?.agentRoleId ?? (options?.agentRole === null ? null : undefined),
             agentRoleRevision: options?.agentRole?.agentRoleRevision,
@@ -3810,6 +3813,7 @@ export const SessionChatInterface = memo(
         mcpSelection.selectedIds,
         pushMessageQueue,
         repoFullName,
+        includeDeferredResults,
         selectedModeId,
         selectedModelId,
         session.acpSessionId,
@@ -4045,7 +4049,8 @@ export const SessionChatInterface = memo(
         !isExternalHistoryRefreshing,
       onRetry: async () =>
         await dispatchPrompt(
-          t('sessions.capacityRetry.continuationPrompt', CAPACITY_RETRY_CONTINUATION_PROMPT)
+          t('sessions.capacityRetry.continuationPrompt', CAPACITY_RETRY_CONTINUATION_PROMPT),
+          { includeDeferredOperationResults: false }
         ),
     });
 
@@ -5056,7 +5061,7 @@ export const SessionChatInterface = memo(
         setInputActionState('ready');
         pendingUserInterruptRef.current = true;
         try {
-          await requestSessionCancel(session.id, activeAssistantTurnId);
+          await requestSessionCancel(session.id, activeAssistantTurnId, { turnOnly: true });
           captureSessionEvent('session/queue_interrupt_succeeded', {
             queue_item_id: item.$cid,
             active_assistant_turn_id: activeAssistantTurnId,

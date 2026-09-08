@@ -161,6 +161,26 @@ describe('resolveSessionDispatchAction', () => {
 // ── resolveSessionCancelAction ──────────────────────────────────────────────
 
 describe('resolveSessionCancelAction', () => {
+  it('preserves turn-only intent and does not deduplicate a subsequent explicit Stop', () => {
+    const meta = {
+      ...baseMeta,
+      lastCanceledTurn: { turnId: 'assistant-1', turnOnly: true as const },
+    };
+    expect(resolveSessionCancelAction(meta, undefined, MACHINE)).toEqual({
+      type: 'cancel',
+      turnId: 'assistant-1',
+      turnOnly: true,
+    });
+    const seen = JSON.stringify(['assistant-1', true]);
+    expect(resolveSessionCancelAction(meta, seen, MACHINE)).toEqual({
+      type: 'noop',
+      reason: 'already-seen',
+    });
+    expect(
+      resolveSessionCancelAction({ ...meta, lastCanceledTurn: 'assistant-1' }, seen, MACHINE)
+    ).toEqual({ type: 'cancel', turnId: 'assistant-1' });
+  });
+
   it('returns noop when meta is undefined', () => {
     const action = resolveSessionCancelAction(undefined, undefined, MACHINE);
     expect(action).toEqual({ type: 'noop', reason: 'not-owned' });

@@ -51,9 +51,17 @@ the existing uncertain recovery behavior. Failed settlements have an owned retry
 which only writes the receipt, never repeats the prompt. Consumed result retention
 stays at seven days; held ready results are not expired by the automatic-delivery TTL.
 
-Cancellation from MCP and edit-and-resend remains turn-only. The additive
+Cancellation from MCP, edit-and-resend, queue interruption, and local-project
+removal remains turn-only. Renderer RPC and durable fallback carry the same intent:
+`lastCanceledTurn` is a string for explicit Stop or an atomic `{turnId, turnOnly: true}`
+object for internal cancellation. Deduplication includes intent, so an internal cancel
+cannot suppress a later explicit Stop of the same turn. The additive
 `deferredOperationInputs` v1 capability gates the CLI's `turnOnly` wire extension;
 legacy daemons receive their original cancellation payload. Restart durability is
 machine-local, not a cross-machine migration guarantee. Normal automatic completion
 batching is separate future work. Product contract:
 [operation-delivery-control.zh.md](../../../../specs/operation-delivery-control.zh.md).
+
+User-triggered composer shortcuts (implement plan, create PR, fix CI) inherit the
+include-results checkbox just like typed input, for both immediate and queued sends.
+Background capacity retry explicitly opts out.

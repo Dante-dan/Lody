@@ -859,8 +859,8 @@ export type SessionMeta = {
    * producers; execution terminal bookkeeping must never rewrite it.
    */
   latestUserMsgId?: string;
-  /** Assistant turn id the client wants to stop; cancel is ignored unless it matches the machine's in-memory active turn. */
-  lastCanceledTurn?: string;
+  /** String requests explicit Stop; the atomic object preserves internal turn-only intent. */
+  lastCanceledTurn?: string | { turnId: string; turnOnly: true };
   /** Latest user history entry id that the machine has fully handled. */
   lastHandledUserMsgId?: string;
   /** User history entry id currently being processed by the machine. */

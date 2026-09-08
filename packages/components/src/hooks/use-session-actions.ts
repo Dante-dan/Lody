@@ -11,6 +11,7 @@ import type {
   SessionMeta,
   SessionToCreate,
   MachineId,
+  MachineMeta,
   MachineLegacyMetaFields,
   SessionDocMeta,
   SessionTurnInputConfig,
@@ -26,6 +27,7 @@ import {
   getMachineFlockLocalProjects,
   getSessionRoomId,
   machineFlockKeys,
+  machineSupportsDeferredOperationInputs,
   machineDeleteCommandToQueueItem,
   SessionStatusFactory,
   getLocalProjectHistoryProviderKey,
@@ -360,7 +362,11 @@ export type SessionActions = {
     userTurnId: string,
     options?: { inputConfig?: SessionTurnInputConfig; machineId?: MachineId | null }
   ) => Promise<void>;
-  requestSessionCancel: (sessionId: SessionId, turnId: string) => Promise<void>;
+  requestSessionCancel: (
+    sessionId: SessionId,
+    turnId: string,
+    options?: { turnOnly?: boolean }
+  ) => Promise<void>;
   requestSessionSteer: (
     sessionId: SessionId,
     expectedTurnId: string,
@@ -879,7 +885,7 @@ export function useSessionActions(): SessionActions {
   );
 
   const requestSessionCancel = useCallback(
-    async (sessionId: SessionId, turnId: string) => {
+    async (sessionId: SessionId, turnId: string, options?: { turnOnly?: boolean }) => {
       if (!runtime) {
         throw new Error('Runtime not ready');
       }
@@ -888,10 +894,21 @@ export function useSessionActions(): SessionActions {
       if (isLoroRepoDocDeleted(existing)) return;
       const meta = existing?.meta as SessionMeta | undefined;
       const machineId = meta?.machineId;
+      const machine =
+        options?.turnOnly && machineId
+          ? ((await runtime.repo.getDocMeta(getMachineRoomId(machineId)))?.meta as
+              | MachineMeta
+              | undefined)
+          : undefined;
+      const turnOnly =
+        options?.turnOnly === true && machineSupportsDeferredOperationInputs(machine);
       if (machineId) {
         // Fast-path RPC is intentionally redundant with the durable meta fallback below.
         void runtime
-          .requestSessionCancel(machineId, sessionId, turnId, { timeoutMs: 2_000 })
+          .requestSessionCancel(machineId, sessionId, turnId, {
+            timeoutMs: 2_000,
+            ...(turnOnly ? { turnOnly: true } : {}),
+          })
           .then((response) => {
             if (response && !response.success) {
               log('session cancel rpc failed for %s/%s: %s', sessionId, turnId, response.error);
@@ -903,7 +920,7 @@ export function useSessionActions(): SessionActions {
       }
       await runtime.writer.upsertDocMeta(roomId, {
         // Stop targets the assistant turn currently on screen, not the originating user turn.
-        lastCanceledTurn: turnId,
+        lastCanceledTurn: turnOnly ? { turnId, turnOnly: true } : turnId,
       } as Partial<SessionMeta>);
     },
     [runtime]

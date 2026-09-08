@@ -153,7 +153,7 @@ export function useRemoveLocalProject() {
               (sessionStore) => resolveActiveAssistantTurnId(sessionStore.getState().history)
             );
             if (!activeAssistantTurnId) return;
-            await requestSessionCancel(sessionId, activeAssistantTurnId);
+            await requestSessionCancel(sessionId, activeAssistantTurnId, { turnOnly: true });
           } catch (error) {
             console.warn('Failed to request local project session stop', {
               sessionId: session.id,

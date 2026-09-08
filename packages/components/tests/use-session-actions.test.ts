@@ -272,6 +272,39 @@ describe('useSessionActions', () => {
     return actions;
   };
 
+  it.each([false, true])(
+    'preserves cancel intent in RPC and durable metadata (turnOnly=%s)',
+    async (turnOnly) => {
+      const sessionId = 'cancel-intent' as SessionId;
+      const machineId = 'machine-1' as MachineId;
+      const upsertDocMeta = vi.fn(async () => undefined);
+      const requestSessionCancel = vi.fn(async () => {
+        throw new Error('RPC unavailable');
+      });
+      const runtime = createRuntime({
+        repo: {
+          getDocMeta: async (room: string) => ({
+            meta:
+              room === getMachineRoomId(machineId)
+                ? { protocolCapabilities: { deferredOperationInputs: 1 } }
+                : { id: sessionId, machineId },
+          }),
+          upsertDocMeta,
+        } as unknown as WorkspaceRuntime['repo'],
+      });
+      runtime.requestSessionCancel = requestSessionCancel;
+      const actions = await renderActions(runtime);
+      await actions.requestSessionCancel(sessionId, 'assistant-1', { turnOnly });
+      expect(requestSessionCancel).toHaveBeenCalledWith(machineId, sessionId, 'assistant-1', {
+        timeoutMs: 2000,
+        ...(turnOnly ? { turnOnly: true } : {}),
+      });
+      expect(upsertDocMeta).toHaveBeenCalledWith(getSessionRoomId(sessionId), {
+        lastCanceledTurn: turnOnly ? { turnId: 'assistant-1', turnOnly: true } : 'assistant-1',
+      });
+    }
+  );
+
   it('does not block session creation on remote stream pre-creation', async () => {
     const sessionId = 'session-create-stream-pending' as SessionId;
     const streamCreate = createDeferred();

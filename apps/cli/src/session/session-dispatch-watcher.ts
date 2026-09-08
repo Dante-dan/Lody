@@ -1237,11 +1237,9 @@ export class SessionDispatchWatcher {
   private sessionNeedsActiveWatch(meta: SessionMeta): boolean {
     return shouldWatchSession({
       meta,
-      hasUnprocessedCancelRequest: Boolean(
-        typeof meta.lastCanceledTurn === 'string' &&
-        meta.lastCanceledTurn.length > 0 &&
-        meta.lastCanceledTurn !== this.cancelSeenTurn.get(meta.id)
-      ),
+      hasUnprocessedCancelRequest:
+        resolveSessionCancelAction(meta, this.cancelSeenTurn.get(meta.id), this.deps.machineId)
+          .type === 'cancel',
       hasRpcTurnOffer: (this.rpcTurnStash.get(meta.id)?.size ?? 0) > 0,
       hasAccessRetry: this.accessFibers.has(meta.id),
     });
@@ -1867,7 +1865,10 @@ export class SessionDispatchWatcher {
     if (!isActive()) {
       return;
     }
-    this.cancelSeenTurn.set(sessionId, action.turnId);
+    this.cancelSeenTurn.set(
+      sessionId,
+      action.turnOnly ? JSON.stringify([action.turnId, true]) : action.turnId
+    );
     await this.deps.executionService.cancelSession(
       {
         type: 'session/cancel',
@@ -1876,7 +1877,7 @@ export class SessionDispatchWatcher {
         workspaceId: this.deps.workspaceId,
         turnId: action.turnId,
       },
-      { deferOperations: true }
+      { deferOperations: action.turnOnly !== true }
     );
     if (!isActive()) {
       return;

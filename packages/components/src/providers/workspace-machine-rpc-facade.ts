@@ -6,6 +6,7 @@ import type {
 import {
   getServerNow,
   machineSupportsLocalFileResourcesProtocol,
+  machineSupportsDeferredOperationInputs,
   type MachineProtocolCapabilities,
   type CodeCollabV2Error,
   type CodeCollabV2FileIndexRequest,
@@ -496,15 +497,22 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     machineId: MachineId,
     sessionId: SessionId,
     turnId: string,
-    options?: { timeoutMs?: number }
+    options?: { timeoutMs?: number; turnOnly?: boolean }
   ): Promise<SessionCancelResponse | null> => {
     try {
+      const turnOnly =
+        options?.turnOnly &&
+        machineSupportsDeferredOperationInputs({
+          protocolCapabilities: await deps.getMachineProtocolCapabilities(machineId),
+        })
+          ? { turnOnly: true }
+          : {};
       if (await canUseLocalMachineRpc(machineId)) {
         const response = await getLocalMachineRpcSender()?.({
           machineId,
           workspaceId,
           method: 'session/cancel',
-          params: { sessionId, turnId },
+          params: { sessionId, turnId, ...turnOnly },
           timeoutMs: options?.timeoutMs ?? 2_000,
         });
         if (response && !response.ok) {
@@ -522,6 +530,7 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
       ).requestSessionCancel({
         sessionId,
         turnId,
+        ...turnOnly,
         timeoutMs: options?.timeoutMs ?? 2_000,
       });
     } catch (error) {
