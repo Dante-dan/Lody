@@ -10,17 +10,18 @@ Translation: current
 The desktop regression suite covered bootstrap and three resource lifecycles but left
 common catalog, metadata, and fork workflows at component or Node-test boundaries. Five
 journeys were implemented and exercised against the real Electron renderer, IPC graph, and
-bundled CLI. Agent Roles, workspace MCP selection, Session management, and local-project
-removal are active. The Session-fork journey exposed a product defect during worktree commit
-and remains an evidence-backed blocked backlog row.
+bundled CLI. Agent Roles, workspace MCP selection, Session management, local-project removal,
+and Session fork are active. The fork journey currently exposes a known product defect during
+worktree commit and remains executable so the separate repair is regression-gated.
 
 ## Decision and scope
 
 - Promote `LODY-MCP-001`, `LODY-ROLE-001`, and `LODY-SESSION-002` from the
   evidence-backed backlog, and register `LODY-PROJECT-001` as active P1 coverage.
-- Keep `LODY-FORK-001` in backlog with the observed built-desktop failure: after the
-  worktree and target ACP runtime are created, the second `forkOperation` LoroMap write
-  fails with `Map value must be an object`. Product repair is intentionally deferred.
+- Activate `LODY-FORK-001` as P1 coverage. It reproduces the observed built-desktop failure:
+  after the worktree and target ACP runtime are created, the second `forkOperation` LoroMap
+  write fails with `Map value must be an object`. The product repair remains separate from
+  this E2E change.
 - Keep interaction policy in Page Objects and use observable durable state or process
   evidence for assertions. Gherkin remains a thin description of user outcomes.
 - Seed the runtime-none Session journey through the renderer's real persisted workspace
@@ -32,10 +33,11 @@ and remains an evidence-backed blocked backlog row.
 
 ## Evidence and limits
 
-The suite checker confirms eight registry-matched active scenarios with unique stable IDs.
+The suite checker confirms nine registry-matched active scenarios with unique stable IDs.
 Three fresh focused built-desktop rounds each passed all four new active journeys and all 37
-steps. The full active regression passed all eight scenarios and all 62 steps. The fork run
-reached the asynchronous commit and retained a trace, CLI backlog, screenshot, and process
-snapshot before teardown; its root error is recorded in the registry. Fixtures use explicit
+steps before the fork journey was activated. The corresponding full regression passed eight
+scenarios and 62 steps. The active fork run reaches the asynchronous commit and retains a
+trace, CLI backlog, screenshot, and process snapshot before teardown; it is expected to fail
+until the separate product repair lands. Fixtures use explicit
 file signals, process evidence, durable catalog reads, and Playwright polling, with no
 wall-clock sleep or live external-provider dependency.

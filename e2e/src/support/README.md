@@ -17,6 +17,9 @@
 | `pages/mcp-catalog-page.ts`               | MCP settings, Turn selection, ACP startup, and cleanup              |
 | `pages/project-lifecycle-page.ts`         | Local project picker, sidebar, catalog, and removal lifecycle       |
 | `pages/session-management-page.ts`        | Session metadata, Archive restore, history, and deletion            |
+| `pages/session-fork-page.ts`              | Native ACP fork, origin, worktree, and source isolation              |
 | `fixtures/agent-role-fixture.ts`          | File-signaled scripted ACP and Role execution evidence              |
 | `fixtures/mcp-catalog-fixture.ts`         | ACP and stdio MCP process evidence                                  |
 | `fixtures/seeded-local-session.ts`        | Synthetic persisted Session metadata and history                    |
+| `fixtures/session-fork-fixture.ts`        | Synthetic Git repository and shared fork-process evidence           |
+| `fixtures/session-fork-acp.mjs`           | Fork-capable deterministic ACP provider                              |

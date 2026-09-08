@@ -295,9 +295,10 @@
     },
     {
       "id": "LODY-FORK-001",
-      "state": "backlog",
+      "state": "active",
       "priority": "P1",
       "runtime": "simulator",
+      "feature": "src/features/session-fork.feature",
       "title": "Fork a completed Session into an independent worktree Session",
       "owner": "session-lifecycle",
       "fixture": "synthetic-git-and-scripted-acp",
@@ -327,11 +328,6 @@
         "durableState": "Independent Session history and worktree",
         "externalWire": "Scripted ACP"
       },
-      "gap": "The built desktop reaches asynchronous worktree-fork commit, where replacing the existing forkOperation LoroMap fails with `Map value must be an object` before the target Session is published.",
-      "evidence": [
-        "apps/cli/src/session/session-fork-service.ts",
-        ".agents/notes/implemented/testing/2026-09-08-desktop-e2e-user-journeys.md"
-      ],
       "signals": {
         "criticality": 5,
         "boundaryRisk": 5,
@@ -340,7 +336,7 @@
       },
       "freshness": 4,
       "scoutJourneys": ["session", "work"],
-      "blockedReason": "Fix the product forkOperation LoroMap update at worktree commit, then rerun the prepared journey through three focused rounds and full regression.",
+      "blockedReason": null,
       "estimatedMinutes": 8
     },
     {

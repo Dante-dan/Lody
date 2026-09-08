@@ -10,6 +10,8 @@ import type { SyntheticReviewRepository } from './fixtures/synthetic-review-repo
 import { McpCatalogPage } from './pages/mcp-catalog-page.js';
 import { SeededLocalSessionFixture } from './fixtures/seeded-local-session.js';
 import { SessionManagementPage } from './pages/session-management-page.js';
+import { SessionForkFixture } from './fixtures/session-fork-fixture.js';
+import { SessionForkPage, type SessionForkResources } from './pages/session-fork-page.js';
 import { ProjectLifecyclePage } from './pages/project-lifecycle-page.js';
 import { AgentRoleFixture } from './fixtures/agent-role-fixture.js';
 import { AgentRolePage, type AgentRoleResources } from './pages/agent-role-page.js';
@@ -24,16 +26,19 @@ export class LodyWorld extends World {
   workPage: WorkSessionPage | null = null;
   mcpPage: McpCatalogPage | null = null;
   sessionManagementPage: SessionManagementPage | null = null;
+  sessionForkPage: SessionForkPage | null = null;
   projectLifecyclePage: ProjectLifecyclePage | null = null;
   agentRolePage: AgentRolePage | null = null;
   workFixture: WorkSessionFixture | null = null;
   mcpFixture: McpCatalogFixture | null = null;
   seededSessionFixture: SeededLocalSessionFixture | null = null;
+  sessionForkFixture: SessionForkFixture | null = null;
   agentRoleFixture: AgentRoleFixture | null = null;
   reviewFixture: SyntheticReviewRepository | null = null;
   activeAcpEvent: ScriptedAcpEvent | null = null;
   mcpSessionEvent: McpCatalogAcpEvent | null = null;
   workResources: WorkSessionResources | null = null;
+  sessionForkResources: SessionForkResources | null = null;
   agentRoleResources: AgentRoleResources | null = null;
 
   prepare(tags: readonly string[]): void {
@@ -82,6 +87,17 @@ export class LodyWorld extends World {
     await this.mcpPage.configureCustomAgent();
   }
 
+  async configureSessionForkAgent(): Promise<void> {
+    if (!this.onboarding || !this.harness?.page) {
+      throw new Error('Scenario is not ready for Session fork setup');
+    }
+    await this.onboarding.waitForLocalBootstrap();
+    this.sessionForkFixture = await SessionForkFixture.create();
+    this.sessionForkPage = new SessionForkPage(this.harness.page, this.sessionForkFixture);
+    await this.onboarding.skipConfigurationAndEnterProduct();
+    await this.sessionForkPage.configureAgentFromSettings();
+  }
+
   async configureProjectLifecycleJourney(): Promise<void> {
     if (!this.onboarding || !this.harness?.page) {
       throw new Error('Scenario is not ready for project lifecycle setup');
@@ -109,8 +125,10 @@ export class LodyWorld extends World {
   disposeFixtures(): void {
     this.reviewFixture?.cleanup();
     this.workFixture?.dispose();
+    this.sessionForkFixture?.dispose();
     this.reviewFixture = null;
     this.workFixture = null;
+    this.sessionForkFixture = null;
     this.agentRoleFixture = null;
     this.mcpFixture = null;
     this.seededSessionFixture = null;
