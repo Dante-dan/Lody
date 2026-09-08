@@ -178,8 +178,19 @@ is a context window). Vendor model `_meta` never enters the CLI.
 
 ### Session titles
 
-Builtin Claude owns session title generation through ACP `session_info_update`. Builtin Codex
-still uses the isolated generator in `title-generator.ts`, but its adapter tags every pushed
-title with `_meta.lody.titleSource`. Other providers use `title-generator.ts` /
-`response-utils.ts`. The shared `usesAcpProvidedSessionTitle()` predicate hides obsolete
-provider title settings only for Claude.
+Builtin Claude and Codex own session title generation through ACP `session_info_update`:
+acp-extension-claude asks the Agent SDK for a title via its `generate_session_title` control
+request, and acp-extension-codex (>= 1.8.0) runs a cheap-model turn on an ephemeral thread and
+persists the result as the codex thread name. The shared `acpOwnsSessionTitleGeneration()`
+predicate keeps `title-generator.ts`'s isolated session out of their title path and hides the
+obsolete provider title settings for both.
+
+The two adapters differ in how they label a title, so the trust gate is separate. Claude sends
+a bare `session_info_update` with no `_meta`, so it needs the `trustsUntaggedAcpSessionTitle()`
+allowlist. Codex tags every title and emits a first-prompt `fallback` preview before its
+generated `explicit` one, so it must stay outside that allowlist or the preview would win.
+
+Grok, Kimi and the DeepSeek Harness publish no usable ACP title — Grok has no title code at
+all, Kimi's `session_info_update` carries the first prompt truncated to 200 chars with no
+`_meta`, and the DeepSeek Harness never mounts its upstream `dsh-session-title` plugin — so
+they keep using `title-generator.ts` / `response-utils.ts` and the `titleGeneration` config.

@@ -39,7 +39,7 @@ import {
   type TitleGenerationConfig,
   isManagedBuiltinAgentType,
   sanitizeLodyInternalInstructions,
-  usesAcpProvidedSessionTitle,
+  acpOwnsSessionTitleGeneration,
   SessionCreateResponse,
   SessionChatResponse,
   SessionStatusFactory,
@@ -8980,8 +8980,9 @@ export class MessageHandler {
     runtimeOverrides?: BuiltinRuntimeOverrides,
     titleConfig?: TitleGenerationConfig
   ): Promise<void> {
-    // Builtin Claude publishes a generated session_info_update title.
-    if (usesAcpProvidedSessionTitle(cliType, agentType)) {
+    // Builtin Claude and Codex generate their own titles and publish them as
+    // session_info_update; starting the isolated agent would only duplicate them.
+    if (acpOwnsSessionTitleGeneration(cliType, agentType)) {
       return;
     }
     const existingGeneration = this.titleGenerationInFlight.get(sessionId);

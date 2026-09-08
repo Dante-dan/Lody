@@ -40,8 +40,34 @@ export type BuiltinAgentType = BuiltinAgent['agentType'];
 export type AgentConfigCliType = 'builtin' | 'registry' | 'custom';
 export type AgentType = string;
 
-/** Builtin ACP adapters that publish their own session titles. */
-export const usesAcpProvidedSessionTitle = (
+/**
+ * Builtin ACP adapters that generate their own session titles, so Lody never
+ * starts its isolated title agent for them and hides the title-generation
+ * config from their agent settings.
+ *
+ * - `claude`: acp-extension-claude asks the Agent SDK for a real title via the
+ *   `generate_session_title` control request and publishes it at turn end.
+ * - `codex`: acp-extension-codex (>= 1.8.0) runs its own cheap-model generation
+ *   on an ephemeral thread, persists it as the codex thread name, and publishes
+ *   it tagged `_meta.lody.titleSource: 'explicit'`.
+ *
+ * Grok, Kimi and the DeepSeek Harness have no ACP title generation at all and
+ * still depend on the isolated generator.
+ */
+export const acpOwnsSessionTitleGeneration = (
+  cliType: AgentConfigCliType | null | undefined,
+  agentType: AgentType | null | undefined
+): boolean => cliType === 'builtin' && (agentType === 'claude' || agentType === 'codex');
+
+/**
+ * Adapters whose pushed titles are authoritative without a `titleSource` tag.
+ *
+ * Deliberately narrower than {@link acpOwnsSessionTitleGeneration}: only
+ * acp-extension-claude omits `_meta.lody.titleSource`, so it needs an allowlist.
+ * Codex tags every title, and its first-prompt `fallback` preview must stay
+ * rejected — widening this predicate would turn that preview into the title.
+ */
+export const trustsUntaggedAcpSessionTitle = (
   cliType: AgentConfigCliType | null | undefined,
   agentType: AgentType | null | undefined
 ): boolean => cliType === 'builtin' && agentType === 'claude';

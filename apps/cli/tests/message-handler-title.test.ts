@@ -127,7 +127,7 @@ describe('MessageHandler title generation', () => {
     expect(mockedGenerateTitleIsolated).not.toHaveBeenCalled();
   });
 
-  it('runs isolated generation for Codex when title is missing', async () => {
+  it('runs isolated generation for Kimi when title is missing', async () => {
     const { handler, sessionDoc } = await createHandler(undefined);
 
     const titleHost = handler as unknown as {
@@ -141,7 +141,7 @@ describe('MessageHandler title generation', () => {
     await titleHost.maybeGenerateAndStoreSessionTitle(
       's-2' as SessionId,
       'builtin',
-      'codex',
+      'kimi',
       'Do something cool'
     );
 
@@ -172,13 +172,13 @@ describe('MessageHandler title generation', () => {
     const first = titleHost.maybeGenerateAndStoreSessionTitle(
       's-shared' as SessionId,
       'builtin',
-      'codex',
+      'kimi',
       'Fix title races'
     );
     const second = titleHost.maybeGenerateAndStoreSessionTitle(
       's-shared' as SessionId,
       'builtin',
-      'codex',
+      'kimi',
       'Fix title races'
     );
     await vi.waitFor(() => expect(mockedGenerateTitleIsolated).toHaveBeenCalledTimes(1));
@@ -296,9 +296,9 @@ describe('MessageHandler title generation', () => {
     expect(sessionDoc.setTitle).not.toHaveBeenCalled();
   });
 
-  it('applies Codex titleGeneration overrides when no titleConfig is passed', async () => {
+  it('applies Kimi titleGeneration overrides when no titleConfig is passed', async () => {
     const titleGeneration = {
-      configOptionValues: { model: 'gpt-5.1-codex', reasoning_effort: 'low' },
+      configOptionValues: { model: 'kimi-k2-turbo', reasoning_effort: 'low' },
     };
     const { handler, workspaceDocument } = await createHandler(undefined, undefined, undefined, {
       agentConfigId: 'agent-config-1',
@@ -316,7 +316,7 @@ describe('MessageHandler title generation', () => {
     await titleHost.maybeGenerateAndStoreSessionTitle(
       's-6' as SessionId,
       'builtin',
-      'codex',
+      'kimi',
       'Do something cool'
     );
 
@@ -344,6 +344,36 @@ describe('MessageHandler title generation', () => {
       's-8' as SessionId,
       'builtin',
       'claude',
+      'Do something cool'
+    );
+
+    expect(mockedGenerateTitleIsolated).not.toHaveBeenCalled();
+    expect(workspaceDocument.getAgentConfigById).not.toHaveBeenCalled();
+  });
+
+  // acp-extension-codex >= 1.8.0 generates its own title on an ephemeral thread
+  // and pushes it as session_info_update, so the isolated generator would only
+  // duplicate that work — and would not read the agent config to do it.
+  it('skips isolated generation for builtin Codex', async () => {
+    const { handler, workspaceDocument } = await createHandler(undefined, undefined, undefined, {
+      agentConfigId: 'agent-config-1',
+      agentConfigMeta: {
+        titleGeneration: { configOptionValues: { model: 'gpt-5.1-codex' } },
+      },
+    });
+
+    const titleHost = handler as unknown as {
+      maybeGenerateAndStoreSessionTitle: (
+        sessionId: SessionId,
+        cliType: string,
+        agentType: string,
+        taskPrompt: string
+      ) => Promise<void>;
+    };
+    await titleHost.maybeGenerateAndStoreSessionTitle(
+      's-codex-acp' as SessionId,
+      'builtin',
+      'codex',
       'Do something cool'
     );
 

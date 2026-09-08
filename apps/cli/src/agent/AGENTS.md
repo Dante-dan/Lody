@@ -105,10 +105,11 @@ context/acp-agent-edit-evidence.md; adapter repos: [apps/cli/AGENTS.md](../../AG
   the cache, and requests/responses carry that id to keep configs of one provider isolated.
   `ManagedRuntimeUpdateCoordinator` never hot-swaps a running ACP process, and Machine Flock
   writes ignore `fetchedAt` when comparing entries.
-- Builtin Claude owns session titles through ACP `session_info_update`; store them only after
-  `sanitizeLodyInternalInstructions`, and never start `title-generator.ts`'s isolated session
-  for Claude. For Codex accept only `explicit` `_meta.lody.titleSource` names, ignore its
-  first-prompt `fallback`, and require `_meta.lody.messagePhase === 'final_answer'`; untyped
-  chunks, error/warning payloads, and internal-instruction tails are never candidates.
-  Each isolated run owns and removes a unique temp directory; concurrent session-title and
-  branch-name work reuses one in-flight result.
+- Builtin Claude and Codex own session titles via ACP `session_info_update`
+  (`acpOwnsSessionTitleGeneration()`): store them only after
+  `sanitizeLodyInternalInstructions` and never start `title-generator.ts`'s isolated session
+  for them. Only Claude is trusted untagged (`trustsUntaggedAcpSessionTitle()`); for Codex
+  take only `explicit` `_meta.lody.titleSource`, ignore its first-prompt `fallback`,
+  and require `_meta.lody.messagePhase === 'final_answer'`; untyped chunks, error/warning
+  payloads, and internal-instruction tails never qualify. Each isolated run owns and removes
+  a temp dir; session-title and branch-name work share one in-flight result.

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   computeTitleGenerationDefaults,
   getBuiltinTitleGenerationDefaults,
-  usesAcpProvidedSessionTitle,
+  acpOwnsSessionTitleGeneration,
+  trustsUntaggedAcpSessionTitle,
   type AcpConfigOptionSummary,
 } from '../src/ai';
 
@@ -118,15 +119,38 @@ describe('getBuiltinTitleGenerationDefaults', () => {
   });
 });
 
-describe('usesAcpProvidedSessionTitle', () => {
-  it('uses the builtin Claude ACP title', () => {
-    expect(usesAcpProvidedSessionTitle('builtin', 'claude')).toBe(true);
+describe('acpOwnsSessionTitleGeneration', () => {
+  it('lets the builtin Claude and Codex adapters generate their own titles', () => {
+    expect(acpOwnsSessionTitleGeneration('builtin', 'claude')).toBe(true);
+    expect(acpOwnsSessionTitleGeneration('builtin', 'codex')).toBe(true);
   });
 
-  it('keeps isolated title generation for other providers', () => {
-    expect(usesAcpProvidedSessionTitle('builtin', 'codex')).toBe(false);
-    expect(usesAcpProvidedSessionTitle('builtin', 'kimi')).toBe(false);
-    expect(usesAcpProvidedSessionTitle('registry', 'codex')).toBe(false);
-    expect(usesAcpProvidedSessionTitle('custom', 'claude')).toBe(false);
+  it('keeps isolated title generation for adapters without ACP title support', () => {
+    expect(acpOwnsSessionTitleGeneration('builtin', 'kimi')).toBe(false);
+    expect(acpOwnsSessionTitleGeneration('builtin', 'grok')).toBe(false);
+    expect(acpOwnsSessionTitleGeneration('builtin', 'deepseek')).toBe(false);
+  });
+
+  it('never applies to registry or custom providers', () => {
+    expect(acpOwnsSessionTitleGeneration('registry', 'codex')).toBe(false);
+    expect(acpOwnsSessionTitleGeneration('custom', 'claude')).toBe(false);
+  });
+});
+
+describe('trustsUntaggedAcpSessionTitle', () => {
+  it('trusts builtin Claude, which publishes titles without a titleSource tag', () => {
+    expect(trustsUntaggedAcpSessionTitle('builtin', 'claude')).toBe(true);
+  });
+
+  // Codex tags every title and emits a first-prompt `fallback` preview before
+  // its generated `explicit` title. Trusting untagged titles here would promote
+  // that preview to the session title.
+  it('does not trust Codex titles that lack an explicit titleSource', () => {
+    expect(trustsUntaggedAcpSessionTitle('builtin', 'codex')).toBe(false);
+  });
+
+  it('never applies to registry or custom providers', () => {
+    expect(trustsUntaggedAcpSessionTitle('registry', 'claude')).toBe(false);
+    expect(trustsUntaggedAcpSessionTitle('custom', 'claude')).toBe(false);
   });
 });
