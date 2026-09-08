@@ -120,32 +120,37 @@ describe('getBuiltinTitleGenerationDefaults', () => {
 });
 
 describe('acpOwnsSessionTitleGeneration', () => {
-  it('lets the builtin Claude and Codex adapters generate their own titles', () => {
+  it('lets the builtin Claude, Codex and Grok adapters generate their own titles', () => {
     expect(acpOwnsSessionTitleGeneration('builtin', 'claude')).toBe(true);
     expect(acpOwnsSessionTitleGeneration('builtin', 'codex')).toBe(true);
+    expect(acpOwnsSessionTitleGeneration('builtin', 'grok')).toBe(true);
   });
 
   it('keeps isolated title generation for adapters without ACP title support', () => {
     expect(acpOwnsSessionTitleGeneration('builtin', 'kimi')).toBe(false);
-    expect(acpOwnsSessionTitleGeneration('builtin', 'grok')).toBe(false);
     expect(acpOwnsSessionTitleGeneration('builtin', 'deepseek')).toBe(false);
   });
 
   it('never applies to registry or custom providers', () => {
     expect(acpOwnsSessionTitleGeneration('registry', 'codex')).toBe(false);
     expect(acpOwnsSessionTitleGeneration('custom', 'claude')).toBe(false);
+    expect(acpOwnsSessionTitleGeneration('custom', 'grok')).toBe(false);
   });
 });
 
 describe('trustsUntaggedAcpSessionTitle', () => {
-  it('trusts builtin Claude, which publishes titles without a titleSource tag', () => {
+  // Claude and Grok both publish a bare session_info_update with no _meta.
+  it('trusts the builtin adapters that publish titles without a titleSource tag', () => {
     expect(trustsUntaggedAcpSessionTitle('builtin', 'claude')).toBe(true);
+    expect(trustsUntaggedAcpSessionTitle('builtin', 'grok')).toBe(true);
   });
 
-  // Codex tags every title and emits a first-prompt `fallback` preview before
-  // its generated `explicit` title. Trusting untagged titles here would promote
-  // that preview to the session title.
+  // Codex tags every title and emits a first-prompt `fallback` preview before its
+  // generated `explicit` one. Trusting untagged titles here would promote that
+  // preview to the session title, so it must stay outside this set even though it
+  // does own its title generation.
   it('does not trust Codex titles that lack an explicit titleSource', () => {
+    expect(acpOwnsSessionTitleGeneration('builtin', 'codex')).toBe(true);
     expect(trustsUntaggedAcpSessionTitle('builtin', 'codex')).toBe(false);
   });
 

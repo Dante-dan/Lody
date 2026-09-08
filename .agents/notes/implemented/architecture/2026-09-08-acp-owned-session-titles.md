@@ -1,4 +1,4 @@
-# Let Codex own its session title, and split the ACP title predicates
+# Let Codex and Grok own their session titles, and split the ACP title predicates
 
 Status: implemented
 Translation: pending
@@ -6,21 +6,20 @@ Translation: pending
 ## Abstract
 
 Lody wanted every builtin agent to stop carrying its own `titleGeneration`
-session config and take the session title from the ACP adapter instead. An audit
-of all five builtin adapters shows only acp-extension-claude and
-acp-extension-codex are wired up today, so the isolated generator and its config
-must stay for Grok, Kimi and the DeepSeek Harness. For all three the gap is ours,
-not a missing upstream feature — most sharply for Grok, which a live probe shows
-already pushes a real generated title that Lody receives and then discards for
-carrying no `titleSource`.
-Codex was the one adapter doing the work twice, since Lody spawned an isolated
-codex ACP session for the title while the adapter independently generated and
-pushed its own, so Codex now joins Claude as an ACP-owned title provider. That
-required splitting the single `usesAcpProvidedSessionTitle()` predicate, because
-the two adapters need opposite trust rules and conflating them would have
-promoted Codex's first-prompt preview to the session title. Branch naming still
+session config and take the session title from its ACP adapter instead. An audit
+of all five builtin adapters found three that already produce a usable title —
+Claude, Codex, and, contrary to a first reading that inspected only our proxy,
+Grok, whose official runtime generates one and pushes it, confirmed by live probe
+— so all three now take the ACP title while Kimi and the DeepSeek Harness keep
+the isolated generator. Codex and Grok were both doing the work twice, each
+generating a title that Lody then either duplicated or discarded. Delivering this
+required splitting the single `usesAcpProvidedSessionTitle()` predicate into
+ownership and trust, because Codex tags its titles and emits a prompt-preview
+`fallback` first while Claude and Grok push one bare authoritative title, and
+conflating the two would have promoted Codex's preview to the session title. The
+cost is that title wording now belongs to the adapters, and branch naming still
 falls back to the isolated generator when no ACP title has landed yet, so this
-reduces title work but does not yet eliminate the isolated session.
+removes duplicated work without yet eliminating the isolated session.
 
 ## The audit
 
@@ -30,7 +29,7 @@ Each adapter was read at the commit this repository pins.
 | --- | --- | --- | --- | --- |
 | `acp-extension-claude` | 0.70.0 | yes | no `_meta` at all | yes — SDK `generate_session_title` control request |
 | `acp-extension-codex` | 1.10.0 (since 1.8.0) | yes | yes, generated titles are `explicit` | yes — cheap-model turn on an ephemeral thread |
-| `acp-extension-grok` | 0.1.0 | yes — the runtime pushes it and the proxy forwards it | no `_meta` at all | yes — upstream `title_refresh.rs` |
+| `acp-extension-grok` | 0.1.0 (runtime 1.0.13) | yes — the runtime pushes it and the proxy forwards it | no `_meta` at all | yes — upstream `title_refresh.rs` |
 | `acp-extension-kimi` | acp-server 0.0.1 | yes, but the title is the first prompt truncated to 200 chars | no `_meta` at all | no |
 | `acp-extension-dsh` | 0.1.1 | no | no | no |
 
@@ -93,27 +92,29 @@ that is separate work and is not attempted here.
 sites, and Codex needs opposite answers to them:
 
 - *May Lody skip its isolated generator and hide the title config?* Yes for
-  Claude and Codex. This is now `acpOwnsSessionTitleGeneration()`.
-- *May Lody trust a pushed title that carries no `titleSource`?* Only for Claude,
-  which sends a bare `session_info_update`. This is now
+  Claude, Codex and Grok. This is now `acpOwnsSessionTitleGeneration()`.
+- *May Lody trust a pushed title that carries no `titleSource`?* Only for Claude
+  and Grok, which both send a bare `session_info_update`. This is now
   `trustsUntaggedAcpSessionTitle()`.
 
-Codex must stay out of the second predicate. It emits a `fallback` prompt-preview
-title before its generated `explicit` one, and `apps/cli/src/agent/AGENTS.md`
-already required rejecting that preview. Extending the original single predicate
-to Codex would have silently made the raw first prompt the session title — the
-main trap this split exists to prevent.
+The two sets are deliberately not the same, and Codex is the reason. It emits a
+`fallback` prompt-preview title before its generated `explicit` one, and
+`apps/cli/src/agent/AGENTS.md` already required rejecting that preview. Keeping
+one predicate and extending it to Codex would have silently made the raw first
+prompt the session title — the main trap this split exists to prevent. Grok, by
+contrast, was observed to push exactly one title with no preview, so it joins
+Claude in the trusted-untagged set.
 
 The `titleGeneration` config surface (schema field, settings section, CLI flags)
 is deliberately left in place. Removing it would strip the cheap-model and
-least-privilege-mode selection that Grok, Kimi, DeepSeek Harness, registry and
-custom providers still rely on. The config simply stops being reachable for
-Codex, as it already was for Claude.
+least-privilege-mode selection that Kimi, the DeepSeek Harness, registry and
+custom providers still rely on. The config simply stops being reachable for Codex
+and Grok, as it already was for Claude.
 
 "Unreachable" has to hold on every path, not just the settings form. Branch
 naming resolved the persisted `titleGeneration` for whatever agent it was naming
 a branch for, so a value stored before this change would have kept steering
-Claude and Codex runs after their config disappeared from the UI. Branch naming
+Claude, Codex and Grok runs after their config disappeared from the UI. Branch naming
 now skips that lookup for ACP-owned agents and lets
 `computeTitleGenerationDefaults()` pick from the live `configOptions` instead.
 
@@ -126,6 +127,12 @@ best-effort inside the adapter and swallows failures without signalling the
 client, so a failed generation now leaves the draft title rather than falling
 back to Lody's generator.
 
+Handing titles to the adapters also hands over their wording. None of the three
+sees `DEFAULT_TITLE_GENERATION_PROMPT`, so constraints it carries — the 26-letter
+English budget, the single-line rule — no longer apply to them. Grok additionally
+keeps refining its title over the first few turns before freezing it, so a Grok
+session title can change after it first appears.
+
 This change does not reach zero isolated ACP sessions. `generateBranchNameWithTimeout`
 reuses an in-flight or already-stored generated title, and otherwise still calls
 `generateTitleIsolated()`; with the title path skipped, Codex now takes that
@@ -136,4 +143,6 @@ to the prompt text — changing that affects every provider, not just the
 ACP-owned ones.
 
 Verification is type checks, lint, and the shared unit tests covering both
-predicates. No live codex, Kimi, Grok or DeepSeek session was exercised.
+predicates, plus the branch-name cases for all three ACP-owned agents. The Grok
+behaviour rests on the live probe described above; no live Codex, Kimi or
+DeepSeek session was exercised.

@@ -40,6 +40,12 @@ export type BuiltinAgentType = BuiltinAgent['agentType'];
 export type AgentConfigCliType = 'builtin' | 'registry' | 'custom';
 export type AgentType = string;
 
+/** Builtin agents whose ACP adapter generates the session title itself. */
+const ACP_TITLE_OWNING_AGENTS = new Set(['claude', 'codex', 'grok']);
+
+/** Of those, the ones that push a title carrying no `_meta.lody.titleSource`. */
+const UNTAGGED_TITLE_AGENTS = new Set(['claude', 'grok']);
+
 /**
  * Builtin ACP adapters that generate their own session titles, so Lody never
  * starts its isolated title agent for them and hides the title-generation
@@ -50,27 +56,32 @@ export type AgentType = string;
  * - `codex`: acp-extension-codex (>= 1.8.0) runs its own cheap-model generation
  *   on an ephemeral thread, persists it as the codex thread name, and publishes
  *   it tagged `_meta.lody.titleSource: 'explicit'`.
+ * - `grok`: the official runtime generates the title in its own ACP session impl
+ *   and pushes one `session_info_update` per session, which acp-extension-grok
+ *   forwards untouched.
  *
- * Grok, Kimi and the DeepSeek Harness have no ACP title generation at all and
- * still depend on the isolated generator.
+ * Kimi and the DeepSeek Harness still depend on the isolated generator: Kimi's
+ * pushed title is only the first prompt truncated to 200 chars, and the Harness
+ * never mounts its upstream title plugin.
  */
 export const acpOwnsSessionTitleGeneration = (
   cliType: AgentConfigCliType | null | undefined,
   agentType: AgentType | null | undefined
-): boolean => cliType === 'builtin' && (agentType === 'claude' || agentType === 'codex');
+): boolean => cliType === 'builtin' && !!agentType && ACP_TITLE_OWNING_AGENTS.has(agentType);
 
 /**
  * Adapters whose pushed titles are authoritative without a `titleSource` tag.
  *
- * Deliberately narrower than {@link acpOwnsSessionTitleGeneration}: only
- * acp-extension-claude omits `_meta.lody.titleSource`, so it needs an allowlist.
- * Codex tags every title, and its first-prompt `fallback` preview must stay
- * rejected — widening this predicate would turn that preview into the title.
+ * Deliberately narrower than {@link acpOwnsSessionTitleGeneration}: Claude and
+ * Grok both publish a bare `session_info_update` with no `_meta`, so they need
+ * an allowlist. Codex tags every title and emits a first-prompt `fallback`
+ * preview before its generated `explicit` one, so it must stay out — widening
+ * this predicate would turn that preview into the session title.
  */
 export const trustsUntaggedAcpSessionTitle = (
   cliType: AgentConfigCliType | null | undefined,
   agentType: AgentType | null | undefined
-): boolean => cliType === 'builtin' && agentType === 'claude';
+): boolean => cliType === 'builtin' && !!agentType && UNTAGGED_TITLE_AGENTS.has(agentType);
 
 /**
  * User-defined ACP launch spec for `cliType: 'custom'` providers: the exact

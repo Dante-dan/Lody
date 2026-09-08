@@ -178,29 +178,26 @@ is a context window). Vendor model `_meta` never enters the CLI.
 
 ### Session titles
 
-Builtin Claude and Codex own session title generation through ACP `session_info_update`:
-acp-extension-claude asks the Agent SDK for a title via its `generate_session_title` control
-request, and acp-extension-codex (>= 1.8.0) runs a cheap-model turn on an ephemeral thread and
-persists the result as the codex thread name. The shared `acpOwnsSessionTitleGeneration()`
-predicate keeps `title-generator.ts`'s isolated session out of their title path and hides the
-obsolete provider title settings for both.
+Builtin Claude, Codex and Grok own session title generation through ACP
+`session_info_update`. acp-extension-claude asks the Agent SDK for a title via its
+`generate_session_title` control request; acp-extension-codex (>= 1.8.0) runs a cheap-model
+turn on an ephemeral thread and persists the result as the codex thread name; Grok's official
+runtime generates the title inside its own ACP session impl
+(`xai-grok-shell/src/session/acp_session_impl/title_refresh.rs`) and pushes one update per
+session, which the `acp-extension-grok` proxy forwards untouched. The shared
+`acpOwnsSessionTitleGeneration()` predicate keeps `title-generator.ts`'s isolated session out
+of their title path and hides the obsolete provider title settings for all three.
 
-The two adapters differ in how they label a title, so the trust gate is separate. Claude sends
-a bare `session_info_update` with no `_meta`, so it needs the `trustsUntaggedAcpSessionTitle()`
-allowlist. Codex tags every title and emits a first-prompt `fallback` preview before its
-generated `explicit` one, so it must stay outside that allowlist or the preview would win.
+How a title is labelled decides whether Lody may trust it, and that is a separate,
+narrower set. Claude and Grok both send a bare `session_info_update` with no `_meta`, so they
+need the `trustsUntaggedAcpSessionTitle()` allowlist. Codex tags every title and emits a
+first-prompt `fallback` preview before its generated `explicit` one, so it must stay outside
+that allowlist even though it does own its generation — otherwise the preview wins.
 
-Grok, Kimi and the DeepSeek Harness deliver no title Lody can currently use, so they keep
-using `title-generator.ts` / `response-utils.ts` and the `titleGeneration` config. In all
-three cases the gap is on our side, not a missing upstream feature:
-
-- **Grok**: verified by live probe to already push one real generated
-  `session_info_update` title per session, which `acp-extension-grok` forwards untouched.
-  It carries no `_meta`, so Lody receives it and discards it for lacking
-  `_meta.lody.titleSource` — the same untagged shape as Claude. Enabling it is a tagging
-  decision, not missing upstream support.
-- **Kimi**: its `session_info_update` carries the first prompt truncated to 200 chars with no
-  `_meta`, while the engine's real `SessionTitleService` stays reachable only from kap-server
-  and the node SDK. `SessionMeta.titleKind` is discarded at the ACP boundary.
-- **DeepSeek Harness**: pins `@deepseek-ai/dsh-session-title` in its dependency closure but
-  never mounts it in `createDeepSeekHarnessCordisConfig`.
+Kimi and the DeepSeek Harness still use `title-generator.ts` / `response-utils.ts` and the
+`titleGeneration` config. Neither gap is a missing upstream feature: Kimi's
+`session_info_update` carries the first prompt truncated to 200 chars with no `_meta` while
+its real `SessionTitleService` stays reachable only from kap-server and the node SDK (the
+engine's `SessionMeta.titleKind` is discarded at the ACP boundary), and the DeepSeek Harness
+pins `@deepseek-ai/dsh-session-title` in its dependency closure but never mounts it in
+`createDeepSeekHarnessCordisConfig`.

@@ -249,7 +249,7 @@ describe('MessageHandler title generation', () => {
 
   // Claude and Codex no longer expose a title-generation config, so a value
   // persisted before that must not keep steering their branch-name runs.
-  it.each(['claude', 'codex'])(
+  it.each(['claude', 'codex', 'grok'])(
     'ignores a stale persisted titleGeneration when naming a branch for %s',
     async (agentType) => {
       const { handler } = await createHandler(undefined, undefined, undefined, {
@@ -411,10 +411,10 @@ describe('MessageHandler title generation', () => {
     expect(workspaceDocument.getAgentConfigById).not.toHaveBeenCalled();
   });
 
-  // acp-extension-codex >= 1.8.0 generates its own title on an ephemeral thread
-  // and pushes it as session_info_update, so the isolated generator would only
-  // duplicate that work — and would not read the agent config to do it.
-  it('skips isolated generation for builtin Codex', async () => {
+  // Codex generates its title on an ephemeral thread and Grok's runtime pushes one
+  // per session; either way the isolated generator would only duplicate that work,
+  // and must not read the agent config to do it.
+  it.each(['codex', 'grok'])('skips isolated generation for builtin %s', async (agentType) => {
     const { handler, workspaceDocument } = await createHandler(undefined, undefined, undefined, {
       agentConfigId: 'agent-config-1',
       agentConfigMeta: {
@@ -431,9 +431,9 @@ describe('MessageHandler title generation', () => {
       ) => Promise<void>;
     };
     await titleHost.maybeGenerateAndStoreSessionTitle(
-      's-codex-acp' as SessionId,
+      's-acp-owned' as SessionId,
       'builtin',
-      'codex',
+      agentType,
       'Do something cool'
     );
 
