@@ -1,7 +1,7 @@
 # 会话历史写入
 
 Status: draft
-Translation: current
+Translation: stale
 
 [English](session-history-writes.md)
 

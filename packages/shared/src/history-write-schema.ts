@@ -3,6 +3,7 @@ import {
   SessionHistoryInputConfigSchema,
   MessageContentSchema,
   PlanEntrySchema,
+  normalizeLegacyAcpSessionConfig,
 } from './message-schemas';
 
 /** New writes only. Never parse/rewrite the stored history through this schema. */
@@ -20,7 +21,9 @@ export const HistoryEntryWriteSchema = z.object({
   status: z
     .enum(['pending', 'pending_apply', 'seen', 'processing', 'handled', 'failed', 'canceled'])
     .optional(),
-  inputConfig: SessionHistoryInputConfigSchema.optional(),
+  inputConfig: z
+    .preprocess(normalizeLegacyAcpSessionConfig, SessionHistoryInputConfigSchema)
+    .optional(),
   read: z.boolean().optional(),
   userId: z.string().optional(),
   modelInfo: z

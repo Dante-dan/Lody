@@ -1346,7 +1346,10 @@ describe('SessionDispatchWatcher', () => {
         messageQueueUpdatedAt: 1,
       })),
       getHistory: vi.fn(async () => history),
-      popMessageQueue: vi.fn(async () => queue.shift() ?? null),
+      peekReadyMessageQueue: vi.fn(async () => queue[0] ?? null),
+      removeMessageQueueItem: vi.fn(async () => {
+        queue.shift();
+      }),
       appendUserTurn: vi.fn(async (entry: SessionHistoryInput) => {
         history = [...history, entry];
         promotedPointer = entry.id;
@@ -1406,7 +1409,7 @@ describe('SessionDispatchWatcher', () => {
     await vi.waitFor(() => {
       expect(startSession).toHaveBeenCalledTimes(1);
     });
-    expect(sessionDoc.popMessageQueue).toHaveBeenCalledTimes(1);
+    expect(sessionDoc.peekReadyMessageQueue).toHaveBeenCalledTimes(1);
     expect(history[0]).toEqual(
       expect.objectContaining({
         id: 'queued-mq-1',
@@ -1443,7 +1446,7 @@ describe('SessionDispatchWatcher', () => {
       status: 'handled' as const,
       read: true,
     };
-    const popMessageQueue = vi.fn(async () => ({
+    const peekReadyMessageQueue = vi.fn(async () => ({
       $cid: 'mq-resurrected',
       task: 'queued hello',
       userId: 'user-1',
@@ -1479,8 +1482,10 @@ describe('SessionDispatchWatcher', () => {
       watcher as unknown as {
         promoteNextQueuedMessage: (
           sessionDoc: {
-            popMessageQueue: typeof popMessageQueue;
+            peekReadyMessageQueue: typeof peekReadyMessageQueue;
             updateHistory: typeof updateHistory;
+            removeMessageQueueItem: (cid: string) => Promise<void>;
+            appendUserTurn?: (entry: SessionHistoryInput) => Promise<void>;
           },
           meta: SessionMeta,
           history: SessionHistoryInput[]
@@ -1489,7 +1494,7 @@ describe('SessionDispatchWatcher', () => {
     ).promoteNextQueuedMessage.bind(watcher);
 
     const promoted = await promoteNextQueuedMessage(
-      { popMessageQueue, updateHistory },
+      { peekReadyMessageQueue, updateHistory, removeMessageQueueItem: vi.fn(async () => {}) },
       {
         id: sessionId,
         machineId: 'machine-1',
@@ -1503,8 +1508,36 @@ describe('SessionDispatchWatcher', () => {
     );
 
     expect(promoted).toBeNull();
-    expect(popMessageQueue).toHaveBeenCalledTimes(1);
+    expect(peekReadyMessageQueue).toHaveBeenCalledTimes(1);
     expect(updateHistory).not.toHaveBeenCalled();
+    const remainingQueue = [await peekReadyMessageQueue()];
+    const failingDoc = {
+      peekReadyMessageQueue: async () => remainingQueue[0] ?? null,
+      removeMessageQueueItem: async () => {
+        remainingQueue.shift();
+      },
+      appendUserTurn: async () => {
+        throw new Error('synthetic-write-rejected');
+      },
+      updateHistory,
+    };
+    await expect(
+      promoteNextQueuedMessage(
+        failingDoc,
+        {
+          id: sessionId,
+          machineId: 'machine-1',
+          userId: 'user-1',
+          createdAt: '2026-09-09T00:00:00Z',
+          cliType: 'builtin',
+          agentType: 'codex',
+          status: { type: 'idle' },
+        },
+        []
+      )
+    ).rejects.toThrow('synthetic-write-rejected');
+    expect(remainingQueue).toHaveLength(1);
+    expect(remainingQueue[0]?.userTurnId).toBe(turnId);
   });
 
   /**
@@ -1558,7 +1591,7 @@ describe('SessionDispatchWatcher', () => {
       },
     } as unknown as SessionDocument['mirror'];
     const sessionDoc = Object.assign(realDoc, {
-      popMessageQueue: vi.fn(async () => ({
+      peekReadyMessageQueue: vi.fn(async () => ({
         $cid: 'mq-pointer',
         task: 'queued hello',
         userId: 'user-1',

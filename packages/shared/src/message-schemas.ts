@@ -3673,7 +3673,7 @@ function normalizeLegacySessionProject(message: UnknownRecord): UnknownRecord {
  * - `cliType: 'builtin'`
  * - `agentType: 'claude' | 'codex'`
  */
-function normalizeLegacyAcpSessionConfig(value: unknown): unknown {
+export function normalizeLegacyAcpSessionConfig(value: unknown): unknown {
   if (!isRecord(value)) {
     return value;
   }

@@ -9,6 +9,8 @@ import {
   PermissionOutcomeSchema,
   ToolCallMessageSchema,
   ToolCallContentSchema,
+  SessionHistoryInputConfigSchema,
+  TaskProposalMetaSchema,
 } from './message-schemas';
 import {
   HistoryEntryWriteSchema,
@@ -117,14 +119,25 @@ const cleanNew = (schema: z.ZodType, input: unknown, old?: unknown): unknown => 
 
 // One independently editable group, derived from the message definition rather
 // than a second set of validators. Tool identity stays outside this group.
-const ToolStateWriteSchema = ToolCallMessageSchema.pick({
-  status: true,
-  title: true,
-  kind: true,
-  locations: true,
-  permissionRequest: true,
-  content: true,
+const ToolStateWriteSchema = ToolCallMessageSchema.omit({
+  type: true,
+  toolCallId: true,
 });
+
+function prepareObjectFields(
+  schema: z.ZodObject,
+  old: Record<string, unknown>,
+  input: Record<string, unknown>
+) {
+  const result = { ...old };
+  for (const [key, field] of Object.entries(schema.shape)) {
+    if (historyValuesEqual(old[key], input[key])) continue;
+    const value = cleanNew(field as z.ZodType, input[key], old[key]);
+    if (value === undefined) delete result[key];
+    else result[key] = value;
+  }
+  return result;
+}
 
 /** Permission producers also enrich descriptions; they do not author old content. */
 function prepareToolState(old: unknown, input: unknown): Record<string, unknown> | undefined {
@@ -173,7 +186,11 @@ function prepareToolState(old: unknown, input: unknown): Record<string, unknown>
 }
 
 /** Only a read acknowledgement on a newly inserted pending user row is benign. */
-function matchesRollbackReceipt(before: unknown[], after: unknown[], current: unknown[]): boolean {
+function matchesRollbackReceipt(
+  before: readonly unknown[],
+  after: readonly unknown[],
+  current: readonly unknown[]
+): boolean {
   const previousIds = new Set(before.filter(record).map((entry) => entry.id));
   return (
     after.length === current.length &&
@@ -242,12 +259,36 @@ function prepareReplacement(previous: unknown, incoming: unknown): Record<string
         const old = oldIndex < nextAnchor ? oldItems[oldIndex] : undefined;
         const toolState = prepareToolState(old, item);
         if (toolState !== undefined) return toolState;
+        if (
+          record(old) &&
+          record(item) &&
+          old.type === 'system_notice' &&
+          item.type === old.type &&
+          old.name === 'task_proposal' &&
+          item.name === old.name &&
+          record(old.meta) &&
+          record(item.meta) &&
+          old.meta.proposalId === item.meta.proposalId &&
+          historyValuesEqual({ ...old, meta: undefined }, { ...item, meta: undefined })
+        ) {
+          return { ...old, meta: prepareObjectFields(TaskProposalMetaSchema, old.meta, item.meta) };
+        }
         return cleanNew(
           MessageContentSchema,
           item,
           record(old) && record(item) && old.type === item.type ? old : undefined
         );
       });
+    } else if (
+      key === 'inputConfig' &&
+      record(previous.inputConfig) &&
+      record(incoming.inputConfig)
+    ) {
+      result.inputConfig = prepareObjectFields(
+        SessionHistoryInputConfigSchema,
+        previous.inputConfig,
+        incoming.inputConfig
+      );
     } else {
       const value = cleanNew(schema, incoming[key], previous[key]);
       if (value === undefined) delete result[key];
@@ -399,40 +440,46 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       planWrite(previous, [...values, ...previous] as SessionHistory[], (_old, value) => value)();
     },
     updateWithRollback(updater) {
-      const before = list.toJSON() as SessionHistoryInput[];
-      writer.update(updater);
-      const after = list.toJSON();
+      const before = readAll();
+      const next = immer.produce(before, updater);
       // Unchanged rows are not owned by this operation. Capture only the range
       // it changed, retaining the current values outside it during compensation.
       let start = 0;
       while (
         start < before.length &&
-        start < after.length &&
-        historyValuesEqual(before[start], after[start])
+        start < next.length &&
+        historyValuesEqual(before[start], next[start])
       )
         start++;
       let suffix = 0;
       while (
         suffix < before.length - start &&
-        suffix < after.length - start &&
-        historyValuesEqual(before[before.length - 1 - suffix], after[after.length - 1 - suffix])
+        suffix < next.length - start &&
+        historyValuesEqual(before[before.length - 1 - suffix], next[next.length - 1 - suffix])
       )
         suffix++;
+      // Capture only the owned range from storage, including fields the reader hides.
+      const removed = before.slice(start, before.length - suffix).map((_, offset) => {
+        const value = list.get(start + offset);
+        return isContainer(value) ? value.toJSON() : value;
+      });
+      planWrite(before, next)();
+      const after = readAll();
       let consumed = false;
       return () => {
-        const current = list.toJSON() as SessionHistoryInput[];
+        const current = readAll();
         // Structural changes remain conservative: an index is safe only while
         // every row still has the same identity and order as the receipt.
         const sameRows =
-          current.length === after.length &&
-          current.every((row, i) => record(row) && record(after[i]) && row.id === after[i].id);
+          current.length >= after.length &&
+          after.every((row, i) => record(row) && record(current[i]) && row.id === current[i].id);
         if (
           consumed ||
           !sameRows ||
           !matchesRollbackReceipt(
             before,
             after.slice(start, after.length - suffix),
-            current.slice(start, current.length - suffix)
+            current.slice(start, after.length - suffix)
           )
         )
           throw new HistoryWriteError([{ path: ['history'], code: 'stale_rollback' }]);
@@ -441,8 +488,8 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
         // other than the discarded replacement's automatic read acknowledgement.
         const restored = [
           ...current.slice(0, start),
-          ...before.slice(start, before.length - suffix),
-          ...current.slice(current.length - suffix),
+          ...removed,
+          ...current.slice(after.length - suffix),
         ];
         planWrite(current as SessionHistory[], restored, (_old, value) => value)();
         consumed = true;

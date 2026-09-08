@@ -2843,7 +2843,7 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
     return (this.mirror.getState().mq ?? []) as MessageQueueItem[];
   }
 
-  async popMessageQueue(): Promise<MessageQueueItem | null> {
+  async peekReadyMessageQueue(): Promise<MessageQueueItem | null> {
     if (!this.mirror) {
       return null;
     }
@@ -2866,14 +2866,14 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
       }
     }
 
-    this.mirror.setState((prev) => {
-      const mq = (prev.mq ?? []) as MessageQueueItem[];
-      // @ts-ignore
-      prev.mq = mq.slice(1);
-      return prev;
-    });
-
     return first ?? null;
+  }
+
+  async popMessageQueue(): Promise<MessageQueueItem | null> {
+    const first = await this.peekReadyMessageQueue();
+    if (!first) return null;
+    await this.removeMessageQueueItem(first.$cid);
+    return first;
   }
 
   async pushMessageQueue(item: Omit<MessageQueueItem, '$cid'>): Promise<void> {

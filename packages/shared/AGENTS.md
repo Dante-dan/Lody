@@ -24,14 +24,17 @@
 - Copying stored history uses a writer-captured snapshot, never a caller-supplied
   "trusted" array. Preserve unchanged opaque content; parse authored changes and new
   notices. Prepend copies to target initialization rows without replacing their containers;
-  reject colliding ids. Rollback restores only the changed range and retains current content
-  of untouched rows. Reject intervening row identity/order changes and edits inside that range,
+  reject colliding ids. Rollback captures only the changed range and retains current content
+  of untouched rows and later appended rows. Reject changes to existing row identity/order and edits inside that range,
   except pending-to-seen read acknowledgement on newly inserted user rows.
   External ACP imports remain new input.
-- Tool status, permission and descriptive metadata (title/kind/locations) are independent
+- Tool fields other than type/toolCallId are independent
   edits: derive their parsers from the tool message schema and validate changed fields,
   not untouched stored payloads. Content-list edits retain unchanged blocks and parse
   authored blocks; tool identity changes still use the complete item parser.
+- Normalize legacy built-in CLI selectors on new history input only. Independent stored
+  input-config and task-proposal metadata edits validate changed fields, not untouched
+  historical values; proposal identity changes still require complete parsing.
 - ACP tool blocks and locations are explicit JSON extension boundaries. Unknown block
   types must not bypass validation of malformed known variants. Preserve declared `_meta`
   and extension keys; closed execution configuration still selects declared fields.

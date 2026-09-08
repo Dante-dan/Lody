@@ -20,6 +20,73 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it.each(['claude', 'codex'])('normalizes legacy %s config only on new writes', (cliType) => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    mirror.historyWriter.append({
+      ...entry(),
+      inputConfig: { cliType },
+    } as unknown as SessionHistory);
+    expect(doc.getList('history').toJSON()[0].inputConfig).toEqual({
+      cliType: 'builtin',
+      agentType: cliType,
+    });
+    expect(() =>
+      mirror.historyWriter.append({
+        ...entry('invalid'),
+        inputConfig: { cliType: 'invalid' },
+      } as unknown as SessionHistory)
+    ).toThrow();
+    mirror.dispose();
+  });
+
+  it('edits independent fields without reparsing damaged stored config, tool or proposal fields', () => {
+    const doc = new Loro();
+    const row = doc.getList('history').pushContainer(new LoroMap());
+    const stored = {
+      ...entry(),
+      inputConfig: { modeId: null, agentRoleId: '', future: true },
+      items: [
+        { type: 'tool_call', toolCallId: 'tool', status: 'in_progress', kind: 'future-kind' },
+        {
+          type: 'system_notice',
+          name: 'task_proposal',
+          meta: { proposalId: 'proposal', title: 42, future: true },
+        },
+      ],
+    };
+    for (const [key, value] of Object.entries(stored)) row.set(key, value);
+    doc.commit();
+    const mirror = open(doc);
+    mirror.historyWriter.updateEntry('turn', (turn) => {
+      turn.inputConfig!._lodyDeliveryKind = 'steer';
+      const tool = turn.items![0]!;
+      if (tool.type === 'tool_call') {
+        tool.status = 'completed';
+        tool.rawOutput = { ok: true };
+      }
+      const proposal = turn.items![1]!;
+      if (proposal.type === 'system_notice' && proposal.name === 'task_proposal')
+        proposal.meta!.outcome = 'dismissed';
+    });
+    expect(doc.getList('history').toJSON()[0]).toMatchObject({
+      inputConfig: { ...stored.inputConfig, _lodyDeliveryKind: 'steer' },
+      items: [
+        { ...stored.items[0], status: 'completed', rawOutput: { ok: true } },
+        { ...stored.items[1], meta: { ...stored.items[1]!.meta, outcome: 'dismissed' } },
+      ],
+    });
+    const version = doc.version().toJSON();
+    expect(() =>
+      mirror.historyWriter.updateEntry('turn', (turn) => {
+        const tool = turn.items![0]!;
+        if (tool.type === 'tool_call') tool.rawOutput = 42 as never;
+      })
+    ).toThrow();
+    expect(doc.version().toJSON()).toEqual(version);
+    mirror.dispose();
+  });
+
   it('derives an input parser without mutating strict schemas or dropping refinements', () => {
     const schema = z
       .object({ nested: z.object({ count: z.number() }).strict() })
@@ -401,9 +468,8 @@ describe('single history writer', () => {
     const peerMirror = open(peer);
     peerMirror.historyWriter.append(entry('peer'));
     doc.import(peer.export({ mode: 'update', from: doc.version() }));
-    const withPeer = doc.getList('history').toJSON();
-    expect(() => stale()).toThrow('stale_rollback');
-    expect(doc.getList('history').toJSON()).toEqual(withPeer);
+    stale();
+    expect(doc.getList('history').toJSON()).toEqual([...before, entry('peer')]);
     mirror.dispose();
     peerMirror.dispose();
   });

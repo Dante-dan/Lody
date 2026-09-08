@@ -2053,12 +2053,12 @@ export class SessionDispatchWatcher {
   }
 
   /**
-   * Try to pop a message from the session's message queue and promote it into
+   * Peek a ready message from the session's message queue and promote it into
    * a history entry. This handles the case where the web client enqueues messages
    * via the message queue API instead of writing directly to the session history.
    *
-   * This is an I/O operation (mutates the session doc by popping the queue and
-   * appending to history), which is why it lives in the watcher rather than in
+   * Remove its queue row only after history accepts it. This I/O operation
+   * lives in the watcher rather than in
    * the pure turn-finding logic.
    */
   private async promoteNextQueuedMessage(
@@ -2073,20 +2073,23 @@ export class SessionDispatchWatcher {
       return null;
     }
     try {
-      const popMessageQueue = (
-        sessionDoc as { popMessageQueue?: (() => Promise<MessageQueueItem | null>) | undefined }
-      ).popMessageQueue;
-      if (!popMessageQueue) {
+      const peekMessageQueue = (
+        sessionDoc as {
+          peekReadyMessageQueue?: (() => Promise<MessageQueueItem | null>) | undefined;
+        }
+      ).peekReadyMessageQueue;
+      if (!peekMessageQueue) {
         return null;
       }
 
-      const queuedItem = await popMessageQueue.call(sessionDoc);
+      const queuedItem = await peekMessageQueue.call(sessionDoc);
       if (!queuedItem) {
         return null;
       }
 
       const queuedTurnId = queuedItem.userTurnId?.trim() || `queued-${queuedItem.$cid}`;
       if (history.some((entry) => entry.id === queuedTurnId)) {
+        await sessionDoc.removeMessageQueueItem(queuedItem.$cid);
         this.deps.logger.debug(
           `[${meta.id}] Dropping already-promoted queued message ${queuedItem.$cid}`
         );
@@ -2126,7 +2129,7 @@ export class SessionDispatchWatcher {
       });
 
       if (!pendingEntry) {
-        this.deps.logger.debug(`[${meta.id}] Dropping invalid queued message ${queuedItem.$cid}`);
+        this.deps.logger.debug(`[${meta.id}] Retaining invalid queued message ${queuedItem.$cid}`);
         return null;
       }
 
@@ -2137,6 +2140,7 @@ export class SessionDispatchWatcher {
 
       // Promotion is a dispatch producer; `appendUserTurn` publishes the pointer.
       await sessionDoc.appendUserTurn(entry);
+      await sessionDoc.removeMessageQueueItem(queuedItem.$cid);
       return entry;
     } finally {
       releaseQueueMutation();

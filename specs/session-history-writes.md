@@ -1,7 +1,7 @@
 # Session history writes
 
 Status: draft
-Translation: current
+Translation: stale
 
 [中文](session-history-writes.zh.md)
 
@@ -32,16 +32,20 @@ That tolerance must not authorize creating new malformed items locally.
   Caller-created JSON cannot claim this provenance. Copying does not modify the source.
 - Failed edit-and-resend can restore captured old history without reparsing it as
   new input. A one-use local rollback receipt restores only the changed range, preserving
-  current content of untouched rows. It rejects intervening row identity/order changes
+  current content of untouched rows and subsequent appends. It captures only the affected
+  stored range and rejects changes to existing row identity/order
   and edits inside that range, except a newly inserted pending user row becoming seen/read
   with every other field unchanged. It is not crash recovery or a distributed transaction.
   External provider imports remain new inputs, not privileged stored-history copies.
 - Acceptance here means a local CRDT write. Existing repo persistence and transport
   still own durability, permissions, and remote synchronization.
-- Tool status, permission requests and descriptive metadata (title/kind/locations)
+- Tool fields other than type/toolCallId
   parse only changed fields without reparsing untouched tool payloads; outcome-only
-  edits retain existing request information. Identity/content changes still require
-  complete item parsing. Invalid new metadata rejects the command before any write.
+  edits retain existing request information. Identity changes require complete item parsing;
+  changed content blocks are parsed separately. Invalid new fields reject the command before any write.
+- New history accepts existing legacy built-in CLI selector normalization without rewriting
+  stored history. Steer config and same-identity task-proposal edits parse only changed fields.
+- Queue promotion removes its queued row only after history acceptance; failed writes retain it.
 - Accepted steer provenance survives both writing and read normalization. Editing and
   resending must not reinterpret a steer as an independently replayable user turn.
 - External imports retain their source hashes and derived ids. A separate versioned
