@@ -59,7 +59,8 @@ No PR or package publication is implied by this note.
 Core 0.1.1, Codex 1.10.1, Grok 0.1.1, and DSH 0.1.2 are prepared source versions,
 not published versions. The production Kimi runtime manifest remains on its
 published artifact until a coordinated release; the dirty preview is not a
-production manifest replacement. The coordinated changes are reviewed through separate draft PRs; none are released by this note.
+production manifest replacement. The five submodule PRs are merged; the Lody integration remains in draft.
+Package and runtime publication is separate from these source merges.
 
 ## Review dependencies
 
@@ -69,7 +70,9 @@ production manifest replacement. The coordinated changes are reviewed through se
 - [DSH #12](https://github.com/LodyAI/acp-extension-dsh/pull/12)
 - [Kimi #8](https://github.com/LodyAI/acp-extension-kimi/pull/8)
 
-Release Core first, then merge and release the wrappers. Keep the Lody change
+The submodule pointers now target their merged default-branch commits. All six
+submodule source trees are identical to the previously verified versions; Claude
+was already current. Release Core first, then release the wrappers. Keep the Lody change
 in draft until the managed-runtime artifact is updated to the reviewed Kimi
 implementation. The source pointer now includes the Kimi PR; its patch changeset
 was confirmed before submission.
