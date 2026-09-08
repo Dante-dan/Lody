@@ -70,6 +70,16 @@ describe('Grok TUI permission compatibility', () => {
     ).toEqual({ outcome: 'cancelled' });
   });
 
+  it.each([false, true])('keeps plan decisions interactive (pending=%s)', (pending) => {
+    expect(
+      getBuiltinToolPermissionOutcome({
+        ...args,
+        pending,
+        request: { ...request, toolCall: { ...request.toolCall, kind: 'switch_mode' } },
+      })
+    ).toBeUndefined();
+  });
+
   it('keeps question requests interactive even when draining', () => {
     const question: RequestPermissionRequest = {
       ...request,
