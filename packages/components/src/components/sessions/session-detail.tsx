@@ -25,6 +25,7 @@ import {
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/ui/button';
 import { useRouter } from '@tanstack/react-router';
+import { useComposerNavigationFocus } from '../chat/submission/use-composer-navigation-focus';
 import { usePostHog } from '@posthog/react';
 import {
   buildPendingUserHistoryEntry,
@@ -45,6 +46,7 @@ import {
   type SessionId,
   type SessionMeta,
   type SessionStatus,
+  type ConversationMessage,
   type VisualAnnotationReferencePayload,
   type WorkspaceId,
 } from '@lody/shared';
@@ -66,6 +68,7 @@ import {
   RenameSessionDialog,
   type RenameSessionDialogTarget,
 } from '@/components/sessions/rename-session-dialog';
+import { ChatShareImageDialog } from '@/components/sessions/chat-share-image-dialog';
 import {
   DraftSessionChatInterface,
   type DraftSessionChatInterfaceHandle,
@@ -701,6 +704,7 @@ const SessionDetail = ({
 }) => {
   const { t } = useTranslation();
   const router = useRouter();
+  const claimNavigationFocus = useComposerNavigationFocus(sessionId);
   const postHog = usePostHog();
   const isMobile = useIsMobile();
   const isZenLayoutMode = useAtomValue(zenLayoutModeAtom);
@@ -1290,9 +1294,7 @@ const SessionDetail = ({
         };
       });
       if (placement === 'tab') {
-        setTabOrderState((current) =>
-          appendTabOrderId(current, sessionGroupIds, targetSessionId)
-        );
+        setTabOrderState((current) => appendTabOrderId(current, sessionGroupIds, targetSessionId));
       }
       if (response.partial && response.warnings.length > 0) {
         toast.warning(
@@ -1300,7 +1302,16 @@ const SessionDetail = ({
         );
       }
     },
-    [canForkSession, currentWorkspaceId, pendingForks, postHog, runtime, sessionGroupIds, t, user?.id]
+    [
+      canForkSession,
+      currentWorkspaceId,
+      pendingForks,
+      postHog,
+      runtime,
+      sessionGroupIds,
+      t,
+      user?.id,
+    ]
   );
   const pendingForkSourceByTargetSessionId = useMemo(() => {
     const sourceByTarget = new Map<SessionId, string>();
@@ -2362,6 +2373,14 @@ const SessionDetail = ({
     null
   );
 
+  // Share-as-image preview target: the selected tab's session plus the plain-text
+  // conversation snapshot pulled from its chat surface when the menu item fires.
+  const [shareImageTarget, setShareImageTarget] = useState<{
+    session: SessionMeta;
+    messages: ConversationMessage[];
+    agentName?: string;
+  } | null>(null);
+
   const handleRequestDeleteCurrentSession = useCallback(() => {
     if (!activeSession) return;
     setDeleteConfirmOpen(true);
@@ -2514,6 +2533,34 @@ const SessionDetail = ({
     }
     void activeChatRef.copyConversationHistory();
   }, [activeDraftTab, activeTabSessionId, captureSessionDetailEvent, t]);
+
+  const handleShareAsImage = useCallback(() => {
+    if (activeDraftTab) {
+      return;
+    }
+    const activeChatRef = chatRefsMap.current.get(activeTabSessionId);
+    const shareData =
+      activeChatRef && 'getShareImageData' in activeChatRef
+        ? activeChatRef.getShareImageData()
+        : null;
+    if (
+      !activeTabSession ||
+      !shareData ||
+      shareData.messages.length === 0 ||
+      !activeChatRef ||
+      !('startShareImageSelection' in activeChatRef)
+    ) {
+      toast.error(t('sessions.shareImage.empty', 'No conversation to share'));
+      return;
+    }
+    activeChatRef.startShareImageSelection(shareData.messages, (messages) => {
+      setShareImageTarget({
+        session: activeTabSession,
+        messages,
+        agentName: shareData.agentName,
+      });
+    });
+  }, [activeDraftTab, activeTabSession, activeTabSessionId, t]);
 
   const handleOpenSearch = useCallback(() => {
     if (activeDraftTab) {
@@ -5098,6 +5145,9 @@ const SessionDetail = ({
               >
                 <SessionChatInterface
                   ref={(el) => setChatTabRef(tabSession.id, el)}
+                  claimNavigationFocus={
+                    isActive && tabSession.id === sessionId ? claimNavigationFocus : undefined
+                  }
                   session={tabSession}
                   workspaceSession={activeSession}
                   className="h-full"
@@ -5665,6 +5715,7 @@ const SessionDetail = ({
       onShareWithTeam={
         showSessionSharing ? () => handleRequestShareSession(activeSession) : undefined
       }
+      onShareAsImage={activeDraftTab ? undefined : handleShareAsImage}
       onOpenPrTab={handleOpenPrTab}
       onNavigateSession={handleNavigateSession}
       browserActionSession={activeBrowserSession}
@@ -5726,6 +5777,8 @@ const SessionDetail = ({
     const pendingForkSourceId = pendingForkSourceByTargetSessionId.get(chatSession.id);
     return {
       ref: (element: SessionChatInterfaceHandle | null) => setChatTabRef(chatSession.id, element),
+      claimNavigationFocus:
+        isActive && chatSession.id === sessionId ? claimNavigationFocus : undefined,
       session: chatSession,
       workspaceSession: activeSession,
       className: 'h-full',
@@ -5966,6 +6019,15 @@ const SessionDetail = ({
       <RenameSessionDialog
         target={renameDialogTarget}
         onClose={() => setRenameDialogTarget(null)}
+      />
+      <ChatShareImageDialog
+        open={shareImageTarget != null}
+        onOpenChange={(open) => {
+          if (!open) setShareImageTarget(null);
+        }}
+        session={shareImageTarget?.session ?? null}
+        messages={shareImageTarget?.messages ?? []}
+        agentName={shareImageTarget?.agentName}
       />
     </div>
   );
