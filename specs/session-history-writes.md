@@ -31,8 +31,9 @@ That tolerance must not authorize creating new malformed items locally.
   Prepend copied rows and reject id collisions; retain target containers.
   Caller-created JSON cannot claim this provenance. Copying does not modify the source.
 - Failed edit-and-resend can restore captured old history without reparsing it as
-  new input. A one-use local rollback receipt must reject intervening history changes
-  rather than overwrite them, except a newly inserted pending user row becoming seen/read
+  new input. A one-use local rollback receipt restores only the changed range, preserving
+  current content of untouched rows. It rejects intervening row identity/order changes
+  and edits inside that range, except a newly inserted pending user row becoming seen/read
   with every other field unchanged. It is not crash recovery or a distributed transaction.
   External provider imports remain new inputs, not privileged stored-history copies.
 - Acceptance here means a local CRDT write. Existing repo persistence and transport

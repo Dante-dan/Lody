@@ -77,6 +77,7 @@ function createHarness(
     active?: boolean;
     prepareError?: Error;
     persistError?: Error;
+    beforeCommitFailure?: (doc: LoroDoc) => void;
     history?: SessionHistoryInput[];
   } = {}
 ) {
@@ -185,6 +186,7 @@ function createHarness(
       persistPendingChanges: vi.fn(async (reason: string) => {
         events.push(reason.endsWith('rollback') ? 'persist-rollback' : 'persist');
         if (options.persistError && reason.endsWith('commit')) {
+          options.beforeCommitFailure?.(loro);
           throw options.persistError;
         }
       }),
@@ -371,27 +373,50 @@ describe('SessionEditAndResendService', () => {
     expect(harness.agentClient.prepareReplacementSession).not.toHaveBeenCalled();
   });
 
-  it('restores the old history tail when the durable commit fails', async () => {
-    const history = historyFixture();
-    const opaqueItems = [
-      { type: 'future_item', value: 42 },
-      { type: 'text', text: 42, futureField: 'keep' },
-    ];
-    history[3] = { ...history[3]!, items: opaqueItems } as unknown as SessionHistoryInput;
-    const harness = createHarness({ persistError: new Error('disk unavailable'), history });
+  it.each([false, true])(
+    'restores the old tail on commit failure with peer prefix edit=%s',
+    async (peerEdit) => {
+      const history = historyFixture();
+      const opaqueItems = [
+        { type: 'future_item', value: 42 },
+        { type: 'text', text: 42, futureField: 'keep' },
+      ];
+      history[3] = { ...history[3]!, items: opaqueItems } as unknown as SessionHistoryInput;
+      const harness = createHarness({
+        persistError: new Error('disk unavailable'),
+        history,
+        beforeCommitFailure: peerEdit
+          ? (doc) => {
+              const peer = new LoroDoc();
+              peer.import(doc.export({ mode: 'snapshot' }));
+              (peer.getList('history').get(0) as LoroMap).set('items', [
+                { type: 'text', text: 'peer prefix edit' },
+              ]);
+              doc.import(peer.export({ mode: 'update', from: doc.version() }));
+            }
+          : undefined,
+      });
 
-    await expect(harness.service.editAndResend(spec)).resolves.toMatchObject({
-      success: false,
-      error: { code: 'HISTORY_WRITE_FAILED' },
-    });
-    expect(harness.getHistory().map((entry) => entry.id)).toEqual([
-      'user-1',
-      'assistant-1',
-      'user-2',
-      'assistant-2',
-    ]);
-    expect(harness.events).toContain('persist-rollback');
-    expect(harness.getHistory()).toEqual(history);
-    expect(harness.agentClient.adoptPreparedSession).not.toHaveBeenCalled();
-  });
+      await expect(harness.service.editAndResend(spec)).resolves.toMatchObject({
+        success: false,
+        error: { code: 'HISTORY_WRITE_FAILED' },
+      });
+      expect(harness.getHistory().map((entry) => entry.id)).toEqual([
+        'user-1',
+        'assistant-1',
+        'user-2',
+        'assistant-2',
+      ]);
+      expect(harness.events).toContain('persist-rollback');
+      expect(harness.getHistory()).toEqual(
+        peerEdit
+          ? [
+              { ...history[0], items: [{ type: 'text', text: 'peer prefix edit' }] },
+              ...history.slice(1),
+            ]
+          : history
+      );
+      expect(harness.agentClient.adoptPreparedSession).not.toHaveBeenCalled();
+    }
+  );
 });

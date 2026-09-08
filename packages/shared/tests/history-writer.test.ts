@@ -18,6 +18,61 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it.each(['before-rollback', 'after-rollback'] as const)(
+    'preserves a peer prefix edit arriving %s',
+    (arrival) => {
+      const doc = new Loro();
+      const mirror = open(doc);
+      for (const name of ['prefix', 'old', 'answer']) mirror.historyWriter.append(entry(name));
+      const before = doc.getList('history').toJSON();
+      const prefixCid = (doc.getList('history').get(0) as LoroMap).id;
+      const peer = new Loro();
+      peer.import(doc.export({ mode: 'snapshot' }));
+      const peerMirror = open(peer);
+      const rollback = mirror.historyWriter.updateWithRollback((history) => [
+        history[0]!,
+        entry('replacement'),
+      ]);
+      peerMirror.historyWriter.update((history) => {
+        history[0]!.items = [{ type: 'text', text: 'peer edit' }];
+        return history;
+      });
+      if (arrival === 'before-rollback')
+        doc.import(peer.export({ mode: 'update', from: doc.version() }));
+      rollback();
+      doc.import(peer.export({ mode: 'update', from: doc.version() }));
+      peer.import(doc.export({ mode: 'update', from: peer.version() }));
+      const expected = [
+        { ...before[0], items: [{ type: 'text', text: 'peer edit' }] },
+        ...before.slice(1),
+      ];
+      expect(doc.getList('history').toJSON()).toEqual(expected);
+      expect(peer.getList('history').toJSON()).toEqual(expected);
+      expect((doc.getList('history').get(0) as LoroMap).id).toBe(prefixCid);
+      expect(() => rollback()).toThrow('stale_rollback');
+      mirror.dispose();
+      peerMirror.dispose();
+    }
+  );
+
+  it('refuses edits to the replacement without partially restoring the tail', () => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    mirror.historyWriter.append(entry('old'));
+    const rollback = mirror.historyWriter.updateWithRollback(() => [entry('replacement')]);
+    mirror.historyWriter.update((history) => {
+      history[0]!.items = [{ type: 'text', text: 'new work' }];
+      return history;
+    });
+    const version = doc.version().toJSON();
+    expect(() => rollback()).toThrow('stale_rollback');
+    expect(doc.version().toJSON()).toEqual(version);
+    expect(mirror.historyWriter.read('replacement')?.items).toEqual([
+      { type: 'text', text: 'new work' },
+    ]);
+    mirror.dispose();
+  });
+
   it('appends beside damaged old tool blocks and keeps extensions on their own variants', () => {
     const doc = new Loro();
     const mirror = open(doc);

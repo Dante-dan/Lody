@@ -244,7 +244,7 @@ export interface HistoryWriter {
   capture(): StoredHistorySnapshot;
   /** Prepend copied history, retaining target initialization rows; ids must not collide. */
   copyFrom(snapshot: StoredHistorySnapshot, history: SessionHistoryInput[]): void;
-  /** Reject intervening edits, except read acknowledgement of a newly added pending user row. */
+  /** Restore the changed range only; retain edits to untouched rows. */
   updateWithRollback(
     updater: (history: SessionHistoryInput[]) => SessionHistoryInput[]
   ): () => void;
@@ -376,14 +376,49 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       const before = list.toJSON() as SessionHistoryInput[];
       writer.update(updater);
       const after = list.toJSON();
+      // Unchanged rows are not owned by this operation. Capture only the range
+      // it changed, retaining the current values outside it during compensation.
+      let start = 0;
+      while (
+        start < before.length &&
+        start < after.length &&
+        historyValuesEqual(before[start], after[start])
+      )
+        start++;
+      let suffix = 0;
+      while (
+        suffix < before.length - start &&
+        suffix < after.length - start &&
+        historyValuesEqual(before[before.length - 1 - suffix], after[after.length - 1 - suffix])
+      )
+        suffix++;
       let consumed = false;
       return () => {
-        if (consumed || !matchesRollbackReceipt(before, after, list.toJSON()))
+        const current = list.toJSON() as SessionHistoryInput[];
+        // Structural changes remain conservative: an index is safe only while
+        // every row still has the same identity and order as the receipt.
+        const sameRows =
+          current.length === after.length &&
+          current.every((row, i) => record(row) && record(after[i]) && row.id === after[i].id);
+        if (
+          consumed ||
+          !sameRows ||
+          !matchesRollbackReceipt(
+            before,
+            after.slice(start, after.length - suffix),
+            current.slice(start, current.length - suffix)
+          )
+        )
           throw new HistoryWriteError([{ path: ['history'], code: 'stale_rollback' }]);
         // Only this closure can restore its captured values. Never reparse old data
         // as new input, and never overwrite intervening local/remote history edits
         // other than the discarded replacement's automatic read acknowledgement.
-        planWrite(list.toJSON() as SessionHistory[], before, (_old, value) => value)();
+        const restored = [
+          ...current.slice(0, start),
+          ...before.slice(start, before.length - suffix),
+          ...current.slice(current.length - suffix),
+        ];
+        planWrite(current as SessionHistory[], restored, (_old, value) => value)();
         consumed = true;
       };
     },

@@ -24,8 +24,10 @@
 - Copying stored history uses a writer-captured snapshot, never a caller-supplied
   "trusted" array. Preserve unchanged opaque content; parse authored changes and new
   notices. Prepend copies to target initialization rows without replacing their containers;
-  reject colliding ids. Rollback rejects intervening history changes except pending-to-seen
-  read acknowledgement on newly inserted user rows. External ACP imports remain new input.
+  reject colliding ids. Rollback restores only the changed range and retains current content
+  of untouched rows. Reject intervening row identity/order changes and edits inside that range,
+  except pending-to-seen read acknowledgement on newly inserted user rows.
+  External ACP imports remain new input.
 - Tool status, permission and descriptive metadata (title/kind/locations) are independent
   edits: derive their parsers from the tool message schema and validate changed fields,
   not untouched stored payloads. Content-list edits retain unchanged blocks and parse
