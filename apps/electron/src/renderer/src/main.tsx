@@ -13,7 +13,12 @@ import '@lody/components/tailwind/index.css'
 import { jotaiStore } from '@lody/components/lib'
 import { collectBootDiagnostics, renderBootFailure } from '@lody/components/lib/boot-failure'
 import { installResizeObserverLoopErrorHandler } from '@lody/components/lib/resize-observer'
-import { getIpcServices } from '@lody/components/lib/electron-ipc-client'
+import { getIpcServices, onIpcEvent } from '@lody/components/lib/electron-ipc-client'
+import {
+  desktopWindowContextAtom,
+  setDesktopWindowContext
+} from '@lody/components/lib/desktop-window-context'
+import { sidebarCollapsedAtom } from '@lody/components/atoms/sidebar-state'
 import { Provider } from 'jotai'
 
 import { ErrorBoundary } from '@/components/error-boundary'
@@ -127,6 +132,22 @@ window.addEventListener('unhandledrejection', (event) => {
 })
 
 try {
+  const applyWindowContext = (
+    context: Awaited<
+      ReturnType<NonNullable<ReturnType<typeof getIpcServices>>['app']['getWindowContext']>
+    >
+  ) => {
+    setDesktopWindowContext(context)
+    jotaiStore.set(desktopWindowContextAtom, context)
+  }
+  onIpcEvent('app.windowContext', applyWindowContext)
+  const windowContext = await getIpcServices()!.app.getWindowContext()
+  applyWindowContext(windowContext)
+  const firstWindowLoad = sessionStorage.getItem('lody:windowInitialized') !== '1'
+  if (firstWindowLoad) {
+    jotaiStore.set(sidebarCollapsedAtom, Boolean(windowContext.sessionId))
+    sessionStorage.setItem('lody:windowInitialized', '1')
+  }
   // Resolve and persist the desktop's first-run language before React can
   // commit. AppInitializer keeps later changes synchronized; awaiting here
   // closes the window where onboarding could paint once in English first.
@@ -147,6 +168,12 @@ try {
     },
     history: isFileProtocol ? createHashHistory() : undefined
   })
+  if (firstWindowLoad && windowContext.sessionId) {
+    router.history.replace(router.history.location.href, {
+      ...router.history.location.state,
+      focusComposerSessionId: windowContext.tabSessionId ?? windowContext.sessionId
+    })
+  }
   createRoot(rootElement, {
     // ErrorBoundary remains the single owner of caught-error UI and PostHog.
     // React 19 no longer rethrows render errors, so these root callbacks only

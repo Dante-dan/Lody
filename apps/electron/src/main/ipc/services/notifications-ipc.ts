@@ -1,4 +1,5 @@
-import { IpcMethod, IpcService } from 'electron-ipc-decorator'
+import { getIpcContext, IpcMethod, IpcService } from 'electron-ipc-decorator'
+import { getAppWindowContext, requireAppWindow } from '../../app-windows'
 import type { ShowSessionCompletionNotificationInput } from '@lody/shared/electron-ipc'
 import { getIpcServiceDeps } from '../ipc-service-deps'
 
@@ -31,6 +32,9 @@ export class NotificationsIpc extends IpcService {
   async showSessionCompletion(payload: ShowSessionCompletionNotificationInput) {
     if (!isShowSessionCompletionNotificationInput(payload)) {
       return { shown: false, reason: 'invalid_payload' }
+    }
+    if (!getAppWindowContext(requireAppWindow(getIpcContext().event))?.backgroundOwner) {
+      return { shown: false, reason: 'another_window_owns_notifications' }
     }
     return getIpcServiceDeps().notificationService.showSessionCompletion(payload)
   }

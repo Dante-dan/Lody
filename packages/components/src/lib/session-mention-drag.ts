@@ -1,3 +1,6 @@
+import { beginSessionWindowDrag } from './session-window-actions';
+import i18next from 'i18next';
+
 /**
  * Dragging a sidebar session onto a chat surface, as a data transfer.
  *
@@ -32,6 +35,8 @@ export type SessionMentionDragPayload = {
   sessionId: string;
   /** Only for the `text/plain` fallback outside the app. */
   title?: string;
+  /** Sidebar rows detach; tab-strip drags retain their existing reorder behavior. */
+  detach?: boolean;
 };
 
 type DragTypes = { types?: ArrayLike<string> | Iterable<string> };
@@ -44,6 +49,9 @@ function toTypeArray(dataTransfer: DragTypes | null | undefined): string[] {
 let inFlightSessionId: string | null = null;
 const inFlightListeners = new Set<() => void>();
 let dragEndBound = false;
+let finishWindowDrag: ((released: boolean) => void) | null = null;
+let dragCancelled = false;
+let dragImage: HTMLElement | null = null;
 
 function notifySessionMentionDragListeners(): void {
   for (const listener of inFlightListeners) listener();
@@ -55,20 +63,35 @@ function setInFlightSessionId(next: string | null): void {
   notifySessionMentionDragListeners();
 }
 
-function onWindowDragEnd(): void {
+function onWindowDragEnd(event: DragEvent): void {
+  const finish = finishWindowDrag;
+  finishWindowDrag = null;
+  // Accepted mentions/external drops are copies. Chromium reports zero screen
+  // coordinates for a cancelled native drag; Escape is also tracked explicitly.
+  finish?.(
+    !dragCancelled &&
+      event.dataTransfer?.dropEffect === 'none' &&
+      (event.screenX !== 0 || event.screenY !== 0)
+  );
   clearSessionMentionDrag();
+}
+
+function onDragKeyDown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') dragCancelled = true;
 }
 
 function bindWindowDragEnd(): void {
   if (dragEndBound || typeof window === 'undefined') return;
   dragEndBound = true;
   window.addEventListener('dragend', onWindowDragEnd, true);
+  window.addEventListener('keydown', onDragKeyDown, true);
 }
 
 function unbindWindowDragEnd(): void {
   if (!dragEndBound || typeof window === 'undefined') return;
   dragEndBound = false;
   window.removeEventListener('dragend', onWindowDragEnd, true);
+  window.removeEventListener('keydown', onDragKeyDown, true);
 }
 
 /** Session id currently being dragged out of the sidebar or a session tab, if any. */
@@ -109,6 +132,10 @@ export function subscribeSessionMentionDrag(onStoreChange: () => void): () => vo
 
 /** Ends the in-flight drag. Tests call this between cases. */
 export function clearSessionMentionDrag(): void {
+  finishWindowDrag?.(false);
+  finishWindowDrag = null;
+  dragImage?.remove();
+  dragImage = null;
   unbindWindowDragEnd();
   setInFlightSessionId(null);
 }
@@ -121,11 +148,31 @@ export function clearSessionMentionDrag(): void {
  * without it the browser starts its own link drag and never reaches this.
  */
 export function startSessionMentionDrag(
-  event: { dataTransfer: Pick<DataTransfer, 'setData' | 'effectAllowed'> | null },
+  event: {
+    dataTransfer:
+      | (Pick<DataTransfer, 'setData' | 'effectAllowed'> &
+          Partial<Pick<DataTransfer, 'setDragImage'>>)
+      | null;
+  },
   payload: SessionMentionDragPayload
 ): void {
   const dataTransfer = event.dataTransfer;
   if (!dataTransfer) return;
+  // A new native drag replaces any unfinished one (for example after a source
+  // surface disappears). Release its token and preview before storing the next.
+  clearSessionMentionDrag();
+  dragCancelled = false;
+  if (payload.detach) {
+    finishWindowDrag = beginSessionWindowDrag(payload.sessionId);
+    if (finishWindowDrag && dataTransfer.setDragImage) {
+      dragImage = document.createElement('div');
+      dragImage.className =
+        'fixed -left-[10000px] top-0 rounded-lg border bg-popover px-4 py-3 text-sm text-popover-foreground shadow-lg pointer-events-none';
+      dragImage.textContent = `${payload.title || payload.sessionId} · ${i18next.t('sessions.drag.openWindow')}`;
+      document.body.appendChild(dragImage);
+      dataTransfer.setDragImage(dragImage, 24, 20);
+    }
+  }
   dataTransfer.effectAllowed = 'copy';
   dataTransfer.setData(SESSION_MENTION_DRAG_TYPE, payload.sessionId);
   dataTransfer.setData(`${SESSION_MENTION_DRAG_ID_PREFIX}${payload.sessionId.toLowerCase()}`, '');

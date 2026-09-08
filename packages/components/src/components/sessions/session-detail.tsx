@@ -172,6 +172,7 @@ import {
 import { getAppShareUrl } from '@/lib/app-location';
 import { getCommandKeybindings, useCommand } from '@/lib/commands';
 import { useDesktopTabCloser } from '@/lib/desktop-tab-or-window-close';
+import { getDesktopWindowContext } from '@/lib/desktop-window-context';
 import { cn, getBasename } from '@/lib';
 
 import {
@@ -4210,6 +4211,7 @@ const SessionDetail = ({
       const target = resolveFocusedTabCloseTarget();
       if (!target) return 'handled';
       if (target.kind === 'landing') {
+        if (getDesktopWindowContext()?.secondary) return 'unhandled';
         handleBackToList();
         return 'handled';
       }

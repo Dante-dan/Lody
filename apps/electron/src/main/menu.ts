@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, shell } from 'electron'
 import { closeFocusedTabOrWindow } from './close-focused-tab-or-window'
+import { getFocusedAppWindow, getAppWindowContext } from './app-windows'
 import type { AppUpdaterService } from './services/app-updater-service'
 import en from '../../../../locales/en.json'
 import zhCN from '../../../../locales/zh_CN.json'
@@ -35,7 +36,7 @@ function sendMenuAction(action: string): void {
   if (!menuOptions) {
     return
   }
-  let window = menuOptions.getMainWindow()
+  let window = getFocusedAppWindow() ?? menuOptions.getMainWindow()
   if (!window || window.isDestroyed()) {
     window = menuOptions.openOrFocusMainWindow()
   }
@@ -61,8 +62,10 @@ function handleCloseFocusedTabOrWindow(targetWindow?: Electron.BaseWindow): void
       : BrowserWindow.getFocusedWindow()
   closeFocusedTabOrWindow({
     focused,
-    mainWindow: menuOptions?.getMainWindow() ?? null,
-    sendCloseCurrentTabOrWindow: () => sendMenuAction('close-current-tab-or-window')
+    mainWindow:
+      focused && getAppWindowContext(focused) ? focused : (menuOptions?.getMainWindow() ?? null),
+    sendCloseCurrentTabOrWindow: () =>
+      focused?.webContents.send('app.menuAction', 'close-current-tab-or-window')
   })
 }
 
@@ -217,7 +220,10 @@ function buildAndSetMenu(): void {
           : [
               {
                 label: t(locale, 'menu.closeWindow'),
-                click: () => menuOptions?.getMainWindow()?.close()
+                click: (_item: Electron.MenuItem, targetWindow?: Electron.BaseWindow) => {
+                  const window = targetWindow ?? BrowserWindow.getFocusedWindow()
+                  if (window && !window.isDestroyed()) window.close()
+                }
               }
             ])
       ] as Electron.MenuItemConstructorOptions[]

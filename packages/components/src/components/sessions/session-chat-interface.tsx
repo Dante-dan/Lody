@@ -49,7 +49,9 @@ import {
   X,
 } from 'lucide-react';
 import { Button } from '@/ui/button';
-import { isMacOSElectronRenderer, useElectronFullscreen } from '@/lib/electron';
+import { isElectronRenderer, isMacOSElectronRenderer, useElectronFullscreen } from '@/lib/electron';
+import { openSessionWindow } from '@/lib/session-window-actions';
+import { AppWindow } from 'lucide-react';
 import { getIpcServices } from '@/lib/electron-ipc-client';
 import { isMac } from '@/lib/commands/platform';
 import { matchesKeyboardEvent, parseBinding } from '@/lib/commands/key-matcher';
@@ -1164,6 +1166,19 @@ export function SessionHeaderMenu({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[200px] max-w-[320px]">
+          {isElectronRenderer() ? (
+            <DropdownMenuItem
+              onSelect={() =>
+                openSessionWindow(
+                  session.parentSessionId ?? session.id,
+                  session.parentSessionId ? session.id : undefined
+                )
+              }
+            >
+              <AppWindow className="h-3.5 w-3.5" />
+              {t('sessions.contextMenu.openInNewWindow', 'Open session in new window')}
+            </DropdownMenuItem>
+          ) : null}
           {/* One compact context group keeps useful identity visible. Separate labels make
               every value pay for two rows, while a submenu hides context behind another step. */}
           {!compact && showSessionContext ? (

@@ -11,7 +11,13 @@ import macIcon from '../../build/icon-mac.padded.png?asset'
 import { acquireSingleInstanceLock, registerOpenUrlHandler } from './deep-link'
 import { registerLodyProtocolClient } from './protocol-client'
 import { registerIpcServices } from './ipc/register-services'
-import { openMainWindow, openOrFocusMainWindow, setMainWindowProductReloadTarget } from './window'
+import {
+  openMainWindow,
+  openOrFocusMainWindow,
+  setMainWindowProductReloadTarget,
+  focusMainWindow
+} from './window'
+import { getFocusedAppWindow } from './app-windows'
 import { getMainWindow, setAppQuitting, setWindowsTrayAvailable } from './window-state'
 import { CliService } from './services/cli-service'
 import { TerminalRelay } from './services/terminal-relay'
@@ -294,6 +300,11 @@ if (hasSingleInstanceLock) {
     appUpdaterService.start()
 
     app.on('activate', () => {
+      const focused = getFocusedAppWindow()
+      if (focused) {
+        focusMainWindow(focused)
+        return
+      }
       const windows = BrowserWindow.getAllWindows()
       if (windows.length === 0) {
         openMainWindow({ icon })

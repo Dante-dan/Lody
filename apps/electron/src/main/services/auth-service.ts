@@ -679,8 +679,18 @@ export class AuthService {
     return await authClient.organization.list(withAuthorization({}, sessionToken))
   }
 
-  async getActiveOrganization(options?: unknown) {
+  async getActiveOrganization(
+    options?: unknown,
+    target?: { organizationSlug: string } | { organizationId: string }
+  ) {
     const sessionToken = await this.getSessionToken(options)
+    // A window-scoped lookup must never fall back to or mutate the account's
+    // active organization. Better Auth checks membership for this exact target.
+    if (target) {
+      return await authClient.organization.getFullOrganization(
+        withAuthorization({ query: target }, sessionToken)
+      )
+    }
     const activeOrganizationResponse = await authClient.organization.getFullOrganization(
       withAuthorization({}, sessionToken)
     )
@@ -949,20 +959,6 @@ export class AuthService {
         {
           memberId,
           role,
-          organizationId
-        },
-        sessionToken
-      )
-    )
-  }
-
-  async organizationSetActive(input: unknown) {
-    const parsed = parseObjectInput(input, 'organization.setActive')
-    const organizationId = readRequiredString(parsed, 'organizationId', 'organization.setActive')
-    const sessionToken = await this.getSessionToken(input)
-    return await authClient.organization.setActive(
-      withAuthorization(
-        {
           organizationId
         },
         sessionToken

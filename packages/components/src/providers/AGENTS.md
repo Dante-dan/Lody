@@ -37,6 +37,11 @@ safety. Removal requires a reviewed replacement write boundary (PR #460).
 
 ## Workspace runtime
 
+- Additional desktop renderers use separate Repo/cursor cache namespaces, never
+  separate logical workspace identities or CLI instances. Their eager-sync activity
+  port requires both effective navigation-sidebar visibility and background ownership;
+  changes pause/resume the coordinator without replacing the active-session runtime.
+
 - `create-workspace-runtime.ts` maintains one Repo view. `WorkspaceTargetRouter` owns
   target ownership and transport selection; do not restore a second writer or a
   proxy-authoring/write-intent mirror.

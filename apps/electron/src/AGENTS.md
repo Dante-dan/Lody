@@ -33,6 +33,20 @@ native-dependency, and OSS-composition rules stay in `apps/electron/AGENTS.md`.
 
 ## Renderer and window integration
 
+- `app-windows.ts` owns product-window registration, per-window workspace targets,
+  last focus, and one background owner per workspace. New windows accept validated
+  targets, never arbitrary URLs. Auxiliary windows close normally, do not overwrite
+  primary bounds/last-route state, and receive the same preload/navigation guards.
+- Desktop organization lookups and activation are window-scoped. Resolve the exact
+  organization through authenticated `getFullOrganization`; never switch the shared
+  account active organization to navigate a second renderer. Auth IPC still requires
+  a registered product window, its main frame, and the trusted renderer URL.
+- Public browser views and native dialogs belong to the invoking product window.
+  Session detach consumes one drag token; cancelled/accepted drops cannot open a
+  window, and native screen bounds decide whether release was outside the app.
+- Native Close Window acts on the menu's target or current focus; never fall back
+  to the primary window when an auxiliary window owns the action.
+
 - Generic update metadata may carry localized Markdown under
   `vendor.lodyChangelog.locales.{en,zh_CN}` in addition to the standard English
   `releaseNotes` fallback. Main validates and bounds those remote strings before

@@ -37,6 +37,11 @@ const CATEGORY_ORDER: CommandCategory[] = [
 const MAX_SESSION_RESULTS = 8;
 
 export function CommandPalette() {
+  const [open] = useCommandPaletteState();
+  return open ? <OpenCommandPalette /> : null;
+}
+
+function OpenCommandPalette() {
   const { t } = useTranslation();
   const router = useRouter();
   const workspaceSlug = useAtomValue(currentWorkspaceSlugAtom);

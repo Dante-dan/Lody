@@ -43,6 +43,26 @@ Parent `AGENTS.md` files also apply.
   syncing state follows that same scoped readiness, not the coarser connection
   state; an online transport does not imply that workspace data is ready.
 
+## Desktop windows
+
+- Workspace, Local Project, Updated and Pinned Session rows share
+  `SessionWindowMenuItem` and the modifier-click action; new-window navigation must
+  leave the source route intact. Only sidebar HTML5 drags opt into detach; accepted
+  mention drops and tab-strip reordering retain their existing behavior.
+- A dedicated Session window must enter the exact conversation with side panels
+  closed and one-shot composer focus. Cmd/Ctrl+W on its lone parent closes that
+  window; the primary window retains its existing Chat Landing behavior.
+- Background ownership, not OS focus, gates notifications and badge subscriptions;
+  destroying an owner hands work to a remaining window in that workspace. The
+  command palette subscribes only while open.
+- Task Index sync is workspace-scoped, not sidebar-scoped: keep it mounted while
+  Tasks is enabled and the workspace is ready, even with collapsed navigation or Zen.
+
+Ownership and isolation rationale:
+[multi-window decision](../../../.agents/notes/implemented/architecture/2026-09-06-desktop-multi-window.md).
+Current interactions: [routing](../../../.agents/docs/sessions-tabs-routing.md) and
+[background work](../../../.agents/docs/sessions-render-cost.md).
+
 ## Billing data
 
 - When authenticated user and workspace resolution completes, preload the billing

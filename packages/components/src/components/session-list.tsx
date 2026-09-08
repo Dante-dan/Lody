@@ -74,6 +74,8 @@ import {
   type OpenedBySessionTreeNode,
 } from '@/lib/session-opened-by-tree';
 import { startSessionMentionDrag } from '@/lib/session-mention-drag';
+import { handleSessionWindowGesture } from '@/lib/session-window-actions';
+import { SessionWindowMenuItem } from './session-window-menu-item';
 import { SwipeActionRow } from '@/components/shared/swipe-action-row';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useStableNow } from '@/hooks/use-stable-now';
@@ -893,6 +895,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
                 draggable
                 onDragStart={(event) =>
                   startSessionMentionDrag(event, {
+                    detach: true,
                     sessionId: session.sessionId,
                     title: session.title,
                   })
@@ -922,8 +925,9 @@ const SessionGroupSection = memo(function SessionGroupSection({
                 onClick={
                   useAnchor
                     ? undefined
-                    : () => {
+                    : (event) => {
                         if (!isSelectable) return;
+                        if (handleSessionWindowGesture(event, session.sessionId)) return;
                         onSelectSession?.(session.sessionId);
                       }
                 }
@@ -933,6 +937,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
                     : (e) => {
                         if (!isSelectable) return;
                         if (e.key === 'Enter' || e.key === ' ') {
+                          if (handleSessionWindowGesture(e, session.sessionId)) return;
                           e.preventDefault();
                           onSelectSession?.(session.sessionId);
                         }
@@ -1040,6 +1045,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
               <ContextMenu key={session.sessionId}>
                 <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
                 <ContextMenuContent className="min-w-[180px]">
+                  <SessionWindowMenuItem sessionId={session.sessionId} />
                   <SessionRowOpenedByMenuItems
                     opener={openedByOpener}
                     separateToggle={hasStandardMenuActions}

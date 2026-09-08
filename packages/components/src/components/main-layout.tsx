@@ -11,6 +11,11 @@ import { StuckConnectionBannerContainer } from './stuck-connection-banner';
 import { DesktopSettingsModal } from './settings/desktop-settings-modal';
 import { TaskQuickAddDialogContainer } from './tasks/task-quick-add-dialog-container';
 import { TaskStatusWatcher } from './tasks/task-status-watcher';
+import {
+  WorkspaceBackground,
+  WorkspaceBadge,
+  WorkspaceWindowRegistration,
+} from './workspace-background';
 export {
   getMobileMainLayoutContentClassName,
   getMobileMainLayoutRootClassName,
@@ -56,11 +61,17 @@ export function MainLayout({
 
   return (
     <WorkspaceRuntimeShell workspaceReady={workspaceReady}>
+      <WorkspaceWindowRegistration />
+      <WorkspaceBackground>
+        <WorkspaceBadge />
+      </WorkspaceBackground>
       {children}
       {tasksEnabled && workspaceReady ? (
         <>
           <TaskIndexSync />
-          <TaskStatusWatcher />
+          <WorkspaceBackground>
+            <TaskStatusWatcher />
+          </WorkspaceBackground>
           <TaskQuickAddDialogContainer />
         </>
       ) : null}

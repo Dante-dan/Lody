@@ -32,6 +32,12 @@ import { useImplicitLocalWorkspace } from './local-platform-provider';
 import { capturePostHogEvent } from '@/lib/posthog-analytics';
 import { maybeClearLodyCacheOnBoot } from '@/lib/clear-local-cache';
 import { isElectronRenderer } from '@/lib/electron';
+import {
+  getDesktopWindowContext,
+  workspaceBackgroundOwnerAtom,
+} from '@/lib/desktop-window-context';
+import { navigationSidebarHiddenAtom } from '@/atoms/layout-state';
+import { jotaiStore } from '@/lib/utils';
 import { isNativeAppShell } from '@/lib/native-platform';
 import { usePlatform } from '@lody/platform/react';
 import { useVisibleMachineMetas } from '@/hooks/use-visible-machine-metas';
@@ -257,6 +263,26 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
           workspaceId: effectiveWorkspaceId,
           apiBaseUrl: API_BASE_URL,
           eagerSyncSurface,
+          ...(isElectronRenderer()
+            ? {
+                cacheNamespace: getDesktopWindowContext()?.secondary
+                  ? `${effectiveWorkspaceId}-window-${getDesktopWindowContext()!.id}`
+                  : effectiveWorkspaceId,
+                backgroundActivity: {
+                  isEnabled: () =>
+                    !jotaiStore.get(navigationSidebarHiddenAtom) &&
+                    jotaiStore.get(workspaceBackgroundOwnerAtom),
+                  subscribe: (listener: () => void) => {
+                    const stopLayout = jotaiStore.sub(navigationSidebarHiddenAtom, listener);
+                    const stopOwner = jotaiStore.sub(workspaceBackgroundOwnerAtom, listener);
+                    return () => {
+                      stopLayout();
+                      stopOwner();
+                    };
+                  },
+                },
+              }
+            : {}),
           // Platform assembly is the only authority for room topology. Do not
           // re-probe Electron or cloud configuration inside the runtime.
           syncMode: platform.sync.mode,
@@ -266,7 +292,10 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
           },
           ...(telemetryEnabled
             ? {
-                onAnalyticsEvent: (event: { name: string; properties?: Record<string, unknown> }) => {
+                onAnalyticsEvent: (event: {
+                  name: string;
+                  properties?: Record<string, unknown>;
+                }) => {
                   capturePostHogEvent(postHogRef.current, event.name, event.properties);
                 },
               }

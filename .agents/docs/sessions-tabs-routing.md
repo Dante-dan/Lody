@@ -35,7 +35,8 @@ this page is the full text of the rules summarised there.
     A lone parent Session tab is not draggable; enable tab drag only once a
     second visible tab exists. On desktop, Cmd/Ctrl+W is the native Close
     accelerator. Session-detail registers a tab closer: focused side panel or
-    child tab closes; the lone parent leaves for Chat Landing without archiving.
+    child tab closes; the lone parent leaves for Chat Landing without archiving
+    in the primary window, but closes an auxiliary product window.
     A parent with siblings is not closeable and does not close the window. With
     no closer mounted (Chat Landing and other surfaces) the chord closes the
     window.
@@ -138,3 +139,29 @@ this page is the full text of the rules summarised there.
   `session-detail.tsx` URL writer goes through `writeSessionUrlTab`, which
   drops a write whose captured session no longer matches the current route —
   an async caller resolving after a switch must not yank the router back.
+
+## Opening another desktop window
+
+Sidebar modifier-click, the Session row's more/right-click menu, and the Session
+header menu send a validated workspace/Session target through the Electron app
+service. A header can also name the exact child tab under its root. Main's
+`appWindowPath` explicitly encodes that conversation in `?tab`; this entry is an
+exception to ordinary cross-surface links that restore the last active tab.
+The source window does not navigate, and repeated opens create additional views.
+Modifier-selecting a workspace sends a workspace-only target to Chat Landing.
+
+The renderer reads its window context before mounting React. First entry into a
+Session window collapses navigation and installs one-shot composer focus intent;
+auxiliary tab/panel persistence starts separately in `sessionStorage`, so another
+window's restored panels cannot replace the requested initial view. Navigation
+can subsequently expand, and window-local state survives renderer reload without
+overwriting the primary last-route record. This is not app-restart window restoration.
+
+Only sidebar drags opt into detach. Main tracks a one-shot token and Escape,
+while the renderer excludes accepted drops and cancelled drags. Native cursor
+position must be outside every visible product window, including the edge margin.
+Tab-strip drags continue to mean mention/reorder, not detach.
+
+The source-level [window constraints](../../packages/components/src/AGENTS.md#desktop-windows)
+remain binding; [the decision note](../notes/implemented/architecture/2026-09-06-desktop-multi-window.md)
+explains the ownership and persistence trade-offs and verification limits.

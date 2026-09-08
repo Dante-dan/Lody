@@ -391,6 +391,12 @@ async function runPendingClearOnBoot(): Promise<PendingLocalClearMode | null> {
   const mode = readPendingLocalClearMode();
   if (!mode) return null;
 
+  // A reload only releases this renderer. Other app windows must release
+  // their database handles before the existing, user-requested clear starts.
+  if (typeof window !== 'undefined' && window.__LODY_ELECTRON__ === true) {
+    await getIpcServices()?.app.closeOtherWindowsForReset();
+  }
+
   try {
     if (mode === 'hard') {
       await clearAllLodyLocalData();

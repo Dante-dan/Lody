@@ -180,6 +180,9 @@ type RuntimeDeps = {
    */
   getAuthorizedMachineIds?: () => ReadonlySet<MachineId> | null;
   eagerSyncSurface?: EagerSyncSurface;
+  /** Per-renderer cache identity; never used as a transport/workspace identity. */
+  cacheNamespace?: string;
+  backgroundActivity?: { isEnabled(): boolean; subscribe(listener: () => void): () => void };
 };
 
 type LoroStreamsTokenProvider = ReturnType<typeof createLoroStreamsTokenProvider>;
@@ -392,7 +395,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     | null = null;
   const repo = await LoroRepo.create({
     storageAdapter: new IndexedDBStorageAdaptor({
-      dbName: 'lody-loro-repo-db-' + deps.workspaceId,
+      dbName: 'lody-loro-repo-db-' + (deps.cacheNamespace ?? deps.workspaceId),
     }),
     metaDebounceCommitMs: 0,
     resolveRoomTransports: (room) =>
@@ -417,7 +420,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     );
   };
   const remoteCursorStore = createResilientRemoteCursorStore({
-    dbName: 'lody-loro-stream-cursors-' + deps.workspaceId,
+    dbName: 'lody-loro-stream-cursors-' + (deps.cacheNamespace ?? deps.workspaceId),
     shouldBypassPrimaryLoad: shouldBypassMetaRemoteCursorLoad,
     onWarning: (message, context) => {
       console.warn(message, {
@@ -4207,7 +4210,9 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     watchHandles.push(watchHandle);
 
     backgroundSyncCoordinatorStartPromise = (async () => {
-      const highWaterStore = await createEagerSyncHighWaterStore(workspaceId);
+      const highWaterStore = await createEagerSyncHighWaterStore(
+        (deps.cacheNamespace ?? workspaceId) as WorkspaceId
+      );
       if (disposePromise) {
         highWaterStore.close();
         return;
@@ -4276,10 +4281,13 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         env: {
           isOnline: () => isBrowserOnline(),
           isAppVisible: () =>
-            typeof document === 'undefined' || document.visibilityState === 'visible',
+            (deps.backgroundActivity?.isEnabled() ?? true) &&
+            (typeof document === 'undefined' || document.visibilityState === 'visible'),
           subscribe: (onChange) => {
             backgroundSyncEnvListeners.add(onChange);
+            const stopActivity = deps.backgroundActivity?.subscribe(onChange);
             return () => {
+              stopActivity?.();
               backgroundSyncEnvListeners.delete(onChange);
             };
           },

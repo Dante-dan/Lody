@@ -8,6 +8,8 @@ import {
 } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { startSessionMentionDrag } from '@/lib/session-mention-drag';
+import { handleSessionWindowGesture } from '@/lib/session-window-actions';
+import { SessionWindowMenuItem } from './session-window-menu-item';
 import {
   Archive,
   GitBranch,
@@ -803,7 +805,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
       // Drag a conversation onto a chat surface to mention it there.
       draggable
       onDragStart={(event) =>
-        startSessionMentionDrag(event, { sessionId: item.id, title: item.title })
+        startSessionMentionDrag(event, { sessionId: item.id, title: item.title, detach: true })
       }
       className={cn(
         // Named group ('row') so the archive hover-reveal scopes to the hovered row
@@ -828,8 +830,9 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
       onClick={
         useAnchor
           ? undefined
-          : () => {
+          : (event) => {
               if (!onSelect) return;
+              if (handleSessionWindowGesture(event, item.id)) return;
               onSelect(item.id);
             }
       }
@@ -839,6 +842,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
           : (event) => {
               if (!onSelect) return;
               if (event.key !== 'Enter' && event.key !== ' ') return;
+              if (handleSessionWindowGesture(event, item.id)) return;
               event.preventDefault();
               onSelect(item.id);
             }
@@ -968,6 +972,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
     <ContextMenu onOpenChange={setRowMenuOpen}>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
+        <SessionWindowMenuItem sessionId={item.id} />
         <SessionRowOpenedByMenuItems
           opener={openedByOpener}
           goToOpener={

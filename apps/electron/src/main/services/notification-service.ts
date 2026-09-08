@@ -7,6 +7,7 @@ import type {
   ShowSessionCompletionNotificationResult
 } from '../types'
 import { formatUnknownError } from '../utils'
+import { appWindows, getAppWindowContext } from '../app-windows'
 
 function getNotificationSettingsUrls(platform: NodeJS.Platform): string[] {
   if (platform === 'darwin') {
@@ -138,7 +139,18 @@ export class NotificationService {
     })
 
     notification.on('click', () => {
-      const mainWindow = this.getMainWindow()
+      const matching = appWindows().find((window) => {
+        const url = new URL(window.webContents.getURL())
+        const path = url.protocol === 'file:' ? url.hash.slice(1) : url.pathname + url.search
+        return path.split('?')[0] === `/${input.workspaceSlug}/sessions/${input.sessionId}`
+      })
+      const mainWindow =
+        matching ??
+        appWindows().find((window) => {
+          const context = getAppWindowContext(window)
+          return context?.backgroundOwner && context.workspaceSlug === input.workspaceSlug
+        }) ??
+        this.getMainWindow()
       if (!mainWindow || mainWindow.isDestroyed()) {
         return
       }

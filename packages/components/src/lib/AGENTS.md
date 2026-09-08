@@ -17,6 +17,13 @@ Rationale: [components](../../../../.agents/docs/components-package.md) and
   platform port. Fix resolution/erasure at this boundary or reconsider caller ownership.
   Push events and one-way sends stay in `@lody/shared/electron-ipc`.
 
+## Desktop window isolation
+
+Desktop auxiliary-window context is installed before React boot. Sidebar collapse
+and auxiliary Session tab/viewer state use window-local storage; only the primary
+window writes the app's last-route preference. A confirmed app-level cache clear
+releases the other product renderers before deleting shared-origin databases.
+
 ## Crash recovery and diagnostics
 
 - `ErrorBoundary`'s `error-boundary-fallback.tsx` displays the real error and one-click

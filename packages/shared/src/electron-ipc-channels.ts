@@ -14,6 +14,14 @@ import type {
 } from './electron-ipc';
 
 export type IpcPushMap = {
+  'app.windowContext': {
+    id: number;
+    secondary: boolean;
+    workspaceSlug: string | null;
+    sessionId?: string;
+    tabSessionId?: string;
+    backgroundOwner: boolean;
+  };
   'terminal.event':
     | TerminalDataEvent
     | TerminalExitEvent
@@ -57,6 +65,7 @@ export const IPC_PUSH_CHANNELS = {
   appDeepLink: 'app.deepLink',
   appMenuAction: 'app.menuAction',
   appFullscreen: 'app.fullscreen',
+  appWindowContext: 'app.windowContext',
   appNativeTheme: 'app.nativeTheme',
   appGlobalShortcut: 'app.globalShortcut',
   appSessionCompletionClick: 'app.sessionCompletionClick',

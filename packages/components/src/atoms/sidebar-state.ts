@@ -1,5 +1,6 @@
 import { atom } from 'jotai';
-import { atomWithStorage } from 'jotai/utils';
+import { atomWithStorage, createJSONStorage } from 'jotai/utils';
+import { isElectronRenderer } from '@/lib/electron';
 import { currentWorkspaceIdAtom } from './workspace-context';
 
 /**
@@ -205,7 +206,14 @@ export const githubWorktreesSectionCollapsedAtom = atomWithStorage<boolean>(
  * Whether the desktop left sidebar is collapsed (fully hidden). Persisted.
  * Mobile uses `mobileDrawerOpenAtom` and ignores this.
  */
-export const sidebarCollapsedAtom = atomWithStorage<boolean>('lody-sidebar-collapsed', false);
+export const sidebarCollapsedAtom = atomWithStorage<boolean>(
+  'lody-sidebar-collapsed',
+  false,
+  isElectronRenderer()
+    ? createJSONStorage<boolean>(() => window.sessionStorage)
+    : createJSONStorage<boolean>(),
+  { getOnInit: true }
+);
 
 /**
  * Last expanded width in px. Restored when the user re-opens the sidebar so

@@ -2,7 +2,8 @@ import { dialog } from 'electron'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { IpcMethod, IpcService } from 'electron-ipc-decorator'
+import { getIpcContext, IpcMethod, IpcService } from 'electron-ipc-decorator'
+import { requireAppWindow } from '../../app-windows'
 import type {
   SendSessionFileLocalInput,
   SendSessionFileLocalResult
@@ -135,7 +136,7 @@ export class LocalProjectsIpc extends IpcService {
 
   @IpcMethod()
   async selectDirectory() {
-    const mainWindow = getIpcServiceDeps().getMainWindow()
+    const mainWindow = requireAppWindow(getIpcContext().event)
     const result =
       mainWindow && !mainWindow.isDestroyed()
         ? await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })

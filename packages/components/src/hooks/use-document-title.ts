@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { getDesktopWindowContext } from '@/lib/desktop-window-context';
 
 const DEFAULT_TITLE = 'Lody';
 
@@ -11,7 +12,12 @@ export function useDocumentTitle(title: string | null | undefined) {
     if (typeof document === 'undefined') return undefined;
 
     const previousTitle = document.title;
-    document.title = title ? `${title} - ${DEFAULT_TITLE}` : DEFAULT_TITLE;
+    const workspace = getDesktopWindowContext()?.workspaceSlug;
+    document.title = workspace
+      ? [title, workspace, DEFAULT_TITLE].filter(Boolean).join(' · ')
+      : title
+        ? `${title} - ${DEFAULT_TITLE}`
+        : DEFAULT_TITLE;
 
     return () => {
       document.title = previousTitle;

@@ -1,4 +1,5 @@
 import { isValidWorkspaceSlug } from './workspace';
+import { getDesktopWindowContext } from './desktop-window-context';
 
 const LAST_APP_ROUTE_STORAGE_KEY = 'lody:lastAppRoute';
 const LAST_APP_ROUTE_STORAGE_VERSION = 1;
@@ -103,6 +104,7 @@ export function readLastAppRoutePath(): string | null {
 }
 
 export function writeLastAppRoutePath(path: string | null): void {
+  if (getDesktopWindowContext()?.secondary) return;
   if (typeof window === 'undefined') {
     return;
   }

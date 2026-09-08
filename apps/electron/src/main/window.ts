@@ -1,4 +1,6 @@
-import { app, BrowserWindow, dialog, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, nativeTheme, shell, screen } from 'electron'
+import { appWindowPath, placeAppWindow, type AppWindowTarget } from './app-window-target'
+import { registerAppWindow, getAppWindowContext } from './app-windows'
 import { is } from '@electron-toolkit/utils'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -39,7 +41,9 @@ import {
 
 type CreateMainWindowOptions = {
   icon: string
-  initialPath?: '/' | '/onboarding'
+  initialPath?: string
+  target?: AppWindowTarget
+  position?: { x: number; y: number }
   hideWindowOnAutoLaunch?: boolean
   onDidFinishLoad?: () => void
 }
@@ -58,6 +62,7 @@ const MOUNT_WATCHDOG_TIMEOUT_MS = 20_000
 // dialog after a longer outage so we don't pester the user.
 const UNRESPONSIVE_DIALOG_DELAY_MS = 10_000
 const pendingInitialMaximize = new WeakSet<BrowserWindow>()
+let productWindowIcon = ''
 
 function logDeepLinkDebug(message: string, meta?: Record<string, unknown>): void {
   if (meta) {
@@ -130,7 +135,7 @@ function formatLoadFailure(details: LoadFailureDetails): string {
   ].join('\n')
 }
 
-function resolveMainRendererTarget(initialPath: '/' | '/onboarding' = '/'): ReloadTarget {
+function resolveMainRendererTarget(initialPath = '/'): ReloadTarget {
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     return {
       type: 'url',
@@ -328,11 +333,21 @@ function attachMainWindowDiagnostics(window: BrowserWindow, recoveryTarget: Relo
 }
 
 export function createMainWindow(options: CreateMainWindowOptions): BrowserWindow {
-  const shouldMaximizeOnLaunch = shouldMaximizeMainWindowOnLaunch()
-  nativeTheme.themeSource = getInitialMainWindowThemeSource(options.initialPath)
+  if (!options.target) productWindowIcon = options.icon
+  const shouldMaximizeOnLaunch = !options.target && shouldMaximizeMainWindowOnLaunch()
+  if (!options.target)
+    nativeTheme.themeSource = getInitialMainWindowThemeSource(
+      options.initialPath === '/onboarding' ? '/onboarding' : '/'
+    )
   const resolvedTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
   const window = new BrowserWindow({
     ...getMainWindowConstructorOptions(),
+    ...(options.target
+      ? placeAppWindow(
+          screen.getDisplayNearestPoint(options.position ?? screen.getCursorScreenPoint()).workArea,
+          options.position ?? screen.getCursorScreenPoint()
+        )
+      : {}),
     show: false,
     backgroundColor: getMainWindowBackgroundColor(resolvedTheme),
     autoHideMenuBar: true,
@@ -365,7 +380,13 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
   if (options.hideWindowOnAutoLaunch && shouldMaximizeOnLaunch) {
     pendingInitialMaximize.add(window)
   }
-  trackMainWindowState(window)
+  registerAppWindow(window, options.target)
+  if (!options.target) trackMainWindowState(window)
+  const sendFullscreenState = () => {
+    if (!window.isDestroyed()) window.webContents.send('app.fullscreen', window.isFullScreen())
+  }
+  window.on('enter-full-screen', sendFullscreenState)
+  window.on('leave-full-screen', sendFullscreenState)
   const mainTarget = resolveMainRendererTarget(options.initialPath)
   const recoveryTarget = resolveRecoveryTarget()
   installNavigationGuard(window, [mainTarget, recoveryTarget])
@@ -475,17 +496,6 @@ export function openMainWindow(options: OpenMainWindowOptions): BrowserWindow {
 
   setMainWindow(window)
 
-  // Push fullscreen state to the renderer so it can collapse the macOS
-  // traffic-light insets (sidebar header, top-bar padding, drag strip) while
-  // the lights are auto-hidden in native fullscreen.
-  const sendFullscreenState = () => {
-    if (!window.isDestroyed()) {
-      window.webContents.send('app.fullscreen', window.isFullScreen())
-    }
-  }
-  window.on('enter-full-screen', sendFullscreenState)
-  window.on('leave-full-screen', sendFullscreenState)
-
   window.on('close', (event) => {
     if (isAppQuitting()) {
       return
@@ -526,7 +536,22 @@ export function openMainWindow(options: OpenMainWindowOptions): BrowserWindow {
 }
 
 export function setMainWindowProductReloadTarget(window: BrowserWindow): void {
+  if (getAppWindowContext(window)?.secondary) return
   setReloadTarget(window, resolveMainRendererTarget('/'))
+}
+
+export function openAppWindow(
+  source: BrowserWindow,
+  target: AppWindowTarget,
+  position?: { x: number; y: number }
+): BrowserWindow {
+  const bounds = source.getBounds()
+  return createMainWindow({
+    icon: productWindowIcon,
+    initialPath: appWindowPath(target),
+    target,
+    position: position ?? { x: bounds.x + 28, y: bounds.y + 28 }
+  })
 }
 
 export function openOrFocusMainWindow(options: OpenMainWindowOptions): BrowserWindow {

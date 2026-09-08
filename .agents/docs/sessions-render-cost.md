@@ -35,3 +35,33 @@ this page is the full text of the rules summarised there.
   shown as base fallback, but must not be copied or labeled as current. The
   mobile bottom `SessionInfoBar` omits branch information; desktop keeps it.
 
+## Multiple renderers and navigation visibility
+
+Electron main's `app-windows.ts` assigns one background owner per workspace in
+registration order and publishes context changes on registration, workspace
+change, and destruction. `WorkspaceBackground` uses that assignment for completion
+notifications, badges, task status and auto-archive watchers, subject to their
+existing capability gates. Ownership is not OS focus: a hidden but registered
+primary window can remain owner. Closing it only transfers ownership if it is
+destroyed, rather than hidden by the platform's primary-window close policy.
+
+`RuntimeProvider` gives auxiliary renderers separate Repo, cursor and eager-sync
+high-water cache namespaces, without changing workspace identity, transport
+topology or CLI ownership. Each renderer still owns its active conversation runtime.
+For desktop eager prefetch, the activity port requires background ownership AND
+effective navigation-sidebar visibility; the coordinator also checks document
+visibility. Activity changes pause/resume prefetch without rebuilding the runtime.
+
+Main-layout task-index sync remains mounted while Tasks is enabled and the workspace
+is ready, including collapsed navigation, Zen and auxiliary windows. The same index
+feeds the Tasks list/board, open task tabs and status watcher; unmounting it clears
+those shared projections and is not a sidebar-only optimization. Workspace changes
+and disabling Tasks still release the index. The command palette mounts subscriptions
+only while open. Current conversation updates and execution remain live. The right
+panel's mounted-but-hidden contract is separate from left navigation visibility;
+its consumers still need their own visibility gates.
+
+See the [source constraints](../../packages/components/src/AGENTS.md#desktop-windows)
+and [decision record](../notes/implemented/architecture/2026-09-06-desktop-multi-window.md).
+Reduced subscription/prefetch scope is established by the implementation, not a
+measured memory or CPU savings figure.

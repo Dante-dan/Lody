@@ -1,10 +1,13 @@
 import { BrowserWindow, type IpcMainInvokeEvent } from 'electron'
+import { getAppWindowContext } from '../app-windows'
 
 export function assertMainWindowSender(
   event: IpcMainInvokeEvent,
   getMainWindow: () => BrowserWindow | null
 ): void {
-  const mainWindow = getMainWindow()
+  const senderWindow = BrowserWindow.fromWebContents(event.sender)
+  const mainWindow =
+    senderWindow && getAppWindowContext(senderWindow) ? senderWindow : getMainWindow()
   const senderUrl = event.senderFrame?.url
   const devRendererUrl = process.env['ELECTRON_RENDERER_URL']
   let hasAllowedUrl = false

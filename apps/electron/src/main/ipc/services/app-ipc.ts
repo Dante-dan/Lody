@@ -1,6 +1,15 @@
 import { access } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { BrowserWindow, nativeTheme, shell, systemPreferences } from 'electron'
+import { BrowserWindow, nativeTheme, shell, systemPreferences, screen } from 'electron'
+import {
+  appWindows,
+  getAppWindowContext,
+  requireAppWindow,
+  updateAppWindowWorkspace
+} from '../../app-windows'
+import { parseAppWindowTarget, isOutsideAppWindows } from '../../app-window-target'
+import { openAppWindow } from '../../window'
+import { beginSessionWindowDrag, finishSessionWindowDrag } from '../../session-window-drag'
 import { getIpcContext, IpcMethod, IpcService } from 'electron-ipc-decorator'
 import {
   GLOBAL_SHORTCUT_DEFAULTS,
@@ -90,6 +99,59 @@ export function installNativeThemeWatch(): void {
 
 export class AppIpc extends IpcService {
   static override readonly groupName = 'app'
+
+  @IpcMethod()
+  async getWindowContext() {
+    return getAppWindowContext(requireAppWindow(getIpcContext().event))!
+  }
+
+  @IpcMethod()
+  async updateWindowWorkspace(slug: string | null) {
+    if (slug !== null) parseAppWindowTarget({ workspaceSlug: slug })
+    updateAppWindowWorkspace(requireAppWindow(getIpcContext().event), slug)
+  }
+
+  @IpcMethod()
+  async openWindow(raw: unknown) {
+    const source = requireAppWindow(getIpcContext().event)
+    const target = parseAppWindowTarget(raw)
+    return { id: openAppWindow(source, target).id }
+  }
+
+  @IpcMethod()
+  async beginSessionDrag(raw: unknown) {
+    const source = requireAppWindow(getIpcContext().event)
+    const target = parseAppWindowTarget(raw)
+    if (!target.sessionId) throw new Error('Session required')
+    return beginSessionWindowDrag(source, target)
+  }
+
+  @IpcMethod()
+  async finishSessionDrag(token: string, released: boolean) {
+    const source = requireAppWindow(getIpcContext().event)
+    const target = finishSessionWindowDrag(source, token, released === true)
+    if (!target) return { opened: false }
+    const point = screen.getCursorScreenPoint()
+    if (
+      !isOutsideAppWindows(
+        point,
+        appWindows()
+          .filter((w) => w.isVisible())
+          .map((w) => w.getBounds())
+      )
+    )
+      return { opened: false }
+    openAppWindow(source, target, { x: point.x - 120, y: point.y - 20 })
+    return { opened: true }
+  }
+
+  @IpcMethod()
+  async closeOtherWindowsForReset() {
+    const source = requireAppWindow(getIpcContext().event)
+    // The caller has already confirmed the app-level reset. Destroying the other
+    // renderers releases their IndexedDB connections before the boot-time clear.
+    for (const window of appWindows()) if (window !== source) window.destroy()
+  }
 
   @IpcMethod()
   async getFullscreen() {
@@ -246,6 +308,10 @@ export class AppIpc extends IpcService {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) {
       return { ok: false as const, error: 'unknown_window' }
+    }
+    if (!getAppWindowContext(win)?.backgroundOwner) {
+      getIpcServiceDeps().windowBadgeService.clearWindow(win.id)
+      return { ok: true as const }
     }
     getIpcServiceDeps().windowBadgeService.setBadge(win.id, badge)
     return { ok: true as const }

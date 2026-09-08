@@ -66,11 +66,12 @@ only tells global dispatch to yield for events originating in its subtree.
 - Cmd/Ctrl+W is a native menu accelerator, not a registry command. Do not restore a
   `role: 'close'` accelerator and do not bind `$mod+w` in the renderer. Main
   `closeFocusedTabOrWindow` closes DevTools, then broadcasts
-  `close-current-tab-or-window` to the main window. The shell
+  `close-current-tab-or-window` to the focused product window. The shell
   (`desktop-tab-or-window-close.ts`) asks the top tab closer; session-detail
   registers one. No closer (Chat Landing and other surfaces) closes the
   BrowserWindow. The main-process `close` handler still hides on macOS instead of
-  quitting. The chord is not listed or rebindable in keyboard settings.
+  quitting; auxiliary windows close normally, including a lone parent conversation.
+  The chord is not listed or rebindable in keyboard settings.
 - Commands carry `titleKey`; palette/settings resolve it through i18n at render time.
 - Desktop native Tab handling is in
   `apps/electron/src/renderer/src/native-tab-behavior.ts`.

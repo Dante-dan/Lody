@@ -12,6 +12,7 @@ import {
   useSyncExternalStore,
 } from 'react';
 import { cn } from '@/lib/utils';
+import { isNewWindowGesture } from '@/lib/session-window-actions';
 import { WINDOW_DRAG_EXEMPT_CLASS, WINDOW_DRAG_HEADER_CLASS } from '@/ui/window-drag-region';
 import { useElectronFullscreen } from '@/lib/electron';
 import { Badge } from '@/ui/badge';
@@ -231,7 +232,7 @@ export interface LoroSidebarProps {
 
   labels?: Partial<LoroSidebarLabels>;
 
-  onWorkspaceSelected?: (workspaceId: string) => void;
+  onWorkspaceSelected?: (workspaceId: string, newWindow?: boolean) => void;
   onCreateWorkspaceClicked?: () => void;
   onInviteClicked?: () => void;
   onLinkRepoClicked?: () => void;
@@ -923,7 +924,26 @@ export const LoroSidebar = memo(function LoroSidebar({
                       onValueChange={(value) => onWorkspaceSelected?.(value)}
                     >
                       {workspaces.map((ws) => (
-                        <DropdownMenuRadioItem key={ws.id} value={ws.id} className="gap-2">
+                        <DropdownMenuRadioItem
+                          key={ws.id}
+                          value={ws.id}
+                          className="gap-2"
+                          onClick={(event) => {
+                            if (isNewWindowGesture(event)) {
+                              event.preventDefault();
+                              onWorkspaceSelected?.(ws.id, true);
+                            }
+                          }}
+                          onKeyDown={(event) => {
+                            if (
+                              (event.key === 'Enter' || event.key === ' ') &&
+                              isNewWindowGesture(event)
+                            ) {
+                              event.preventDefault();
+                              onWorkspaceSelected?.(ws.id, true);
+                            }
+                          }}
+                        >
                           <WorkspaceAvatar
                             workspace={{ name: ws.name, logo: ws.logo }}
                             className="h-5 w-5 shrink-0 text-[10px]"

@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { startSessionMentionDrag } from '@/lib/session-mention-drag';
+import { handleSessionWindowGesture } from '@/lib/session-window-actions';
+import { SessionWindowMenuItem } from './session-window-menu-item';
 import { useSidebarKeyboardNav } from '@/hooks/use-sidebar-keyboard-nav';
 import { useLocation, useRouter } from '@tanstack/react-router';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
@@ -673,7 +675,9 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
       data-menu-open={rowMenuOpen ? '' : undefined}
       // Drag a conversation onto a chat surface to mention it there.
       draggable
-      onDragStart={(event) => startSessionMentionDrag(event, { sessionId: session.id, title })}
+      onDragStart={(event) =>
+        startSessionMentionDrag(event, { sessionId: session.id, title, detach: true })
+      }
       className={cn(
         'group w-full rounded-md px-2 text-left',
         'py-1',
@@ -687,11 +691,13 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
           ? 'text-sidebar-selection-foreground'
           : 'text-sidebar-foreground dark:text-sidebar-foreground/75'
       )}
-      onClick={() => {
+      onClick={(event) => {
+        if (handleSessionWindowGesture(event, session.id)) return;
         onNavigate(session.id);
       }}
       onKeyDown={(event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
+        if (handleSessionWindowGesture(event, session.id)) return;
         event.preventDefault();
         onNavigate(session.id);
       }}
@@ -759,6 +765,7 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
     <ContextMenu onOpenChange={setRowMenuOpen}>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
+        <SessionWindowMenuItem sessionId={session.id} />
         <SessionRowOpenedByMenuItems
           opener={openedByOpener}
           goToOpener={
@@ -2719,10 +2726,18 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
   }, [t]);
 
   const handleWorkspaceSelected = useCallback(
-    (nextWorkspaceId: string) => {
+    (nextWorkspaceId: string, newWindow = false) => {
       const target = (organizations ?? []).find((org) => org.id === nextWorkspaceId);
       const slug = target?.slug;
       if (!slug) {
+        return;
+      }
+      if (newWindow && getIpcServices()) {
+        void getIpcServices()!
+          .app.openWindow({ workspaceSlug: slug })
+          .catch(() => {
+            toast.error(t('sessions.contextMenu.openWindowFailed'));
+          });
         return;
       }
       writePreferredWorkspaceSlug(slug);
@@ -2734,7 +2749,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       closeMobileDrawer();
       void router.navigate({ to: '/$workspaceName/chat', params: { workspaceName: slug } });
     },
-    [closeMobileDrawer, organizations, router, setWorkspaceContext, switchOrganization]
+    [closeMobileDrawer, organizations, router, setWorkspaceContext, switchOrganization, t]
   );
 
   const labels: Partial<LoroSidebarLabels> = useMemo(() => {

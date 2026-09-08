@@ -4,6 +4,44 @@ import { SessionList } from '@/components/session-list';
 import type { SessionListProps } from '@/components/session-list';
 import { sidebarCollapsedOpenedBySessionsAtom } from '@/atoms/focus-layer';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { jotaiStore } from '@/lib/utils';
+import { currentWorkspaceSlugAtom } from '@/atoms/workspace-context';
+
+function DesktopWindowDemo(args: SessionListProps) {
+  const [ready, setReady] = useState(false);
+  const [target, setTarget] = useState('');
+  useEffect(() => {
+    const electron = Object.getOwnPropertyDescriptor(window, '__LODY_ELECTRON__');
+    const ipc = Object.getOwnPropertyDescriptor(window, 'ipc');
+    const slug = jotaiStore.get(currentWorkspaceSlugAtom);
+    jotaiStore.set(currentWorkspaceSlugAtom, 'demo');
+    Object.defineProperty(window, '__LODY_ELECTRON__', { configurable: true, value: true });
+    Object.defineProperty(window, 'ipc', {
+      configurable: true,
+      value: {
+        invoke: async (channel: string, input: unknown) => {
+          if (channel === 'app.openWindow') setTarget(JSON.stringify(input));
+          return channel === 'app.getFullscreen' ? false : { id: 2 };
+        },
+        on: () => () => {},
+      },
+    });
+    setReady(true);
+    return () => {
+      if (electron) Object.defineProperty(window, '__LODY_ELECTRON__', electron);
+      else Reflect.deleteProperty(window, '__LODY_ELECTRON__');
+      if (ipc) Object.defineProperty(window, 'ipc', ipc);
+      else Reflect.deleteProperty(window, 'ipc');
+      jotaiStore.set(currentWorkspaceSlugAtom, slug);
+    };
+  }, []);
+  return ready ? (
+    <div>
+      <TaskListDemo {...args} />
+      <output aria-label="Window request">{target}</output>
+    </div>
+  ) : null;
+}
 
 const meta = {
   title: 'Components/SessionList',
@@ -252,6 +290,11 @@ const DEFAULT_ARGS: SessionListProps = {
 export const Default: Story = {
   args: DEFAULT_ARGS,
   render: (args) => <TaskListDemo {...args} />,
+};
+
+export const DesktopWindowActions: Story = {
+  args: DEFAULT_ARGS,
+  render: (args) => <DesktopWindowDemo {...args} />,
 };
 
 export const Loading: Story = {

@@ -7,6 +7,12 @@ import {
 } from '@lody/shared/electron-ipc'
 import { assertMainWindowSender } from '../assert-sender'
 import { getIpcServiceDeps } from '../ipc-service-deps'
+import {
+  appWindows,
+  getAppWindowContext,
+  requireAppWindow,
+  updateAppWindowWorkspace
+} from '../../app-windows'
 
 function assertAuthSender(): void {
   const { event } = getIpcContext()
@@ -33,7 +39,10 @@ export class AuthIpc extends IpcService {
   @IpcMethod()
   async signOut() {
     assertAuthSender()
+    const source = requireAppWindow(getIpcContext().event)
     await getIpcServiceDeps().authService.signOut()
+    for (const window of appWindows()) if (window !== source) window.destroy()
+    updateAppWindowWorkspace(source, null)
   }
 
   @IpcMethod()
@@ -51,7 +60,11 @@ export class AuthIpc extends IpcService {
   @IpcMethod()
   async getActiveOrganization(options?: unknown) {
     assertAuthSender()
-    return await getIpcServiceDeps().authService.getActiveOrganization(options)
+    const slug = getAppWindowContext(requireAppWindow(getIpcContext().event))?.workspaceSlug
+    return await getIpcServiceDeps().authService.getActiveOrganization(
+      options,
+      slug ? { organizationSlug: slug } : undefined
+    )
   }
 
   @IpcMethod()
@@ -141,7 +154,19 @@ export class AuthIpc extends IpcService {
   @IpcMethod()
   async setActive(payload: unknown) {
     assertAuthSender()
-    return await getIpcServiceDeps().authService.organizationSetActive(payload)
+    const source = requireAppWindow(getIpcContext().event)
+    const organizationId =
+      payload && typeof payload === 'object' && 'organizationId' in payload
+        ? payload.organizationId
+        : null
+    if (typeof organizationId !== 'string' || !organizationId)
+      throw new Error('Invalid organization id')
+    const result = await getIpcServiceDeps().authService.getActiveOrganization(payload, {
+      organizationId
+    })
+    if (result.data && !Array.isArray(result.data) && result.data.slug && !result.error)
+      updateAppWindowWorkspace(source, result.data.slug)
+    return result
   }
 
   @IpcMethod()
