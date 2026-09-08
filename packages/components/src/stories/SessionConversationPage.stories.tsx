@@ -930,17 +930,21 @@ const buildHistory = (
 const toStreamItems = (sessionId: SessionId, messages: SessionHistoryParsed[]) =>
   messages.map((message) => ({ type: 'message', sessionId, message }) as const);
 
-const renderMessageRow = ({
-  message,
-  sessionId,
-}: {
-  message: SessionHistoryParsed;
-  sessionId: SessionId;
-}) => (
+const renderMessageRow = (
+  {
+    message,
+    sessionId,
+  }: {
+    message: SessionHistoryParsed;
+    sessionId: SessionId;
+  },
+  showSenderIdentity = false
+) => (
   <MessageRowView
     message={message}
     sessionId={sessionId}
     user={message.userId ? usersById[message.userId] : undefined}
+    showSenderIdentity={showSenderIdentity}
     capacityRetry={
       message.id === 'capacity-failure'
         ? {
@@ -1411,7 +1415,7 @@ function StoryShell({
                           <SessionChatStreamView
                             sessionId={session.id}
                             items={toStreamItems(session.id, history)}
-                            renderMessageRow={renderMessageRow}
+                            renderMessageRow={(row) => renderMessageRow(row, showCollaborators)}
                             className="h-full"
                             agentActivityLabel={
                               isWorking

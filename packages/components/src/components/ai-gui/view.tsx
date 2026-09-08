@@ -1829,6 +1829,7 @@ export const MessageRowView = memo(function MessageRowView({
   message,
   sessionId,
   user,
+  showSenderIdentity = false,
   onNavigateSession,
   onEdit,
   onResendUndelivered,
@@ -1842,6 +1843,7 @@ export const MessageRowView = memo(function MessageRowView({
   onResendUndelivered?: (userTurnId: string, inputBlocks: SessionInputBlock[]) => Promise<boolean>;
   capacityRetry?: CapacityRetryControl;
   user?: SessionChatUser;
+  showSenderIdentity?: boolean;
   conversationFontSize?: ConversationFontSize;
 }) {
   const { i18n } = useTranslation();
@@ -1872,6 +1874,7 @@ export const MessageRowView = memo(function MessageRowView({
         message={message}
         sessionId={sessionId}
         user={user}
+        showSenderIdentity={showSenderIdentity}
         timestampLabel={timestampLabel}
         hasWideContent={hasWideContent}
         conversationFontSize={conversationFontSize}
@@ -2688,6 +2691,7 @@ const UserMessageRowView = ({
   message,
   sessionId,
   user,
+  showSenderIdentity,
   timestampLabel,
   hasWideContent,
   conversationFontSize,
@@ -2697,6 +2701,7 @@ const UserMessageRowView = ({
   message: SessionHistoryParsed;
   sessionId: SessionId;
   user?: SessionChatUser;
+  showSenderIdentity: boolean;
   timestampLabel: string;
   hasWideContent: boolean;
   conversationFontSize: ConversationFontSize;
@@ -2801,7 +2806,7 @@ const UserMessageRowView = ({
   return (
     <div className={cn('flex w-full flex-row-reverse', isMobile ? 'gap-2 pl-7' : 'gap-2.5')}>
       <div className="mt-0.5 shrink-0 text-muted-foreground">
-        <UserMessageAuthorAvatar user={user} isMobile={isMobile} />
+        <UserMessageAuthorAvatar user={user} isMobile={isMobile} showProfile={showSenderIdentity} />
       </div>
       <div
         className={cn(
@@ -2813,7 +2818,7 @@ const UserMessageRowView = ({
           className="flex flex-row-reverse items-center gap-1.5 text-[11px] text-muted-foreground"
           data-testid="user-message-metadata"
         >
-          {user?.name ? (
+          {showSenderIdentity && user?.name ? (
             <span className="max-w-40 truncate font-medium text-foreground/70" title={user.name}>
               {user.name}
             </span>
@@ -3015,9 +3020,11 @@ const UserMessageRowView = ({
 function UserMessageAuthorAvatar({
   user,
   isMobile,
+  showProfile,
 }: {
   user?: SessionChatUser;
   isMobile: boolean;
+  showProfile: boolean;
 }) {
   const { t } = useTranslation();
   const displayName = user?.name?.trim() || user?.email?.trim();
@@ -3025,7 +3032,7 @@ function UserMessageAuthorAvatar({
     <UserAvatar user={user} className={cn(isMobile ? 'h-7 w-7' : 'h-8 w-8')} showIcon />
   );
 
-  if (isMobile || !displayName) {
+  if (isMobile || !showProfile || !displayName) {
     return avatar;
   }
 

@@ -11,7 +11,7 @@ the reasoning behind those rules.
 | Area      | Owner                                            | Contract                                                                          |
 | --------- | ------------------------------------------------ | --------------------------------------------------------------------------------- |
 | Stream    | `view.tsx`, `build-chat-stream-items.ts`         | Stable Virtua rows and scroll.                                                    |
-| User rows | `view.tsx`                                       | Sender metadata and desktop profile.                                              |
+| User rows | `view.tsx`                                       | Multi-member sender metadata and desktop profile.                                 |
 | Turns     | `assistant-turn-render-blocks.ts`                | Activity groups and foldable segments.                                            |
 | Outline   | `conversation-outline-*`                         | Round ticks and navigation.                                                       |
 | Selection | [`message-selection.tsx`](message-selection.tsx) | Temporary message selection, drag rectangle, range modifiers, and edge scrolling. |

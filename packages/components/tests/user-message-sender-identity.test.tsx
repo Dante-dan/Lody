@@ -49,7 +49,12 @@ describe('user message sender identity', () => {
           createElement(
             ForceDesktopLayoutProvider,
             null,
-            createElement(MessageRowView, { message, sessionId, user })
+            createElement(MessageRowView, {
+              message,
+              sessionId,
+              user,
+              showSenderIdentity: true,
+            })
           )
         )
       );
@@ -82,5 +87,31 @@ describe('user message sender identity', () => {
 
     expect(document.body.textContent).toContain('Maya Chen');
     expect(document.body.textContent).toContain('maya.chen@example.com');
+  });
+
+  it('keeps sender identity hidden when the workspace has one member', async () => {
+    await act(async () => {
+      root?.render(
+        createElement(
+          JotaiProvider,
+          null,
+          createElement(
+            ForceDesktopLayoutProvider,
+            null,
+            createElement(MessageRowView, {
+              message,
+              sessionId,
+              user,
+              showSenderIdentity: false,
+            })
+          )
+        )
+      );
+    });
+
+    expect(
+      container?.querySelector('[data-testid="user-message-metadata"]')?.textContent
+    ).not.toContain('Maya Chen');
+    expect(container?.querySelector('button[aria-label="View profile for Maya Chen"]')).toBeNull();
   });
 });
