@@ -43,6 +43,17 @@ That tolerance must not authorize creating new malformed items locally.
   complete item parsing. Invalid new metadata rejects the command before any write.
 - Accepted steer provenance survives both writing and read normalization. Editing and
   resending must not reinterpret a steer as an independently replayable user turn.
+- External imports retain their source hashes and derived ids. A separate versioned
+  stored-content baseline records the writer's actual result in the document cursor.
+  Compare existing role/items/plan exactly against that baseline; never sanitize old
+  content to make it match. Without a baseline, compare exact legacy source hashes.
+  A local deletion is a conflict, not permission to restore deleted turns automatically.
+  Baselines are bound to their own cursor's source hashes, never an independently newer
+  metadata digest. Explicit conflict replacement records a fresh baseline.
+
+This adds optional cursor metadata, not a body migration. Old readers can ignore it;
+old importers do not understand the stored baseline and may still report conflicts
+on projected history. This is not arbitrary downgrade safety.
 
 ## Limits and review questions
 
@@ -63,5 +74,6 @@ Non-history control-field validation remains outside this HistoryWriter contract
 - `packages/shared/tests/history-writer.test.ts` and `history-writer.contract.ts`
 - [Decision](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.md)
 - [Business-field repair and pending hash decision](../.agents/notes/implemented/bug-fix/2026-09-08-history-writer-business-fields.md)
+- [Imported-history baseline repair](../.agents/notes/implemented/bug-fix/2026-09-08-imported-history-baseline.md)
 
 Draft for human review; implementation and passing tests do not grant Spec approval.

@@ -69,3 +69,6 @@ requires an explicit decision. No such format change is included in these repair
 
 Contract: [draft Spec](../../../../specs/session-history-writes.md).
 PR: [#460](https://github.com/LodyAI/Lody/pull/460).
+
+The subsequent [stored-history baseline repair](2026-09-08-imported-history-baseline.md)
+resolves the pending hash issue above without changing legacy source hashes or bodies.

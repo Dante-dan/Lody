@@ -34,6 +34,16 @@ Translation: current
 - 已接受的 steer 标记在写入和读取归一化后都必须保留；编辑重发不能把 steer
   当作可独立重放的普通用户轮次。
 
+## 外部导入的内容基线
+
+来源 hash 和据此生成的 id 保持不变；文档 cursor 另存带版本的实际写入内容基线。
+刷新时精确比较已有 role/items/plan，不把旧内容裁剪后再比较。没有基线时仍严格比较
+旧来源 hash；用户删除旧轮次应视作冲突，而不是自动恢复。基线只绑定同一 cursor 的
+来源 hashes，不采用可能已提前更新的元数据 digest。显式解决冲突后记录新基线。
+
+这会新增可选 cursor 元数据，但不迁移历史正文。旧读取端可忽略新字段；旧导入器
+不理解基线，仍可能对已裁剪的历史报告冲突，因此不是任意降级安全保证。
+
 ## 边界与待审事项
 
 这不是任意跨版本兼容或 reader 安全的证明。TypeScript 无法保证不可信输入、字符串语义约束，
@@ -50,5 +60,6 @@ Translation: current
 - `packages/shared/tests/history-writer.test.ts` 与 `history-writer.contract.ts`
 - [决策记录](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.zh.md)
 - [业务字段修复与待定 hash 决策](../.agents/notes/implemented/bug-fix/2026-09-08-history-writer-business-fields.zh.md)
+- [外部历史基线修复](../.agents/notes/implemented/bug-fix/2026-09-08-imported-history-baseline.zh.md)
 
 这是供人工审阅的草稿；实现和测试通过不代表 Spec 已获批准。

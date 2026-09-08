@@ -2529,6 +2529,24 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
     }));
   }
 
+  /** No async gap between the guarded history write, its stored snapshot and cursor. */
+  async updateHistoryAndCursor(
+    update: (
+      history: SessionHistoryInput[],
+      cursor: SessionExternalHistoryCursorDocState | undefined
+    ) => SessionHistoryInput[],
+    createCursor: (stored: SessionHistoryInput[]) => SessionExternalHistoryCursorDocState
+  ): Promise<void> {
+    if (!this.mirror) throw new Error('Mirror not initialized');
+    const mirror = this.mirror;
+    mirror.historyWriter.update((history) =>
+      update(history, mirror.getState().externalHistoryCursor)
+    );
+    // Capture immediately, before an awaited caller could observe a peer/local edit.
+    const cursor = createCursor(mirror.historyWriter.capture().history);
+    mirror.setState({ externalHistoryCursor: cursor });
+  }
+
   /**
    * Get the plan from the latest assistant entry in history.
    * Plan is now stored per-turn on each history entry, not at the root level.
