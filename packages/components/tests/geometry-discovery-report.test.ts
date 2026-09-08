@@ -56,7 +56,7 @@ function renderVisualReport(captures: readonly { captureId: string; atoms: reado
   };
 }
 
-function column(lefts: readonly number[]): ReportAtom[] {
+function column(lefts: readonly number[], scopes?: readonly string[]): ReportAtom[] {
   return lefts.map((left, index) => ({
     id: `atom-${index}`,
     label: `Item ${index}`,
@@ -65,6 +65,7 @@ function column(lefts: readonly number[]): ReportAtom[] {
     xEnd: left + 24,
     yStart: index * 80,
     yEnd: index * 80 + 24,
+    ...(scopes ? { scope: scopes[index] } : {}),
   }));
 }
 
@@ -145,4 +146,39 @@ it('bounds isolated candidates per capture without touching peer-supported ones 
   report.showMore();
   report.showMore();
   expect(report.cards()).toHaveLength(withheld);
+});
+
+it('marks a candidate whose witnesses come from another section, and can hide it', () => {
+  // Scope stays out of MINING — grouping on it would file two code paths into
+  // different families and hide the defect that correlates with them. But a
+  // reader triaging the queue needs to know whether the comparison held still
+  // inside one section, because a delta measured against another section is
+  // usually the distance between two unrelated boxes rather than an error.
+  const atoms = column(
+    [100, 100, 100, 140, 100, 100],
+    ['side-panel', 'side-panel', 'side-panel', 'composer', 'side-panel', 'side-panel']
+  );
+  const report = renderVisualReport([{ captureId: 'mixed', atoms }]);
+
+  expect(report.summaries().length).toBeGreaterThan(0);
+  expect(report.summaries().every((summary) => summary.includes('跨区域'))).toBe(true);
+
+  const filter = document.querySelector<HTMLSelectElement>('#visual-evidence-filter')!;
+  filter.value = 'same-scope';
+  filter.dispatchEvent(new Event('change'));
+  expect(report.cards()).toHaveLength(0);
+});
+
+it('leaves a candidate unmarked when every witness shares its section', () => {
+  const atoms = column([100, 100, 100, 140, 100, 100], Array.from({ length: 6 }, () => 'side-panel'));
+  const report = renderVisualReport([{ captureId: 'single', atoms }]);
+
+  expect(report.summaries().length).toBeGreaterThan(0);
+  expect(report.summaries().some((summary) => summary.includes('跨区域'))).toBe(false);
+
+  const before = report.cards().length;
+  const filter = document.querySelector<HTMLSelectElement>('#visual-evidence-filter')!;
+  filter.value = 'same-scope';
+  filter.dispatchEvent(new Event('change'));
+  expect(report.cards()).toHaveLength(before);
 });

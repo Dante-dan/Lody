@@ -449,6 +449,14 @@
         font-size: 13px;
         overflow-wrap: anywhere;
       }
+      .visual-cross-scope {
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        padding: 0 6px;
+        margin-left: 4px;
+        font-size: 11px;
+        color: var(--text-muted);
+      }
       /* Folded measurements are subordinate evidence, not another card. */
       .visual-candidates .visual-measurements {
         padding: 0 0 0 12px;
@@ -613,6 +621,7 @@
           >Evidence
           <select id="visual-evidence-filter">
             <option value="review">Review queue · peer ≥ 2 + top singletons</option>
+            <option value="same-scope">Review queue · 仅同区域见证</option>
             <option value="all">All raw deviations</option>
           </select></label
         >
@@ -652,12 +661,20 @@
       const rawVisualCandidates = visualCaptures
         .flatMap((capture) => {
           const atoms = new Map(capture.atoms.map((atom) => [atom.id, atom]));
-          return capture.deviations.map((deviation) => ({
-            capture,
-            deviation,
-            atom: atoms.get(deviation.atomId),
-            atoms,
-          }));
+          return capture.deviations.map((deviation) => {
+            const atom = atoms.get(deviation.atomId);
+            // Section scope is REPORT EVIDENCE, never a grouping input — mining
+            // stays DOM-blind, because a defect correlates with the structural
+            // difference and grouping on it hides the bug. But a reader triaging
+            // the queue is asking a question mining cannot: is this comparison
+            // between things that belong together? A candidate measured against
+            // witnesses from another section is usually two unrelated boxes that
+            // render alike, and its delta is the distance between them rather
+            // than an error. Saying so costs nothing and answers it at a glance.
+            const witnesses = [...deviation.dominantAtomIds, ...deviation.peerAtomIds];
+            const crossScope = witnesses.some((id) => atoms.get(id)?.scope !== atom?.scope);
+            return { capture, deviation, atom, atoms, crossScope };
+          });
         })
         .sort((a, b) => b.deviation.score - a.deviation.score);
       const rankVisualCandidates = (candidates) =>
@@ -713,7 +730,7 @@
       );
       const visualCandidates = rankVisualCandidates(rawVisualCandidates);
       document.getElementById('visual-summary').textContent =
-        `${visualCaptures.length} captures · ${visualCaptures.reduce((sum, capture) => sum + capture.atoms.length, 0)} atoms · ${reviewVisualCandidates.length} review candidates / ${foldedVisualCandidates.length} grouped / ${visualCandidates.length} raw deviations · 孤立候选每 capture 上限 ${VISUAL_SINGLETON_REVIEW_BUDGET} 条 · 每个 capture 独立计算，尚未跨 capture 确认`;
+        `${visualCaptures.length} captures · ${visualCaptures.reduce((sum, capture) => sum + capture.atoms.length, 0)} atoms · ${reviewVisualCandidates.length} review candidates（其中 ${reviewVisualCandidates.filter((candidate) => !candidate.crossScope).length} 条见证全在同一区域）/ ${foldedVisualCandidates.length} grouped / ${visualCandidates.length} raw deviations · 孤立候选每 capture 上限 ${VISUAL_SINGLETON_REVIEW_BUDGET} 条 · 每个 capture 独立计算，尚未跨 capture 确认`;
       const visualList = document.getElementById('visual-candidates');
       const px = (value) => `${Number(value.toFixed(2))}px`;
       function appendVisualCandidate({
@@ -722,12 +739,22 @@
         atom,
         atoms,
         rank,
+        crossScope,
         measurements = [deviation],
       }) {
         const card = document.createElement('details');
         const heading = document.createElement('summary');
         const signedDelta = deviation.value - deviation.expected;
         heading.textContent = `#${rank} ${atom.label} · ${deviation.axis}-${deviation.measure} · ${signedDelta >= 0 ? '+' : ''}${px(signedDelta)} · ${capture.captureId}`;
+        if (crossScope) {
+          // Not a verdict: a cross-section comparison can be the real catch this
+          // pass exists for, two code paths rendering one thing differently. It
+          // is just the fact a reader needs before reading the number.
+          const marker = document.createElement('span');
+          marker.className = 'visual-cross-scope';
+          marker.textContent = '跨区域';
+          heading.append(' ', marker);
+        }
         card.append(heading);
         // Materialize images only on expansion; retain every ranked candidate.
         card.addEventListener('toggle', () => {
@@ -842,8 +869,15 @@
       }
       visualMore.addEventListener('click', showMoreVisualCandidates);
       const updateVisualCandidates = () => {
+        // The same queue, narrowed by whether the comparison stayed inside one
+        // section. Ranking is untouched: this is the reader choosing what to
+        // read, not structure deciding what scores.
         const candidates =
-          evidenceFilter.value === 'all' ? visualCandidates : reviewVisualCandidates;
+          evidenceFilter.value === 'all'
+            ? visualCandidates
+            : evidenceFilter.value === 'same-scope'
+              ? reviewVisualCandidates.filter((candidate) => !candidate.crossScope)
+              : reviewVisualCandidates;
         selectedVisualCandidates = candidates.filter(
           ({ capture }) => !captureFilter.value || capture.captureId === captureFilter.value
         );
