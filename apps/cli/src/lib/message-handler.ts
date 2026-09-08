@@ -3074,8 +3074,8 @@ export class MessageHandler {
       deferredOperations: {
         stop: (sessionId, sourceTurnId) =>
           this.operationCoordinator.deferSessionDeliveries(sessionId, sourceTurnId),
-        startInput: (sessionId, userTurnId, userId, stopVersion) =>
-          this.operationCoordinator.startDeferredInput(sessionId, userTurnId, userId, stopVersion),
+        startInput: (sessionId, userTurnId, userId) =>
+          this.operationCoordinator.startDeferredInput(sessionId, userTurnId, userId),
       },
       logger: this.logger,
       sessionManager: this.sessionManager,

@@ -142,7 +142,6 @@ describe('LodyOperationStore', () => {
       workspaceId: input.workspaceId,
       sessionId: input.requesterSessionId,
       userTurnId: 'human-next',
-      stopVersion: 1,
       userId: input.requesterUserId,
       workerBootId: 'boot',
     };
@@ -152,8 +151,6 @@ describe('LodyOperationStore', () => {
       for (const id of ['first', 'second'])
         store.finish(input.requesterSessionId, id, { type: 'cancelled' });
       expect(store.startDeferredInput({ ...args, userId: 'other-user' })).toBeUndefined();
-      expect(store.startDeferredInput({ ...args, stopVersion: 0 })).toBeUndefined();
-      expect(store.startDeferredInput({ ...args, stopVersion: undefined })).toBeUndefined();
       const first = store.startDeferredInput(args);
       if (!first) throw new Error('expected deferred input');
       expect(first.operationIds).toEqual(['first', 'second']);
@@ -189,7 +186,6 @@ describe('LodyOperationStore', () => {
       workspaceId: input.workspaceId,
       sessionId: input.requesterSessionId,
       userTurnId: 'human-next',
-      stopVersion: 1,
       userId: input.requesterUserId,
       workerBootId: 'boot',
     };
@@ -214,7 +210,7 @@ describe('LodyOperationStore', () => {
       store.close();
     }
   });
-  it('does not let a user message queued before a second Stop drain its backlog', async () => {
+  it('allows a queued human message to carry ready results after Stop', async () => {
     const store = await makeStore();
     const input = baseInput();
     try {
@@ -228,13 +224,8 @@ describe('LodyOperationStore', () => {
         userTurnId: 'queued',
         userId: input.requesterUserId,
         workerBootId: 'boot',
-        stopVersion: 1,
       };
-      expect(store.getDeliveryStopVersion(input.requesterSessionId)).toBe(2);
-      expect(store.startDeferredInput(args)).toBeUndefined();
-      expect(store.startDeferredInput({ ...args, stopVersion: 2 })?.operationIds).toEqual([
-        input.operationId,
-      ]);
+      expect(store.startDeferredInput(args)?.operationIds).toEqual([input.operationId]);
     } finally {
       store.close();
     }
@@ -266,7 +257,6 @@ describe('LodyOperationStore', () => {
         userTurnId: 'human',
         userId: input.requesterUserId,
         workerBootId: 'boot',
-        stopVersion: 1,
       });
       expect(attached?.operationIds).toEqual(['large-a', 'large-b', 'large-c']);
       expect(Buffer.byteLength(attached?.text ?? '')).toBeLessThanOrEqual(DEFERRED_INPUT_MAX_BYTES);

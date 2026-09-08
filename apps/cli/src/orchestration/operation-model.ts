@@ -8,8 +8,6 @@ import { LODY_MAX_CHAIN_DEPTH } from '@lody/shared';
 export type OrchestrationModelState = {
   deferred: boolean;
   attachedToUser: boolean;
-  queuedInputEligibility: boolean[];
-  activeInputEligible: boolean;
   operation: 'absent' | 'active' | 'finished';
   targetInput: 'absent' | 'missing' | 'retry_scheduled' | 'durable';
   delivery:
@@ -64,8 +62,6 @@ export type OrchestrationModelAction =
 export const initialOrchestrationModelState = (): OrchestrationModelState => ({
   deferred: false,
   attachedToUser: false,
-  queuedInputEligibility: [],
-  activeInputEligible: false,
   operation: 'absent',
   targetInput: 'absent',
   delivery: 'absent',
@@ -85,20 +81,13 @@ export const stepOrchestrationModel = (
   state: OrchestrationModelState,
   action: OrchestrationModelAction
 ): OrchestrationModelState => {
-  const next = { ...state, queuedInputEligibility: [...state.queuedInputEligibility] };
+  const next = { ...state };
   switch (action) {
     case 'user_stop':
       next.deferred = true;
-      next.queuedInputEligibility = next.queuedInputEligibility.map(() => false);
-      next.activeInputEligible = false;
       return stepOrchestrationModel(next, 'interrupt_turn');
     case 'attach_to_user':
-      if (
-        next.activeTurn === 'user' &&
-        next.activeInputEligible &&
-        next.deferred &&
-        next.delivery === 'pending'
-      ) {
+      if (next.activeTurn === 'user' && next.deferred && next.delivery === 'pending') {
         next.delivery = 'started';
         next.deliveryClaimOwner = 'current';
         next.attachedToUser = true;
@@ -151,14 +140,12 @@ export const stepOrchestrationModel = (
         next.progress = 'settled';
       break;
     case 'enqueue_user':
-      if (next.queuedUsers < 2) next.queuedInputEligibility.push(true);
       next.queuedUsers = Math.min(2, next.queuedUsers + 1);
       break;
     case 'schedule':
       if (next.archived || next.activeTurn !== 'none') break;
       if (next.queuedUsers > 0) {
         next.queuedUsers -= 1;
-        next.activeInputEligible = next.queuedInputEligibility.shift() ?? false;
         next.activeTurn = 'user';
       } else if (next.delivery === 'uncertain') {
         next.delivery = 'uncertain_finalizing';

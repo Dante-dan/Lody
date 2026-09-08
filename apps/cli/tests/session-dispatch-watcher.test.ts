@@ -1328,7 +1328,6 @@ describe('SessionDispatchWatcher', () => {
           agentRoleId: 'role-reviewer',
           agentRoleRevision: 7,
           includeDeferredOperationResults: true,
-          deferredOperationStopVersion: 3,
         },
       },
     ];
@@ -1419,7 +1418,6 @@ describe('SessionDispatchWatcher', () => {
           agentRoleId: 'role-reviewer',
           agentRoleRevision: 7,
           includeDeferredOperationResults: true,
-          deferredOperationStopVersion: 3,
         }),
       })
     );
@@ -1434,7 +1432,6 @@ describe('SessionDispatchWatcher', () => {
           agentRoleId: 'role-reviewer',
           agentRoleRevision: 7,
           includeDeferredOperationResults: true,
-          deferredOperationStopVersion: 3,
         }),
       }),
       { dispatchSource: 'queue' }

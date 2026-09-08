@@ -12,7 +12,7 @@ const trace = (...actions: Parameters<typeof stepOrchestrationModel>[1][]) =>
   actions.reduce(stepOrchestrationModel, initialOrchestrationModelState());
 
 describe('Operation delivery executable model', () => {
-  it('does not treat a pre-stop queued message as a new human input', () => {
+  it('allows an already queued human message to carry saved results after Stop', () => {
     const stale = trace(
       'accept',
       'materialize_success',
@@ -22,7 +22,7 @@ describe('Operation delivery executable model', () => {
       'schedule',
       'attach_to_user'
     );
-    expect(stale).toMatchObject({ delivery: 'pending', activeTurn: 'user', attachedToUser: false });
+    expect(stale).toMatchObject({ delivery: 'started', activeTurn: 'user', attachedToUser: true });
   });
   it('holds old work through stop and restart, then supplies it only inside a user turn', () => {
     const held = trace(

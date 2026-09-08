@@ -23,24 +23,23 @@ The real-Mirror regression is in
 
 ## Deferred results
 
-User Stop atomically records held Operations, their source Turns, and a monotonically
-increasing stop version in side tables. An insert trigger also holds late acceptance
+User Stop atomically records held Operations and their source Turns in side tables. An insert trigger also holds late acceptance
 from those sources and their completion Turns; new human sources stay runnable.
 This preserves the existing strict `SELECT *` readers of Operations and Deliveries.
 The gate is rechecked at claim, prepare, and start. Paused work never spends another
 attempt merely because a watcher or restart scanned it.
 
-The renderer freezes the observed stop version and its include/exclude choice into
+The renderer saves the include/exclude choice into
 each human input, through direct dispatch, queue promotion, and steer. The provider
 boundary claims a bounded snapshot of ready held results from the same requester,
 in the same synchronous step as submitting the prompt. Results precede the current
 user instruction as attributed reference data, using the current user config.
-Previously queued inputs have an older version and cannot drain a later Stop.
-Missing/stale versions fail closed until a newly authored input observes the projection.
+An already queued human input may carry ready results when it is submitted after Stop.
+There is no stop counter or authoring-version check.
 
 Results stay in the operation store; existing progress cards keep updating without
 adding completion Turns during pause. The metadata projection contains counts by
-requester and the stop version, never result text or dispatch authority. Equal
+requester, never result text or dispatch authority. Equal
 projections are skipped. Large inputs use bounded result previews, preserving target
 history references and omission metadata; overflow remains pending for a future human
 input rather than scheduling extra prompts. A single input is bounded to 68 KiB.

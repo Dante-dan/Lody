@@ -11,7 +11,6 @@ export type DeferredOperationControl = {
   startInput: (
     sessionId: SessionId,
     userTurnId: string,
-    userId: string,
-    stopVersion?: number
+    userId: string
   ) => DeferredOperationInput | undefined;
 };

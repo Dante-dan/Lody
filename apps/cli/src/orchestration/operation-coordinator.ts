@@ -188,12 +188,7 @@ export class LodyOperationCoordinator {
     void this.wake('user-stop');
   }
 
-  startDeferredInput(
-    sessionId: SessionId,
-    userTurnId: string,
-    userId: string,
-    stopVersion?: number
-  ) {
+  startDeferredInput(sessionId: SessionId, userTurnId: string, userId: string) {
     if (!this.started || this.blockedSessions.has(sessionId)) return undefined;
     const input = this.withStore((store) =>
       store.startDeferredInput({
@@ -202,7 +197,6 @@ export class LodyOperationCoordinator {
         userTurnId,
         userId,
         workerBootId: this.workerBootId,
-        stopVersion,
       })
     );
     if (!input) return undefined;
@@ -457,8 +451,7 @@ export class LodyOperationCoordinator {
         store.getDeferredDeliveryCounts(this.options.workspaceId, sessionId)
       );
       const count = Object.values(counts).reduce((sum, value) => sum + value, 0);
-      const stopVersion = this.withStore((store) => store.getDeliveryStopVersion(sessionId));
-      const projectionKey = `${stopVersion}:${JSON.stringify(counts)}`;
+      const projectionKey = JSON.stringify(counts);
       if (this.projectedDeferredInputs.get(sessionId) === projectionKey) continue;
       try {
         const meta = await this.options.workspaceDocument.repo.getDocMeta(
@@ -470,13 +463,11 @@ export class LodyOperationCoordinator {
           !isLoroRepoDocDeleted(meta) &&
           (meta.meta as SessionMeta).machineId === this.options.machineId &&
           ((meta.meta as SessionMeta).deferredOperationResultCount !== count ||
-            (meta.meta as SessionMeta).deferredOperationStopVersion !== stopVersion ||
             JSON.stringify((meta.meta as SessionMeta).deferredOperationResultCounts) !==
               JSON.stringify(counts))
         ) {
           await this.options.workspaceDocument.repo.upsertDocMeta?.(getSessionRoomId(sessionId), {
             deferredOperationResultCount: count,
-            deferredOperationStopVersion: stopVersion,
             deferredOperationResultCounts: counts,
           });
         }

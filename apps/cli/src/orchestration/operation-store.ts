@@ -480,8 +480,7 @@ export class LodyOperationStore {
         if (!inserted.changes) return;
         this.db
           .prepare(
-            `INSERT INTO operation_delivery_control (workspace_id, requester_session_id, stop_version)
-          VALUES (?, ?, 1) ON CONFLICT(requester_session_id) DO UPDATE SET stop_version = stop_version + 1`
+            `INSERT OR IGNORE INTO operation_delivery_sessions (workspace_id, requester_session_id) VALUES (?, ?)`
           )
           .run(workspaceId, sessionId);
         this.db
@@ -536,7 +535,7 @@ export class LodyOperationStore {
       .parse(
         this.db
           .prepare(
-            `SELECT requester_session_id FROM operation_delivery_control WHERE workspace_id = ?`
+            `SELECT requester_session_id FROM operation_delivery_sessions WHERE workspace_id = ?`
           )
           .all(workspaceId)
       )
@@ -564,13 +563,6 @@ export class LodyOperationStore {
     return Object.fromEntries(rows.map((row) => [row.requester_user_id, row.count]));
   }
 
-  getDeliveryStopVersion(sessionId: SessionId): number {
-    const row = this.db
-      .prepare('SELECT stop_version FROM operation_delivery_control WHERE requester_session_id = ?')
-      .get(sessionId);
-    return row ? z.object({ stop_version: z.number() }).parse(row).stop_version : 0;
-  }
-
   /** Called synchronously at the provider submission boundary; no history/network awaits. */
   startDeferredInput(args: {
     workspaceId: WorkspaceId;
@@ -578,7 +570,6 @@ export class LodyOperationStore {
     userTurnId: string;
     userId: string;
     workerBootId: string;
-    stopVersion?: number;
   }): { text: string; claimId: string; operationIds: string[]; userTurnId: string } | undefined {
     // Most prompts have no stopped work. Do not take the machine-wide SQLite writer lock for them.
     if (
@@ -592,7 +583,6 @@ export class LodyOperationStore {
       return undefined;
     return this.db
       .transaction(() => {
-        if (args.stopVersion !== this.getDeliveryStopVersion(args.sessionId)) return undefined;
         // A repeated dispatch or a recovered user Turn must never replay an input of unknown outcome.
         if (
           this.db
@@ -1758,10 +1748,9 @@ export class LodyOperationStore {
         source_turn_id TEXT NOT NULL,
         PRIMARY KEY (requester_session_id, source_turn_id)
       );
-      CREATE TABLE IF NOT EXISTS operation_delivery_control (
+      CREATE TABLE IF NOT EXISTS operation_delivery_sessions (
         workspace_id TEXT NOT NULL,
-        requester_session_id TEXT PRIMARY KEY,
-        stop_version INTEGER NOT NULL
+        requester_session_id TEXT PRIMARY KEY
       );
       CREATE TABLE IF NOT EXISTS operation_delivery_holds (
         requester_session_id TEXT NOT NULL,
@@ -1835,7 +1824,7 @@ export class LodyOperationStore {
       'table:operation_progress_settlements',
       'table:orchestration_meta',
       'table:operation_stopped_turns',
-      'table:operation_delivery_control',
+      'table:operation_delivery_sessions',
       'table:operation_delivery_holds',
       'table:operation_user_inputs',
       'trigger:operations_insert_delivery_hold',

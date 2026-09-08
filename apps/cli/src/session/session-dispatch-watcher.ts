@@ -1975,7 +1975,6 @@ export class SessionDispatchWatcher {
         taskToolsEnabled: entry.inputConfig?.taskToolsEnabled === true,
         chainDepth: entry.inputConfig?.chainDepth,
         includeDeferredOperationResults: entry.inputConfig?.includeDeferredOperationResults,
-        deferredOperationStopVersion: entry.inputConfig?.deferredOperationStopVersion,
         agentRoleId: entry.inputConfig?.agentRoleId,
         agentRoleRevision: entry.inputConfig?.agentRoleRevision,
         issuePRMentions: entry.inputConfig?.issuePRMentions,
@@ -2022,7 +2021,6 @@ export class SessionDispatchWatcher {
         taskToolsEnabled: entry.inputConfig?.taskToolsEnabled === true,
         chainDepth: entry.inputConfig?.chainDepth,
         includeDeferredOperationResults: entry.inputConfig?.includeDeferredOperationResults,
-        deferredOperationStopVersion: entry.inputConfig?.deferredOperationStopVersion,
         agentRoleId: entry.inputConfig?.agentRoleId,
         agentRoleRevision: entry.inputConfig?.agentRoleRevision,
         issuePRMentions: entry.inputConfig?.issuePRMentions,
@@ -2124,7 +2122,6 @@ export class SessionDispatchWatcher {
         taskToolsEnabled: queuedItem.acpSessionConfig?.taskToolsEnabled === true,
         includeDeferredOperationResults:
           queuedItem.acpSessionConfig?.includeDeferredOperationResults,
-        deferredOperationStopVersion: queuedItem.acpSessionConfig?.deferredOperationStopVersion,
         agentRoleId: queuedItem.acpSessionConfig?.agentRoleId,
         agentRoleRevision: queuedItem.acpSessionConfig?.agentRoleRevision,
         issuePRMentions: queuedItem.acpSessionConfig?.issuePRMentions,

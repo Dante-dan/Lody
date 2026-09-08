@@ -392,8 +392,7 @@ describe('LodyOperationCoordinator', () => {
       const input = harness.coordinator.startDeferredInput(
         harness.requesterSessionId,
         'new-human',
-        'user-1',
-        1
+        'user-1'
       );
       vi.spyOn(LodyOperationStore.prototype, 'settleDeferredInput').mockImplementationOnce(() => {
         throw new Error('temporary store failure');
@@ -424,8 +423,7 @@ describe('LodyOperationCoordinator', () => {
       const input = harness.coordinator.startDeferredInput(
         harness.requesterSessionId,
         'new-human',
-        'user-1',
-        1
+        'user-1'
       );
       expect(input?.text).toContain('review-round-1');
       input?.settle('handled');

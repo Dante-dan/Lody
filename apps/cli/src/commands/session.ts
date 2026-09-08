@@ -1300,7 +1300,6 @@ async function appendUserPromptHistory(args: {
 }
 
 function buildCliHistoryInputConfig(args: {
-  deferredOperationStopVersion?: number;
   prompt: string;
   cliType: SessionMeta['cliType'];
   agentType: SessionMeta['agentType'];
@@ -1324,9 +1323,6 @@ function buildCliHistoryInputConfig(args: {
     taskToolsEnabled: args.taskToolsEnabled === true,
     resume: args.resume,
     chainDepth: args.chainDepth,
-    ...(args.deferredOperationStopVersion !== undefined
-      ? { deferredOperationStopVersion: args.deferredOperationStopVersion }
-      : {}),
   };
 }
 
@@ -3273,9 +3269,6 @@ export async function sendSessionChatResult(
       taskToolsEnabled: effectiveDispatchConfig.taskToolsEnabled,
       resume: session.acpSessionId ?? undefined,
       chainDepth: orchestration?.chainDepth,
-      deferredOperationStopVersion: orchestration
-        ? undefined
-        : session.deferredOperationStopVersion,
     }),
     preallocatedId: orchestration?.userTurnId,
     knownHistory: quotaHistory,

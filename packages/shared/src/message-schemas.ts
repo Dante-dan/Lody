@@ -373,7 +373,6 @@ export const ACPSessionConfigSchema = z
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
     includeDeferredOperationResults: z.boolean().optional(),
-    deferredOperationStopVersion: z.number().int().nonnegative().optional(),
   })
   .passthrough();
 
@@ -396,7 +395,6 @@ const LooseSessionTurnInputConfigSchema = z
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
     includeDeferredOperationResults: z.boolean().optional(),
-    deferredOperationStopVersion: z.number().int().nonnegative().optional(),
   })
   .passthrough();
 

@@ -621,7 +621,6 @@ export const historyItemsToInputBlocks = (
 
 export const buildSessionTurnInputConfig = (args: {
   includeDeferredOperationResults?: boolean;
-  deferredOperationStopVersion?: number;
   inputBlocks: readonly SessionInputBlock[];
   cliType: AgentConfigCliType;
   agentType: string;
@@ -640,9 +639,6 @@ export const buildSessionTurnInputConfig = (args: {
 
   return {
     prompt: args.prompt ?? extractPromptPreviewFromInputBlocks(normalizedInputBlocks),
-    ...(args.deferredOperationStopVersion !== undefined
-      ? { deferredOperationStopVersion: args.deferredOperationStopVersion }
-      : {}),
     ...(args.includeDeferredOperationResults !== undefined
       ? { includeDeferredOperationResults: args.includeDeferredOperationResults }
       : {}),

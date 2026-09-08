@@ -1616,8 +1616,6 @@ export type ACPSessionConfig = {
   chainDepth?: number;
   /** This human input may carry results deferred by Stop. False opts out for this input only. */
   includeDeferredOperationResults?: boolean;
-  /** Stop boundary observed at authoring; older queued inputs cannot drain it. */
-  deferredOperationStopVersion?: number;
 };
 
 /**

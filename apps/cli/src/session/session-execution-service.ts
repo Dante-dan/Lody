@@ -1332,8 +1332,7 @@ export class SessionExecutionService {
         deferredInput = this.deps.deferredOperations?.startInput(
           options.sessionId,
           options.userTurnId,
-          options.userId,
-          options.inputConfig.deferredOperationStopVersion
+          options.userId
         );
       }
       const steerRun = agentClient.steerPrompt(
@@ -2951,8 +2950,7 @@ export class SessionExecutionService {
                                 self.deps.deferredOperations?.startInput(
                                   sessionId,
                                   runtime.userTurnId,
-                                  invocation.requesterUserId,
-                                  invocation.inputConfig.deferredOperationStopVersion
+                                  invocation.requesterUserId
                                 );
                             }
                             const input = runtime.deferredOperationInput;

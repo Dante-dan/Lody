@@ -2,8 +2,8 @@
 
 Root and `apps/cli/AGENTS.md` apply; `specs/session-orchestration.md` owns behavior.
 
-- User Stop durably defers old work; only a matching stop-version human input may
-  carry it. Never clear holds on send or wake. Internal cancels stay turn-only.
+- User Stop durably defers old work; the next submitted human input may carry it,
+  including queued input. Never clear holds on send or wake. Internal cancels stay turn-only.
   Contract and recovery: [README.md](README.md#deferred-results).
 
 - `operation-store.ts` is the shared machine-local WAL SQLite source of truth.
