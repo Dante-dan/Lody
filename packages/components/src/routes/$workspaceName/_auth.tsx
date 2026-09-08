@@ -5,11 +5,9 @@ import { useOrganization } from '@/hooks/useOrganization';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { runtimeInitializingAtom, userAtom } from '@/atoms';
 import { WorkspaceCheckoutPendingDialog } from '@/components/workspace-checkout-pending-dialog';
-import { ElectronSessionCompletionNotifier } from '@/components/electron-session-completion-notifier';
 import { ElectronMenuHandler } from '@/components/electron-menu-handler';
 import { AppCommands } from '@/components/app-commands';
 import { CommandPalette } from '@/components/commands/command-palette';
-import { AutoArchivePrWatcher } from '@/components/auto-archive-pr-watcher';
 import { useStableSession } from '@/hooks/useStableSession';
 import { useOnlineMachineIds } from '@/hooks/use-machine-online-status';
 import { usePostHog } from '@posthog/react';
@@ -33,7 +31,6 @@ import { LoadingPlaceholder } from '@/components/loading-placeholder';
 import { useVisibleMachineMetas } from '@/hooks/use-visible-machine-metas';
 import { useFireOncePerKey } from '@/hooks/use-fire-once';
 import { writeLastAppRoutePath } from '@/lib/last-app-route';
-import { WorkspaceBackground } from '@/components/workspace-background';
 import { type LodyLiveActivityBridge, useLodyLiveActivity } from '@/hooks/use-lody-live-activity';
 import { isNativeIOSAppShell } from '@/lib/native-platform';
 import { isLocalAppPlatform } from '@/lib/app-platform';
@@ -85,15 +82,9 @@ function LocalPlatformLayoutContent({ workspaceName }: { workspaceName: string }
       <LazyMainLayout>
         <AuthedWorkspaceRouteTracker />
         <Outlet />
-        <WorkspaceBackground>
-          <ElectronSessionCompletionNotifier />
-        </WorkspaceBackground>
         <ElectronMenuHandler />
         <AppCommands />
         <CommandPalette />
-        <WorkspaceBackground>
-          <AutoArchivePrWatcher />
-        </WorkspaceBackground>
       </LazyMainLayout>
     </RouteSuspense>
   );
@@ -387,15 +378,9 @@ function AuthedLayoutContent({
         <LazyMainLayout>
           <AuthedWorkspaceRouteTracker />
           <Outlet />
-          <WorkspaceBackground>
-            <ElectronSessionCompletionNotifier />
-          </WorkspaceBackground>
           <ElectronMenuHandler />
           <AppCommands />
           <CommandPalette />
-          <WorkspaceBackground>
-            <AutoArchivePrWatcher />
-          </WorkspaceBackground>
           <WorkspaceCheckoutPendingDialog />
         </LazyMainLayout>
       </RouteSuspense>
@@ -456,14 +441,8 @@ function AuthedLayoutContent({
       <LazyMainLayout>
         <AuthedWorkspaceRouteTracker />
         <Outlet />
-        <WorkspaceBackground>
-          <ElectronSessionCompletionNotifier />
-        </WorkspaceBackground>
         <ElectronMenuHandler />
         <CommandPalette />
-        <WorkspaceBackground>
-          <AutoArchivePrWatcher />
-        </WorkspaceBackground>
         <WorkspaceCheckoutPendingDialog />
       </LazyMainLayout>
     </RouteSuspense>

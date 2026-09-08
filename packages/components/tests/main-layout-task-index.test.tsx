@@ -55,11 +55,11 @@ vi.mock('../src/components/web-workspace-layout', () => ({
 vi.mock('../src/components/mobile/mobile-workspace-layout', () => ({
   MobileWorkspaceLayout: () => null,
 }));
-vi.mock('../src/components/workspace-background', () => ({
-  WorkspaceWindowRegistration: () => null,
-  WorkspaceBadge: () => null,
-  WorkspaceBackground: ({ children }: { children: ReactNode }) => children,
+vi.mock('../src/hooks/use-workspace-badge', () => ({ useWorkspaceBadge: () => {} }));
+vi.mock('../src/components/electron-session-completion-notifier', () => ({
+  ElectronSessionCompletionNotifier: () => null,
 }));
+vi.mock('../src/components/auto-archive-pr-watcher', () => ({ AutoArchivePrWatcher: () => null }));
 vi.mock('../src/components/bug-report/bug-report-dialog-container', () => ({
   BugReportDialogContainer: () => null,
 }));

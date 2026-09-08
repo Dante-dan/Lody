@@ -45,7 +45,7 @@ Electron 主进程为每个工作区指定一个后台任务负责窗口，并�
 [Renderer 启动](../../../../apps/electron/src/renderer/src/main.tsx)和
 [标签持久化](../../../../packages/components/src/lib/session-draft-tabs.ts)区分初始聚焦/导航与窗口内 UI 状态。
 [运行时 Provider](../../../../packages/components/src/providers/runtime-provider.tsx)注入缓存身份与活动条件；
-[后台组件](../../../../packages/components/src/components/workspace-background.tsx)控制只由负责窗口运行的订阅，
+[主布局](../../../../packages/components/src/components/main-layout.tsx)控制只由负责窗口运行的订阅，
 而不替换当前运行时。
 
 约束仍在[源码指南](../../../../packages/components/src/AGENTS.md)中。当前解释位于
@@ -115,9 +115,20 @@ Windows/Linux 的“窗口 → 关闭窗口”菜单也残留了固定关闭主�
 这些是定向回归，不是新增 Windows/macOS 原生验收或仓库全量通过的声明。
 此前原生拖拽的不确定性保持不变。
 
+## 精简跟进
+
+窗口注册与后台订阅的归属判断集中到 MainLayout，删除通用后台包装组件，以及三处路由中
+重复挂载的 watcher。Task Index 仍在归属判断之外，未就绪的工作区仍不启动通知或自动归档。
+原生操作路由、调用方校验、缓存隔离和后台归属仍是多窗口必需的职责。
+
+删除窗口坐标算式断言和新增的侧栏回调/IPC spy 检查：它们不能证明真实窗口位置，或第二个
+Renderer 打开后来源窗口导航不变。原有未读菜单测试保持不变。保留非法目标拒绝、拖拽
+生命周期、存储隔离，以及两项已复现 P1 的回归测试。代价是减少模拟调用链覆盖，不代表
+已补齐文中原生验收缺口；此前测试数量仍指各自当时的版本。
+
 ## 与既有记录的关系
 
 限定范围检索未发现需要替代的多窗口决策记录。本次新增记录，同时更新已有 Session 解释，包括
 此前未区分窗口类型、认为关闭唯一父标签总会返回 Chat Landing 的描述。
 [通讯架构草案](../../../../specs/communication-architecture.zh.md)仍是草案；缓存命名空间不改变
-其逻辑工作区与 CLI 的分工。本次变更暂无 PR 链接。
+其逻辑工作区与 CLI 的分工。PR：[#519](https://github.com/LodyAI/Lody/pull/519)。

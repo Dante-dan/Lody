@@ -1,12 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { EventEmitter } from 'node:events'
-import {
-  appWindowPath,
-  parseAppWindowTarget,
-  placeAppWindow,
-  isOutsideAppWindows
-} from './app-window-target.ts'
+import { appWindowPath, parseAppWindowTarget } from './app-window-target.ts'
 import { beginSessionWindowDrag, finishSessionWindowDrag } from './session-window-drag.ts'
 
 void test('window targets name an exact internal conversation, not a restored child tab or arbitrary URL', () => {
@@ -33,31 +28,6 @@ void test('window targets name an exact internal conversation, not a restored ch
     assert.throws(() => parseAppWindowTarget({ workspaceSlug }))
   }
   assert.throws(() => parseAppWindowTarget({ workspaceSlug: 'team', sessionId: 'a/b' }))
-})
-
-void test('detached placement stays within a small or negative-origin display', () => {
-  assert.deepEqual(placeAppWindow({ x: -800, y: 0, width: 800, height: 600 }, { x: -10, y: 500 }), {
-    x: -800,
-    y: 0,
-    width: 800,
-    height: 600
-  })
-  assert.deepEqual(placeAppWindow({ x: 0, y: 0, width: 1920, height: 1080 }, { x: 80, y: 70 }), {
-    x: 80,
-    y: 70,
-    width: 1000,
-    height: 760
-  })
-})
-
-void test('release must be outside every Lody window, including the edge margin', () => {
-  const windows = [
-    { x: 0, y: 0, width: 500, height: 400 },
-    { x: 700, y: 0, width: 500, height: 400 }
-  ]
-  assert.equal(isOutsideAppWindows({ x: 510, y: 100 }, windows), false)
-  assert.equal(isOutsideAppWindows({ x: 800, y: 100 }, windows), false)
-  assert.equal(isOutsideAppWindows({ x: 600, y: 100 }, windows), true)
 })
 
 function fakeWindow() {

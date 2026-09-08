@@ -39,7 +39,7 @@ this page is the full text of the rules summarised there.
 
 Electron main's `app-windows.ts` assigns one background owner per workspace in
 registration order and publishes context changes on registration, workspace
-change, and destruction. `WorkspaceBackground` uses that assignment for completion
+change, and destruction. `MainLayout` uses that assignment for completion
 notifications, badges, task status and auto-archive watchers, subject to their
 existing capability gates. Ownership is not OS focus: a hidden but registered
 primary window can remain owner. Closing it only transfers ownership if it is

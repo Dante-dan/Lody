@@ -59,7 +59,7 @@ identity, ownership, and detach acceptance. [Renderer bootstrap](../../../../app
 and [tab persistence](../../../../packages/components/src/lib/session-draft-tabs.ts)
 separate initial focus/navigation from window-local UI state. The
 [runtime provider](../../../../packages/components/src/providers/runtime-provider.tsx)
-injects cache identity and activity; [background surfaces](../../../../packages/components/src/components/workspace-background.tsx)
+injects cache identity and activity; [main layout](../../../../packages/components/src/components/main-layout.tsx)
 gate owner-only consumers without replacing the active runtime.
 
 Binding UI constraints remain in [source guidelines](../../../../packages/components/src/AGENTS.md).
@@ -144,6 +144,21 @@ made the task regression and all four menu cases fail; restoring the fixes passe
 These are targeted regressions, not a new native Windows/macOS acceptance run or a
 complete repository test pass. The earlier native-drag uncertainty is unchanged.
 
+## Simplification follow-up
+
+Window registration and background-consumer gates now live directly in MainLayout;
+the generic background wrapper and three repeated route-level watcher mounts were
+removed. Task Index remains outside the owner gate, and pending workspaces still
+do not start notification or auto-archive consumers. Native routing, sender checks,
+cache isolation and background ownership remain necessary multi-window responsibilities.
+
+Removed coordinate-arithmetic assertions and the added sidebar callback/IPC-spy
+checks: they did not prove native placement or a second renderer leaving the source
+route intact. Existing unread-menu tests remain unchanged. Retained target rejection,
+drag lifecycle, storage isolation, and the two reproduced P1 regression tests. This
+reduces mocked wiring coverage; it does not replace the documented native acceptance
+gaps with a stronger claim. Earlier test counts describe their original revisions.
+
 ## Relationship to earlier records
 
 The scoped search found no earlier multi-window note to supersede. This adds a decision
@@ -151,4 +166,4 @@ record and updates existing Session explanations, including the former unqualifi
 claim that closing a lone parent always returns to Chat Landing. The
 [communication architecture draft](../../../../specs/communication-architecture.zh.md)
 remains a draft; cache namespaces do not change its logical workspace/CLI split.
-No PR link is available for this change.
+PR: [#519](https://github.com/LodyAI/Lody/pull/519).

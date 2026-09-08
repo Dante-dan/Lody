@@ -1,4 +1,4 @@
-import { type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useAtomValue } from 'jotai';
 import { tasksFeatureEnabledAtom } from '@/atoms/settings';
 import { useIsMobile } from '../hooks/use-mobile';
@@ -11,11 +11,12 @@ import { StuckConnectionBannerContainer } from './stuck-connection-banner';
 import { DesktopSettingsModal } from './settings/desktop-settings-modal';
 import { TaskQuickAddDialogContainer } from './tasks/task-quick-add-dialog-container';
 import { TaskStatusWatcher } from './tasks/task-status-watcher';
-import {
-  WorkspaceBackground,
-  WorkspaceBadge,
-  WorkspaceWindowRegistration,
-} from './workspace-background';
+import { currentWorkspaceSlugAtom } from '@/atoms/workspace-context';
+import { workspaceBackgroundOwnerAtom } from '@/lib/desktop-window-context';
+import { getIpcServices } from '@/lib/electron-ipc-client';
+import { useWorkspaceBadge } from '@/hooks/use-workspace-badge';
+import { ElectronSessionCompletionNotifier } from './electron-session-completion-notifier';
+import { AutoArchivePrWatcher } from './auto-archive-pr-watcher';
 export {
   getMobileMainLayoutContentClassName,
   getMobileMainLayoutRootClassName,
@@ -44,6 +45,11 @@ function TaskIndexSync() {
   return null;
 }
 
+function WorkspaceBadge() {
+  useWorkspaceBadge();
+  return null;
+}
+
 export function MainLayout({
   children,
   workspaceReady = true,
@@ -58,21 +64,30 @@ export function MainLayout({
   // Behind the beta gate none of this mounts: no index subscription, no status
   // watcher, no quick-add dialog listening for its open atom.
   const tasksEnabled = useAtomValue(tasksFeatureEnabledAtom);
+  const owner = useAtomValue(workspaceBackgroundOwnerAtom);
+  const slug = useAtomValue(currentWorkspaceSlugAtom);
+  useEffect(() => {
+    void getIpcServices()?.app.updateWindowWorkspace(slug);
+    return () => {
+      void getIpcServices()?.app.updateWindowWorkspace(null);
+    };
+  }, [slug]);
 
   return (
     <WorkspaceRuntimeShell workspaceReady={workspaceReady}>
-      <WorkspaceWindowRegistration />
-      <WorkspaceBackground>
-        <WorkspaceBadge />
-      </WorkspaceBackground>
+      {owner ? <WorkspaceBadge /> : null}
       {children}
       {tasksEnabled && workspaceReady ? (
         <>
           <TaskIndexSync />
-          <WorkspaceBackground>
-            <TaskStatusWatcher />
-          </WorkspaceBackground>
+          {owner ? <TaskStatusWatcher /> : null}
           <TaskQuickAddDialogContainer />
+        </>
+      ) : null}
+      {owner && workspaceReady ? (
+        <>
+          <ElectronSessionCompletionNotifier />
+          <AutoArchivePrWatcher />
         </>
       ) : null}
       {workspaceReady ? <BugReportDialogContainer /> : null}
