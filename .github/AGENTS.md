@@ -4,16 +4,16 @@
 
 ## Ownership
 
-| Area                | Source of truth                                                | Contract                                                                         |
-| ------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Contributor prompts | `PULL_REQUEST_TEMPLATE.md`, Issue Forms                        | Ask only for public, actionable contribution context.                            |
-| PR validation       | `scripts/check-pr-body.mjs`                                    | Validate the rendered template contract without GitHub mutations.                |
-| PR reconciliation   | `scripts/pr-policy.mjs`                                        | Own disposition, findings, labels, comments, grace period, cleanup, and expiry.  |
-| Issue linking       | `scripts/pr-issue-link.mjs`                                    | Parse and normalize only `## Related issue`.                                     |
-| Event orchestration | `workflows/pr-policy.yml`, `workflows/pr-policy-reconcile.yml` | Route every PR event and audit through one concurrency group and one reconciler. |
-| Scope labels        | `labeler.yml`, `workflows/pr-scope.yml`                        | Derive configured `scope:*` labels from changed paths.                           |
-| Code checks         | `workflows/ci.yml`                                             | Preserve the stable `Static checks` and `Tests` jobs used as required checks.    |
-| Codex review        | root `AGENTS.md` `## Code Review Rules`, `codex-review.md`     | Report only P0/P1, security first; 👍 when the linked Issue is solved.           |
+| Area                | Source of truth                                                | Contract                                                                             |
+| ------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Contributor prompts | `PULL_REQUEST_TEMPLATE.md`, Issue Forms                        | Ask only for public, actionable contribution context.                                |
+| PR validation       | `scripts/check-pr-body.mjs`                                    | Validate the rendered template contract without GitHub mutations.                    |
+| PR reconciliation   | `scripts/pr-policy.mjs`                                        | Own disposition, findings, labels, comments, grace period, cleanup, and expiry.      |
+| Issue linking       | `scripts/pr-issue-link.mjs`                                    | Parse and normalize only `## Related issue`.                                         |
+| Event orchestration | `workflows/pr-policy.yml`, `workflows/pr-policy-reconcile.yml` | Route every PR event and audit through one concurrency group and one reconciler.     |
+| Scope labels        | `labeler.yml`, `workflows/pr-scope.yml`                        | Derive configured `scope:*` labels from changed paths.                               |
+| Code checks         | `workflows/ci.yml`, `scripts/select-ci-scope.mjs`              | Keep `Static checks`/`Tests`. Selector skip/affected fail open; no workflow `paths`. |
+| Codex review        | root `AGENTS.md` `## Code Review Rules`, `codex-review.md`     | Report only P0/P1, security first; 👍 when the linked Issue is solved.               |
 
 Do not duplicate a rule across these layers. Changes to required PR template
 headings must update the checker in the same commit and validate representative
