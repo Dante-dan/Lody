@@ -54,7 +54,7 @@ await test('llms answer blocks cover the GEO questions and only link live docs',
   assert.ok(existsSync(path.join(docsEnRoot, '(features)', 'session-handoff.mdx')));
 
   const workspace = LLMS_ANSWERS.find((block) => /Claude Code team workspace/iu.test(block.question));
-  assert.ok(workspace?.links.some((link) => link.sitePath === '/docs/workspace'));
+  assert.ok(workspace?.links.some((link) => link.sitePath === '/docs/compare/workspace'));
   assert.ok(workspace?.links.some((link) => link.sitePath === '/docs/team'));
-  assert.ok(existsSync(path.join(docsEnRoot, '(features)', 'workspace.mdx')));
+  assert.ok(existsSync(path.join(docsEnRoot, 'compare', 'workspace.mdx')));
 });

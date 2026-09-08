@@ -82,8 +82,8 @@ await test('session-handoff English FAQ matches the page and emits FAQPage JSON-
 });
 
 await test('workspace English FAQ is a hub, not a Claude-only product claim', () => {
-  const fromMdx = extractFaqFromMdx(readDoc('content/docs/en/(features)/workspace.mdx'));
-  const items = docsFaqByPath['/docs/workspace'] ?? [];
+  const fromMdx = extractFaqFromMdx(readDoc('content/docs/en/compare/workspace.mdx'));
+  const items = docsFaqByPath['/docs/compare/workspace'] ?? [];
   assert.equal(items.length, 5);
   assert.deepEqual(items, fromMdx);
   assert.match(items[0]?.question ?? '', /Claude Code team or Claude Code workspace/u);

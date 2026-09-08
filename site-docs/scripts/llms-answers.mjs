@@ -49,7 +49,7 @@ export const LLMS_ANSWERS = [
       'Invite members under Settings -> Workspace. Machines stay private until you share them. Each session picks its own agent config. Starting another session is a new isolated task; handing off lets a teammate continue the existing one.',
     ].join('\n\n'),
     links: [
-      { title: 'Multi-model Coding Agent Workspace', sitePath: '/docs/workspace' },
+      { title: 'Multi-model Coding Agent Workspace', sitePath: '/docs/compare/workspace' },
       { title: 'Team Features', sitePath: '/docs/team' },
       { title: 'Agent Config', sitePath: '/docs/agents' },
       { title: 'Worktrees', sitePath: '/docs/worktrees' },
