@@ -27,6 +27,7 @@ export function getBuiltinToolPermissionOutcome(args: {
   if (
     args.agentConfig?.cliType !== 'builtin' ||
     args.agentConfig.agentType !== 'grok' ||
+    args.request.toolCall.kind === 'switch_mode' ||
     isAskUserQuestionPermissionRequest(args.request)
   ) {
     return undefined;

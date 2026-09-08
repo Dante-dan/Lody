@@ -21,6 +21,15 @@ current target advertises the new option; an explicit boolean takes precedence.
 Frozen historical Turns are not rewritten. Executing a plan sets the next Turn's
 Plan value to false while preserving its permission selection.
 
+## Grok plan approval
+
+A completed Grok plan is shown for an explicit implement, keep planning, or abandon
+decision, including under Always Approve. Keep planning can carry revision feedback
+when the client supports form elicitation. Empty plans remain reviewable; errors,
+dismissal, and cancellation never imply approval. Native enter/exit events refresh
+the independent Plan toggle. These semantics use standard ACP plan, permission,
+and elicitation messages rather than a new provider-specific client interface.
+
 ## Evidence and validation
 
 - [Core contract](../packages/acp-extension-core/src/plan-mode.ts)
