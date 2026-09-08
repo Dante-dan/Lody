@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { Loro, LoroList, LoroMap, LoroText } from 'loro-crdt';
 import { Mirror } from 'loro-mirror';
+import { z } from 'zod';
+import { parseHistoryWrite } from '../src/history-write-schema';
 import { createSessionMirror } from '../src/session-mirror';
 import { sessionDocSchema, type SessionHistory } from '../src/schema';
 import type { SessionId } from '../src/ids';
@@ -18,6 +20,63 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it('derives an input parser without mutating strict schemas or dropping refinements', () => {
+    const schema = z
+      .object({ nested: z.object({ count: z.number() }).strict() })
+      .strict()
+      .superRefine((value, ctx) => {
+        if (value.nested.count < 0) ctx.addIssue({ code: 'custom', message: 'negative' });
+      });
+    const input = { nested: { count: 2, future: true, $cid: 'transport' }, extra: true };
+    expect(parseHistoryWrite(schema, input)).toEqual({ nested: { count: 2 } });
+    expect(schema.safeParse(input).success).toBe(false);
+    expect(() => parseHistoryWrite(schema, { nested: { count: -1, extra: true } })).toThrow(
+      'custom'
+    );
+    expect(input.nested.$cid).toBe('transport');
+  });
+
+  it('updates a target after peer insert/delete without touching other turns', () => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    mirror.historyWriter.append(entry('prefix'));
+    mirror.historyWriter.append(entry('target'));
+    const peer = new Loro();
+    peer.import(doc.export({ mode: 'snapshot' }));
+    const peerMirror = open(peer);
+    const oldPrefix = doc.getList('history').get(0) as LoroMap;
+    expect(
+      mirror.historyWriter.updateEntry('target', (turn) => {
+        turn.items = [{ type: 'text', text: 'first' }];
+        return turn;
+      })
+    ).toBe(true);
+    peerMirror.historyWriter.update((history) => [entry('inserted'), ...history]);
+    doc.import(peer.export({ mode: 'update', from: doc.version() }));
+    mirror.historyWriter.updateEntry('target', (turn) => {
+      turn.items = [{ type: 'text', text: 'second' }];
+      return turn;
+    });
+    expect(oldPrefix.toJSON().items).toEqual(entry().items);
+    expect(mirror.historyWriter.read('inserted')?.items).toEqual(entry().items);
+    expect(mirror.historyWriter.read('target')?.items).toEqual([{ type: 'text', text: 'second' }]);
+    const version = doc.version().toJSON();
+    expect(() =>
+      mirror.historyWriter.updateEntry('target', (turn) => ({ ...turn, id: 'other' }))
+    ).toThrow('immutable_id');
+    expect(() =>
+      mirror.historyWriter.updateEntry('target', (turn) => ({ ...turn, finished: 'bad' as never }))
+    ).toThrow('Invalid history write');
+    expect(doc.version().toJSON()).toEqual(version);
+    peer.import(doc.export({ mode: 'update', from: peer.version() }));
+    peerMirror.historyWriter.update((history) => history.filter((turn) => turn.id !== 'target'));
+    doc.import(peer.export({ mode: 'update', from: doc.version() }));
+    expect(mirror.historyWriter.updateEntry('target', (turn) => turn)).toBe(false);
+    expect(doc.getList('history').toJSON()).toEqual(peer.getList('history').toJSON());
+    mirror.dispose();
+    peerMirror.dispose();
+  });
+
   it('updates only the requested field beside opaque history and preserves nested extensions', () => {
     const doc = new Loro();
     const mirror = open(doc);

@@ -176,20 +176,33 @@ export const handleACPUpdateMessage = async (
 
   try {
     if (persistableBatch.length > 0) {
-      await doc.updateHistory((history) => {
-        const targetTurnId = getTargetTurnId();
-        if (!targetTurnId && callbacks?.allowAutonomousAssistantEntry !== true) {
-          callbacks?.logger?.warn(
-            `[${doc.sessionId}] Dropping ${persistableBatch.length} ACP history notifications without an assistant entry target`
-          );
-          return history;
-        }
-        const createId = targetTurnId ? () => targetTurnId : uuidV4;
-        return applyNotificationOnHistory(history, persistableBatch, model, {
-          createId,
-          ...(targetTurnId ? { targetAssistantEntryId: targetTurnId } : {}),
-        });
-      });
+      const targetTurnId = getTargetTurnId();
+      // Tool/subagent updates can belong to older turns. Only text/thought
+      // chunks have a target-local ownership contract; retain full routing otherwise.
+      const targetOnly =
+        targetTurnId &&
+        persistableBatch.every(
+          ({ update }) =>
+            (update.sessionUpdate === 'agent_message_chunk' ||
+              update.sessionUpdate === 'agent_thought_chunk') &&
+            update.content.type === 'text'
+        );
+      await doc.updateHistory(
+        (history) => {
+          if (!targetTurnId && callbacks?.allowAutonomousAssistantEntry !== true) {
+            callbacks?.logger?.warn(
+              `[${doc.sessionId}] Dropping ${persistableBatch.length} ACP history notifications without an assistant entry target`
+            );
+            return history;
+          }
+          const createId = targetTurnId ? () => targetTurnId : uuidV4;
+          return applyNotificationOnHistory(history, persistableBatch, model, {
+            createId,
+            ...(targetTurnId ? { targetAssistantEntryId: targetTurnId } : {}),
+          });
+        },
+        targetOnly ? { onlyEntryId: targetTurnId } : undefined
+      );
     }
     // Evidence is derived from the same enriched notification, but it is only
     // safe to publish after the corresponding history write commits. Otherwise

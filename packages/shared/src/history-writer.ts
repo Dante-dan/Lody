@@ -212,10 +212,22 @@ function prepareReplacement(previous: unknown, incoming: unknown): Record<string
       // by deletion. Align replacements within the block, never across an anchor.
       let lastOld = -1;
       const anchors = incoming.items.map((item) => {
-        const index = oldItems.findIndex((old, i) => i > lastOld && historyValuesEqual(old, item));
+        let index = -1;
+        for (let i = lastOld + 1; i < oldItems.length; i++) {
+          if (historyValuesEqual(oldItems[i], item)) {
+            index = i;
+            break;
+          }
+        }
         if (index >= 0) lastOld = index;
         return index;
       });
+      let following = oldItems.length;
+      const followingAnchors = new Array<number>(anchors.length);
+      for (let i = anchors.length - 1; i >= 0; i--) {
+        followingAnchors[i] = following;
+        if (anchors[i]! >= 0) following = anchors[i]!;
+      }
       let oldStart = 0;
       let newStart = 0;
       result.items = incoming.items.map((item, i) => {
@@ -225,7 +237,7 @@ function prepareReplacement(previous: unknown, incoming: unknown): Record<string
           newStart = i + 1;
           return oldItems[unchanged];
         }
-        const nextAnchor = anchors.slice(i + 1).find((index) => index >= 0) ?? oldItems.length;
+        const nextAnchor = followingAnchors[i]!;
         const oldIndex = oldStart + i - newStart;
         const old = oldIndex < nextAnchor ? oldItems[oldIndex] : undefined;
         const toolState = prepareToolState(old, item);
@@ -260,6 +272,8 @@ export interface HistoryWriter {
   read(turnId: string): SessionHistory | undefined;
   /** Existing typed callback API; only its changed turns/items reach the writer. */
   update(updater: (history: SessionHistoryInput[]) => SessionHistoryInput[]): void;
+  /** Mutate an existing turn without producing/planning the entire history. */
+  updateEntry(id: string, updater: (entry: SessionHistoryInput) => SessionHistoryInput): boolean;
   setField<K extends Exclude<keyof SessionHistoryInput, '$cid' | 'items' | 'id'>>(
     turnId: string,
     key: K,
@@ -280,7 +294,7 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
     for (let index = list.length - 1; index >= 0; index--) {
       const map = list.get(index);
       if (isContainer(map) && map.kind() === 'Map' && (map as LoroMap).get('id') === id)
-        return map as LoroMap;
+        return { map: map as LoroMap, index };
     }
     return undefined;
   };
@@ -372,12 +386,14 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
           throw new HistoryWriteError([{ path: ['history'], code: 'copy_target_conflict' }]);
         ids.add(entry.id);
       }
-      const used = new Set<number>();
+      // Incoming ids were proven unique above. Match each to the first stored
+      // occurrence once instead of rescanning the entire source for every turn.
+      const sourceById = new Map<string, SessionHistoryInput>();
+      for (const old of source) if (!sourceById.has(old.id)) sourceById.set(old.id, old);
       const values = history.map((entry) => {
-        const index = source.findIndex((old, i) => !used.has(i) && old.id === entry.id);
-        if (index < 0) return cleanNew(HistoryEntryWriteSchema, entry);
-        used.add(index);
-        return prepareReplacement(source[index], entry);
+        const old = sourceById.get(entry.id);
+        if (!old) return cleanNew(HistoryEntryWriteSchema, entry);
+        return prepareReplacement(old, entry);
       });
       // Values are either unchanged stored data or preflighted authored changes.
       planWrite(previous, [...values, ...previous] as SessionHistory[], (_old, value) => value)();
@@ -443,8 +459,9 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       doc.commit();
     },
     replace(id, entry) {
-      const map = locate(id);
-      if (!map) return false;
+      const target = locate(id);
+      if (!target) return false;
+      const { map } = target;
       if (entry.id !== id) throw new HistoryWriteError([{ path: ['id'], code: 'immutable_id' }]);
       const previous = map.toJSON();
       const value = prepareReplacement(previous, entry);
@@ -453,16 +470,30 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       return true;
     },
     read(id) {
-      return locate(id)?.toJSON() as SessionHistory | undefined;
+      return locate(id)?.map.toJSON() as SessionHistory | undefined;
     },
     update(updater) {
       const previous = readAll();
       const next = immer.produce(previous as SessionHistoryInput[], (draft) => updater(draft));
       prepare(previous, next)();
     },
+    updateEntry(id, updater) {
+      const target = locate(id);
+      if (!target) return false;
+      const { map, index } = target;
+      const previous = readHistory?.()[index] ?? (map.toJSON() as SessionHistoryInput);
+      const next = immer.produce(previous, (draft) => updater(draft));
+      if (next.id !== id) throw new HistoryWriteError([{ path: ['id'], code: 'immutable_id' }]);
+      if (historyValuesEqual(previous, next)) return true;
+      const prepared = prepareReplacement(previous, next);
+      diffHistoryContainer(map, sessionHistorySchema, previous, prepared, undefined);
+      doc.commit();
+      return true;
+    },
     setField(id, key, value) {
-      const map = locate(id);
-      if (!map) return false;
+      const target = locate(id);
+      if (!target) return false;
+      const { map } = target;
       const field = HistoryEntryWriteSchema.shape[key];
       if (
         !Object.hasOwn(HistoryEntryWriteSchema.shape, key) ||

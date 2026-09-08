@@ -73,11 +73,11 @@ export class HistoryWriteError extends Error {
 }
 
 export function parseHistoryWrite<T>(schema: z.ZodType<T>, value: unknown): T {
-  const result = schema.safeParse(projectInput(schema, withoutTransportIds(value)));
+  const result = z.safeParse(historyInputSchema(schema), withoutTransportIds(value));
   if (!result.success)
     throw new HistoryWriteError(result.error.issues.map(({ path, code }) => ({ path, code })));
   assertHistoryJson(result.data);
-  return result.data;
+  return result.data as T;
 }
 
 const discriminatedOptions = new WeakMap<z.ZodUnion, Map<unknown, readonly z.core.$ZodType[]>>();
@@ -124,38 +124,37 @@ export function historyUnionCandidates(
 // Reuse the business schemas' field definitions, but do not make their stricter
 // external-RPC unknown-key policy a history rewrite policy. Closed objects select
 // known input fields; explicit ACP extension dictionaries remain open.
-function projectInput(schema: z.core.$ZodType, value: unknown): unknown {
-  if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable)
-    return projectInput(schema.unwrap(), value);
-  if (schema instanceof z.ZodUnion) {
-    const candidates = historyUnionCandidates(schema, value);
-    // Final safeParse still validates the entire selected branch once.
-    if (candidates.length === 1) return projectInput(candidates[0]!, value);
-    for (const option of candidates) {
-      const candidate = projectInput(option, value);
-      if (z.safeParse(option, candidate).success) return candidate;
-    }
-    return value;
-  }
-  if (schema instanceof z.ZodArray && Array.isArray(value))
-    return value.map((item) => projectInput(schema.element, item));
-  if (
-    schema instanceof z.ZodObject &&
-    value !== null &&
-    typeof value === 'object' &&
-    !Array.isArray(value)
-  ) {
+const inputSchemas = new WeakMap<z.core.$ZodType, z.core.$ZodType>();
+function historyInputSchema(schema: z.core.$ZodType): z.core.$ZodType {
+  const cached = inputSchemas.get(schema);
+  if (cached) return cached;
+  let result = schema;
+  // Clone definitions, including checks/refinements, once. Zod then selects,
+  // filters and validates in a single parse; never project/parse every value twice.
+  if (schema instanceof z.ZodOptional) {
+    result = schema.clone({ ...schema.def, innerType: historyInputSchema(schema.unwrap()) });
+  } else if (schema instanceof z.ZodNullable) {
+    result = schema.clone({ ...schema.def, innerType: historyInputSchema(schema.unwrap()) });
+  } else if (schema instanceof z.ZodUnion) {
+    result = schema.clone({ ...schema.def, options: schema.options.map(historyInputSchema) });
+  } else if (schema instanceof z.ZodArray) {
+    result = schema.clone({ ...schema.def, element: historyInputSchema(schema.element) });
+  } else if (schema instanceof z.ZodObject) {
     const catchall = schema.def.catchall;
     const open = catchall && !(catchall instanceof z.ZodNever);
-    return Object.fromEntries(
-      Object.entries(value).flatMap(([key, child]) => {
-        const field = schema.shape[key];
-        if (field) return [[key, projectInput(field, child)]];
-        return open ? [[key, projectInput(catchall, child)]] : [];
-      })
-    );
+    result = schema.clone({
+      ...schema.def,
+      shape: Object.fromEntries(
+        Object.entries(schema.shape).map(([key, field]) => [
+          key,
+          historyInputSchema(field as z.core.$ZodType),
+        ])
+      ),
+      catchall: open ? historyInputSchema(catchall) : undefined,
+    });
   }
-  return value;
+  inputSchemas.set(schema, result);
+  return result;
 }
 
 // Mirror adds $cid to nested maps, including strict ACP objects. It is read-side

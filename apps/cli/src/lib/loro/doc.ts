@@ -6,6 +6,7 @@ import {
   CliType,
   collectOnlineMachineIdsFromPresence,
   createSessionMirror,
+  HistoryWriteError,
   SessionStatusFactory,
   SessionId,
   WorkspaceId,
@@ -2577,12 +2578,28 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
     });
   }
 
-  async updateHistory(updateFn: (history: SessionHistoryInput[]) => SessionHistoryInput[]) {
+  async updateHistory(
+    updateFn: (history: SessionHistoryInput[]) => SessionHistoryInput[],
+    options?: { onlyEntryId: string }
+  ) {
     if (!this.mirror) {
       throw new Error('Mirror not initialized');
     }
     let attemptedTail: Record<string, unknown> | null = null;
     try {
+      // The caller promises this operation needs no other turn (e.g. targeted
+      // text chunks). A missing target retains the normal creation path below.
+      if (
+        options &&
+        this.mirror.historyWriter.updateEntry(options.onlyEntryId, (entry) => {
+          const next = updateFn([entry]);
+          attemptedTail = this.summarizeHistoryTailForDiagnostics(next);
+          if (next.length !== 1 || next[0]?.id !== options.onlyEntryId)
+            throw new HistoryWriteError([{ path: ['history'], code: 'invalid_targeted_update' }]);
+          return next[0];
+        })
+      )
+        return;
       this.mirror.setState((prev) => {
         const nextHistory = updateFn((prev.history as SessionHistoryInput[]) || []);
         attemptedTail = this.summarizeHistoryTailForDiagnostics(nextHistory);

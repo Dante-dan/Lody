@@ -38,6 +38,10 @@
 - Steer provenance is a declared history input-config field, not an unknown extension.
   Both new writes and read normalization must retain it for edit-and-resend checks.
 - Scalar/fileDiff writes read and diff only the requested field, never the turn's items.
-  Discriminator lookup comes from the parser schema; final validation remains mandatory.
+  Writer input parsers derive from schema definitions with all refinements retained;
+  never mutate the original RPC schemas. Parsing filters and validates in one pass.
   `readStored` returns detached JSON for hashing, not stored-copy provenance. Keep `capture`
   protection for callers that can author copies from an old snapshot.
+- Target-local streaming uses `updateEntry`; it must not produce/plan the entire history.
+  Resolve the live turn on each call, preserve immutable ids, and preflight before writing.
+  Generic history updates remain for operations with cross-turn ownership or structural edits.

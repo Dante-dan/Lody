@@ -30,11 +30,21 @@ const fixture = (i: number): SessionHistory => ({
 const entries = Array.from({ length: turns }, (_, i) => fixture(i));
 let expectedHistory: unknown;
 for (let sample = 0; sample < samples; sample++)
-  for (const mode of ['mirror', 'writer'] as const) {
+  for (const mode of ['mirror', 'writer', 'targeted-writer'] as const) {
     const doc = new Loro();
+    let commitMs = 0;
+    const commit = doc.commit.bind(doc);
+    doc.commit = (...args: Parameters<typeof commit>) => {
+      const start = performance.now();
+      try {
+        return commit(...args);
+      } finally {
+        commitMs += performance.now() - start;
+      }
+    };
     const initialState = { session: { id: 'synthetic-perf' as SessionId }, history: [] };
     const view =
-      mode === 'writer'
+      mode !== 'mirror'
         ? createSessionMirror({ doc, initialState })
         : new Mirror({
             doc,
@@ -54,21 +64,29 @@ for (let sample = 0; sample < samples; sample++)
         s.history = entries;
       })
     );
+    const beforeStreamCommit = commitMs;
     const stream = measure(() => {
-      const update = (history: SessionHistory[]) => {
-        const tool = history[turns - 1]!.items![19]!;
+      const updateEntry = (entry: SessionHistory) => {
+        const tool = entry.items![19]!;
         if (tool.type === 'tool_call') {
           const block = tool.content?.[0];
           if (block?.type === 'content' && block.content.type === 'text') block.content.text += 'x';
         }
-        return history;
+        return entry;
       };
-      if (writer) writer.update(update);
+      if (writer && mode === 'targeted-writer')
+        writer.updateEntry(`synthetic-${turns - 1}`, updateEntry);
+      else if (writer)
+        writer.update((history) => {
+          updateEntry(history[turns - 1]!);
+          return history;
+        });
       else
         view.setState((s) => {
-          update(s.history);
+          updateEntry(s.history[turns - 1]!);
         });
     }, 10);
+    const streamCommit = (commitMs - beforeStreamCommit) / 10;
     let flip = false;
     const field = measure(() => {
       flip = !flip;
@@ -91,7 +109,7 @@ for (let sample = 0; sample < samples; sample++)
     const history = doc.getList('history').toJSON();
     if (expectedHistory === undefined) expectedHistory = history;
     else assert.deepEqual(history, expectedHistory);
-    console.log(JSON.stringify({ sample, mode, turns, seed, stream, field, append }));
+    console.log(JSON.stringify({ sample, mode, turns, seed, stream, streamCommit, field, append }));
     view.dispose();
   }
 
