@@ -35,7 +35,8 @@ a new turn resolves a different identity, execution internally terminates the st
 resumes the same ACP session under a freshly built environment before sending the prompt. The
 internal replacement does not publish the SessionManager termination lifecycle, so the in-flight
 turn keeps its state, presence, and ACP output routing. This avoids an adapter-specific
-mutable-environment protocol and pays the restart cost only on identity changes.
+mutable-environment protocol and pays the restart cost only on identity changes. Adopted
+speculative preparations use this same replacement path when their launch snapshot is stale.
 
 ## Alternatives
 

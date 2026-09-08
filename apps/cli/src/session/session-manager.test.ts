@@ -19,7 +19,7 @@ import {
 import { deriveRepoIdFromLocalProjectPath } from '@lody/shared/node/worktree-paths';
 import { normalizeLocalProjectRootPath } from '@lody/shared/node/local-project';
 
-import { getDefaultSessionWorkdir } from './session';
+import { getDefaultSessionWorkdir, Session } from './session';
 import { SessionManager, type ISession } from './session-manager';
 import { createNoopSessionSandbox } from './session-sandbox';
 import type { SessionConfig } from './types';
@@ -897,6 +897,54 @@ describe('SessionManager durable create ownership', () => {
 });
 
 describe('SessionManager preparation compatibility', () => {
+  it('silently replaces an adopted preparation with a stale Git identity', async () => {
+    const logger = createLogger();
+    const manager = new SessionManager(
+      logger,
+      'token',
+      'machine-1' as MachineId,
+      'workspace-1' as WorkspaceId,
+      createWorkspaceDocument(new Map()),
+      {
+        sessionSandboxFactory: async () => createNoopSessionSandbox(),
+        cloudPort: createTestCloudPort(),
+      }
+    );
+    const sessionId = 'stale-prepared-git-identity' as SessionId;
+    const config = createSessionConfig({ sessionId });
+    const preparedSession = new Session(config, logger, process.cwd(), createNoopSessionSandbox());
+    vi.spyOn(preparedSession, 'updateGitIdentity').mockReturnValue(true);
+    const dispose = vi.fn(async () => await preparedSession.terminate(true));
+    const prepared = {
+      session: preparedSession,
+      config,
+      compatibility: createPreparedTestCompatibility({}),
+      initialized: Promise.resolve(),
+      sessionReady: Promise.resolve(),
+      workspaceReady: Promise.resolve(null),
+      agentResult: Promise.resolve('prepared-acp-session'),
+      adopt: vi.fn(async () => undefined),
+      dispose,
+    };
+    const coldSession = { sessionId } as ISession;
+    const internals = manager as unknown as {
+      finishPreparedSession(config: SessionConfig, prepared: typeof prepared): Promise<ISession>;
+      createSessionInnerWithAgent(config: SessionConfig): Promise<ISession>;
+    };
+    const coldCreate = vi
+      .spyOn(internals, 'createSessionInnerWithAgent')
+      .mockResolvedValue(coldSession);
+    const terminated = vi.fn();
+    manager.on('terminated', terminated);
+
+    await expect(internals.finishPreparedSession(config, prepared)).resolves.toBe(coldSession);
+
+    expect(dispose).not.toHaveBeenCalled();
+    expect(terminated).not.toHaveBeenCalled();
+    expect(manager.getSession(sessionId)).toBeNull();
+    expect(coldCreate).toHaveBeenCalledWith(config, undefined);
+  });
+
   it('rejects a prepared session with different initial config option values', async () => {
     const manager = new SessionManager(
       createLogger(),

@@ -25,7 +25,8 @@ An ACP process snapshots its environment at launch. If the effective Git identit
 reusing a session, Lody must internally terminate the stale process and resume the same ACP
 session with the new environment before submitting the next prompt. This replacement must not
 publish the session termination lifecycle or submit that prompt to the stale process. An
-unchanged identity does not require a restart.
+unchanged identity does not require a restart. This also applies when an adopted speculative
+preparation has a stale identity snapshot.
 
 ## Evidence
 

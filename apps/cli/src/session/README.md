@@ -174,7 +174,8 @@ port resolves only its synthetic owner and never performs network I/O. PR and pu
 itself comes from the requester-bound GitHub token, not from git config. Because an ACP process
 snapshots its launch environment, a changed effective identity internally replaces and resumes
 that ACP session before the next prompt without publishing session termination; unchanged
-identities keep the existing process.
+identities keep the existing process. The same non-lifecycle replacement applies after a
+speculative preparation is adopted with a stale identity snapshot.
 
 ### Speculative preparation
 

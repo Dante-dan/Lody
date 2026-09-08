@@ -30,7 +30,8 @@ ACP 子进程会在启动时快照环境，因此只更新 host 侧 Session 配�
 Session 会记录启动快照中的 identity；新 turn 解析出不同 identity 时，执行层会在内部终止旧
 子进程，再以重新构建的环境恢复同一个 ACP session，之后才发送 prompt。这个内部替换不会发布
 SessionManager termination 生命周期，因此当前 turn 的状态、presence 和 ACP 输出路由得以保留。
-这样无需增加 adapter 特定的可变环境协议，并且只有 identity 变化时才承担重启成本。
+已 adopt 的 speculative preparation 如果启动快照过期，也使用相同的替换路径。这样无需增加
+adapter 特定的可变环境协议，并且只有 identity 变化时才承担重启成本。
 
 ## 备选方案
 

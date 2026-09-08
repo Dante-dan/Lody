@@ -1217,7 +1217,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         this.logger.debug(
           `[${sessionId}] Discarding prepared ACP process because its Git identity snapshot is stale`
         );
-        await prepared.dispose();
+        await this.terminateSessionForRestart(sessionId);
         return await this.createSessionInnerWithAgent(config, agentStart);
       }
       const acpSessionId = await prepared.agentResult;
