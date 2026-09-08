@@ -67,7 +67,9 @@ production manifest replacement. The coordinated changes are reviewed through se
 - [Codex #34](https://github.com/LodyAI/acp-extension-codex/pull/34)
 - [Grok #13](https://github.com/LodyAI/acp-extension-grok/pull/13)
 - [DSH #12](https://github.com/LodyAI/acp-extension-dsh/pull/12)
+- [Kimi #8](https://github.com/LodyAI/acp-extension-kimi/pull/8)
 
 Release Core first, then merge and release the wrappers. Keep the Lody change
-in draft until its Kimi source pointer and managed-runtime artifact are updated
-to the reviewed implementation. Changeset confirmation is pending for Kimi.
+in draft until the managed-runtime artifact is updated to the reviewed Kimi
+implementation. The source pointer now includes the Kimi PR; its patch changeset
+was confirmed before submission.
