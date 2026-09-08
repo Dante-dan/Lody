@@ -110,10 +110,10 @@ withheld one is a finding, ledger entry or gate verdict.
 
 ## Measured limit: it compares across sections and cannot know not to
 
-On the 21-capture report, after the fixes above, 77% of deviations still have a witness in a
-different `sectionScope` — top bar icon against composer icon, sidebar row against panel
-header. Not a bug left to chase: locality is a proxy, and the discriminator a reviewer uses
+77% of deviations have a witness in another `sectionScope` — top bar icon against composer
+icon. Not a bug left to chase: locality is a proxy, and the discriminator a reviewer uses
 (same structural relationship) is what visual grouping discards on purpose. Some is the
-intended catch — two sidebar lists rendering one row at different pitches — and most is
-noise, and the card cannot say which. So this lane is an auxiliary candidate source; do not
-present it as, or promote it into, the baseline and regression rail.
+intended catch, most is noise, and the card cannot say which. So the report SHOWS scope,
+filters on it, and ranks same-section first — reading order, never a grouping input, since
+a cross-section delta is large by spanning sections and score alone buried 11 of 12 real
+cards at ranks 66-78. An auxiliary candidate source; never the baseline and regression rail.

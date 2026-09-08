@@ -679,7 +679,17 @@
         .sort((a, b) => b.deviation.score - a.deviation.score);
       const rankVisualCandidates = (candidates) =>
         [...candidates]
-          .sort((a, b) => b.deviation.score - a.deviation.score)
+          // Same-section comparisons first, then by score. This is READING order,
+          // not a grouping input: mining stays DOM-blind, every candidate is still
+          // here, and no threshold removes one. Ranking by score alone put 11 of
+          // the 12 same-section candidates at ranks 66-78, behind 65 cross-section
+          // cards whose deltas are large precisely BECAUSE they span sections. The
+          // cards most likely to be real were the ones a reader would never reach.
+          .sort(
+            (a, b) =>
+              Number(a.crossScope) - Number(b.crossScope) ||
+              b.deviation.score - a.deviation.score
+          )
           .map((candidate, index) => ({ ...candidate, rank: index + 1 }));
       const foldedVisualCandidates = [
         ...rawVisualCandidates

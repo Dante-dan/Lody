@@ -182,3 +182,40 @@ it('leaves a candidate unmarked when every witness shares its section', () => {
   filter.dispatchEvent(new Event('change'));
   expect(report.cards()).toHaveLength(before);
 });
+
+it('puts same-section candidates ahead of higher-scoring cross-section ones', () => {
+  // The cross-section card scores far higher precisely because it spans
+  // sections: its delta is the distance between two unrelated boxes. Ranking on
+  // score alone therefore sorts the least meaningful comparison to the top.
+  const atoms: ReportAtom[] = [
+    ...column([100, 100, 100, 109, 100, 100], Array.from({ length: 6 }, () => 'panel')),
+    ...column([600, 600, 600, 660, 600, 600], [
+      'panel',
+      'panel',
+      'panel',
+      'composer',
+      'panel',
+      'panel',
+    ]).map((atom, index) => ({
+      ...atom,
+      id: `far-${index}`,
+      label: `Far ${index}`,
+      yStart: atom.yStart + 2000,
+      yEnd: atom.yEnd + 2000,
+    })),
+  ];
+  const report = renderVisualReport([{ captureId: 'ranked', atoms }]);
+  const summaries = report.summaries();
+
+  const firstCross = summaries.findIndex((summary) => summary.includes('跨区域'));
+  const lastSame = summaries.reduce(
+    (last, summary, index) => (summary.includes('跨区域') ? last : index),
+    -1
+  );
+  expect(firstCross).toBeGreaterThan(-1);
+  expect(lastSame).toBeGreaterThan(-1);
+  // Every same-section card outranks every cross-section one.
+  expect(lastSame).toBeLessThan(firstCross);
+  // And the buried one is the higher-scoring card, so this is a real reorder.
+  expect(summaries[firstCross]).toContain('Far');
+});
