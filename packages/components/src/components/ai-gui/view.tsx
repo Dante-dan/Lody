@@ -2801,7 +2801,7 @@ const UserMessageRowView = ({
   return (
     <div className={cn('flex w-full flex-row-reverse', isMobile ? 'gap-2 pl-7' : 'gap-2.5')}>
       <div className="mt-0.5 shrink-0 text-muted-foreground">
-        <UserAvatar user={user} className={cn(isMobile ? 'h-7 w-7' : 'h-8 w-8')} showIcon />
+        <UserMessageAuthorAvatar user={user} isMobile={isMobile} />
       </div>
       <div
         className={cn(
@@ -2809,7 +2809,15 @@ const UserMessageRowView = ({
           isMobile ? 'max-w-[min(100%,28rem)] gap-1' : 'max-w-[80%] gap-1.5 sm:max-w-[70%]'
         )}
       >
-        <div className="flex flex-row-reverse items-center gap-1.5 text-[11px] text-muted-foreground">
+        <div
+          className="flex flex-row-reverse items-center gap-1.5 text-[11px] text-muted-foreground"
+          data-testid="user-message-metadata"
+        >
+          {user?.name ? (
+            <span className="max-w-40 truncate font-medium text-foreground/70" title={user.name}>
+              {user.name}
+            </span>
+          ) : null}
           {timestampLabel ? <span className="tabular-nums">{timestampLabel}</span> : null}
           {isUndelivered ? (
             onResendUndelivered ? (
@@ -3003,6 +3011,65 @@ const UserMessageRowView = ({
     </div>
   );
 };
+
+function UserMessageAuthorAvatar({
+  user,
+  isMobile,
+}: {
+  user?: SessionChatUser;
+  isMobile: boolean;
+}) {
+  const { t } = useTranslation();
+  const displayName = user?.name?.trim() || user?.email?.trim();
+  const avatar = (
+    <UserAvatar user={user} className={cn(isMobile ? 'h-7 w-7' : 'h-8 w-8')} showIcon />
+  );
+
+  if (isMobile || !displayName) {
+    return avatar;
+  }
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="block rounded-full outline-hidden ring-offset-background transition-opacity hover:opacity-85 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          aria-label={t('sessions.openSenderProfile', 'View profile for {{name}}', {
+            name: displayName,
+          })}
+        >
+          {avatar}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        side="left"
+        align="start"
+        sideOffset={10}
+        className="w-72 overflow-hidden p-0"
+        aria-label={t('sessions.senderProfile', 'Sender profile')}
+      >
+        <div className="flex items-center gap-3.5 p-4">
+          <UserAvatar
+            user={user}
+            className="h-16 w-16 shrink-0 text-xl"
+            fallbackClassName="bg-primary/10 text-primary"
+          />
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-foreground">
+              {user?.name?.trim() || displayName}
+            </div>
+            {user?.email ? (
+              <div className="mt-1 truncate text-xs text-muted-foreground" title={user.email}>
+                {user.email}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 /**
  * Confirmation dialog behind the "Not delivered" label: resends the
