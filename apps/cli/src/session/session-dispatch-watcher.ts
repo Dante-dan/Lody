@@ -2124,6 +2124,7 @@ export class SessionDispatchWatcher {
         taskToolsEnabled: queuedItem.acpSessionConfig?.taskToolsEnabled === true,
         includeDeferredOperationResults:
           queuedItem.acpSessionConfig?.includeDeferredOperationResults,
+        deferredOperationStopVersion: queuedItem.acpSessionConfig?.deferredOperationStopVersion,
         agentRoleId: queuedItem.acpSessionConfig?.agentRoleId,
         agentRoleRevision: queuedItem.acpSessionConfig?.agentRoleRevision,
         issuePRMentions: queuedItem.acpSessionConfig?.issuePRMentions,

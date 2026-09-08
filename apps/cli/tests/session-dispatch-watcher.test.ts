@@ -1327,6 +1327,8 @@ describe('SessionDispatchWatcher', () => {
           agentType: 'codex',
           agentRoleId: 'role-reviewer',
           agentRoleRevision: 7,
+          includeDeferredOperationResults: true,
+          deferredOperationStopVersion: 3,
         },
       },
     ];
@@ -1416,6 +1418,8 @@ describe('SessionDispatchWatcher', () => {
         inputConfig: expect.objectContaining({
           agentRoleId: 'role-reviewer',
           agentRoleRevision: 7,
+          includeDeferredOperationResults: true,
+          deferredOperationStopVersion: 3,
         }),
       })
     );
@@ -1429,6 +1433,8 @@ describe('SessionDispatchWatcher', () => {
         acpSessionConfig: expect.objectContaining({
           agentRoleId: 'role-reviewer',
           agentRoleRevision: 7,
+          includeDeferredOperationResults: true,
+          deferredOperationStopVersion: 3,
         }),
       }),
       { dispatchSource: 'queue' }
