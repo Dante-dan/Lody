@@ -102,6 +102,32 @@ const createHandler = async (
   return { handler, sessionDoc, workspaceDocument };
 };
 
+// Drives the branch-rename path far enough to observe which titleConfig reaches
+// the isolated generator. `exec` reports no branch, so the rename itself is a
+// no-op and no git command runs.
+const renameBranch = async (handler: MessageHandler, agentType: string): Promise<void> => {
+  const branchHost = handler as unknown as {
+    maybeRenameSessionBranchFromPrompt: (
+      sessionId: SessionId,
+      session: unknown,
+      cliType: string,
+      agentType: string,
+      taskPrompt: string
+    ) => Promise<void>;
+  };
+  const session = {
+    getWorkdir: () => '/tmp/lody-branch-test',
+    exec: async () => ({ stdout: '', stderr: '', exitCode: 1 }),
+  };
+  await branchHost.maybeRenameSessionBranchFromPrompt(
+    's-branch' as SessionId,
+    session,
+    'builtin',
+    agentType,
+    'Fix the flaky login redirect'
+  );
+};
+
 describe('MessageHandler title generation', () => {
   beforeEach(() => {
     mockedGenerateTitleIsolated.mockClear();
@@ -219,6 +245,40 @@ describe('MessageHandler title generation', () => {
 
     expect(branch).toBe('fix/title-races');
     expect(mockedGenerateTitleIsolated).not.toHaveBeenCalled();
+  });
+
+  // Claude and Codex no longer expose a title-generation config, so a value
+  // persisted before that must not keep steering their branch-name runs.
+  it.each(['claude', 'codex'])(
+    'ignores a stale persisted titleGeneration when naming a branch for %s',
+    async (agentType) => {
+      const { handler } = await createHandler(undefined, undefined, undefined, {
+        agentConfigId: 'agent-config-1',
+        agentConfigMeta: { titleGeneration: { configOptionValues: { model: 'stale-model' } } },
+      });
+
+      await renameBranch(handler, agentType);
+
+      expect(mockedGenerateTitleIsolated).toHaveBeenCalledTimes(1);
+      expect(mockedGenerateTitleIsolated).toHaveBeenCalledWith(
+        expect.objectContaining({ titleConfig: undefined })
+      );
+    }
+  );
+
+  it('still applies the persisted titleGeneration when naming a branch for Kimi', async () => {
+    const titleGeneration = { configOptionValues: { model: 'kimi-k2-turbo' } };
+    const { handler } = await createHandler(undefined, undefined, undefined, {
+      agentConfigId: 'agent-config-1',
+      agentConfigMeta: { titleGeneration },
+    });
+
+    await renameBranch(handler, 'kimi');
+
+    expect(mockedGenerateTitleIsolated).toHaveBeenCalledTimes(1);
+    expect(mockedGenerateTitleIsolated).toHaveBeenCalledWith(
+      expect.objectContaining({ titleConfig: titleGeneration })
+    );
   });
 
   it('keeps skipping isolated generation when an existing title has no draft source', async () => {

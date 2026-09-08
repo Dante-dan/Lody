@@ -65,6 +65,13 @@ least-privilege-mode selection that Grok, Kimi, DeepSeek Harness, registry and
 custom providers still rely on. The config simply stops being reachable for
 Codex, as it already was for Claude.
 
+"Unreachable" has to hold on every path, not just the settings form. Branch
+naming resolved the persisted `titleGeneration` for whatever agent it was naming
+a branch for, so a value stored before this change would have kept steering
+Claude and Codex runs after their config disappeared from the UI. Branch naming
+now skips that lookup for ACP-owned agents and lets
+`computeTitleGenerationDefaults()` pick from the live `configOptions` instead.
+
 ## Trade-offs and limits
 
 Codex generates its title after the first turn completes and skips generation

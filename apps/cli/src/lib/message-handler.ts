@@ -9716,8 +9716,17 @@ export class MessageHandler {
       );
     }
 
-    const resolvedTitleConfig =
-      titleConfig ?? (await this.resolveTitleConfig(sessionId, metaAgentConfigId));
+    // Claude and Codex no longer expose a title-generation config, so a value
+    // persisted before that must not keep steering their runs here. They still
+    // reach the isolated generator when no ACP title has landed yet, and it
+    // falls back to computeTitleGenerationDefaults() for them.
+    // Claude and Codex no longer expose a title-generation config, so a value
+    // persisted before that must not keep steering their runs here. They still
+    // reach the isolated generator when no ACP title has landed yet, and it
+    // falls back to computeTitleGenerationDefaults() for them.
+    const resolvedTitleConfig = acpOwnsSessionTitleGeneration(cliType, agentType)
+      ? undefined
+      : (titleConfig ?? (await this.resolveTitleConfig(sessionId, metaAgentConfigId)));
     const branchName = await this.generateBranchNameWithTimeout(
       cliType,
       agentType,
