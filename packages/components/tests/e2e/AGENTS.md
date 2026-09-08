@@ -1,7 +1,7 @@
 # Geometry constraint system
 
-`CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only.
-Package `AGENTS.md` and the repository root also apply.
+`CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only. Package `AGENTS.md`
+and the repository root also apply.
 
 Measures rendered geometry, turns it into findings, gates what a human promoted.
 `src/lib/chat-workspace-geometry.ts` (spec, grid, discovery) and
@@ -72,7 +72,8 @@ chat row of one family are two findings. Findings merge evidence across captures
 the first capture's label; repeated instance rules with identical member offsets are
 measurement-model divergences, not repeated violations.
 
-A structural improvement RE-KEYS reviews; a decision nobody carries forward is made twice. Each entry records the identity it reviewed (label, axis, anchor, surface);
+A structural improvement RE-KEYS reviews; a decision nobody carries forward is made twice.
+Each entry records the identity it reviewed (label, axis, anchor, surface);
 `diffGeometryFindings` pairs a resolved key with a new one as `rekeyed` — same label, or,
 where a locale makes labels unmatchable, same axis + anchor + surface with |offset| within
 0.25px — and triage MOVES status, reason and baseline there rather than report resolved and
@@ -86,12 +87,12 @@ beside the code ([src/lib](../../src/lib/AGENTS.md)). Review lives in checked-in
 `geometry-ledger.json`; `geometry-contracts.json` compiles ONLY `promoted` entries, each
 declaring `ink` or `layout-box`; no other status compiles.
 
-- A baseline is EXECUTED, not printed: the gate reruns the pipeline over the whole capture
-  plan with no screenshots, and fails when a finding's |offset| passes |baseline| plus one
-  device pixel (1/DPR of its COARSEST capture) or when a finding has no ledger entry
-  (`geometry:triage`, like a lockfile). `ignored` opts out, `promoted` belongs to the
-  contract check, and offsets are means over the WHOLE plan, so a baseline belongs to the
-  platform that recorded it: re-baseline where CI runs, never trim the plan for speed.
+- A baseline is EXECUTED, not printed: the gate reruns the pipeline over the whole plan, no
+  screenshots, and fails when a finding's |offset| passes |baseline| plus one device pixel
+  (1/DPR of its COARSEST capture), or has no ledger entry (`geometry:triage`, like a
+  lockfile). `ignored` opts out, `promoted` belongs to the contract check, a baseline is
+  bound to the platform that recorded it: re-baseline where CI runs, never trim the plan.
+  Gate and diff read the WORST capture, never the merged mean `offset`.
 - `debt` and `wont-fix` are two decisions, not one word; `triage` records `debt` rather than
   guess. `geometry:verify-fix <dir> <key…|--repair-group=…>` reruns that gate and only then
   moves a finding back inside one device pixel to `fixed` at its new baseline, the strictest

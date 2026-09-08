@@ -2792,7 +2792,19 @@ export function diffGeometryFindings(
   const changed = artifact.findings.filter((finding) => {
     const carried = rekeyedTo.get(finding.key);
     const baseline = (carried ? ledger.findings[carried] : ledger.findings[finding.key])?.baseline;
-    return baseline ? Math.abs(finding.offset - baseline.offset) > offsetTolerance : false;
+    if (!baseline) return false;
+    // Per CAPTURE, never the merged offset. `finding.offset` is the mean across
+    // every capture the finding was seen in, so a regression confined to one
+    // condition — a dark-theme-only or zh-locale-only shift — is divided by the
+    // capture count before it is ever compared. On a finding merged across 12
+    // captures that takes a 6px break to move the mean past a 0.5px tolerance,
+    // and those are exactly the conditions a reviewer is least likely to catch
+    // by eye. Every capture carries its own measurement, so every one is read.
+    const measured =
+      finding.evidence.length > 0
+        ? finding.evidence.map((evidence) => evidence.offset)
+        : [finding.offset];
+    return measured.some((offset) => Math.abs(offset - baseline.offset) > offsetTolerance);
   });
   return {
     current,
@@ -3196,7 +3208,10 @@ export type GeometryRatchetViolation = Readonly<{
   anchor: SemanticAlignmentAnchor;
   status?: GeometryLedgerStatus;
   baseline?: number;
+  /** The worst single capture, not the mean across captures. */
   current: number;
+  /** Which capture `current` came from, so a one-condition break is nameable. */
+  captureId?: string;
   /** The slack allowed above `|baseline|`, in CSS pixels. */
   tolerance?: number;
 }>;
@@ -3252,11 +3267,25 @@ export function checkGeometryLedgerRatchet(
     const baseline = entry.baseline?.offset;
     if (baseline === undefined) return [];
     const tolerance = geometryFindingDevicePixel(finding, captures);
-    if (Math.abs(finding.offset) <= Math.abs(baseline) + tolerance) return [];
+    // The gate reads the WORST capture, not the mean of all of them, for the
+    // same reason the report diff does: averaging divides a one-condition
+    // regression by the capture count before the gate can see it. The capture
+    // travels with the violation, because "baseline -3 → current -3.4" is
+    // unactionable when what actually happened is that one theme moved 9px.
+    const worst =
+      finding.evidence.length > 0
+        ? finding.evidence.reduce((left, right) =>
+            Math.abs(right.offset) > Math.abs(left.offset) ? right : left
+          )
+        : undefined;
+    const current = worst?.offset ?? finding.offset;
+    if (Math.abs(current) <= Math.abs(baseline) + tolerance) return [];
     return [
       {
         kind: 'offset-regression',
         ...identity,
+        current,
+        captureId: worst?.captureId,
         status: entry.status,
         baseline,
         tolerance,
@@ -3379,7 +3408,7 @@ export function formatGeometryRatchetViolations(
         : [
             `regressed finding ${violation.key}`,
             `  ${violation.surfaceFamily} · ${violation.label} · ${violation.axis}/${violation.anchor} (${violation.status})`,
-            `  baseline ${(violation.baseline ?? 0).toFixed(3)}px → current ${violation.current.toFixed(3)}px`,
+            `  baseline ${(violation.baseline ?? 0).toFixed(3)}px → current ${violation.current.toFixed(3)}px${violation.captureId ? ` in ${violation.captureId}` : ''}`,
             `  allowed |offset| ≤ ${(Math.abs(violation.baseline ?? 0) + (violation.tolerance ?? 0)).toFixed(3)}px (baseline + ${(violation.tolerance ?? 0).toFixed(3)}px device pixel)`,
           ].join('\n')
     )

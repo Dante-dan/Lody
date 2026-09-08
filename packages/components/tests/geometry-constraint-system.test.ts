@@ -427,6 +427,69 @@ describe('geometry constraint artifacts', () => {
     ]);
   });
 
+  it('sees a regression confined to one capture that the merged offset hides', () => {
+    // `finding.offset` is the MEAN across captures, so a break in one condition
+    // is divided by the capture count before it is compared. Merged across four
+    // captures, a 1.5px shift in one moves the mean 0.375px and slips under a
+    // 0.5px tolerance; across twelve it would take 6px. A dark-theme-only or
+    // locale-only regression is exactly that shape, and exactly the one a
+    // reviewer is least likely to catch by eye.
+    const evidence = [0, 0, 0, 1.5].map((offset, index) => ({
+      captureId: `capture-${index}`,
+      scopeKey: 'row',
+      coordinate: 100 + offset,
+      line: 100,
+      normalizedLine: 0.5,
+      offset,
+      yStart: 0,
+      yEnd: 10,
+    }));
+    const finding = {
+      key: 'geometry/workspace/diluted',
+      kind: 'alignment-rail' as const,
+      surfaceFamily: 'workspace',
+      locator: locator('Diluted'),
+      label: 'Diluted',
+      axis: 'x' as const,
+      anchor: 'inline-end' as const,
+      normalizedLine: 0.5,
+      offset: 0.375,
+      captureCount: 4,
+      totalCaptureCount: 4,
+      evidence,
+    };
+    const ledger: GeometryLedger = {
+      version: 1,
+      findings: { [finding.key]: { status: 'debt', baseline: { offset: 0 } } },
+    };
+    const artifact = { version: 1 as const, findings: [finding] };
+
+    // The mean alone would say nothing changed.
+    expect(Math.abs(finding.offset - 0)).toBeLessThanOrEqual(0.5);
+    expect(diffGeometryFindings(artifact, ledger).changed).toEqual([finding]);
+
+    const captures = {
+      version: 1 as const,
+      captures: evidence.map((entry) => ({
+        captureId: entry.captureId,
+        deviceScaleFactor: 2,
+      })),
+    } as unknown as Parameters<typeof checkGeometryLedgerRatchet>[2];
+    // The gate reads the worst capture and names it, or the message reads
+    // "baseline 0 → current 0.375" for a 1.5px break.
+    expect(checkGeometryLedgerRatchet(artifact, ledger, captures)).toEqual([
+      expect.objectContaining({
+        kind: 'offset-regression',
+        key: finding.key,
+        current: 1.5,
+        captureId: 'capture-3',
+      }),
+    ]);
+    expect(
+      formatGeometryRatchetViolations(checkGeometryLedgerRatchet(artifact, ledger, captures))
+    ).toContain('current 1.500px in capture-3');
+  });
+
   it('uses the ledger for report diffs and compiles only promoted contracts', () => {
     const finding = {
       key: 'geometry/workspace/finding',
