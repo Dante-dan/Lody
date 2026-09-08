@@ -28,6 +28,7 @@
     "mention",
     "slash-commands",
     "copy-md",
-    "session-orchestration"
+    "session-orchestration",
+    "agent-collaboration"
   ]
 }

@@ -1,12 +1,6 @@
 ---
-title: 用 Claude Code 统筹 Kimi 和 Codex，分派任务、协同修复与审查
-date: 2026-09-08
-author: Lody 团队
-authorLink: https://lody.ai
-description: 在 Lody 中让 Claude Code 梳理 PR 和 Issue，向 Kimi、Codex 分派任务，通过 @ 会话交换上下文，跨机器、跨 Agent 协调修复与审查。
-tag: 指南
-sidebar: false
-aside: false
+title: Agent 协作工作流
+description: 通过会话引用、任务分派和审查修复循环，协调 Claude Code、Kimi、Codex 和 Grok 跨对话、跨仓库、跨机器协作。
 ---
 
 你手上有一批 Issue、几个待处理的 PR，还有一个可能涉及三个仓库的 bug。你希望 Claude Code 先过一遍这些工作，把修复交给 Kimi，让 Codex 审查，再把结果汇总回来。
@@ -26,16 +20,17 @@ aside: false
 | Claude Code | 梳理 Issue 和 PR、分派工作、跟进结果 | 当前进度、依赖关系和待决定的问题 |
 | Kimi | 实现范围明确的修复 | 补丁、提交和验证结果 |
 | Codex | 审查补丁 | 对应具体提交的审查意见 |
+| Grok | 调查另一个受影响的仓库 | 调查结果和接口修改建议 |
 
-这些角色是针对当前任务的选择。你可以交换分工、使用同一种 Agent 的多个实例，或接入其他兼容的 Agent。
+这些角色是针对当前任务的选择。你可以交换分工、使用同一种 Agent 的多个实例，或接入其他兼容的 Agent。Grok 也可以根据分工实现修复、审查补丁，或协调其他会话。
 
-Lody 提供组织这些工作的[跨会话工具](/zh/docs/session-orchestration/)。本文通过这些工具协调 Claude Code、Kimi 和 Codex 会话，不涉及配置 Claude Code 原生 Agent Teams 功能。
+Lody 提供组织这些工作的[跨会话工具](/zh/docs/session-orchestration/)。本文通过这些工具协调 Claude Code、Kimi、Codex 和 Grok 会话，不涉及配置 Claude Code 原生 Agent Teams 功能。
 
 ## 准备工作区
 
 先[把机器连接到 Lody](/zh/docs/quickstart/)，确认机器上有需要使用的 [Agent 配置](/zh/docs/agents/)。目标机器需要在线，Agent 需要具备访问目标仓库及执行任务所需 GitHub 工具的权限。
 
-创建一条 Claude Code 会话负责统筹，告诉它要处理哪些仓库、PR 或 Issue。为修改代码的任务分配独立 [Git worktree](/zh/docs/worktrees/)，让并行 Agent 使用不同的工作目录。Fork 到新 worktree 时从已提交的 `HEAD` 开始，其他目录中的未提交修改不会自动带过去。
+下面以 Claude Code 负责统筹、Kimi、Codex 或 Grok 执行具体任务为例。创建一条 Claude Code 会话负责统筹，告诉它要处理哪些仓库、PR 或 Issue。为修改代码的任务分配独立 [Git worktree](/zh/docs/worktrees/)，让并行 Agent 使用不同的工作目录。Fork 到新 worktree 时从已提交的 `HEAD` 开始，其他目录中的未提交修改不会自动带过去。
 
 第一步可以先让它理解这批工作，再开始修改代码。
 
@@ -71,7 +66,8 @@ Lody 提供组织这些工作的[跨会话工具](/zh/docs/session-orchestration
 调查请求重试后产生重复记录的问题，涉及这些仓库：
 [客户端仓库]、[SDK 仓库]、[服务端仓库]。
 
-为每个仓库创建一条专注的会话。让 Agent 互相交流：
+分别创建 Kimi 会话调查客户端、Codex 会话调查 SDK、Grok 会话调查服务端。
+让 Agent 互相交流：
 重试从哪里发起，各层目前如何处理重复请求。
 先确认请求的接口约定，再修改有依赖关系的部分。
 

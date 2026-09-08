@@ -9,6 +9,8 @@ Lody Agent 可以通过内置 Lody MCP 工具跨对话工作。你可以让一�
 
 自己开多条会话——隔离 Worktree、混用模型、团队可见性——见[并行 Coding Agents](/zh/docs/parallel-agents)。本页讲的是控制路径：一个 Agent 去协调其他对话。
 
+包含 Claude Code、Kimi、Codex 和 Grok 的完整示例，以及会话引用和跨机器协作步骤，见 [Agent 协作工作流](/zh/docs/agent-collaboration/)。
+
 ## 在对话中使用
 
 直接在普通提示词中描述目标和分工即可，例如：
@@ -29,7 +31,7 @@ Agent 可以创建或复用对话、读取其状态和有限历史、发送后�
 
 ### 让 Claude Code 统筹任务
 
-可以让 Claude Code 先过一遍一组 PR 或 Issue，识别依赖关系，再把具体工作分派给 Kimi、Codex 等其他 Agent。每个 Agent 在独立对话中工作，负责统筹的 Agent 可以发送后续指令并汇总结果。访问仓库使用各 Agent 可用的工具和凭据。
+可以让 Claude Code 先过一遍一组 PR 或 Issue，识别依赖关系，再把具体工作分派给 Kimi、Codex、Grok 等其他 Agent。每个 Agent 在独立对话中工作，负责统筹的 Agent 可以发送后续指令并汇总结果。访问仓库使用各 Agent 可用的工具和凭据。
 
 ```text
 过一遍这些 PR 和 Issue，把相关工作分组并识别依赖关系。

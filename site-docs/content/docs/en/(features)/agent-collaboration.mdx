@@ -1,12 +1,6 @@
 ---
-title: Use Claude Code as an Orchestrator for Kimi and Codex
-date: 2026-09-08
-author: Lody Team
-authorLink: https://lody.ai
-description: Use Claude Code in Lody to triage PRs and issues, delegate to Kimi and Codex, share context with @ session mentions, and coordinate fixes across machines and agents.
-tag: Guide
-sidebar: false
-aside: false
+title: Agent Collaboration Workflows
+description: Coordinate Claude Code, Kimi, Codex, and Grok across sessions, repositories, and machines with mentions, task delegation, and review/fix loops.
 ---
 
 You have a queue of issues, several open PRs, and a bug that might involve three repositories. You want Claude Code to work through the queue, delegate fixes to Kimi, ask Codex to review them, and bring the results back.
@@ -26,15 +20,18 @@ Here is one possible division of work:
 | Claude Code | Inspect the issue and PR queue, assign work, follow up | Current status, dependencies, and unresolved decisions |
 | Kimi | Implement a scoped fix | Patch, commit, and verification results |
 | Codex | Review that patch | Findings tied to the reviewed commit |
+| Grok | Investigate another affected repository | Findings and proposed interface changes |
 
-Those roles are choices for this task. You can switch them, use several instances of the same agent, or bring another compatible agent into the workspace.
+Those roles are choices for this task. You can switch them, use several instances of the same agent, or bring another compatible agent into the workspace. Grok can also implement a fix,
+review a patch, or coordinate other sessions when selected for that assignment.
 
-Lody provides the [cross-session tools](/docs/session-orchestration/) used to organize this work. This guide uses those tools across Claude Code, Kimi, and Codex sessions; it does not configure Claude Code's native Agent Teams feature.
+Lody provides the [cross-session tools](/docs/session-orchestration/) used to organize this work. This guide uses those tools across Claude Code, Kimi, Codex, and Grok sessions; it does not configure Claude Code's native Agent Teams feature.
 
 ## Set up the workspace
 
 [Connect a machine to Lody](/docs/quickstart/) and make sure the [agent configurations](/docs/agents/) you want to use are available there. The target machines need to be online, and the agents need access to the repositories and any GitHub tools required for their assignments.
 
+The examples below use Claude Code for coordination and Kimi, Codex, or Grok for focused work.
 Start a Claude Code session for coordination. Tell it which repositories, PRs, or issues to inspect. Give editing tasks their own [Git worktrees](/docs/worktrees/) so parallel agents have separate working directories. A new worktree fork starts from committed `HEAD`; uncommitted changes in another directory will not appear there automatically.
 
 The first useful assignment is to understand the queue before changing code.
@@ -73,7 +70,8 @@ You can start an investigation in each repository at the same time. Before imple
 Investigate duplicate records after a request retry across these repositories:
 [client repo], [SDK repo], [server repo].
 
-Create a focused session for each repository. Ask the agents to exchange
+Assign a Kimi session to the client, a Codex session to the SDK, and a Grok
+session to the server. Ask the agents to exchange
 findings about where retries originate and how duplicate requests are handled.
 Have them agree on the request contract before making dependent changes.
 
