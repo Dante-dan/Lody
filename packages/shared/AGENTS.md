@@ -28,6 +28,10 @@
   read acknowledgement on newly inserted user rows. External ACP imports remain new input.
 - Tool status, permission and descriptive metadata (title/kind/locations) are independent
   edits: derive their parsers from the tool message schema and validate changed fields,
-  not untouched stored payloads. Identity/content changes still use the complete item parser.
+  not untouched stored payloads. Content-list edits retain unchanged blocks and parse
+  authored blocks; tool identity changes still use the complete item parser.
+- ACP tool blocks and locations are explicit JSON extension boundaries. Unknown block
+  types must not bypass validation of malformed known variants. Preserve declared `_meta`
+  and extension keys; closed execution configuration still selects declared fields.
 - Steer provenance is a declared history input-config field, not an unknown extension.
   Both new writes and read normalization must retain it for edit-and-resend checks.

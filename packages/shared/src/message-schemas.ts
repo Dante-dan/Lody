@@ -2944,7 +2944,7 @@ const TerminalExitStatusSchema = z
   })
   .loose();
 
-const StandardToolContentSchema = z.discriminatedUnion('type', [
+const KnownStandardToolContentSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('text'),
@@ -2985,7 +2985,24 @@ const StandardToolContentSchema = z.discriminatedUnion('type', [
     .loose(),
 ]);
 
-export const ToolCallContentSchema = z.union([
+// ACP extension blocks remain opaque JSON. Known discriminators must still pass
+// their own schema; malformed known blocks cannot fall through as extensions.
+const unknownProtocolBlock = (known: z.ZodUnion) => {
+  const types = new Set(
+    known.options.flatMap((option) =>
+      option instanceof z.ZodObject && option.shape.type instanceof z.ZodLiteral
+        ? [...option.shape.type.values]
+        : []
+    )
+  );
+  return z.object({ type: z.string().refine((type) => !types.has(type)) }).catchall(z.json());
+};
+const StandardToolContentSchema = z.union([
+  KnownStandardToolContentSchema,
+  unknownProtocolBlock(KnownStandardToolContentSchema),
+]);
+
+const KnownToolCallContentSchema = z.union([
   // Legacy blocks used by older history entries
   z
     .object({
@@ -3046,14 +3063,22 @@ export const ToolCallContentSchema = z.union([
     })
     .loose(),
 ]);
+export const ToolCallContentSchema = z.union([
+  KnownToolCallContentSchema,
+  unknownProtocolBlock(KnownToolCallContentSchema),
+]);
 
-export const ToolCallLocationSchema = z.object({
-  path: z.string(),
-  line: z.number().nullable().optional(),
-  _meta: PermissionMetaSchema.optional(),
-  startLine: z.number().optional(),
-  endLine: z.number().optional(),
-});
+export const ToolCallLocationSchema = z
+  .object({
+    path: z.string(),
+    line: z.number().nullable().optional(),
+    _meta: PermissionMetaSchema.optional(),
+    startLine: z.number().optional(),
+    endLine: z.number().optional(),
+    startColumn: z.number().optional(),
+    endColumn: z.number().optional(),
+  })
+  .catchall(z.json());
 
 export const AvailableCommandSchema = z.object({
   name: z.string(),
@@ -3150,6 +3175,7 @@ export const ChatFailedMetaSchema = z.object({
 
 export const ToolCallMessageSchema = z.object({
   type: z.literal('tool_call'),
+  _meta: PermissionMetaSchema.optional(),
   toolCallId: z.string(),
   title: z.string().nullable().optional(),
   status: ToolCallStatusSchema,

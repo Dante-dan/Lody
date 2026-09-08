@@ -23,6 +23,60 @@ export type AllParserFieldsBelongToHistory = AssertNever<
   Exclude<keyof typeof HistoryEntryWriteSchema.shape, keyof SessionHistory>
 >;
 
+// Check nested field coverage too. Semantic narrowing (e.g. supported MIME types)
+// is intentional; open protocol dictionaries are separately checked at runtime.
+type Variant<A, B> = A extends { type: infer T }
+  ? Extract<B, { type: T }>
+  : A extends { name: infer N }
+    ? Extract<B, { name: N }>
+    : B;
+type Keys<B> = B extends unknown ? keyof B : never;
+type Field<B, K extends PropertyKey> = B extends unknown
+  ? K extends keyof B
+    ? B[K]
+    : never
+  : never;
+type MissingFields<A, B, P extends string = ''> = A extends
+  | string
+  | number
+  | boolean
+  | bigint
+  | symbol
+  ? never
+  : A extends readonly (infer E)[]
+    ? NonNullable<B> extends readonly (infer F)[]
+      ? MissingFields<E, F, `${P}[]`>
+      : never
+    : A extends object
+      ? string extends keyof A
+        ? never
+        : {
+            [K in keyof A & string]: K extends Keys<NonNullable<B>>
+              ? unknown extends Field<NonNullable<B>, K>
+                ? never
+                : MissingFields<
+                    NonNullable<A[K]>,
+                    NonNullable<Field<NonNullable<B>, K>>,
+                    `${P}.${K}`
+                  >
+              : `${P}.${K}`;
+          }[keyof A & string]
+      : never;
+type MissingMessageFields<A = MessageContent> = A extends MessageContent
+  ? MissingFields<A, Variant<A, MessageContentValidated>>
+  : never;
+export type AllNestedMessageFieldsHaveAParser = AssertNever<MissingMessageFields>;
+export type AllNestedInputConfigFieldsHaveAParser = AssertNever<
+  MissingFields<
+    NonNullable<SessionHistory['inputConfig']>,
+    NonNullable<HistoryEntryWrite['inputConfig']>
+  >
+>;
+export type MissingNestedFieldIsDetected = AssertNever<
+  // @ts-expect-error a newly declared nested field must fail the coverage guard
+  MissingFields<{ content: { newField: string }[] }, { content: { text: string }[] }>
+>;
+
 // Included by the normal shared typecheck, not executed by the test runner.
 export function historyWriterTypeContract(writer: HistoryWriter, entry: SessionHistory) {
   writer.append(entry);

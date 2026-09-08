@@ -8,11 +8,13 @@ import {
   MessageContentSchema,
   PermissionOutcomeSchema,
   ToolCallMessageSchema,
+  ToolCallContentSchema,
 } from './message-schemas';
 import {
   HistoryEntryWriteSchema,
   HistoryWriteError,
   parseHistoryWrite,
+  historyUnionCandidates,
 } from './history-write-schema';
 import { diffHistoryContainer, populateContainer } from './history-materializer';
 
@@ -52,19 +54,35 @@ function preserveUnknown(
   if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable)
     return preserveUnknown(schema.unwrap(), old, input, parsed);
   if (schema instanceof z.ZodUnion) {
-    const option = schema.options.find((candidate) => z.safeParse(candidate, parsed).success);
+    const option = historyUnionCandidates(schema, parsed).find(
+      (candidate) => z.safeParse(candidate, parsed).success
+    );
     return option ? preserveUnknown(option, old, input, parsed) : parsed;
   }
   if (schema instanceof z.ZodObject && record(parsed)) {
+    // A different union variant is a new value, not a carrier for the old one's extensions.
+    if (
+      record(old) &&
+      typeof old.type === 'string' &&
+      typeof parsed.type === 'string' &&
+      old.type !== parsed.type
+    )
+      old = undefined;
     const result: Record<string, unknown> = Object.create(null);
     // Explicit protocol extension dictionaries (e.g. ACP content metadata) are
     // open in the shared parser. Respect that contract, not an invented whitelist.
     for (const key of Object.keys(parsed)) {
       if (key !== '$cid' && !Object.hasOwn(schema.shape, key)) result[key] = parsed[key];
     }
+    const open = schema.def.catchall && !(schema.def.catchall instanceof z.ZodNever);
     if (record(old))
       for (const key of Object.keys(old)) {
-        if (key !== '$cid' && !Object.hasOwn(schema.shape, key)) result[key] = old[key];
+        if (
+          key !== '$cid' &&
+          !Object.hasOwn(schema.shape, key) &&
+          (!open || !Object.hasOwn(parsed, key))
+        )
+          result[key] = old[key];
       }
     for (const [key, field] of Object.entries(schema.shape)) {
       if (!Object.hasOwn(parsed, key)) continue;
@@ -93,13 +111,14 @@ const cleanNew = (schema: z.ZodType, input: unknown, old?: unknown): unknown =>
   preserveUnknown(schema, old, input, parseHistoryWrite(schema, input));
 
 // One independently editable group, derived from the message definition rather
-// than a second set of validators. Identity and content stay outside this group.
+// than a second set of validators. Tool identity stays outside this group.
 const ToolStateWriteSchema = ToolCallMessageSchema.pick({
   status: true,
   title: true,
   kind: true,
   locations: true,
   permissionRequest: true,
+  content: true,
 });
 
 /** Permission producers also enrich descriptions; they do not author old content. */
@@ -114,6 +133,21 @@ function prepareToolState(old: unknown, input: unknown): Record<string, unknown>
   const result = { ...old };
   for (const [key, schema] of Object.entries(ToolStateWriteSchema.shape)) {
     if (historyValuesEqual(old[key], input[key])) continue;
+    if (key === 'content' && Array.isArray(input.content)) {
+      const previous = Array.isArray(old.content) ? old.content : [];
+      const used = new Set<number>();
+      result.content = input.content.map((block, i) => {
+        const retained = previous.findIndex(
+          (value, index) => !used.has(index) && historyValuesEqual(value, block)
+        );
+        if (retained >= 0) {
+          used.add(retained);
+          return previous[retained];
+        }
+        return cleanNew(ToolCallContentSchema, block, previous[i]);
+      });
+      continue;
+    }
     const oldRequest = old.permissionRequest;
     const permissionRequest = input.permissionRequest;
     // Answering an existing request does not author its options or tool content.

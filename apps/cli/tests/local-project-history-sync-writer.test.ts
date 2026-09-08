@@ -59,7 +59,7 @@ function notifications(turns: number): AcpSessionNotification[] {
         title: 'Read synthetic file',
         kind: 'read',
         status: 'completed',
-        // Legal ACP extension, deliberately not part of the current storage projection.
+        // Legal ACP extension: new writes must retain it, not just compensate in the hash.
         locations: [{ path: `src/file-${turn}.ts`, line: 1, endColumn: 12 }],
       },
       {
@@ -279,7 +279,7 @@ describe('history import through the real SessionDocument writer', () => {
     expect((await h.importTurns(3)).summary).toMatchObject({ refreshed: 1, conflicted: 0 });
   });
 
-  it('detects legacy field deletion even when the result equals new-input projection', async () => {
+  it('detects deletion of a legacy provider field', async () => {
     const h = await createHarness();
     await h.importTurns(1);
     const loro = await h.makeLegacy();
@@ -345,7 +345,7 @@ describe('history import through the real SessionDocument writer', () => {
     location(loro).set('endColumn', 99);
     loro.commit();
     expect((await h.importTurns(2)).summary.conflicted).toBe(1);
-    location(loro).delete('endColumn');
+    location(loro).set('endColumn', 12);
     loro.commit();
     const cursor = await doc.getExternalHistoryCursor();
     expect((await h.importTurns(2)).summary).toMatchObject({ refreshed: 1, conflicted: 0 });
@@ -354,13 +354,13 @@ describe('history import through the real SessionDocument writer', () => {
     );
   });
 
-  it('appends the next source replay after the writer has filtered an ACP extension', async () => {
+  it('retains ACP extensions and appends the next source replay', async () => {
     const harness = await createHarness();
     expect((await harness.importTurns(1)).summary).toMatchObject({ imported: 1, failed: 0 });
     const { doc, sessionId } = harness.getOnlyDoc();
     const initialHistory = await doc.getHistory();
     expect(initialHistory).toHaveLength(2);
-    expect(JSON.stringify(initialHistory)).not.toContain('endColumn');
+    expect(JSON.stringify(initialHistory)).toContain('"endColumn":12');
     const initialCursor = await doc.getExternalHistoryCursor();
     const initialIds = initialHistory.map((entry) => entry.id);
 

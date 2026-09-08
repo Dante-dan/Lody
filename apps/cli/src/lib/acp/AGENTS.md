@@ -44,6 +44,11 @@ one-release compatibility path; new provider output must use the Core contract.
 
 ## Flush, evidence, and shutdown
 
+Parse tool content before enrichment inspects known fields. Unknown protocol blocks
+remain JSON, while malformed known blocks are rejected. Deterministic HistoryWriteError
+notifications are isolated and reported, never requeued as transient failures; the
+consumed-prefix watermark includes these explicit rejections so healthy output continues.
+
 These bind `../message-handler.ts` and `../session-transient-store.ts`, which drive
 this pipeline. Flush retries retain notification-level progress and cached
 rich-content materialization — never re-upload an attachment after only its history

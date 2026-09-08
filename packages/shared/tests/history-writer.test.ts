@@ -18,6 +18,100 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it('appends beside damaged old tool blocks and keeps extensions on their own variants', () => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    const map = doc.getList('history').pushContainer(new LoroMap());
+    for (const [key, value] of Object.entries({
+      ...entry(),
+      items: [
+        {
+          type: 'tool_call',
+          toolCallId: 'legacy',
+          status: 'in_progress',
+          content: [
+            { type: 'text', text: 42 },
+            { type: 'text', text: 'old', providerExtra: 1 },
+          ],
+        },
+      ],
+    }))
+      map.set(key, value);
+    doc.commit();
+    mirror.historyWriter.update((history) => {
+      const tool = history[0]!.items![0]!;
+      if (tool.type === 'tool_call') tool.content!.push({ type: 'text', text: 'new' } as never);
+      return history;
+    });
+    expect(doc.getList('history').toJSON()[0].items[0].content[0]).toEqual({
+      type: 'text',
+      text: 42,
+    });
+    mirror.historyWriter.update((history) => {
+      const tool = history[0]!.items![0]!;
+      if (tool.type === 'tool_call')
+        tool.content![1] = { type: 'text', text: 'edited', providerExtra: 2 } as never;
+      return history;
+    });
+    expect(doc.getList('history').toJSON()[0].items[0].content[1].providerExtra).toBe(2);
+    mirror.historyWriter.update((history) => {
+      const tool = history[0]!.items![0]!;
+      if (tool.type === 'tool_call')
+        tool.content![1] = { type: 'diff', path: 'synthetic.ts', newText: 'new' };
+      return history;
+    });
+    expect(doc.getList('history').toJSON()[0].items[0].content[1]).toEqual({
+      type: 'diff',
+      path: 'synthetic.ts',
+      newText: 'new',
+    });
+    mirror.dispose();
+  });
+
+  it('retains JSON protocol extensions without admitting malformed known tool blocks', () => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    const tool = {
+      type: 'tool_call',
+      toolCallId: 'extension-tool',
+      status: 'in_progress',
+      _meta: { provider: { revision: 1 } },
+      locations: [{ path: 'synthetic.ts', endColumn: 12, futureLocation: true }],
+      content: [{ type: 'future_block', payload: { revision: 1 } }],
+    };
+    mirror.historyWriter.append({
+      ...entry(),
+      role: 'assistant',
+      items: [tool],
+    } as unknown as SessionHistory);
+    mirror.historyWriter.update((history) => {
+      const item = history[0]!.items![0]!;
+      if (item.type === 'tool_call')
+        item.content!.push({ type: 'content', content: { type: 'text', text: 'later' } });
+      return history;
+    });
+    expect(doc.getList('history').toJSON()[0].items[0]).toMatchObject({
+      ...tool,
+      content: [tool.content[0], { type: 'content', content: { type: 'text', text: 'later' } }],
+    });
+    expect(doc.getList('history').toJSON()[0].items[0].content).toHaveLength(2);
+    const before = doc.version().toJSON();
+    expect(() =>
+      mirror.historyWriter.append({
+        ...entry('bad'),
+        items: [{ ...tool, content: [{ type: 'text', text: 42 }] }],
+      } as unknown as SessionHistory)
+    ).toThrow('Invalid history write');
+    expect(() =>
+      mirror.historyWriter.append({
+        ...entry('bad-json'),
+        items: [{ ...tool, content: [{ type: 'future_block', payload: () => {} }] }],
+      } as unknown as SessionHistory)
+    ).toThrow('Invalid history write');
+    expect(doc.version().toJSON()).toEqual(before);
+    mirror.dispose();
+  });
+
   it('copies opaque stored content without blessing new malformed input or changing the source', () => {
     const source = new Loro();
     const sourceMirror = open(source);
@@ -122,7 +216,7 @@ describe('single history writer', () => {
     expect(() =>
       mirror.historyWriter.replace('turn', {
         ...mirror.historyWriter.read('turn')!,
-        items: [{ ...stored, content: [{ type: 'future_tool_content', data: 'new' }] }],
+        items: [{ ...stored, content: [{ type: 'text', text: 42 }] }],
       } as unknown as SessionHistory)
     ).toThrow('Invalid history write');
     expect(doc.version().toJSON()).toEqual(version);

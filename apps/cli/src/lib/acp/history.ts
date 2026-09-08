@@ -10,6 +10,9 @@ import {
   getServerNow,
   sanitizeGoalObjective,
   truncateTerminalOutputForHistory,
+  ToolCallContentSchema,
+  parseHistoryWrite,
+  HistoryWriteError,
 } from '@lody/shared';
 import type { ModelInfo } from '@lody/shared';
 import type { RequestPermissionRequest, RequestPermissionResponse } from '@agentclientprotocol/sdk';
@@ -265,7 +268,25 @@ const filterInvalidNotifications = (
   const out: AcpSessionNotification[] = [];
   for (const message of batch) {
     const { update, sessionId } = message;
-    const validation = validateNotificationForHistory(update);
+    let validation = validateNotificationForHistory(update);
+    if (
+      validation.ok &&
+      (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') &&
+      update.content != null
+    ) {
+      try {
+        // Validate before enrichment touches known block fields (e.g. text.trim).
+        // Unknown provider variants remain JSON, rather than masquerading as known text.
+        parseHistoryWrite(ToolCallContentSchema.array(), update.content);
+      } catch (error) {
+        if (!(error instanceof HistoryWriteError)) throw error;
+        validation = {
+          ok: false,
+          reason: 'invalid_tool_content',
+          details: { issues: error.issues },
+        };
+      }
+    }
     if (validation.ok) {
       out.push(message);
       continue;

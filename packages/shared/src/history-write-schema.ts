@@ -80,6 +80,27 @@ export function parseHistoryWrite<T>(schema: z.ZodType<T>, value: unknown): T {
   return result.data;
 }
 
+/** Avoid projecting/parsing every message variant when its literals already differ. */
+export function historyUnionCandidates(
+  schema: z.ZodUnion,
+  value: unknown
+): readonly z.core.$ZodType[] {
+  const mayMatch = (option: z.core.$ZodType): boolean => {
+    if (option instanceof z.ZodUnion) return option.options.some(mayMatch);
+    if (!(option instanceof z.ZodObject) || value === null || typeof value !== 'object')
+      return true;
+    for (const [key, field] of Object.entries(option.shape)) {
+      if (
+        field instanceof z.ZodLiteral &&
+        !(field.values as ReadonlySet<unknown>).has((value as Record<string, unknown>)[key])
+      )
+        return false;
+    }
+    return true;
+  };
+  return schema.options.filter(mayMatch);
+}
+
 // Reuse the business schemas' field definitions, but do not make their stricter
 // external-RPC unknown-key policy a history rewrite policy. Closed objects select
 // known input fields; explicit ACP extension dictionaries remain open.
@@ -87,7 +108,7 @@ function projectInput(schema: z.core.$ZodType, value: unknown): unknown {
   if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable)
     return projectInput(schema.unwrap(), value);
   if (schema instanceof z.ZodUnion) {
-    for (const option of schema.options) {
+    for (const option of historyUnionCandidates(schema, value)) {
       const candidate = projectInput(option, value);
       if (z.safeParse(option, candidate).success) return candidate;
     }

@@ -1461,6 +1461,7 @@ export type MessageContent =
   | SessionGoalContent
   | {
       type: 'tool_call';
+      _meta?: { [k: string]: unknown } | null;
       toolCallId: string;
       title?: string | null;
       status: ToolCallStatus;
