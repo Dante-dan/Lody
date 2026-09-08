@@ -3790,7 +3790,9 @@ export class SessionExecutionService {
           activeSession = nextSession;
           session = nextSession;
           ctx.bindSession(nextSession);
-          nextSession.updateGitIdentity(userName, userEmail, message.userId);
+          nextSession.updateGitIdentity(userName, userEmail, message.userId, {
+            preferMachineIdentity: message.userId === self.deps.userId,
+          });
         };
 
         const sessionInputBlocks = normalizeSessionInputBlocks(

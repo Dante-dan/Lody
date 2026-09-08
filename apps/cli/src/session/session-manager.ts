@@ -321,7 +321,12 @@ export interface ISession {
    * Update git identity for commits made in this session.
    * This should be called when a new user sends a chat request to an existing session.
    */
-  updateGitIdentity(userName: string, userEmail: string, userId?: string): void;
+  updateGitIdentity(
+    userName: string,
+    userEmail: string,
+    userId: string | undefined,
+    options: { preferMachineIdentity: boolean }
+  ): void;
   /**
    * Return the already-resolved effective git identity only when it belongs to
    * the requested user. Forks use this as an optimistic local fast path.
@@ -1200,7 +1205,9 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         sessionId
       );
       session.ghTokenInjected = prepared.session.ghTokenInjected;
-      session.updateGitIdentity(config.userName, config.userEmail, config.requesterUserId);
+      session.updateGitIdentity(config.userName, config.userEmail, config.requesterUserId, {
+        preferMachineIdentity: config.requesterUserId === this.cloudPort.identity.userId,
+      });
       const acpSessionId = await prepared.agentResult;
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       await sessionDoc.setACPSessionId(acpSessionId as ACPSessionId);
@@ -1338,7 +1345,9 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     session.ghTokenInjected = ghTokenInjected;
     const sessionId = config.sessionId!;
     this.logger.debug(`[${sessionId}] Session workdir resolved: ${session.getWorkdir()}`);
-    session.updateGitIdentity(config.userName, config.userEmail, config.requesterUserId);
+    session.updateGitIdentity(config.userName, config.userEmail, config.requesterUserId, {
+      preferMachineIdentity: config.requesterUserId === this.cloudPort.identity.userId,
+    });
     let acpSessionId: string | undefined;
 
     const launchResolutionStartedAt = performance.now();
