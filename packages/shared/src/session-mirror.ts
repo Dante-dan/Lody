@@ -51,7 +51,7 @@ export function createSessionMirror(options: {
     options.doc,
     () => mirror.getState().history as SessionHistory[]
   );
-  for (const entry of initialHistory) writer.append(entry);
+  if (initialHistory.length > 0) writer.update(() => initialHistory);
   return {
     historyWriter: writer as HistoryWriter,
     getState: () => mirror.getState(),
@@ -71,7 +71,15 @@ export function createSessionMirror(options: {
         ? undefined
         : writer.prepare(previous.history, next.history);
       // Preflight history before control fields; Mirror only writes the control delta.
-      mirror.setState({ ...next, history: previous.history } as never);
+      const controlChanged = [...new Set([...Object.keys(previous), ...Object.keys(next)])].some(
+        (key) =>
+          key !== 'history' &&
+          !historyValuesEqual(
+            previous[key as keyof SessionWriteState],
+            next[key as keyof SessionWriteState]
+          )
+      );
+      if (controlChanged) mirror.setState({ ...next, history: previous.history } as never);
       writeHistory?.();
     },
   };

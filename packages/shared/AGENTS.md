@@ -37,3 +37,7 @@
   and extension keys; closed execution configuration still selects declared fields.
 - Steer provenance is a declared history input-config field, not an unknown extension.
   Both new writes and read normalization must retain it for edit-and-resend checks.
+- Scalar/fileDiff writes read and diff only the requested field, never the turn's items.
+  Discriminator lookup comes from the parser schema; final validation remains mandatory.
+  `readStored` returns detached JSON for hashing, not stored-copy provenance. Keep `capture`
+  protection for callers that can author copies from an old snapshot.

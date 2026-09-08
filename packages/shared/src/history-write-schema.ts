@@ -80,13 +80,33 @@ export function parseHistoryWrite<T>(schema: z.ZodType<T>, value: unknown): T {
   return result.data;
 }
 
-/** Avoid projecting/parsing every message variant when its literals already differ. */
+const discriminatedOptions = new WeakMap<z.ZodUnion, Map<unknown, readonly z.core.$ZodType[]>>();
+
+/** Schema-derived discriminator lookup; never duplicate the message variant list. */
 export function historyUnionCandidates(
   schema: z.ZodUnion,
   value: unknown
 ): readonly z.core.$ZodType[] {
+  if (schema instanceof z.ZodDiscriminatedUnion) {
+    const key = schema.def.discriminator;
+    let index = discriminatedOptions.get(schema);
+    if (!index) {
+      index = new Map();
+      for (const option of schema.options) {
+        if (!(option instanceof z.ZodObject) || !(option.shape[key] instanceof z.ZodLiteral)) {
+          // Only optimize literal discriminators; other Zod schemas retain their own semantics.
+          return schema.options;
+        }
+        for (const literal of option.shape[key].values) index.set(literal, [option]);
+      }
+      discriminatedOptions.set(schema, index);
+    }
+    return value !== null && typeof value === 'object'
+      ? (index.get((value as Record<string, unknown>)[key]) ?? [])
+      : [];
+  }
   const mayMatch = (option: z.core.$ZodType): boolean => {
-    if (option instanceof z.ZodUnion) return option.options.some(mayMatch);
+    if (option instanceof z.ZodUnion) return historyUnionCandidates(option, value).length > 0;
     if (!(option instanceof z.ZodObject) || value === null || typeof value !== 'object')
       return true;
     for (const [key, field] of Object.entries(option.shape)) {
@@ -108,7 +128,10 @@ function projectInput(schema: z.core.$ZodType, value: unknown): unknown {
   if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable)
     return projectInput(schema.unwrap(), value);
   if (schema instanceof z.ZodUnion) {
-    for (const option of historyUnionCandidates(schema, value)) {
+    const candidates = historyUnionCandidates(schema, value);
+    // Final safeParse still validates the entire selected branch once.
+    if (candidates.length === 1) return projectInput(candidates[0]!, value);
+    for (const option of candidates) {
       const candidate = projectInput(option, value);
       if (z.safeParse(option, candidate).success) return candidate;
     }
@@ -147,13 +170,41 @@ function withoutTransportIds(value: unknown, ancestors = new Set<object>()): unk
   )
     return value;
   ancestors.add(value);
-  const result = Array.isArray(value)
-    ? value.map((child) => withoutTransportIds(child, ancestors))
-    : Object.fromEntries(
-        Object.entries(value)
-          .filter(([key]) => key !== '$cid')
-          .map(([key, child]) => [key, withoutTransportIds(child, ancestors)])
-      );
+  // Most new provider data has no transport ids. Walk for cycles, but only
+  // allocate a copy where stripping an id actually changes the value.
+  let result: unknown = value;
+  if (Array.isArray(value)) {
+    let copy: unknown[] | undefined;
+    value.forEach((child, i) => {
+      const next = withoutTransportIds(child, ancestors);
+      if (next !== child) {
+        copy ??= value.slice();
+        copy[i] = next;
+      }
+    });
+    result = copy ?? value;
+  } else {
+    const object = value as Record<string, unknown>;
+    let copy: Record<string, unknown> | undefined;
+    for (const key of Object.keys(object)) {
+      if (key === '$cid') {
+        copy ??= { ...object };
+        delete copy[key];
+      } else {
+        const next = withoutTransportIds(object[key], ancestors);
+        if (next !== object[key]) {
+          copy ??= { ...object };
+          Object.defineProperty(copy, key, {
+            value: next,
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
+        }
+      }
+    }
+    result = copy ?? value;
+  }
   ancestors.delete(value);
   return result;
 }

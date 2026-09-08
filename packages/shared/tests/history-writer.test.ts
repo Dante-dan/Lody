@@ -18,6 +18,38 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it('updates only the requested field beside opaque history and preserves nested extensions', () => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    const turn = doc.getList('history').pushContainer(new LoroMap());
+    turn.set('id', 'field-target');
+    turn.set('role', 'assistant');
+    turn.set('items', [{ type: 'future', payload: { text: 42 } }]);
+    turn.set('fileDiff', [{ filePath: 'a.ts', add: 1, del: 0, future: 'keep' }]);
+    doc.commit();
+    const items = turn.get('items');
+    mirror.historyWriter.setField('field-target', 'fileDiff', [
+      { filePath: 'a.ts', add: 2, del: 0 },
+    ]);
+    expect(turn.toJSON().fileDiff).toEqual([{ filePath: 'a.ts', add: 2, del: 0, future: 'keep' }]);
+    mirror.historyWriter.setField('field-target', 'finished', true);
+    mirror.historyWriter.setField('field-target', 'finished', undefined);
+    expect(turn.get('items')).toEqual(items);
+    expect(turn.keys()).not.toContain('finished');
+    const version = doc.version().toJSON();
+    expect(() => mirror.historyWriter.setField('field-target', 'finished', 'bad' as never)).toThrow(
+      'Invalid history write'
+    );
+    expect(() =>
+      mirror.historyWriter.setField('field-target', 'items' as never, [] as never)
+    ).toThrow('invalid_field');
+    expect(doc.version().toJSON()).toEqual(version);
+    const detached = mirror.historyWriter.readStored();
+    detached[0]!.items = [];
+    expect(turn.get('items')).toEqual(items);
+    mirror.dispose();
+  });
+
   it.each(['before-rollback', 'after-rollback'] as const)(
     'preserves a peer prefix edit arriving %s',
     (arrival) => {

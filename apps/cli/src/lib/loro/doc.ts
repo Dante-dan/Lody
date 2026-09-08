@@ -2543,7 +2543,7 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
       update(history, mirror.getState().externalHistoryCursor)
     );
     // Capture immediately, before an awaited caller could observe a peer/local edit.
-    const cursor = createCursor(mirror.historyWriter.capture().history);
+    const cursor = createCursor(mirror.historyWriter.readStored());
     mirror.setState({ externalHistoryCursor: cursor });
   }
 

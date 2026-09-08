@@ -54,9 +54,11 @@ function preserveUnknown(
   if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable)
     return preserveUnknown(schema.unwrap(), old, input, parsed);
   if (schema instanceof z.ZodUnion) {
-    const option = historyUnionCandidates(schema, parsed).find(
-      (candidate) => z.safeParse(candidate, parsed).success
-    );
+    const candidates = historyUnionCandidates(schema, parsed);
+    const option =
+      candidates.length === 1
+        ? candidates[0]
+        : candidates.find((candidate) => z.safeParse(candidate, parsed).success);
     return option ? preserveUnknown(option, old, input, parsed) : parsed;
   }
   if (schema instanceof z.ZodObject && record(parsed)) {
@@ -107,8 +109,11 @@ function preserveUnknown(
   return parsed;
 }
 
-const cleanNew = (schema: z.ZodType, input: unknown, old?: unknown): unknown =>
-  preserveUnknown(schema, old, input, parseHistoryWrite(schema, input));
+const cleanNew = (schema: z.ZodType, input: unknown, old?: unknown): unknown => {
+  const parsed = parseHistoryWrite(schema, input);
+  // There is no stored extension to merge for a newly authored value.
+  return old === undefined ? parsed : preserveUnknown(schema, old, input, parsed);
+};
 
 // One independently editable group, derived from the message definition rather
 // than a second set of validators. Tool identity stays outside this group.
@@ -241,6 +246,8 @@ function prepareReplacement(previous: unknown, incoming: unknown): Record<string
 }
 
 export interface HistoryWriter {
+  /** Detached stored JSON for inspection/hashing; not copy/rollback provenance. */
+  readStored(): SessionHistoryInput[];
   capture(): StoredHistorySnapshot;
   /** Prepend copied history, retaining target initialization rows; ids must not collide. */
   copyFrom(snapshot: StoredHistorySnapshot, history: SessionHistoryInput[]): void;
@@ -309,8 +316,8 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
         throw new HistoryWriteError([{ path: ['history'], code: 'unsupported_reorder' }]);
       last = index;
       used.add(index);
+      if (historyValuesEqual(previous[index], entry)) return { index };
       const map = list.get(index);
-      if (historyValuesEqual(previous[index], entry)) return { index, map };
       if (!isContainer(map) || map.kind() !== 'Map')
         throw new HistoryWriteError([{ path: ['history', index], code: 'invalid_stored_turn' }]);
       return { index, map, value: prepareValue(previous[index], entry) };
@@ -341,9 +348,12 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
     planWrite(previous, next);
 
   const writer: HistoryWriter = {
+    readStored() {
+      return list.toJSON() as SessionHistoryInput[];
+    },
     capture() {
       // Read the actual document, not a normalized projection or caller-owned array.
-      const history = list.toJSON() as SessionHistoryInput[];
+      const history = writer.readStored();
       const snapshot = Object.freeze({
         get history() {
           return structuredClone(history);
@@ -451,9 +461,29 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       prepare(previous, next)();
     },
     setField(id, key, value) {
-      const previous = writer.read(id);
-      if (!previous) return false;
-      return writer.replace(id, { ...previous, [key]: value });
+      const map = locate(id);
+      if (!map) return false;
+      const field = HistoryEntryWriteSchema.shape[key];
+      if (
+        !Object.hasOwn(HistoryEntryWriteSchema.shape, key) ||
+        key === ('id' as string) ||
+        key === ('items' as string)
+      )
+        throw new HistoryWriteError([{ path: [key], code: 'invalid_field' }]);
+      const stored = map.get(key);
+      const previous = isContainer(stored) ? stored.toJSON() : stored;
+      if (historyValuesEqual(previous, value)) return true;
+      const parsed = cleanNew(field, value, previous);
+      // A partial map diff only visits this key; it neither reads nor authors items.
+      diffHistoryContainer(
+        map,
+        sessionHistorySchema,
+        { [key]: previous },
+        { [key]: parsed },
+        undefined
+      );
+      doc.commit();
+      return true;
     },
     respondPermission(requestId, outcome, options) {
       parseHistoryWrite(PermissionOutcomeSchema, outcome);
