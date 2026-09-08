@@ -2,6 +2,7 @@
 
 Status: implemented
 Translation: pending
+PR: https://github.com/LodyAI/Lody/pull/499
 
 English | [中文](2026-09-07-ci-affected-tests.zh.md)
 
