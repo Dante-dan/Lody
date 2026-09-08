@@ -326,7 +326,7 @@ export interface ISession {
     userEmail: string,
     userId: string | undefined,
     options: { preferMachineIdentity: boolean }
-  ): void;
+  ): boolean;
   /**
    * Return the already-resolved effective git identity only when it belongs to
    * the requested user. Forks use this as an optimistic local fast path.
@@ -1205,9 +1205,21 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         sessionId
       );
       session.ghTokenInjected = prepared.session.ghTokenInjected;
-      session.updateGitIdentity(config.userName, config.userEmail, config.requesterUserId, {
-        preferMachineIdentity: config.requesterUserId === this.cloudPort.identity.userId,
-      });
+      const identityRequiresRestart = session.updateGitIdentity(
+        config.userName,
+        config.userEmail,
+        config.requesterUserId,
+        {
+          preferMachineIdentity: config.requesterUserId === this.cloudPort.identity.userId,
+        }
+      );
+      if (identityRequiresRestart) {
+        this.logger.debug(
+          `[${sessionId}] Discarding prepared ACP process because its Git identity snapshot is stale`
+        );
+        await prepared.dispose();
+        return await this.createSessionInnerWithAgent(config, agentStart);
+      }
       const acpSessionId = await prepared.agentResult;
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       await sessionDoc.setACPSessionId(acpSessionId as ACPSessionId);

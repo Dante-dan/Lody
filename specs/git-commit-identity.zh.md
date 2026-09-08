@@ -19,6 +19,10 @@ owner 的身份。
 与 committer 环境变量。GitHub 鉴权仍是独立的、绑定请求者的决策，不会改变 commit 对象
 中的 author 或 committer。
 
+ACP 进程会在启动时快照环境。如果复用 session 时有效 Git identity 发生变化，Lody 必须在提交
+下一个 prompt 前终止旧进程，并使用新环境恢复同一个 ACP session；不得把该 prompt 提交给旧
+进程。identity 未变化时无需重启。
+
 ## 证据
 
 身份选择实现在 `apps/cli/src/session/git-identity.ts`。初次创建 session 时，

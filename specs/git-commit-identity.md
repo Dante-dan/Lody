@@ -21,6 +21,11 @@ The selected name and email are exported as both Git author and committer enviro
 GitHub authentication remains a separate requester-bound decision and does not change the commit
 object's author or committer.
 
+An ACP process snapshots its environment at launch. If the effective Git identity changes while
+reusing a session, Lody must terminate the stale process and resume the same ACP session with the
+new environment before submitting the next prompt. It must not submit that prompt to the stale
+process. An unchanged identity does not require a restart.
+
 ## Evidence
 
 Identity selection is implemented in `apps/cli/src/session/git-identity.ts`. Initial session

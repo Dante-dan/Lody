@@ -171,7 +171,9 @@ Lody/GitHub identity and can never inherit the machine owner's Git config; if no
 identity exists, the neutral LodyAI identity is used. The cloud composition root owns hosted
 user resolution because the daemon does not own an end-user browser session; the local access
 port resolves only its synthetic owner and never performs network I/O. PR and push identity
-itself comes from the requester-bound GitHub token, not from git config.
+itself comes from the requester-bound GitHub token, not from git config. Because an ACP process
+snapshots its launch environment, a changed effective identity terminates and resumes that ACP
+session before the next prompt; unchanged identities keep the existing process.
 
 ### Speculative preparation
 

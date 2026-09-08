@@ -26,6 +26,11 @@ identity。这样既保留 owner 明确配置的仓库身份，也避免团队�
 非 owner 路径不会读取机器 Git 配置。GitHub PR、评论、合并和 push 的鉴权仍由独立的、
 绑定请求者的 GitHub token 控制。
 
+ACP 子进程会在启动时快照环境，因此只更新 host 侧 Session 配置无法改变后续工具子进程。
+Session 会记录启动快照中的 identity；新 turn 解析出不同 identity 时，执行层会先终止旧子进程，
+再以重新构建的环境恢复同一个 ACP session，之后才发送 prompt。这样无需增加 adapter 特定的
+可变环境协议，并且只有 identity 变化时才承担重启成本。
+
 ## 备选方案
 
 没有采用精确判断“单人 workspace 或私密机器”的方案。CLI 并不持续持有这两个权威状态，
@@ -40,7 +45,7 @@ identity。这样既保留 owner 明确配置的仓库身份，也避免团队�
 `apps/cli/src/session/session-manager.ts` 与
 `apps/cli/src/session/session-execution-service.ts` 传递。单元测试位于
 `apps/cli/tests/git-identity.test.ts`，产品意图以 draft 记录在
-`specs/git-commit-identity.md`。初始化并构建锁定版本的 ACP extension submodule 后，
-身份定向测试共九项及 CLI typecheck 均已通过。仓库级检查也完成了 typecheck 和 lint
-（lint 为零错误），随后因无关的 components 测试运行时在 152 个测试文件中将 React
+`specs/git-commit-identity.md`。identity、environment、execution-service 与 session-manager
+定向测试共 121 项，均已通过，CLI typecheck 也通过。此前的仓库级检查完成了 typecheck 和
+lint（lint 为零错误），随后因无关的 components 测试运行时在 152 个测试文件中将 React
 `act` 暴露为非函数而停止。

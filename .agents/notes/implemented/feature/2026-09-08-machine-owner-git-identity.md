@@ -29,6 +29,12 @@ The source order is:
 The non-owner path does not read machine Git configuration. GitHub PR, comment, merge, and push
 authorization remains controlled by the separately requester-bound GitHub token.
 
+The ACP child snapshots its environment at launch, so updating the host-side Session config alone
+cannot change later tool subprocesses. Session records the identity in that launch snapshot. When
+a new turn resolves a different identity, execution terminates the stale child and resumes the
+same ACP session under a freshly built environment before sending the prompt. This avoids an
+adapter-specific mutable-environment protocol and pays the restart cost only on identity changes.
+
 ## Alternatives
 
 Using exact "single-member workspace or private machine" predicates was rejected. The CLI does
@@ -44,7 +50,8 @@ The behavior is implemented by `apps/cli/src/session/git-identity.ts`, with owne
 through `apps/cli/src/session/session-manager.ts` and
 `apps/cli/src/session/session-execution-service.ts`. Unit coverage is in
 `apps/cli/tests/git-identity.test.ts`. Product intent is recorded in
-`specs/git-commit-identity.md` as a draft. The focused nine-test identity suite and CLI typecheck
-passed after initializing and building the pinned ACP extension submodules. The repository-wide
-check completed typecheck and lint (zero lint errors), then stopped in the unrelated components
-suite because its React runtime exposed `act` as a non-function across 152 test files.
+`specs/git-commit-identity.md` as a draft. The focused identity, environment, execution-service,
+and session-manager suites pass (121 tests total), as does CLI typecheck. The earlier
+repository-wide check completed typecheck and lint (zero lint errors), then stopped in the
+unrelated components suite because its React runtime exposed `act` as a non-function across 152
+test files.

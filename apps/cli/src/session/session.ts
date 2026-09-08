@@ -112,6 +112,12 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
   private agentProcess: SessionProcessHandle | null = null;
   private readonly sandbox: SessionSandbox;
   private gitIdentity: { id: string; name: string; email: string };
+  private agentGitIdentitySnapshot: {
+    authorName: string;
+    authorEmail: string;
+    committerName: string;
+    committerEmail: string;
+  } | null = null;
   public agentClient: AgentClient | null = null;
   public acpSessionId: ACPSessionId | null = null;
   private acpCapabilities: AcpCapabilitiesResult | null = null;
@@ -295,6 +301,7 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
 
     this.activeProcess = null;
     this.agentProcess = null;
+    this.agentGitIdentitySnapshot = null;
     this.agentClient = null;
     this.acpSessionId = null;
     this.acpCapabilities = null;
@@ -374,7 +381,7 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
     userEmail: string,
     userId: string | undefined,
     options: { preferMachineIdentity: boolean }
-  ): void {
+  ): boolean {
     const configEnv = this.config.env ?? {};
     // Set git identity using Git's recognized environment variables directly
     const { name, email } = resolveSessionGitIdentity(
@@ -395,6 +402,13 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
       email,
     };
     this.logger.debug(`[${this.sessionId}] Git identity updated: ${name} <${email}>`);
+    return (
+      this.agentGitIdentitySnapshot !== null &&
+      (this.agentGitIdentitySnapshot.authorName !== name ||
+        this.agentGitIdentitySnapshot.authorEmail !== email ||
+        this.agentGitIdentitySnapshot.committerName !== name ||
+        this.agentGitIdentitySnapshot.committerEmail !== email)
+    );
   }
 
   getGitIdentityForUser(userId: string): { id: string; name: string; email: string } | null {
@@ -492,6 +506,12 @@ export class Session extends EventEmitter<SessionEvents> implements ISession {
       callbacks.command,
       this.buildShellEnv(callbacks.env, loginShellEnv)
     );
+    this.agentGitIdentitySnapshot = {
+      authorName: env.GIT_AUTHOR_NAME ?? '',
+      authorEmail: env.GIT_AUTHOR_EMAIL ?? '',
+      committerName: env.GIT_COMMITTER_NAME ?? '',
+      committerEmail: env.GIT_COMMITTER_EMAIL ?? '',
+    };
     const launcher: AcpLauncher = resolveAcpLauncher(callbacks.command);
     const spawnAnalyticsProps = {
       cliType: callbacks.cliType,
