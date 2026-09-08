@@ -311,6 +311,120 @@ describe('deferred operation input at the provider boundary', () => {
     }
   );
 
+  it.each([
+    {
+      name: 'automatic successor',
+      explicitStop: true,
+      humanBetween: false,
+      depth: 1,
+      replaceWithHuman: false,
+      knownTarget: true,
+      cancelled: true,
+    },
+    {
+      name: 'new human boundary',
+      explicitStop: true,
+      humanBetween: true,
+      depth: 1,
+      replaceWithHuman: false,
+      knownTarget: true,
+      cancelled: false,
+    },
+    {
+      name: 'human-owned current turn',
+      explicitStop: true,
+      humanBetween: false,
+      depth: 0,
+      replaceWithHuman: false,
+      knownTarget: true,
+      cancelled: false,
+    },
+    {
+      name: 'turn-only cancel',
+      explicitStop: false,
+      humanBetween: false,
+      depth: 1,
+      replaceWithHuman: false,
+      knownTarget: true,
+      cancelled: false,
+    },
+    {
+      name: 'human handoff during history read',
+      explicitStop: true,
+      humanBetween: false,
+      depth: 1,
+      replaceWithHuman: true,
+      knownTarget: true,
+      cancelled: false,
+    },
+    {
+      name: 'unknown stopped turn',
+      explicitStop: true,
+      humanBetween: false,
+      depth: 1,
+      replaceWithHuman: false,
+      knownTarget: false,
+      cancelled: false,
+    },
+  ])('honors delayed Stop only across an automatic successor: $name', async (testCase) => {
+    const sessionId = 'delayed-stop' as SessionId;
+    const effects: string[] = [];
+    const runtime = {
+      sessionId,
+      turnId: 'assistant-B',
+      invocation: { sourceTurnId: 'completion-B', inputConfig: { chainDepth: testCase.depth } },
+      promptInFlight: false,
+      cancelRequested: false,
+    };
+    const doc = {
+      getMetaState: async () => ({}),
+      updateHistory: async () => {},
+      setStatus: async () => {},
+      getHistory: async () => {
+        if (testCase.replaceWithHuman) {
+          runtime.turnId = 'assistant-human';
+          runtime.invocation = { sourceTurnId: 'human-new', inputConfig: { chainDepth: 0 } };
+        }
+        return [
+          ...(testCase.knownTarget ? [{ id: 'assistant-A', role: 'assistant', items: [] }] : []),
+          ...(testCase.humanBetween ? [{ id: 'human-new', role: 'user', items: [] }] : []),
+          { id: 'completion-B', role: 'system', items: [{ type: 'operation_completion' }] },
+          { id: 'assistant-B', role: 'assistant', items: [] },
+        ];
+      },
+    };
+    const deps = createBaseDeps({
+      getActiveTurnId: () => runtime.turnId,
+      deferredOperations: {
+        stop: (_sessionId, sourceTurnId) => {
+          expect(runtime.cancelRequested).toBe(false);
+          effects.push(sourceTurnId);
+        },
+        startInput: () => undefined,
+      },
+      workspaceDocument: {
+        ...createBaseDeps({}).workspaceDocument,
+        getOrCreateSessionDoc: async () => doc,
+      } as unknown as LoroDocumentManager,
+    });
+    const service = new SessionExecutionService(deps);
+    (
+      service as unknown as { turnRuntimeBySession: Map<SessionId, typeof runtime> }
+    ).turnRuntimeBySession.set(sessionId, runtime);
+    await service.cancelSession(
+      {
+        type: 'session/cancel',
+        sessionId,
+        turnId: 'assistant-A',
+        machineId: 'machine-1',
+        workspaceId: 'workspace-1' as WorkspaceId,
+      },
+      { deferOperations: testCase.explicitStop }
+    );
+    expect(runtime.cancelRequested).toBe(testCase.cancelled);
+    expect(effects).toEqual(testCase.cancelled ? ['completion-B'] : []);
+  });
+
   it('persists explicit Stop before cancellation and excludes stale and internal cancels', async () => {
     const sessionId = 'stop-deliveries' as SessionId;
     const effects: string[] = [];
@@ -335,7 +449,7 @@ describe('deferred operation input at the provider boundary', () => {
     const runtime = {
       sessionId,
       turnId: 'current',
-      invocation: { sourceTurnId: 'human-1' },
+      invocation: { sourceTurnId: 'human-1', inputConfig: {} },
       promptInFlight: false,
       cancelRequested: false,
     };

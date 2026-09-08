@@ -4947,16 +4947,48 @@ export class SessionExecutionService {
     success: boolean;
     error?: string;
   }> {
-    const { sessionId, turnId } = message;
+    const { sessionId } = message;
+    let turnId = message.turnId;
     this.deps.logger.info(`Session stop requested: ${sessionId}`);
     this.deps.logger.debug(`[${sessionId}] Received stop request for turn ${turnId}`);
     const sessionDoc = await this.deps.workspaceDocument.getOrCreateSessionDoc(sessionId);
+    const initialRuntime = this.turnRuntimeBySession.get(sessionId);
+    if (
+      options?.deferOperations &&
+      initialRuntime &&
+      initialRuntime.turnId !== turnId &&
+      (initialRuntime.invocation?.inputConfig.chainDepth ?? 0) > 0
+    ) {
+      const history = await sessionDoc.getHistory();
+      // Re-read ownership after the history await: a human steer or a new turn
+      // may have replaced the automatic reply while the request was in transit.
+      const successor = this.turnRuntimeBySession.get(sessionId);
+      const stoppedIndex = history.findIndex(
+        (entry) => entry.id === message.turnId && entry.role === 'assistant'
+      );
+      const later = stoppedIndex >= 0 ? history.slice(stoppedIndex + 1) : [];
+      if (
+        successor &&
+        (successor.invocation?.inputConfig.chainDepth ?? 0) > 0 &&
+        stoppedIndex >= 0 &&
+        !later.some((entry) => entry.role === 'user') &&
+        later.some(
+          (entry) =>
+            entry.id === successor.invocation?.sourceTurnId &&
+            entry.role === 'system' &&
+            entry.items?.some((item) => item.type === 'operation_completion')
+        )
+      ) {
+        turnId = successor.turnId;
+      }
+    }
     const activeTurnId = this.deps.getActiveTurnId(sessionId);
     const executionTurnId = this.currentTurnBySession.get(sessionId);
     const isPrompting = activeTurnId === turnId;
     const isCurrentExecutionTurn = executionTurnId === turnId;
     const currentTurnId = activeTurnId ?? this.currentTurnBySession.get(sessionId);
-    // Cancel is exact-match only: a stale stop request must not interrupt a newer assistant turn.
+    // Ordinary cancellation stays exact-match. Explicit Stop may follow a
+    // proven automatic completion successor, but never cross a human input.
     if (!isPrompting && !isCurrentExecutionTurn) {
       if (options?.deferOperations && !currentTurnId) {
         // The displayed turn can finish while the stop request is in transit.
