@@ -82,8 +82,8 @@ await test('session-handoff English FAQ matches the page and emits FAQPage JSON-
 });
 
 await test('kimi-vs-claude-code English FAQ stays a workspace choice, not a benchmark', () => {
-  const fromMdx = extractFaqFromMdx(readDoc('content/docs/en/(features)/kimi-vs-claude-code.mdx'));
-  const items = docsFaqByPath['/docs/kimi-vs-claude-code'] ?? [];
+  const fromMdx = extractFaqFromMdx(readDoc('content/docs/en/compare/kimi-vs-claude-code.mdx'));
+  const items = docsFaqByPath['/docs/compare/kimi-vs-claude-code'] ?? [];
   assert.equal(items.length, 5);
   assert.deepEqual(items, fromMdx);
   assert.equal(items[0]?.question, 'Kimi vs Claude Code — which should I use in Lody?');

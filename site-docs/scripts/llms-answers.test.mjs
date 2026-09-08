@@ -54,7 +54,7 @@ await test('llms answer blocks cover the GEO questions and only link live docs',
   assert.ok(existsSync(path.join(docsEnRoot, '(features)', 'session-handoff.mdx')));
 
   const kimiVsClaude = LLMS_ANSWERS.find((block) => /Kimi vs Claude Code/iu.test(block.question));
-  assert.ok(kimiVsClaude?.links.some((link) => link.sitePath === '/docs/kimi-vs-claude-code'));
+  assert.ok(kimiVsClaude?.links.some((link) => link.sitePath === '/docs/compare/kimi-vs-claude-code'));
   assert.ok(kimiVsClaude?.links.some((link) => link.sitePath === '/docs/agents'));
-  assert.ok(existsSync(path.join(docsEnRoot, '(features)', 'kimi-vs-claude-code.mdx')));
+  assert.ok(existsSync(path.join(docsEnRoot, 'compare', 'kimi-vs-claude-code.mdx')));
 });

@@ -49,7 +49,7 @@ export const LLMS_ANSWERS = [
       'They are different agent configs in the same workspace, not a workspace-wide winner. You can run both at once in separate sessions. Kimi Code is not the same as pointing a Claude-compatible endpoint at Kimi’s API.',
     ].join('\n\n'),
     links: [
-      { title: 'Kimi vs Claude Code', sitePath: '/docs/kimi-vs-claude-code' },
+      { title: 'Kimi vs Claude Code', sitePath: '/docs/compare/kimi-vs-claude-code' },
       { title: 'Agent Config', sitePath: '/docs/agents' },
       { title: 'CLI Runtime Types', sitePath: '/docs/cli-runtimes' },
     ],
