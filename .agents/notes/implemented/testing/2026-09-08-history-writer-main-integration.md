@@ -38,3 +38,17 @@ Neither these tests nor earlier synthetic timing measurements
 establish 3000-round desktop/mobile acceptance. No release or merge to main is implied.
 
 PR: [#460](https://github.com/LodyAI/Lody/pull/460).
+
+## September 9 integration
+
+Merge main `e12cb225` into PR head `84bda6aa`, retaining published history rather
+than rebasing the reviewed commits. The sole textual conflict is `setForkOperation`:
+keep main's clear-and-commit of the permanent root map, with the PR's mutable
+session facade for nonempty values. This is control metadata, not a second history
+writer. Adapt main's clear/reuse regression to construct the real shared facade.
+The [root-clear fix](../bug-fix/2026-09-08-session-fork-operation-clear.md) remains
+intact; no storage migration or history rewrite is introduced.
+
+Validation: all 38 focused fork/clear/edit-and-resend tests passed, followed by
+full `pnpm check`, formatting and docs checks on the integrated tree. No desktop
+journey or long-conversation performance acceptance was performed for this merge.

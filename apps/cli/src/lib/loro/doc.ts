@@ -2071,12 +2071,18 @@ export class SessionDocument implements LoroDocument<SessionDocMeta, SessionMeta
     if (!this.mirror) {
       throw new Error('SessionDocument not initialized');
     }
-    this.mirror.setState((prev) => {
-      if (operation) {
-        prev.forkOperation = operation;
-      } else {
-        delete prev.forkOperation;
+    if (!operation) {
+      if (!this.handle) {
+        throw new Error('SessionDocument not initialized');
       }
+      // Loro root containers are permanent. Clear the operation's fields while
+      // keeping the root map available for a later fork on this Session.
+      this.handle.doc.getMap('forkOperation').clear();
+      this.handle.doc.commit();
+      return;
+    }
+    this.mirror.setState((prev) => {
+      prev.forkOperation = operation;
       return prev;
     });
   }
