@@ -138,6 +138,14 @@ function historyInputSchema(schema: z.core.$ZodType): z.core.$ZodType {
     result = schema.clone({ ...schema.def, innerType: historyInputSchema(schema.unwrap()) });
   } else if (schema instanceof z.ZodNullable) {
     result = schema.clone({ ...schema.def, innerType: historyInputSchema(schema.unwrap()) });
+  } else if (schema instanceof z.ZodPipe) {
+    // Preserve preprocessing/transforms, while selecting known fields on both
+    // sides of the pipe (notably the legacy inputConfig normalizer's output).
+    result = schema.clone({
+      ...schema.def,
+      in: historyInputSchema(schema.def.in),
+      out: historyInputSchema(schema.def.out),
+    });
   } else if (schema instanceof z.ZodUnion) {
     result = schema.clone({ ...schema.def, options: schema.options.map(historyInputSchema) });
   } else if (schema instanceof z.ZodArray) {

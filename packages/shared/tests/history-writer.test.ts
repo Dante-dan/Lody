@@ -20,6 +20,66 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it('filters nested config extensions on append and resend without rewriting stored input', () => {
+    const doc = new Loro();
+    const stored = {
+      ...entry('old'),
+      inputConfig: {
+        cliType: 'claude',
+        inputBlocks: [{ type: 'text', text: 'hello', futureKey: true }],
+        issuePRMentions: [
+          {
+            type: 'issue',
+            title: 'Synthetic',
+            url: 'https://example.com/1',
+            number: 1,
+            futureKey: true,
+          },
+        ],
+      },
+    };
+    const row = doc.getList('history').pushContainer(new LoroMap());
+    for (const [key, value] of Object.entries(stored)) row.set(key, value);
+    doc.commit();
+    const mirror = open(doc);
+    try {
+      const expectedConfig = {
+        cliType: 'builtin',
+        agentType: 'claude',
+        inputBlocks: [{ type: 'text', text: 'hello' }],
+        issuePRMentions: [
+          { type: 'issue', title: 'Synthetic', url: 'https://example.com/1', number: 1 },
+        ],
+      };
+      mirror.historyWriter.append({ ...stored, id: 'appended' } as unknown as SessionHistory);
+      expect(doc.getList('history').toJSON()[1].inputConfig).toEqual(expectedConfig);
+      expect(row.toJSON()).toEqual(stored);
+      // A fresh resend authors a new turn from the old turn's configuration.
+      const rollback = mirror.historyWriter.updateWithRollback((history) => [
+        ...history,
+        { ...history[0]!, id: 'resent' },
+      ]);
+      expect(doc.getList('history').toJSON()[2].inputConfig).toEqual(expectedConfig);
+      expect(row.toJSON()).toEqual(stored);
+      rollback();
+      const version = doc.version().toJSON();
+      expect(() =>
+        mirror.historyWriter.append({
+          ...stored,
+          id: 'invalid',
+          inputConfig: {
+            ...stored.inputConfig,
+            inputBlocks: [{ type: 'text', text: 42, futureKey: true }],
+          },
+        } as unknown as SessionHistory)
+      ).toThrow();
+      expect(doc.version().toJSON()).toEqual(version);
+      expect(row.toJSON()).toEqual(stored);
+    } finally {
+      mirror.dispose();
+    }
+  });
+
   it.each(['claude', 'codex'])('normalizes legacy %s config only on new writes', (cliType) => {
     const doc = new Loro();
     const mirror = open(doc);
@@ -101,6 +161,12 @@ describe('single history writer', () => {
       'custom'
     );
     expect(input.nested.$cid).toBe('transport');
+    const pipeline = z
+      .preprocess((value) => ({ nested: value }), schema)
+      .transform((value) => ({ count: value.nested.count + 1 }));
+    expect(parseHistoryWrite(pipeline, { count: 2, future: true })).toEqual({ count: 3 });
+    expect(pipeline.safeParse({ count: 2, future: true }).success).toBe(false);
+    expect(() => parseHistoryWrite(pipeline, { count: -1, future: true })).toThrow('custom');
   });
 
   it('updates a target after peer insert/delete without touching other turns', () => {

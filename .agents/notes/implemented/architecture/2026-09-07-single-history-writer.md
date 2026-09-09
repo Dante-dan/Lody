@@ -77,7 +77,12 @@ changed refreshes remains a performance concern; no hash-chain replacement is im
 ## Performance and reproduction
 
 Input schemas are cloned/cached with refinements retained and parsed once; discriminator
-indexes derive from schema literals. Scalar/fileDiff writes read only their field.
+indexes derive from schema literals. Schema derivation traverses both sides of ZodPipe,
+preserving preprocess/transform functions: the legacy config wrapper previously hid strict
+nested objects, rejecting unknown inputBlocks/issuePRMentions fields. Real-writer append
+and resend/rollback tests verify filtering new fields without rewriting the old row or
+accepting wrong known-field types; parser tests retain transforms and refinements.
+Scalar/fileDiff writes read only their field.
 ACP text/thought-only batches use target-local updateEntry; tool/subagent/mixed batches
 retain cross-turn routing. Existing Text edits keep container ids and primitive strings
 stay primitive. No storage migration, attachment externalization or #359 hash-v2 rollout.

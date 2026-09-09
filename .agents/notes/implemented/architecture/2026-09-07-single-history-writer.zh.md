@@ -58,6 +58,11 @@ role/items/plan hashes 与 source digest、长度绑定。它区分新写入投�
 
 ## 性能与复现
 
+schema 派生必须遍历 ZodPipe 两侧，保留 preprocess/transform 函数。旧配置转换包装曾
+遮住内部 strict 对象，导致 inputBlocks/issuePRMentions 的未知字段被拒绝。真实 writer
+的追加与重发/回滚测试验证：新字段被过滤、旧行不被重写、已知字段类型错误仍被拒绝；
+parser 测试另验证转换和 refinement 保留。
+
 输入 schema 缓存派生且保留 refinement，单次解析；discriminator 索引来自 schema。
 标量/fileDiff 只读取目标字段。ACP 纯 text/thought 走 updateEntry；
 tool/subagent/mixed 保留跨 turn 路由。旧 Text 修改保留 CID，primitive 不升级。
