@@ -2446,7 +2446,9 @@ describe('SessionExecutionService', () => {
         // Per-model reasoning efforts: absent for this agent, which publishes no
         // legacy `model[effort]` combination list.
         undefined,
-        true
+        true,
+        // Goal actions: the fixture client advertises no goal extension.
+        undefined
       )
     );
   });
@@ -6169,6 +6171,8 @@ describe('SessionExecutionService', () => {
       'registry:deepseek:unknown',
       capability.modelReasoningEfforts,
       true,
+      // Goal actions: this runtime advertises no goal extension.
+      undefined,
       { signal: expect.any(AbortSignal) }
     );
     expect(result).toEqual(
@@ -6523,5 +6527,142 @@ describe('SessionExecutionService', () => {
     const second = await service.refreshMachineAcpCapabilities(request);
     expect(second).toEqual(expect.objectContaining({ success: true }));
     expect(fetchAcpCapabilities).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('SessionExecutionService goal control', () => {
+  const goalSessionId = 'session-goal' as SessionId;
+
+  const createGoalService = (
+    overrides: {
+      transport?: 'request' | 'promptMeta' | 'slashCommand' | null;
+      hasSession?: boolean;
+    } = {}
+  ) => {
+    const controlGoal = vi.fn(async () => {});
+    const agentClient = {
+      isCreated: vi.fn(() => true),
+      resolveGoalActionTransport: vi.fn(() =>
+        'transport' in overrides ? overrides.transport : 'request'
+      ),
+      controlGoal,
+      currentModel: undefined,
+    };
+    const getSession = vi.fn(() =>
+      overrides.hasSession === false ? null : { agentClient, acpSessionId: 'acp-goal' }
+    );
+    const deps = createBaseDeps({
+      sessionManager: {
+        getSession,
+        getPendingSession: vi.fn(() => null),
+      } as unknown as SessionManager,
+      workspaceDocument: {
+        repo: { upsertDocMeta: vi.fn(async () => {}) },
+        getOrCreateSessionDoc: vi.fn(async () => ({
+          getMetaState: vi.fn(async () => ({
+            id: goalSessionId,
+            cliType: 'builtin',
+            agentType: 'codex',
+            acpSessionId: 'acp-goal',
+          })),
+          updateHistory: vi.fn(async () => {}),
+        })),
+      } as unknown as LoroDocumentManager,
+    });
+    const service = new SessionExecutionService(deps);
+    return { service, controlGoal, agentClient };
+  };
+
+  const goalArgs = {
+    sessionId: goalSessionId,
+    userId: 'owner-user',
+    userName: 'Owner',
+    userEmail: 'owner@example.com',
+  } as const;
+
+  it('pauses out-of-band without opening a turn', async () => {
+    const { service, controlGoal } = createGoalService({ transport: 'request' });
+    const continueSession = vi.spyOn(service, 'continueSession').mockResolvedValue(undefined);
+
+    const response = await service.controlSessionGoal({ ...goalArgs, action: 'pause' });
+
+    expect(response).toMatchObject({ accepted: true, disposition: 'applied', action: 'pause' });
+    expect(controlGoal).toHaveBeenCalledWith('pause');
+    // The goal's own prompt owns the session's only turn slot; a pause that
+    // needed a free slot could never reach the goal it is stopping.
+    expect(continueSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses an action the agent never advertised', async () => {
+    const { service } = createGoalService({ transport: null });
+    const continueSession = vi.spyOn(service, 'continueSession').mockResolvedValue(undefined);
+
+    const response = await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+
+    expect(response).toMatchObject({ accepted: false, disposition: 'unsupported' });
+    expect(continueSession).not.toHaveBeenCalled();
+  });
+
+  it('starts a Lody-owned turn for an action that resumes work', async () => {
+    const { service } = createGoalService({ transport: 'promptMeta' });
+    const continueSession = vi.spyOn(service, 'continueSession').mockResolvedValue(undefined);
+
+    const response = await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+
+    expect(response).toMatchObject({ accepted: true, disposition: 'turn_started' });
+    expect(continueSession).toHaveBeenCalledTimes(1);
+    const [request, options] = continueSession.mock.calls[0]!;
+    expect(options).toMatchObject({
+      dispatchSource: 'goal',
+      goalControl: { action: 'resume' },
+    });
+    // No user message: the turn exists to carry the goal, not to say anything.
+    expect(request.userTurnId.startsWith('goal:resume:')).toBe(true);
+    expect(request.acpSessionConfig.modelId).toBeUndefined();
+    expect(request.acpSessionConfig.modeId).toBeUndefined();
+  });
+
+  it('waits for the running turn to release instead of dropping the resume', async () => {
+    const { service } = createGoalService({ transport: 'promptMeta' });
+    const continueSession = vi.spyOn(service, 'continueSession').mockResolvedValue(undefined);
+    const internals = service as unknown as {
+      currentTurnBySession: Map<SessionId, string>;
+      clearCurrentTurn: (sessionId: SessionId, turnId?: string) => void;
+      goalTurnWaiterBySession: Map<SessionId, Promise<void>>;
+    };
+    internals.currentTurnBySession.set(goalSessionId, 'draining-turn');
+
+    const response = await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+
+    expect(response).toMatchObject({ accepted: true, disposition: 'queued' });
+    expect(continueSession).not.toHaveBeenCalled();
+
+    internals.clearCurrentTurn(goalSessionId, 'draining-turn');
+    await internals.goalTurnWaiterBySession.get(goalSessionId);
+
+    expect(continueSession).toHaveBeenCalledTimes(1);
+    expect(continueSession.mock.calls[0]![1]).toMatchObject({ dispatchSource: 'goal' });
+  });
+
+  it('keeps only the newest queued action so a stale pause cannot undo a resume', async () => {
+    const { service } = createGoalService({ transport: 'promptMeta' });
+    const continueSession = vi.spyOn(service, 'continueSession').mockResolvedValue(undefined);
+    const internals = service as unknown as {
+      currentTurnBySession: Map<SessionId, string>;
+      clearCurrentTurn: (sessionId: SessionId, turnId?: string) => void;
+      goalTurnWaiterBySession: Map<SessionId, Promise<void>>;
+    };
+    internals.currentTurnBySession.set(goalSessionId, 'draining-turn');
+
+    await service.controlSessionGoal({ ...goalArgs, action: 'pause' });
+    await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+
+    internals.clearCurrentTurn(goalSessionId, 'draining-turn');
+    await internals.goalTurnWaiterBySession.get(goalSessionId);
+
+    expect(continueSession).toHaveBeenCalledTimes(1);
+    expect(continueSession.mock.calls[0]![1]).toMatchObject({
+      goalControl: { action: 'resume' },
+    });
   });
 });

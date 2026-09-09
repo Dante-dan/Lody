@@ -5,6 +5,8 @@ import {
   type AgentConfigMeta,
   type ChatFailedCode,
   type ChatFailedReason,
+  type SessionGoalAction,
+  type SessionGoalResponse,
   type IssuePRMention,
   type LocalProjectId,
   type MachineAcpBinaryInstallRequestValidated,
@@ -58,6 +60,7 @@ import {
   serializeCustomAcpLaunchSpec,
 } from '@lody/shared';
 import type { ContentBlock } from '@agentclientprotocol/sdk';
+import { randomUUID } from 'node:crypto';
 import type { ModelInfo } from '@lody/shared';
 import { Cause, Data, Effect, Exit, Fiber, type Scope } from 'effect';
 import {
@@ -88,6 +91,7 @@ import {
 } from '@/agent/managed-agent-runtime';
 import type { FetchAcpCapabilitiesOptions } from '@/agent/acp-capabilities';
 import { AcpAuthenticationRequiredError, AgentSteerNotDeliveredError } from '@/agent/agent-client';
+import { GOAL_CONTINUATION_PROMPT_TEXT, type GoalPromptControl } from '@/agent/goal-control';
 import {
   AcpAuthenticationManager,
   type AcpAuthenticationProgressEvent,
@@ -102,7 +106,10 @@ import type { ISession, SessionManager } from './session-manager';
 import type { LoroDocumentManager, SessionDocument } from '@/lib/loro/doc';
 import { buildPrompt, normalizeSessionInputBlocks } from './session-execution-helpers';
 import type { MemoryPressureEvictionResult } from '@/lib/session-gc-manager';
-import { resolveResumableAcpSessionId } from './session-dispatch-logic';
+import {
+  resolveDispatchAcpSessionId,
+  resolveResumableAcpSessionId,
+} from './session-dispatch-logic';
 import { resolveSessionLaunchConfig } from './session-launch-config-resolver';
 import type { MachineAccessVerification } from './session-access-retry';
 import {
@@ -212,6 +219,21 @@ type PromptHandoffRun = {
   signalSuccessor: () => void;
 };
 
+type SessionGoalTurnRequest = {
+  sessionId: SessionId;
+  control: GoalPromptControl;
+  userId: string;
+  userName: string;
+  userEmail: string;
+};
+
+/**
+ * How many consecutive turns a queued goal action waits out. Each wait is one
+ * whole turn, so this is generous for a drain and still bounded for a session
+ * the user keeps chatting in.
+ */
+const GOAL_TURN_QUEUE_MAX_WAITS = 3;
+
 type TurnInvocation = {
   /** Causal input Turn for authorization and durable provenance. */
   sourceTurnId: string;
@@ -225,6 +247,7 @@ type TurnRuntimeState = {
   turnId: string;
   userTurnId?: string;
   invocation?: TurnInvocation;
+  goalControl?: GoalPromptControl;
   session?: ISession;
   project?: ProjectRef;
   baseCommitHash?: string | null;
@@ -328,6 +351,8 @@ type VisibleSessionTurnOptions = {
    * mutate user dispatch status or pointers.
    */
   assistantEntryParentTurnId?: string;
+  /** Goal action this turn runs; the agent receives it as prompt metadata. */
+  goalControl?: GoalPromptControl;
   onTurnStarted?: () => Promise<boolean>;
   onTurnSettled?: (settlement: SessionTurnSettlement) => Promise<void>;
   /**
@@ -347,10 +372,20 @@ type VisibleSessionTurnPlan = {
 };
 
 /** How the turn payload reached this machine (RPC fast path vs CRDT history vs queue promotion). */
-export type SessionDispatchSource = 'rpc' | 'crdt' | 'queue' | 'delivery';
+export type SessionDispatchSource = 'rpc' | 'crdt' | 'queue' | 'delivery' | 'goal';
+
+/**
+ * Turns caused by Lody itself rather than by a user message. They own an
+ * assistant entry but must never touch user dispatch pointers, because no user
+ * turn is waiting on them.
+ */
+const isSystemCausedDispatch = (source: SessionDispatchSource | undefined): boolean =>
+  source === 'delivery' || source === 'goal';
 
 type SessionDispatchOptions = {
   dispatchSource?: SessionDispatchSource;
+  /** Goal action this turn exists to run; travels to the agent as prompt metadata. */
+  goalControl?: GoalPromptControl;
   /**
    * Runs only after this process has synchronously claimed the per-Session
    * visible-turn owner. Delivery uses this to append its system cause without
@@ -563,6 +598,7 @@ export type SessionExecutionServiceDeps = {
     availableCommands?: AcpCommandSummary[];
     sessionFork: boolean;
     acknowledgedSteer: boolean;
+    goalActions?: SessionGoalAction[];
     modelReasoningEfforts?: Record<string, string[]>;
     capabilitySourceVersion?: string;
   }>;
@@ -703,6 +739,9 @@ export class SessionExecutionService {
   private readonly rewriteBarrierSessions = new Set<SessionId>();
   private readonly rewriteConflictLeaseSessions = new Set<SessionId>();
   private readonly turnReleaseWaiters = new Map<SessionId, Map<string, Set<() => void>>>();
+  /** At most one goal action waits per session; a newer action replaces it. */
+  private readonly pendingGoalTurnBySession = new Map<SessionId, SessionGoalTurnRequest>();
+  private readonly goalTurnWaiterBySession = new Map<SessionId, Promise<void>>();
   // Serializes ownership mutations per session so prompt completion and steer
   // application never race the boundary. No global concurrency cap (Infinity):
   // this is pure per-session serialization, matching the old hand-rolled lock.
@@ -1163,6 +1202,168 @@ export class SessionExecutionService {
     return Array.from(bySession, ([sessionId, turnId]) => ({ sessionId, turnId }));
   }
 
+  /**
+   * Run a goal action against a session.
+   *
+   * Status-only actions go out-of-band when the agent advertises that: an
+   * active goal holds this session's only prompt slot open across the agent's
+   * own continuations, so a pause that waited for a free slot would wait for
+   * the thing it is trying to stop. Everything else runs inside a Lody-owned
+   * turn, and if a turn is already running the action waits for that turn
+   * instead of being dropped — the caller gets `queued`, not a dead button.
+   */
+  async controlSessionGoal(options: {
+    sessionId: SessionId;
+    action: SessionGoalAction;
+    objective?: string;
+    userId: string;
+    userName: string;
+    userEmail: string;
+  }): Promise<SessionGoalResponse> {
+    const { sessionId, action } = options;
+    const respond = (
+      disposition: SessionGoalResponse['disposition'],
+      error?: string
+    ): SessionGoalResponse => ({
+      type: 'session/goal_response',
+      sessionId,
+      action,
+      accepted:
+        disposition === 'applied' || disposition === 'turn_started' || disposition === 'queued',
+      disposition,
+      ...(error ? { error } : {}),
+    });
+
+    const agentClient = this.deps.sessionManager.getSession(sessionId)?.agentClient;
+    if (agentClient) {
+      const transport = agentClient.resolveGoalActionTransport(action);
+      if (transport === null) {
+        return respond('unsupported', `Agent does not support goal ${action}`);
+      }
+      if (transport === 'request') {
+        try {
+          await agentClient.controlGoal(action);
+          return respond('applied');
+        } catch (error) {
+          this.deps.logger.warn(
+            `[${sessionId}] Goal ${action} control request failed: ${formatErrorMessage(error)}`
+          );
+          return respond('error', formatErrorMessage(error));
+        }
+      }
+    }
+
+    // No live agent, or an action that needs a turn: the turn boots the session
+    // when necessary and lets the agent client pick its transport at prompt time.
+    const control: GoalPromptControl = {
+      action,
+      ...(options.objective ? { objective: options.objective } : {}),
+    };
+    const request: SessionGoalTurnRequest = {
+      sessionId,
+      control,
+      userId: options.userId,
+      userName: options.userName,
+      userEmail: options.userEmail,
+    };
+    if (this.getExecutionSnapshot(sessionId).hasActiveTurn) {
+      this.queueGoalTurn(request);
+      return respond('queued');
+    }
+    try {
+      await this.startGoalTurn(request);
+      return respond('turn_started');
+    } catch (error) {
+      this.deps.logger.warn(
+        `[${sessionId}] Goal ${action} turn failed to start: ${formatErrorMessage(error)}`
+      );
+      return respond('error', formatErrorMessage(error));
+    }
+  }
+
+  /**
+   * Hold one goal action per session until the running turn releases the prompt.
+   *
+   * A newer action replaces an older one: the user's latest intent is the only
+   * one worth running, and running a stale pause after a resume would undo it.
+   */
+  private queueGoalTurn(request: SessionGoalTurnRequest): void {
+    const { sessionId } = request;
+    this.pendingGoalTurnBySession.set(sessionId, request);
+    if (this.goalTurnWaiterBySession.has(sessionId)) {
+      return;
+    }
+    const waiter = (async () => {
+      // Bounded: a session the user keeps chatting in must not pin this loop.
+      for (let attempt = 0; attempt < GOAL_TURN_QUEUE_MAX_WAITS; attempt += 1) {
+        const snapshot = this.getExecutionSnapshot(sessionId);
+        if (!snapshot.hasActiveTurn || !snapshot.activeTurnId) {
+          break;
+        }
+        await this.waitForTurnRelease(sessionId, snapshot.activeTurnId);
+      }
+      const pending = this.pendingGoalTurnBySession.get(sessionId);
+      this.pendingGoalTurnBySession.delete(sessionId);
+      this.goalTurnWaiterBySession.delete(sessionId);
+      if (!pending) return;
+      if (this.getExecutionSnapshot(sessionId).hasActiveTurn) {
+        this.deps.logger.warn(
+          `[${sessionId}] Dropping queued goal ${pending.control.action}: session stayed busy`
+        );
+        return;
+      }
+      await this.startGoalTurn(pending);
+    })().catch((error: unknown) => {
+      this.pendingGoalTurnBySession.delete(sessionId);
+      this.goalTurnWaiterBySession.delete(sessionId);
+      this.deps.logger.error(
+        `[${sessionId}] Queued goal turn failed: ${formatErrorMessage(error)}`
+      );
+    });
+    this.goalTurnWaiterBySession.set(sessionId, waiter);
+  }
+
+  private async startGoalTurn(request: SessionGoalTurnRequest): Promise<void> {
+    const { sessionId, control } = request;
+    const sessionDoc = await this.deps.workspaceDocument.getOrCreateSessionDoc(sessionId);
+    const meta = await sessionDoc.getMetaState();
+    if (!meta) {
+      throw new Error(`Session ${sessionId} has no metadata`);
+    }
+    if (meta.isArchived) {
+      throw new Error(`Session ${sessionId} is archived`);
+    }
+    if (!meta.cliType || !meta.agentType) {
+      throw new Error(`Session ${sessionId} has no agent configuration`);
+    }
+    const resumeAcpSessionId = resolveDispatchAcpSessionId(meta);
+    await this.continueSession(
+      {
+        type: 'session/chat',
+        sessionId,
+        machineId: this.deps.machineId,
+        workspaceId: this.deps.workspaceId,
+        ...(meta.project ? { project: meta.project } : {}),
+        acpSessionConfig: {
+          // Fallback blocks only: the agent replaces them when the action
+          // schedules its own continuation. The run configuration is
+          // deliberately absent so a goal turn cannot change model or mode.
+          prompt: GOAL_CONTINUATION_PROMPT_TEXT,
+          cliType: meta.cliType,
+          agentType: meta.agentType,
+          ...(resumeAcpSessionId ? { resume: resumeAcpSessionId } : {}),
+        },
+        // A goal turn owns an assistant entry but no user message, so this id
+        // is provenance only and never becomes a dispatch pointer.
+        userTurnId: `goal:${control.action}:${randomUUID()}`,
+        userId: request.userId,
+        userName: request.userName,
+        userEmail: request.userEmail,
+      },
+      { dispatchSource: 'goal', goalControl: control }
+    );
+  }
+
   async steerSession(options: {
     sessionId: SessionId;
     expectedTurnId: string;
@@ -1601,7 +1802,7 @@ export class SessionExecutionService {
   private createTurnRuntime(
     options: Pick<
       VisibleSessionTurnOptions,
-      'sessionId' | 'session' | 'userTurnId' | 'invocation' | 'onTurnSettled'
+      'sessionId' | 'session' | 'userTurnId' | 'invocation' | 'onTurnSettled' | 'goalControl'
     > & { turnId: string }
   ): TurnRuntimeState {
     return {
@@ -1609,6 +1810,7 @@ export class SessionExecutionService {
       turnId: options.turnId,
       userTurnId: options.userTurnId,
       invocation: options.invocation,
+      goalControl: options.goalControl,
       session: options.session,
       promptStarted: false,
       promptInFlight: false,
@@ -2892,6 +3094,9 @@ export class SessionExecutionService {
                               turnId: runtime.turnId,
                               promptPromise: agentClient.prompt(acpSessionId, promptBlocks, {
                                 signal,
+                                ...(runtime.goalControl
+                                  ? { goalControl: runtime.goalControl }
+                                  : {}),
                               }),
                             });
                             await self.awaitPromptHandoffTail(runtime, initialRun);
@@ -3464,8 +3669,9 @@ export class SessionExecutionService {
     prepareOptions?: { sessionDoc?: SessionDocument }
   ): Promise<VisibleSessionTurnPlan> {
     const { sessionId, acpSessionConfig, userId, userName, userEmail, userTurnId } = message;
-    const executionUserTurnId =
-      dispatchOptions?.dispatchSource === 'delivery' ? undefined : userTurnId;
+    const executionUserTurnId = isSystemCausedDispatch(dispatchOptions?.dispatchSource)
+      ? undefined
+      : userTurnId;
     const sessionDoc =
       prepareOptions?.sessionDoc ??
       (await this.deps.workspaceDocument.getOrCreateSessionDoc(sessionId));
@@ -4187,6 +4393,7 @@ export class SessionExecutionService {
         ...(dispatchOptions?.dispatchSource === 'delivery'
           ? { assistantEntryParentTurnId: userTurnId }
           : {}),
+        ...(dispatchOptions?.goalControl ? { goalControl: dispatchOptions.goalControl } : {}),
         ...(dispatchOptions?.onTurnStarted ? { onTurnStarted: dispatchOptions.onTurnStarted } : {}),
         ...(dispatchOptions?.onTurnSettled ? { onTurnSettled: dispatchOptions.onTurnSettled } : {}),
         ...(dispatchOptions?.dispatchSource
@@ -5060,7 +5267,8 @@ export class SessionExecutionService {
         capabilities.sessionFork,
         sourceVersion,
         capabilities.modelReasoningEfforts,
-        capabilities.acknowledgedSteer
+        capabilities.acknowledgedSteer,
+        capabilities.goalActions
       );
     })().catch((error: unknown) => {
       this.deps.logger.debug(
@@ -5369,6 +5577,7 @@ export class SessionExecutionService {
         availableCommands,
         sessionFork,
         acknowledgedSteer,
+        goalActions,
         modelReasoningEfforts,
         capabilitySourceVersion,
       } = await this.deps.fetchAcpCapabilities(
@@ -5409,6 +5618,7 @@ export class SessionExecutionService {
           }),
         modelReasoningEfforts,
         acknowledgedSteer,
+        goalActions,
         { signal: options.signal }
       );
 

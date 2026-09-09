@@ -16,6 +16,8 @@ import type {
   SessionTurnInputConfig,
   MachineFlockKey,
   MachineFlockRow,
+  SessionGoalAction,
+  SessionGoalResponse,
 } from '@lody/shared';
 import {
   buildMachineArchiveSessionCommand,
@@ -367,6 +369,17 @@ export type SessionActions = {
     userTurnId: string,
     options?: { machineId?: MachineId | null }
   ) => Promise<boolean>;
+  /**
+   * Run a goal action through the agent's control extension.
+   *
+   * Status-only actions reach a goal whose prompt is still open, which the chat
+   * path cannot do: that prompt is the session's only turn slot.
+   */
+  requestSessionGoal: (
+    sessionId: SessionId,
+    action: SessionGoalAction,
+    options?: { objective?: string; userId?: string; machineId?: MachineId | null }
+  ) => Promise<SessionGoalResponse | null>;
   touchSessionActivity: (sessionId: SessionId) => Promise<void>;
   updateSessionStatus: (sessionId: SessionId, status: SessionStatus) => Promise<void>;
   updateSessionTitle: (sessionId: SessionId, title: string) => Promise<void>;
@@ -909,6 +922,36 @@ export function useSessionActions(): SessionActions {
     [runtime]
   );
 
+  const requestSessionGoal = useCallback(
+    async (
+      sessionId: SessionId,
+      action: SessionGoalAction,
+      options?: { objective?: string; userId?: string; machineId?: MachineId | null }
+    ): Promise<SessionGoalResponse | null> => {
+      if (!runtime) {
+        throw new Error('Runtime not ready');
+      }
+      const roomId = getSessionRoomId(sessionId);
+      const existing = await runtime.repo.getDocMeta(roomId);
+      const meta = isLoroRepoDocDeleted(existing)
+        ? undefined
+        : (existing?.meta as SessionMeta | undefined);
+      const machineId = options?.machineId ?? meta?.machineId ?? null;
+      const userId = options?.userId?.trim() || meta?.userId;
+      if (!machineId || !userId) {
+        return null;
+      }
+      return await runtime.requestSessionGoal(machineId, {
+        sessionId,
+        action,
+        ...(options?.objective ? { objective: options.objective } : {}),
+        userId,
+        timestamp: new Date().toISOString(),
+      });
+    },
+    [runtime]
+  );
+
   const requestSessionSteer = useCallback(
     async (
       sessionId: SessionId,
@@ -1435,6 +1478,7 @@ export function useSessionActions(): SessionActions {
     requestSessionDispatch,
     requestSessionCancel,
     requestSessionSteer,
+    requestSessionGoal,
     touchSessionActivity,
     updateSessionStatus,
     updateSessionTitle,

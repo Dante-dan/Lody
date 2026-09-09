@@ -17,6 +17,8 @@ import type {
   SessionPrepareCancelResponse,
   SessionPrepareResponse,
   SessionSteerResponse,
+  SessionGoalAction,
+  SessionGoalResponse,
   SessionDocMeta,
   SessionTurnInputConfig,
   SessionId,
@@ -299,6 +301,17 @@ export type WorkspaceRuntime = {
     },
     options?: { timeoutMs?: number }
   ) => Promise<SessionSteerResponse | null>;
+  requestSessionGoal: (
+    machineId: MachineId,
+    args: {
+      sessionId: SessionId;
+      action: SessionGoalAction;
+      objective?: string;
+      userId: string;
+      timestamp: string;
+    },
+    options?: { timeoutMs?: number }
+  ) => Promise<SessionGoalResponse | null>;
   requestSessionTerminate: (
     machineId: MachineId,
     sessionId: SessionId,

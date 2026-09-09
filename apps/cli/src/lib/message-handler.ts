@@ -133,6 +133,8 @@ import {
   getServerNow,
   CODE_COLLAB_V2_TEXT_LIMITS,
   isSessionGoalActive,
+  type SessionGoalAction,
+  type SessionGoalResponse,
   resolveLatestSessionGoalFromHistory,
   resolveProjectGitHubRepo,
   type RepoId,
@@ -2769,6 +2771,36 @@ export class MessageHandler {
     return await this.executionService.steerSession(args);
   }
 
+  private async controlSessionGoalWithAccessCheck(args: {
+    sessionId: SessionId;
+    action: SessionGoalAction;
+    objective?: string;
+    userId: string;
+  }): Promise<SessionGoalResponse> {
+    const access = await this.verifySessionMachineAccess(args.sessionId, args.userId);
+    if (access.outcome !== 'allowed') {
+      return {
+        type: 'session/goal_response',
+        sessionId: args.sessionId,
+        action: args.action,
+        accepted: false,
+        disposition: 'error',
+        error: `Goal access verification ${access.outcome}`,
+      };
+    }
+    // Goal turns commit with the requester's identity, exactly like the turns a
+    // user message would start.
+    const user = await this.sessionUserResolver.resolve(args.userId);
+    return await this.executionService.controlSessionGoal({
+      sessionId: args.sessionId,
+      action: args.action,
+      ...(args.objective ? { objective: args.objective } : {}),
+      userId: args.userId,
+      userName: user.name,
+      userEmail: user.email,
+    });
+  }
+
   private async forkSessionWithAccessCheck(args: SessionForkSpec): Promise<SessionForkResponse> {
     const access = await this.verifySessionMachineAccess(
       args.sourceSessionId,
@@ -3392,6 +3424,7 @@ export class MessageHandler {
           };
         },
         steerSession: async (args) => await this.steerSessionWithAccessCheck(args),
+        controlSessionGoal: async (args) => await this.controlSessionGoalWithAccessCheck(args),
         terminateSession: async ({ sessionId }) => await this.terminateAcpSession(sessionId),
         forkSession: async (args) => await this.forkSessionWithAccessCheck(args),
         editAndResendSession: async (args) => await this.editAndResendSessionWithAccessCheck(args),
@@ -6683,6 +6716,12 @@ export class MessageHandler {
           sessionId: request.params.sessionId as SessionId,
         });
       }
+      case 'session/goal': {
+        return await this.controlSessionGoalWithAccessCheck({
+          ...request.params,
+          sessionId: request.params.sessionId as SessionId,
+        });
+      }
       case 'session/terminate':
         return await this.terminateAcpSession(request.params.sessionId as SessionId);
       case 'session/fork':
@@ -8400,6 +8439,7 @@ export class MessageHandler {
     availableCommands?: NonNullable<MachineAcpCapabilitiesRefreshResponse['availableCommands']>;
     sessionFork: boolean;
     acknowledgedSteer: boolean;
+    goalActions?: SessionGoalAction[];
     modelReasoningEfforts?: Record<string, string[]>;
     capabilitySourceVersion?: string;
   }> {
