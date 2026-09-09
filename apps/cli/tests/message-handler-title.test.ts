@@ -102,16 +102,13 @@ const createHandler = async (
   return { handler, sessionDoc, workspaceDocument };
 };
 
-// Drives the branch-rename path far enough to observe which titleConfig reaches
-// the isolated generator. `exec` reports no branch, so the rename itself is a
-// no-op and no git command runs.
-const renameBranch = async (handler: MessageHandler, agentType: string): Promise<void> => {
+// Drives the whole branch-rename path. `exec` reports no branch, so the rename
+// itself is a no-op and no git command runs.
+const renameBranch = async (handler: MessageHandler): Promise<void> => {
   const branchHost = handler as unknown as {
     maybeRenameSessionBranchFromPrompt: (
       sessionId: SessionId,
       session: unknown,
-      cliType: string,
-      agentType: string,
       taskPrompt: string
     ) => Promise<void>;
   };
@@ -122,8 +119,6 @@ const renameBranch = async (handler: MessageHandler, agentType: string): Promise
   await branchHost.maybeRenameSessionBranchFromPrompt(
     's-branch' as SessionId,
     session,
-    'builtin',
-    agentType,
     'Fix the flaky login redirect'
   );
 };
@@ -215,70 +210,72 @@ describe('MessageHandler title generation', () => {
     expect(sessionDoc.setTitleIfSourceIn).toHaveBeenCalledTimes(1);
   });
 
-  it('reuses an existing title promise for branch-name generation', async () => {
-    const { handler } = await createHandler(undefined);
-    const titleHost = handler as unknown as {
-      generateBranchNameWithTimeout: (
-        cliType: string,
-        agentType: string,
-        taskPrompt: string,
-        env: Record<string, string> | undefined,
-        timeoutMs: number,
-        titleConfig: undefined,
-        customAcp: undefined,
-        runtimeOverrides: undefined,
-        reusableTitlePromise: Promise<string | null>
-      ) => Promise<string | null>;
-    };
+  type BranchNameHost = {
+    generateBranchNameWithTimeout: (
+      taskPrompt: string,
+      timeoutMs: number,
+      reusableTitlePromise?: Promise<string | null>
+    ) => Promise<string | null>;
+  };
 
-    const branch = await titleHost.generateBranchNameWithTimeout(
-      'builtin',
-      'codex',
+  it('prefers an already-available session title over the prompt', async () => {
+    const { handler } = await createHandler(undefined);
+    const branch = await (handler as unknown as BranchNameHost).generateBranchNameWithTimeout(
       'Fallback prompt',
-      undefined,
       1_000,
-      undefined,
-      undefined,
-      undefined,
       Promise.resolve('Fix title races')
     );
 
     expect(branch).toBe('fix/title-races');
+  });
+
+  it('names the branch from the prompt when no title is available', async () => {
+    const { handler } = await createHandler(undefined);
+    const branch = await (handler as unknown as BranchNameHost).generateBranchNameWithTimeout(
+      'Add a retry to the upload queue',
+      1_000
+    );
+
+    expect(branch).toBe('feat/a-retry-to-the-upload-queue');
     expect(mockedGenerateTitleIsolated).not.toHaveBeenCalled();
   });
 
-  // Claude and Codex no longer expose a title-generation config, so a value
-  // persisted before that must not keep steering their branch-name runs.
-  it.each(['claude', 'codex', 'grok'])(
-    'ignores a stale persisted titleGeneration when naming a branch for %s',
-    async (agentType) => {
-      const { handler } = await createHandler(undefined, undefined, undefined, {
-        agentConfigId: 'agent-config-1',
-        agentConfigMeta: { titleGeneration: { configOptionValues: { model: 'stale-model' } } },
-      });
+  // Kebab conversion drops every non-ASCII character, so such a prompt yields no
+  // name at all. Leaving the managed `session/<id>` branch alone beats renaming it
+  // to a meaningless timestamp.
+  it('returns no name when the prompt has no ASCII words', async () => {
+    const { handler } = await createHandler(undefined);
+    const branch = await (handler as unknown as BranchNameHost).generateBranchNameWithTimeout(
+      '把标题生成迁移到会话协议',
+      1_000
+    );
 
-      await renameBranch(handler, agentType);
+    expect(branch).toBeNull();
+  });
 
-      expect(mockedGenerateTitleIsolated).toHaveBeenCalledTimes(1);
-      expect(mockedGenerateTitleIsolated).toHaveBeenCalledWith(
-        expect.objectContaining({ titleConfig: undefined })
-      );
-    }
-  );
+  it('falls back to the prompt when the title does not arrive in time', async () => {
+    const { handler } = await createHandler(undefined);
+    const branch = await (handler as unknown as BranchNameHost).generateBranchNameWithTimeout(
+      'Fix the flaky login redirect',
+      10,
+      new Promise<string | null>(() => {})
+    );
 
-  it('still applies the persisted titleGeneration when naming a branch for Kimi', async () => {
-    const titleGeneration = { configOptionValues: { model: 'kimi-k2-turbo' } };
-    const { handler } = await createHandler(undefined, undefined, undefined, {
+    expect(branch).toBe('fix/the-flaky-login-redirect');
+  });
+
+  // Branch naming is a pure local transform now, so it starts no agent and never
+  // consults the agent config -- the provider no longer reaches this path at all.
+  it('never starts an isolated agent to name a branch', async () => {
+    const { handler, workspaceDocument } = await createHandler(undefined, undefined, undefined, {
       agentConfigId: 'agent-config-1',
-      agentConfigMeta: { titleGeneration },
+      agentConfigMeta: { titleGeneration: { configOptionValues: { model: 'stale-model' } } },
     });
 
-    await renameBranch(handler, 'kimi');
+    await renameBranch(handler);
 
-    expect(mockedGenerateTitleIsolated).toHaveBeenCalledTimes(1);
-    expect(mockedGenerateTitleIsolated).toHaveBeenCalledWith(
-      expect.objectContaining({ titleConfig: titleGeneration })
-    );
+    expect(mockedGenerateTitleIsolated).not.toHaveBeenCalled();
+    expect(workspaceDocument.getAgentConfigById).not.toHaveBeenCalled();
   });
 
   it('keeps skipping isolated generation when an existing title has no draft source', async () => {

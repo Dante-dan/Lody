@@ -17,9 +17,9 @@ required splitting the single `usesAcpProvidedSessionTitle()` predicate into
 ownership and trust, because Codex tags its titles and emits a prompt-preview
 `fallback` first while Claude and Grok push one bare authoritative title, and
 conflating the two would have promoted Codex's preview to the session title. The
-cost is that title wording now belongs to the adapters, and branch naming still
-falls back to the isolated generator when no ACP title has landed yet, so this
-removes duplicated work without yet eliminating the isolated session.
+cost is that title wording now belongs to the adapters. Branch naming, the last
+caller that could still start an isolated session, now derives its name locally,
+so session titles no longer start an extra ACP agent anywhere.
 
 ## The audit
 
@@ -133,16 +133,41 @@ English budget, the single-line rule — no longer apply to them. Grok additiona
 keeps refining its title over the first few turns before freezing it, so a Grok
 session title can change after it first appears.
 
-This change does not reach zero isolated ACP sessions. `generateBranchNameWithTimeout`
-reuses an in-flight or already-stored generated title, and otherwise still calls
-`generateTitleIsolated()`; with the title path skipped, Codex now takes that
-branch as Claude already did. Making branch naming wait for the ACP-pushed title
-within its existing 20s budget is the remaining step, and is not attempted here
-because the timeout path currently abandons the rename rather than falling back
-to the prompt text — changing that affects every provider, not just the
-ACP-owned ones.
+Branch naming had to change too, or the isolated session would simply have moved
+from the title path to the branch path. `maybeRenameSessionBranchFromPrompt` runs
+at session-ready, before any turn, so an ACP title can never have arrived by then;
+with the title path skipped it would have started its own agent, leaving worktree
+sessions at exactly the same one isolated session as before.
+
+Two options were considered and rejected. Deferring the rename until the pushed
+title arrives moves a "once, at session creation" operation into the middle of a
+running conversation, where a turn may already have pushed the branch or opened a
+PR — `renameBranchWithAvailableSuffix` is a bare `git branch -m` with no upstream
+check. Dropping branch naming entirely and relying on the injected instruction
+("Name branches based on the task content", `session-execution-helpers.ts`) fails
+because `buildPrompt` runs only in `startSession`, and the instruction is stripped
+before storage, so it is absent from turn two onward and from every resumed
+session — trading a deterministic behaviour for one whose odds fall as the session
+grows. It is also injected only for `project.kind === 'github'`, while worktrees
+are also created for local projects with `useWorktree`.
+
+What actually landed is simpler: `titleToBranchName` was always a pure transform,
+so the isolated agent only ever compressed the prompt into a shorter title first.
+Branch naming now prefers a title that is already stored or in flight, and
+otherwise converts the prompt directly. `generateBranchNameWithTimeout` no longer
+takes a provider, env, launch spec or title config, and the branch path no longer
+reads the agent config at all.
+
+One deliberate behaviour change: a prompt that yields no valid name now leaves the
+managed `session/<id>` branch alone instead of renaming it to `task/<timestamp>`.
+Kebab conversion strips every non-ASCII character, so this is the normal outcome
+for a Chinese prompt — and it was the outcome before this change too, since the
+generator was asked for a title in the prompt's own language. The isolated session
+those sessions paid for could never have produced a usable branch name. A timeout
+now also falls back to the prompt instead of abandoning the rename.
 
 Verification is type checks, lint, and the shared unit tests covering both
-predicates, plus the branch-name cases for all three ACP-owned agents. The Grok
-behaviour rests on the live probe described above; no live Codex, Kimi or
-DeepSeek session was exercised.
+predicates, the branch-name derivation cases, and the dialog cases covering the
+hidden title-generation section. The Grok behaviour rests on the live probe
+described above; no live Codex, Kimi or DeepSeek session was exercised, and no
+real worktree rename was driven end to end.

@@ -112,4 +112,4 @@ context/acp-agent-edit-evidence.md; adapter repos: [apps/cli/AGENTS.md](../../AG
   Codex is not — take only its `explicit` `_meta.lody.titleSource`, ignore its first-prompt
   `fallback`, and require `_meta.lody.messagePhase === 'final_answer'`. Untyped chunks,
   error/warning payloads, and internal-instruction tails never qualify. Each isolated run
-  owns and removes a temp dir; session-title and branch-name share one in-flight result.
+  owns and removes a temp dir; branch naming never starts one.

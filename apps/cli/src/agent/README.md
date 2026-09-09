@@ -194,6 +194,14 @@ need the `trustsUntaggedAcpSessionTitle()` allowlist. Codex tags every title and
 first-prompt `fallback` preview before its generated `explicit` one, so it must stay outside
 that allowlist even though it does own its generation — otherwise the preview wins.
 
+Branch naming never starts an isolated session. `titleToBranchName` is a pure transform, so
+the only thing an agent ever added was compressing the prompt into a shorter title first.
+`generateBranchNameWithTimeout` now prefers a title that is already stored or in flight for
+the session and otherwise converts the prompt directly, falling back to the prompt if a
+pending title misses its budget. When no valid name can be derived — kebab conversion drops
+every non-ASCII character, so this is the normal outcome for a Chinese prompt — the managed
+`session/<id>` branch is left alone rather than renamed to a timestamp.
+
 Kimi and the DeepSeek Harness still use `title-generator.ts` / `response-utils.ts` and the
 `titleGeneration` config. Neither gap is a missing upstream feature: Kimi's
 `session_info_update` carries the first prompt truncated to 200 chars with no `_meta` while

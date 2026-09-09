@@ -528,10 +528,7 @@ export type SessionExecutionServiceDeps = {
   maybeRenameSessionBranchFromPrompt: (
     sessionId: SessionId,
     session: ISession,
-    cliType: AgentConfigCliType,
-    agentType: string,
-    prompt: string,
-    env?: Record<string, string>
+    prompt: string
   ) => Promise<void>;
   processMessageQueue: (sessionId: SessionId) => Promise<void>;
   syncLiveActivitySummary?: (userId: string) => Promise<void>;
@@ -4675,10 +4672,7 @@ export class SessionExecutionService {
             void self.deps.maybeRenameSessionBranchFromPrompt(
               sessionId,
               session,
-              sessionConfig.agentCliType,
-              sessionConfig.agentType,
-              agentConfig.prompt ?? '',
-              env
+              agentConfig.prompt ?? ''
             );
           }
 

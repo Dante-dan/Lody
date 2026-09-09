@@ -253,7 +253,7 @@ import type { AcpAgentEditEvidence, AcpStandardDiffBlockEvidence } from '@/lib/a
 import { mergeAcpRuntimeConfigUpdates } from '@/lib/acp/runtime-config';
 import { generateTitleIsolated, sanitizeTitle } from '@/agent/title-generator';
 import type { AgentSessionWarning } from '@/agent/agent-client';
-import { ensureValidBranchName } from '@/agent/branch-name-generator';
+import { isValidGitBranchName, titleToBranchName } from '@/agent/branch-name-generator';
 import {
   SessionActivePresenceController,
   type SessionActivePresencePhase,
@@ -386,7 +386,6 @@ import {
   handleLocalProjectWorktreeConfigRequest,
   isLocalProjectWorktreeConfigRequest,
 } from '@/session/worktree/worktree-setup-config-store';
-import { readLegacySessionLaunchConfig } from '@/session/session-launch-config-resolver';
 import { resolveSessionWorktreeCleanupConfig } from '@/session/worktree/worktree-config-resolver';
 
 type RepoDocMetaPatch = Parameters<LoroDocumentManager['repo']['upsertDocMeta']>[1];
@@ -3155,22 +3154,8 @@ export class MessageHandler {
           customAcp,
           runtimeOverrides
         ),
-      maybeRenameSessionBranchFromPrompt: async (
-        sessionId,
-        session,
-        cliType,
-        agentType,
-        prompt,
-        env
-      ) =>
-        await this.maybeRenameSessionBranchFromPrompt(
-          sessionId,
-          session,
-          cliType,
-          agentType,
-          prompt,
-          env
-        ),
+      maybeRenameSessionBranchFromPrompt: async (sessionId, session, prompt) =>
+        await this.maybeRenameSessionBranchFromPrompt(sessionId, session, prompt),
       processMessageQueue: async (sessionId) => await this.processMessageQueue(sessionId),
       syncLiveActivitySummary: async (userId) => {
         await this.syncLiveActivitySummary(userId);
@@ -9669,11 +9654,7 @@ export class MessageHandler {
   private async maybeRenameSessionBranchFromPrompt(
     sessionId: SessionId,
     session: ISession,
-    cliType: AgentConfigCliType,
-    agentType: string,
-    taskPrompt: string,
-    env?: Record<string, string>,
-    titleConfig?: TitleGenerationConfig
+    taskPrompt: string
   ): Promise<void> {
     const trimmedPrompt = taskPrompt.trim();
     if (!trimmedPrompt) {
@@ -9681,32 +9662,15 @@ export class MessageHandler {
     }
 
     let metaBranchName: string | null = null;
-    let metaCustomAcp: CustomAcpLaunchSpec | undefined;
-    let metaRuntimeOverrides: BuiltinRuntimeOverrides | undefined;
-    let metaAgentConfigId: AgentConfigId | undefined;
     let reusableTitlePromise: Promise<string | null> | undefined;
     try {
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       const meta = await sessionDoc.getMetaState();
       metaBranchName = meta?.branchName?.trim() || null;
-      metaAgentConfigId = meta?.agentConfigId;
       const generatedMetaTitle = meta?.titleSource === 'generated' ? meta.title?.trim() : '';
       reusableTitlePromise = generatedMetaTitle
         ? Promise.resolve(generatedMetaTitle)
         : this.titleGenerationInFlight.get(sessionId);
-      const agentConfig = metaAgentConfigId
-        ? await this.workspaceDocument.getAgentConfigById(metaAgentConfigId)
-        : null;
-      const legacyLaunchConfig = await readLegacySessionLaunchConfig({
-        repo: this.workspaceDocument.repo,
-        workspaceId: this.workspaceId,
-        machineId: this.machineId,
-        sessionId,
-        sessionMeta: meta,
-        logger: this.logger,
-      });
-      metaCustomAcp = agentConfig?.customAcp ?? legacyLaunchConfig?.customAcp;
-      metaRuntimeOverrides = agentConfig?.runtimeOverrides ?? legacyLaunchConfig?.runtimeOverrides;
       if (metaBranchName && !isManagedWorktreeBranchName(metaBranchName)) {
         return;
       }
@@ -9716,30 +9680,15 @@ export class MessageHandler {
       );
     }
 
-    // Claude and Codex no longer expose a title-generation config, so a value
-    // persisted before that must not keep steering their runs here. They still
-    // reach the isolated generator when no ACP title has landed yet, and it
-    // falls back to computeTitleGenerationDefaults() for them.
-    // Claude and Codex no longer expose a title-generation config, so a value
-    // persisted before that must not keep steering their runs here. They still
-    // reach the isolated generator when no ACP title has landed yet, and it
-    // falls back to computeTitleGenerationDefaults() for them.
-    const resolvedTitleConfig = acpOwnsSessionTitleGeneration(cliType, agentType)
-      ? undefined
-      : (titleConfig ?? (await this.resolveTitleConfig(sessionId, metaAgentConfigId)));
     const branchName = await this.generateBranchNameWithTimeout(
-      cliType,
-      agentType,
       trimmedPrompt,
-      env,
       20_000,
-      resolvedTitleConfig,
-      metaCustomAcp,
-      metaRuntimeOverrides,
       reusableTitlePromise
     );
     if (!branchName) {
-      this.logger.debug(`[${sessionId}] Skipping branch rename: name generation timed out`);
+      this.logger.debug(
+        `[${sessionId}] Skipping branch rename: the prompt yields no usable branch name`
+      );
       return;
     }
 
@@ -9781,47 +9730,47 @@ export class MessageHandler {
     }
   }
 
+  /**
+   * Derives a worktree branch name without ever starting an ACP agent.
+   *
+   * `titleToBranchName` is a pure transform, so the only thing an isolated agent
+   * ever added here was compressing the prompt into a shorter title first. A title
+   * is still preferred when one is already stored or in flight for this session
+   * (agents that keep the local generator produce one anyway); otherwise the prompt
+   * names the branch directly.
+   *
+   * Returns null when no valid name can be derived — a prompt with no ASCII words
+   * (kebab conversion strips everything else) leaves the managed `session/<id>`
+   * branch alone rather than renaming it to a meaningless timestamp.
+   */
   private async generateBranchNameWithTimeout(
-    cliType: AgentConfigCliType,
-    agentType: string,
     taskPrompt: string,
-    env: Record<string, string> | undefined,
     timeoutMs: number,
-    titleConfig?: TitleGenerationConfig,
-    customAcp?: CustomAcpLaunchSpec,
-    runtimeOverrides?: BuiltinRuntimeOverrides,
     reusableTitlePromise?: Promise<string | null>
   ): Promise<string | null> {
+    const toBranchName = (base: string): string | null => {
+      const candidate = titleToBranchName(base);
+      return candidate && isValidGitBranchName(candidate) ? candidate : null;
+    };
+
+    if (!reusableTitlePromise) {
+      return toBranchName(taskPrompt);
+    }
+
     let timeoutHandle: NodeJS.Timeout | null = null;
     const timeoutPromise = new Promise<null>((resolve) => {
       timeoutHandle = setTimeout(() => resolve(null), timeoutMs);
     });
-
-    const namePromise = (async (): Promise<string> => {
-      const title = reusableTitlePromise
-        ? await reusableTitlePromise
-        : await generateTitleIsolated({
-            cliType,
-            agentType,
-            customAcp,
-            runtimeOverrides,
-            taskPrompt,
-            logger: this.logger,
-            env,
-            titleConfig,
-          });
-      const base = title ?? taskPrompt;
-      return ensureValidBranchName(base, 'task');
-    })();
-
     try {
-      const result = await Promise.race([namePromise, timeoutPromise]);
-      return result ?? null;
+      // A slow or failed title must not hold up (or cancel) the rename: the prompt
+      // is always available as the naming input.
+      const title = await Promise.race([reusableTitlePromise, timeoutPromise]);
+      return toBranchName(title?.trim() || taskPrompt);
     } catch (error) {
       this.logger.debug(
-        `[branch-name] Failed to generate branch name: ${formatErrorMessage(error)}`
+        `[branch-name] Falling back to the prompt after title generation failed: ${formatErrorMessage(error)}`
       );
-      return null;
+      return toBranchName(taskPrompt);
     } finally {
       if (timeoutHandle) {
         clearTimeout(timeoutHandle);
