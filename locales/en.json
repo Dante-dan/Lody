@@ -1,4 +1,6 @@
 {
+  "workspace.openInNewWindow": "Open in new window",
+  "workspace.openInNewWindowHint": "{{key}} + click to open in a new window",
   "session.openInNewWindow": "Open conversation in new window",
   "agents.acpCapabilities.refreshError": "Refresh failed",
   "agents.acpCapabilities.refreshModelsAndModes": "Refresh models and modes",

@@ -762,21 +762,6 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
     <ContextMenu onOpenChange={setRowMenuOpen}>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
-        <SessionWindowMenuItem sessionId={session.id} />
-        <SessionRowOpenedByMenuItems
-          opener={openedByOpener}
-          goToOpener={
-            openerSessionId
-              ? () => onNavigate(openerRootSessionId ?? openerSessionId, openerSessionId)
-              : undefined
-          }
-          goToOpenerLabel={contextMenuLabels.goToOpenerSession}
-        />
-        {canRename ? (
-          <ContextMenuItem icon={<Pencil />} onSelect={beginRename}>
-            {contextMenuLabels.rename}
-          </ContextMenuItem>
-        ) : null}
         {canTogglePinned ? (
           <ContextMenuItem
             icon={isPinned ? <PinOff /> : <Pin />}
@@ -797,15 +782,14 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
             {contextMenuLabels.markUnread}
           </ContextMenuItem>
         ) : null}
-        <ContextMenuItem
-          icon={<Archive />}
-          onSelect={() => {
-            onArchive(session.id);
-          }}
-        >
-          {contextMenuLabels.archive}
-        </ContextMenuItem>
-        {canCopyUrl || shareMenuState ? <ContextMenuSeparator /> : null}
+        {canRename ? (
+          <ContextMenuItem icon={<Pencil />} onSelect={beginRename}>
+            {contextMenuLabels.rename}
+          </ContextMenuItem>
+        ) : null}
+        {(canTogglePinned || canMarkUnread || canRename) && (canCopyUrl || shareMenuState) ? (
+          <ContextMenuSeparator />
+        ) : null}
         {canCopyUrl ? (
           <ContextMenuItem
             icon={<Link2 />}
@@ -816,6 +800,7 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
             {contextMenuLabels.copyUrl}
           </ContextMenuItem>
         ) : null}
+
         {shareMenuState ? (
           <ContextMenuItem
             disabled={shareMenuState !== 'share'}
@@ -841,6 +826,40 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
                   : contextMenuLabels.loadingSharing}
           </ContextMenuItem>
         ) : null}
+        {(canTogglePinned || canMarkUnread || canRename || canCopyUrl || shareMenuState) &&
+        (openerSessionId || openedByOpener || isElectronRenderer()) ? (
+          <ContextMenuSeparator />
+        ) : null}
+
+        <SessionRowOpenedByMenuItems
+          opener={openedByOpener}
+          goToOpener={
+            openerSessionId
+              ? () => onNavigate(openerRootSessionId ?? openerSessionId, openerSessionId)
+              : undefined
+          }
+          goToOpenerLabel={contextMenuLabels.goToOpenerSession}
+        />
+        <SessionWindowMenuItem sessionId={session.id} />
+        {(canTogglePinned ||
+          canMarkUnread ||
+          canRename ||
+          canCopyUrl ||
+          shareMenuState ||
+          openerSessionId ||
+          openedByOpener ||
+          isElectronRenderer()) &&
+        true ? (
+          <ContextMenuSeparator />
+        ) : null}
+        <ContextMenuItem
+          icon={<Archive />}
+          onSelect={() => {
+            onArchive(session.id);
+          }}
+        >
+          {contextMenuLabels.archive}
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   ) : (

@@ -1,4 +1,6 @@
 {
+  "workspace.openInNewWindow": "在新窗口中打开",
+  "workspace.openInNewWindowHint": "{{key}} + 点击可在新窗口打开",
   "session.openInNewWindow": "在新窗口中打开对话",
   "agents.acpCapabilities.refreshError": "刷新失败",
   "agents.acpCapabilities.refreshModelsAndModes": "刷新模型和模式",
