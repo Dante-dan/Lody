@@ -5946,7 +5946,9 @@ export const SessionChatInterface = memo(
                             messageFileDiffEntriesByTurn={messageFileDiffEntriesByTurn}
                             assistantActions={assistantQuickActions}
                             assistantActionsMessageId={latestCompletedProposedPlan?.entryId}
-                            onCopyContext={handleCopyConversationHistory}
+                            onCopyContext={(messageId) => {
+                              void handleCopyConversationHistory(messageId);
+                            }}
                             onForkLastAssistant={onForkLastAssistant}
                             forkWorktreeAvailability={forkWorktreeAvailability}
                             onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}

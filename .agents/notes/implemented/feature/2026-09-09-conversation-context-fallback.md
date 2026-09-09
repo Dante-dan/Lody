@@ -37,9 +37,18 @@ without per-model token estimates. No new wire fields or backend are introduced.
 
 Synthetic tests cover inclusive copy range, unsupported-fork menus, exact edited
 file bytes, local/cloud routing and failures, and mention offsets. Existing
-composer focus and submission feedback tests pass. Full checks are blocked by
-missing runtime submodules and dependency declarations in this checkout; no clean
-build or live provider round trip is claimed. No PR has been created.
+composer focus and submission feedback tests pass. The header-menu suite opens the
+real submenu and verifies selected destinations, disabled pending destinations, and
+copying without native fork support. The copy handler catches and reports errors;
+its message-action adapter explicitly discards the Promise to honor the void event
+contract. This also resolves the type-aware lint failure in
+[PR #558](https://github.com/LodyAI/Lody/pull/558).
+
+A production-profile Cloud integration build and 75 focused tests passed at
+`df5aec96`; the login screen loaded, but no live provider round trip was verified.
+The primary checkout's full check remains blocked by missing runtime submodules
+and stale installed dependencies. Focused menu tests, component typechecking and
+type-aware lint use the independent build checkout with the same edited sources.
 
 The ordinary CLI attachment download failure still yields an unavailable-file
 notice; making that later failure fatal is a separate lifecycle decision.
