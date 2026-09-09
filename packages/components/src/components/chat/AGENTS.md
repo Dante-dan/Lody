@@ -19,7 +19,7 @@ Index and rationale: [README.md](README.md).
 - Single-member workspaces pass no project-sharing state. Otherwise local project
   options and the selected desktop trigger show only effective `Private`; hide Team
   and unresolved states. Effective access is `machine.sharedWithTeam &&
-  project.sharedWithTeam`. The selected Private segment opens `ProjectShareDialog`;
+project.sharedWithTeam`. The selected Private segment opens `ProjectShareDialog`;
   its project share mutation also shares the machine atomically. Use
   `useConvexErrorMessage` for failures (auth recovery, no raw Convex toast).
   GitHub options have no access badge. A desktop machine option is local only when
@@ -45,6 +45,11 @@ Index and rationale: [README.md](README.md).
   draft hooks, exactly like paste and drop.
 
 ## Invariants
+
+- A paste over 5000 characters is an editable file draft; smaller pastes stay
+  prose. Submit via `usePastedTextAttachments` inside the submission lifetime,
+  never inline draft bytes. Preserve failed drafts; local-only mode cannot use
+  cloud upload. See [Spec](../../../../../specs/conversation-context-copy-and-text-attachments.md).
 
 - The chat-route URL declares selection, never one-shot event nonces. Once it names
   a selection, mirror composer steering through desktop `onSelectionUrlSync` using

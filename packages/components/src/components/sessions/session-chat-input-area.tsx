@@ -1,3 +1,4 @@
+import { usePastedTextAttachments } from '@/hooks/use-pasted-text-attachments';
 import {
   useState,
   useCallback,
@@ -577,6 +578,7 @@ export const SessionChatInputArea = memo(
       runtimeWorkspaceId: workspaceRuntime?.workspaceId,
     });
     const authToken = useAtomValue(authTokenAtom);
+    const uploadPastedTextAttachments = usePastedTextAttachments(workspaceId, session.machineId);
     const currentUser = useAtomValue(userAtom);
     const postHog = usePostHog();
     const isArchived = session.isArchived === true;
@@ -1551,7 +1553,7 @@ export const SessionChatInputArea = memo(
         if (isArchived) {
           return false;
         }
-        const normalizedText = normalizePastedTextDraft(text).trim();
+        const normalizedText = normalizePastedTextDraft(text);
         if (!normalizedText) {
           return false;
         }
@@ -1563,7 +1565,7 @@ export const SessionChatInputArea = memo(
           currentValue,
           pastedText: normalizedText,
           displayText: wrapPastedTextChipLabel(
-            t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
+            t('composer.pastedFileInlineLabel', '[Text file · {{charCount}} chars]', {
               charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
             })
           ),
@@ -1890,6 +1892,10 @@ export const SessionChatInputArea = memo(
       const submission = beginSubmission({ dismissKeyboard: usesMobileKeyboardAction });
       if (!submission) return;
       try {
+        inputBlocks.push(
+          ...(await uploadPastedTextAttachments(pastedTextDrafts, session.id, inputBlocks))
+        );
+        if (!submission.isCurrent()) return;
         const accepted = await onSendMessage(inputBlocks, agentRoleTurnSelectionRef.current);
         if (accepted) {
           if (submission.isCurrent()) {
@@ -1914,11 +1920,16 @@ export const SessionChatInputArea = memo(
             void onVisualAnnotationReferencesSubmitted?.(submittedVisualAnnotationReferences);
           }
         }
+      } catch (error) {
+        if (submission.isCurrent())
+          toast.error(error instanceof Error ? error.message : fileUploadFailedLabel);
       } finally {
         submission.finish();
       }
     }, [
       beginSubmission,
+      uploadPastedTextAttachments,
+      fileUploadFailedLabel,
       clearInput,
       clearPendingImages,
       clearPendingFiles,

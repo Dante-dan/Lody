@@ -3948,5 +3948,16 @@
   "sessions.fileViewer.previousPage": "Previous page",
   "sessions.fileViewer.nextPage": "Next page",
   "sessions.fileViewer.page": "Page",
-  "sessions.fileViewer.pageUnavailable": "File changed or is unavailable. Reopen the preview."
+  "sessions.fileViewer.pageUnavailable": "File changed or is unavailable. Reopen the preview.",
+  "sessions.copyContextMarkdown": "Copy context as Markdown",
+  "sessions.copyContextMarkdownHint": "Copy the conversation from the beginning through this message, including this message",
+  "sessions.copyContextIncomplete": "The last response was still generating when copied.",
+  "composer.pastedFileInlineLabel": "[Text file · {{charCount}} chars]",
+  "composer.pastedFileTitle": "Text attachment",
+  "composer.pastedFileSendHint": "Sent as a file. Changes are saved to this draft.",
+  "composer.copyPastedText": "Copy all",
+  "composer.pastedTextToBody": "Convert to message text",
+  "composer.pastedFileInvalid": "Text attachment is empty, too large, or its destination is unavailable.",
+  "composer.tooManyTextAttachments": "Too many attachments. Remove a file or convert it to message text.",
+  "composer.textToFile": "Convert message text to file"
 }

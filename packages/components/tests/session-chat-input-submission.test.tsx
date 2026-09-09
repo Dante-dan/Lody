@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, createElement, createRef, type RefObject } from 'react';
+import { act, createElement, createRef, type RefObject, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRole, AgentRoleId, SessionMeta, SessionInputBlock } from '@lody/shared';
@@ -60,10 +60,18 @@ vi.mock('../src/hooks/use-code-collab-session-file-provider', () => ({
 }));
 
 import {
-  SessionChatInputArea,
+  SessionChatInputArea as UnwrappedSessionChatInputArea,
   setSessionChatInputTextDraft,
   type SessionChatInputAreaHandle,
 } from '../src/components/sessions/session-chat-input-area';
+import { TestCloudPlatformProvider } from './test-platform';
+function SessionChatInputArea(props: ComponentProps<typeof UnwrappedSessionChatInputArea>) {
+  return (
+    <TestCloudPlatformProvider>
+      <UnwrappedSessionChatInputArea {...props} />
+    </TestCloudPlatformProvider>
+  );
+}
 import { initI18n } from '../src/i18n';
 
 (

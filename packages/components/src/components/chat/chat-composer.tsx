@@ -1,3 +1,4 @@
+import { toast } from 'sonner';
 import {
   useEffect,
   useMemo,
@@ -35,6 +36,8 @@ import type { MentionProjectSource } from '@/components/mentions/mention-project
 import type { SkillMentionAgent } from '@/components/mentions/mention-skill-source';
 import {
   arePastedTextDraftsEqual,
+  replacePastedTextDraftWithText,
+  insertPastedTextDraft,
   getPastedTextCharacterCount,
   getPastedTextClipboardTextForSelection,
   getPastedTextLineCount,
@@ -118,6 +121,7 @@ export interface ChatComposerProps {
   promptPlaceholder?: string;
   promptDisabled?: boolean;
   promptRows?: number;
+  promptStyle?: TextareaProps['style'];
   promptEnterKeyHint?: TextareaProps['enterKeyHint'];
   promptRef?: Ref<HTMLTextAreaElement>;
   pastedTextDrafts?: PastedTextDraft[];
@@ -249,6 +253,7 @@ export function ChatComposer({
   promptDisabled = false,
   promptRows = 3,
   promptEnterKeyHint,
+  promptStyle,
   promptRef,
   pastedTextDrafts = [],
   onPastedTextDraftsChange,
@@ -321,7 +326,7 @@ export function ChatComposer({
   const uploadFailedLabel = t('sessions.uploadFailed', 'Upload failed');
   const uploadFailedShortLabel = t('sessions.uploadFailedShort', 'Failed');
   const imagePreviewLabel = t('sessions.imagePreview', 'Image preview');
-  const pastedTextDialogTitle = t('composer.pastedTextTitle', 'Pasted text');
+  const pastedTextDialogTitle = t('composer.pastedFileTitle', 'Text attachment');
   const pastedTextEditorLabel = t('composer.pastedTextEditorLabel', 'Edit pasted text');
   const resolvedPromptPlaceholder =
     promptPlaceholder ??
@@ -340,7 +345,7 @@ export function ChatComposer({
   const formatPastedTextInlineLabel = useCallback(
     (text: string) =>
       wrapPastedTextChipLabel(
-        t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
+        t('composer.pastedFileInlineLabel', '[Text file · {{charCount}} chars]', {
           charCount: numberFormatter.format(getPastedTextCharacterCount(text)),
         })
       ),
@@ -904,6 +909,7 @@ export function ChatComposer({
                 onPaste={onPromptPaste}
                 onCopy={handlePromptCopy}
                 disabled={promptDisabled}
+                style={promptStyle}
                 rows={effectivePromptRows}
                 enterKeyHint={promptEnterKeyHint}
                 placeholder={resolvedPromptPlaceholder}
@@ -947,6 +953,22 @@ export function ChatComposer({
                   isLanding={isLanding}
                   disabled={promptDisabled}
                   onAddAttachment={onAttachmentAddClick}
+                  onConvertTextToFile={
+                    onPastedTextDraftsChange && promptValue.trim() && pastedTextDrafts.length === 0
+                      ? () => {
+                          const result = insertPastedTextDraft({
+                            currentValue: promptValue,
+                            pastedText: promptValue,
+                            displayText: formatPastedTextInlineLabel(promptValue),
+                            selectionStart: 0,
+                            selectionEnd: promptValue.length,
+                          });
+                          if (!result) return;
+                          onPromptChange(result.nextValue);
+                          onPastedTextDraftsChange([result.draft]);
+                        }
+                      : undefined
+                  }
                   attachmentDisabled={attachmentAddDisabled}
                   mcp={mcp}
                 />
@@ -1006,6 +1028,7 @@ export function ChatComposer({
               onPaste={onPromptPaste}
               onCopy={handlePromptCopy}
               disabled={promptDisabled}
+              style={promptStyle}
               rows={effectivePromptRows}
               enterKeyHint={promptEnterKeyHint}
               placeholder={resolvedPromptPlaceholder}
@@ -1076,6 +1099,63 @@ export function ChatComposer({
             setPreviewPastedTextEditorValue('');
           }
         };
+        const replaceDraft = (text: string) => {
+          if (!previewPastedTextDraft || !onPastedTextDraftsChange || promptDisabled) return;
+          const result = replacePastedTextDraftWithText(
+            promptValue,
+            pastedTextDrafts,
+            previewPastedTextDraft.id,
+            text
+          );
+          if (!result) return;
+          onPromptChange(result.nextValue);
+          onPastedTextDraftsChange(result.nextDrafts);
+          handlePastedTextOpenChange(false);
+        };
+        const actions = previewPastedTextDraft ? (
+          <div className="flex shrink-0 flex-wrap gap-2 border-t border-border px-4 py-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                void navigator.clipboard
+                  .writeText(previewPastedTextDraft.text)
+                  .catch(() =>
+                    toast.error(
+                      t(
+                        'sessions.copyConversationHistoryFailed',
+                        'Failed to copy conversation history'
+                      )
+                    )
+                  );
+              }}
+            >
+              {t('composer.copyPastedText', 'Copy all')}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={promptDisabled || !onPastedTextDraftsChange}
+              onClick={() => replaceDraft(previewPastedTextDraft.text)}
+            >
+              {t('composer.pastedTextToBody', 'Convert to message text')}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={promptDisabled || !onPastedTextDraftsChange}
+              onClick={() => replaceDraft('')}
+            >
+              {t('sessions.removeAttachment', 'Remove attachment')}
+            </Button>
+            <span className="self-center text-xs text-muted-foreground">
+              {t('composer.pastedFileSendHint', 'Sent as a file. Changes are saved to this draft.')}
+            </span>
+          </div>
+        ) : null;
         const summaryText = previewPastedTextDraft
           ? t('composer.pastedTextSummary', '{{charCount}} chars · {{lineCount}} lines', {
               charCount: numberFormatter.format(
@@ -1117,6 +1197,7 @@ export function ChatComposer({
                       autoFocus={false}
                       className="input-scrollbar min-h-0 flex-1 resize-none rounded-none border-0 bg-background px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground focus-visible:ring-0 focus-visible:ring-offset-0"
                     />
+                    {actions}
                   </>
                 ) : null}
               </SheetContent>
@@ -1156,6 +1237,7 @@ export function ChatComposer({
                       className="input-scrollbar h-full min-h-0 w-full resize-none overflow-auto rounded-md border-transparent bg-muted/30 px-4 py-3 font-mono text-[13px] leading-relaxed text-foreground focus-visible:ring-1 focus-visible:ring-ring/50"
                     />
                   </div>
+                  {actions}
                 </>
               ) : null}
             </DialogContentWithoutClose>

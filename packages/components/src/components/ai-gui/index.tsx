@@ -1,3 +1,4 @@
+import type { PastedTextDraft } from '@/lib/pasted-text-draft';
 import {
   forwardRef,
   memo,
@@ -94,10 +95,15 @@ export interface SessionChatStreamProps {
   messageFileDiffEntriesByTurn?: MessageFileDiffEntriesByTurn;
   assistantActions?: AssistantMessageAction[];
   assistantActionsMessageId?: string | null;
+  onCopyContext?: (messageId: string) => void;
   onForkLastAssistant?: (turnId: string, destination?: SessionForkDestination) => void;
   forkWorktreeAvailability?: SessionForkWorktreeAvailability;
   onForkWorktreeMenuOpen?: () => void;
-  onEditLastUser?: (message: SessionHistoryParsed, text: string) => Promise<boolean>;
+  onEditLastUser?: (
+    message: SessionHistoryParsed,
+    text: string,
+    pastedTextDrafts?: readonly PastedTextDraft[]
+  ) => Promise<boolean>;
   /** Resends an undelivered (missing-history-acked) user turn's content as a
    * NEW message; the row's "Not delivered" label opens the confirmation dialog. */
   onResendUndelivered?: (userTurnId: string, inputBlocks: SessionInputBlock[]) => Promise<boolean>;
@@ -131,7 +137,11 @@ const MessageRowConnected = memo(function MessageRowConnected({
   workspaceId?: WorkspaceId | null;
   showSenderIdentity: boolean;
   onNavigateSession?: (target: SessionNavigationTarget) => void;
-  onEditLastUser?: (message: SessionHistoryParsed, text: string) => Promise<boolean>;
+  onEditLastUser?: (
+    message: SessionHistoryParsed,
+    text: string,
+    pastedTextDrafts?: readonly PastedTextDraft[]
+  ) => Promise<boolean>;
   /** Resends an undelivered (missing-history-acked) user turn's content as a
    * NEW message; the row's "Not delivered" label opens the confirmation dialog. */
   onResendUndelivered?: (userTurnId: string, inputBlocks: SessionInputBlock[]) => Promise<boolean>;
@@ -181,6 +191,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       assistantActions,
       assistantActionsMessageId,
       onForkLastAssistant,
+      onCopyContext,
       forkWorktreeAvailability,
       onForkWorktreeMenuOpen,
       forkingAssistantMessageId,
@@ -222,6 +233,9 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
     const stableOnNavigateSession = useStableCallback((target: SessionNavigationTarget) => {
       onNavigateSession?.(target);
     });
+    const stableOnCopyContext = useStableCallback((messageId: string) =>
+      onCopyContext?.(messageId)
+    );
     const stableOnForkLastAssistant = useStableCallback(
       (turnId: string, destination?: SessionForkDestination) => {
         onForkLastAssistant?.(turnId, destination);
@@ -292,6 +306,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
         messageFileDiffEntriesByTurn={messageFileDiffEntriesByTurn}
         assistantActions={assistantActions}
         assistantActionsMessageId={assistantActionsMessageId}
+        onCopyContext={onCopyContext ? stableOnCopyContext : undefined}
         onForkLastAssistant={hasForkLastAssistant ? stableOnForkLastAssistant : undefined}
         forkWorktreeAvailability={forkWorktreeAvailability}
         onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}

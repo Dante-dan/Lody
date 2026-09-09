@@ -294,3 +294,10 @@ describe('buildConversationMarkdown', () => {
     expect(result.stats.pathsCount).toBe(1);
   });
 });
+
+it('records file references without claiming their bytes were copied', () => {
+  const file = { type: 'file', fileName: 'context.txt', sizeBytes: 5001 } as MessageContent;
+  const result = buildConversationMarkdown({ history: [entry('user', [file])] });
+  expect(result.markdown).toContain('context.txt');
+  expect(result.markdown).toContain('File contents not included.');
+});

@@ -3,6 +3,7 @@ import { applyTextRewrites } from '@lody/shared';
 
 import {
   arePastedTextDraftsEqual,
+  replacePastedTextDraftWithText,
   buildPastedTextRewrites,
   getPastedTextCharacterCount,
   getPastedTextDraftsAfterInsertion,
@@ -21,9 +22,9 @@ const restoreToValue = (value: string, drafts: Parameters<typeof buildPastedText
   applyTextRewrites(value, buildPastedTextRewrites(drafts)).text;
 
 describe('shouldCapturePastedTextDraft', () => {
-  it('captures text only when it exceeds 1024 characters', () => {
-    expect(shouldCapturePastedTextDraft('a'.repeat(1024))).toBe(false);
-    expect(shouldCapturePastedTextDraft('a'.repeat(1025))).toBe(true);
+  it('captures text only when it exceeds 5000 characters', () => {
+    expect(shouldCapturePastedTextDraft('a'.repeat(5000))).toBe(false);
+    expect(shouldCapturePastedTextDraft('a'.repeat(5001))).toBe(true);
     expect(
       shouldCapturePastedTextDraft(
         Array.from({ length: 20 }, (_, index) => `line ${index}`).join('\n')
@@ -176,7 +177,7 @@ describe('updatePastedTextDraftContent', () => {
 });
 
 describe('buildPastedTextRewrites', () => {
-  it('restores full pasted text into the visible inline prompt', () => {
+  it('sends a file reference without inlining the text', () => {
     expect(
       restoreToValue('Error [Pasted 10 characters], please help', [
         {
@@ -187,10 +188,10 @@ describe('buildPastedTextRewrites', () => {
           end: 'Error '.length + '[Pasted 10 characters]'.length,
         },
       ])
-    ).toBe('Error alpha\nbeta, please help');
+    ).toBe('Error [pasted-paste-1.txt], please help');
   });
 
-  it('preserves edited leading and trailing line breaks when restoring', () => {
+  it('keeps edited content in the attachment rather than the prompt', () => {
     expect(
       restoreToValue('Before [Pasted 5 characters] after', [
         {
@@ -201,7 +202,7 @@ describe('buildPastedTextRewrites', () => {
           end: 'Before '.length + '[Pasted 5 characters]'.length,
         },
       ])
-    ).toBe('Before \nalpha\n after');
+    ).toBe('Before [pasted-paste-1.txt] after');
   });
 });
 
@@ -331,12 +332,12 @@ describe('normalizePastedTextDraft', () => {
 });
 
 describe('isLargePastedText', () => {
-  it('treats text over 1024 characters as large', () => {
-    expect(isLargePastedText('a'.repeat(1025))).toBe(true);
+  it('treats text over 5000 characters as large', () => {
+    expect(isLargePastedText('a'.repeat(5001))).toBe(true);
   });
 
-  it('does not treat text at or below 1024 characters as large', () => {
-    expect(isLargePastedText('a'.repeat(1024))).toBe(false);
+  it('does not treat text at or below 5000 characters as large', () => {
+    expect(isLargePastedText('a'.repeat(5000))).toBe(false);
     expect(
       isLargePastedText(Array.from({ length: 20 }, (_, index) => `line ${index}`).join('\n'))
     ).toBe(false);
@@ -346,7 +347,9 @@ describe('isLargePastedText', () => {
 describe('pasted text summaries', () => {
   it('reports characters and lines from normalized content', () => {
     const text = '  first line\r\nsecond line\r\n\r\nthird line  ';
-    expect(getPastedTextCharacterCount(text)).toBe('first line\nsecond line\n\nthird line'.length);
+    expect(getPastedTextCharacterCount(text)).toBe(
+      '  first line\nsecond line\n\nthird line  '.length
+    );
     expect(getPastedTextLineCount(text)).toBe(4);
   });
 });
@@ -366,7 +369,7 @@ describe('insertPastedTextDraft', () => {
       nextValue: 'Report: [Pasted 10 characters]',
       draft: {
         id: 'paste-1',
-        text: 'alpha\nbeta',
+        text: '  alpha\nbeta  ',
         displayText: '[Pasted 10 characters]',
         start: 'Report: '.length,
         end: 'Report: '.length + '[Pasted 10 characters]'.length,
@@ -387,5 +390,19 @@ describe('arePastedTextDraftsEqual', () => {
 
     expect(arePastedTextDraftsEqual([draft], [draft])).toBe(true);
     expect(arePastedTextDraftsEqual([draft], [{ ...draft, end: draft.end + 1 }])).toBe(false);
+  });
+});
+
+describe('replacePastedTextDraftWithText', () => {
+  it('restores exact text and reanchors the next attachment', () => {
+    const drafts = [
+      { id: 'a', text: '  first\n', displayText: '[a]', start: 0, end: 3 },
+      { id: 'b', text: 'second', displayText: '[b]', start: 4, end: 7 },
+    ];
+    expect(replacePastedTextDraftWithText('[a] [b]', drafts, 'a', drafts[0]!.text)).toEqual({
+      nextValue: '  first\n [b]',
+      nextDrafts: [{ ...drafts[1], start: 9, end: 12 }],
+    });
+    expect(replacePastedTextDraftWithText('changed', drafts, 'a', '')).toBeNull();
   });
 });

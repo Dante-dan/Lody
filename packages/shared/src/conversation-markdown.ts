@@ -464,6 +464,12 @@ function renderItem(item: MessageContent, level: LevelConfig, tally: RenderTally
       // Message text is never trimmed.
       return item.text?.trim() ? item.text : null;
 
+    case 'file':
+      return `- **Attachment:** ${toSummaryLine(item.fileName)} (${item.sizeBytes} bytes). _File contents not included._`;
+
+    case 'image_group':
+      return `- **Images:** ${item.images.length}. _Image contents not included._`;
+
     case 'proposed_plan':
       // Extracted out of the assistant text upstream, so dropping it would lose
       // prose the user can see in the transcript. Also never trimmed.

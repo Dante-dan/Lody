@@ -1,3 +1,5 @@
+import { useComposerSubmission } from './submission/use-composer-submission';
+import { usePastedTextAttachments } from '@/hooks/use-pasted-text-attachments';
 import {
   useCallback,
   useEffect,
@@ -1041,7 +1043,11 @@ function WorkspaceChatLanding({
   // ── Machine & Agent selection ──
   const [selectedMachineId, setSelectedMachineId] = useState<MachineId | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentSelection | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const { submissionPending: submitting, beginSubmission } = useComposerSubmission(
+    chatLandingDraftKey,
+    promptTextareaRef
+  );
   const mcpSelection = useSessionMcpSelection(undefined, { disabled: submitting });
   // The project selector always uses the machine-aware picker so multi-machine
   // workspaces can choose the target explicitly. Standalone Electron entry
@@ -1119,7 +1125,6 @@ function WorkspaceChatLanding({
   const [loadingLocalGitState, setLoadingLocalGitState] = useState(false);
 
   // ── Common refs ──
-  const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
   // Scope root for the keyboard-nav controller (arrow roving over the desktop landing's
   // config + composer column). Mobile/touch keeps native focus behavior.
   const keyboardNavRef = useRef<HTMLDivElement>(null);
@@ -1330,6 +1335,10 @@ function WorkspaceChatLanding({
     sessionId: draftSessionId,
     ensureSessionId: ensureDraftSessionId,
   });
+  const uploadPastedTextAttachments = usePastedTextAttachments(
+    workspaceId as WorkspaceId | null,
+    selectedMachineId
+  );
   const draftStore = useStore();
   const appliedResetKeyAtom = chatLandingAppliedResetKeyAtomFamily(chatLandingDraftKey);
 
@@ -1364,7 +1373,7 @@ function WorkspaceChatLanding({
 
   const insertLargePastedTextAtSelection = useCallback(
     (text: string) => {
-      const normalizedText = normalizePastedTextDraft(text).trim();
+      const normalizedText = normalizePastedTextDraft(text);
       if (!normalizedText) {
         return false;
       }
@@ -1376,7 +1385,7 @@ function WorkspaceChatLanding({
         currentValue,
         pastedText: normalizedText,
         displayText: wrapPastedTextChipLabel(
-          t('composer.pastedTextInlineLabel', '[Pasted {{charCount}} chars]', {
+          t('composer.pastedFileInlineLabel', '[Text file · {{charCount}} chars]', {
             charCount: numberFormatter.format(getPastedTextCharacterCount(normalizedText)),
           })
         ),
@@ -3010,16 +3019,14 @@ function WorkspaceChatLanding({
       configOptionSelectors,
     });
     const sessionIdForStart = draftSessionId ?? ensureDraftSessionId();
+    const submission = beginSubmission({ dismissKeyboard: usesMobileKeyboardAction });
+    if (!submission) return;
     try {
-      setSubmitting(true);
       setComposerStatus(null);
-      // Preserve React draft state until startSession is accepted, but clear the
-      // controlled element immediately so click/Enter feedback cannot wait for
-      // the first local writer await.
-      if (promptTextareaRef.current) {
-        promptTextareaRef.current.value = '';
-      }
-
+      inputBlocks.push(
+        ...(await uploadPastedTextAttachments(pastedTextDrafts, sessionIdForStart, inputBlocks))
+      );
+      if (!submission.isCurrent()) return;
       let project: ProjectRef | undefined;
       let repoFullNameForMentions: string | undefined;
 
@@ -3345,7 +3352,7 @@ function WorkspaceChatLanding({
         toast.error(t('chat.failed'), { description: errMsg });
       }
     } finally {
-      setSubmitting(false);
+      submission.finish();
     }
   };
 

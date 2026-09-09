@@ -81,6 +81,22 @@ describe('SessionForkDestinationPopover', () => {
     ]);
   });
 
+  it('offers copying when native fork is unavailable', async () => {
+    let copied = false;
+    await renderPopover({
+      nativeForkAvailable: false,
+      worktreeAvailability: 'hidden',
+      onCopyContext: () => {
+        copied = true;
+      },
+    });
+    const items = Array.from(document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+    expect(items).toHaveLength(1);
+    expect(items[0]?.textContent).toContain('Copy context as Markdown');
+    await act(async () => items[0]?.click());
+    expect(copied).toBe(true);
+  });
+
   it('does not leave the first destination focused after opening', async () => {
     await renderPopover();
     const firstItem = document.querySelector('[role="menuitem"]');

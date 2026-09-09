@@ -55,3 +55,11 @@ reasoning behind those rules.
   nothing.
 - Draft ACP preparation has a longer contract that remains in the private
   architecture context.
+
+## Pasted text files
+
+All message composers share the editable pasted-file UI in `ChatComposer`.
+`use-pasted-text-attachments.ts` transfers the current bytes only at submission;
+`pasted-text-draft.ts` handles the 5000-character threshold, editing, restoring
+prose and small outgoing file references. See the
+[Spec](../../../../../specs/conversation-context-copy-and-text-attachments.md).

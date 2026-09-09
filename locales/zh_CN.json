@@ -3948,5 +3948,16 @@
   "sessions.fileViewer.previousPage": "上一页",
   "sessions.fileViewer.nextPage": "下一页",
   "sessions.fileViewer.page": "页码",
-  "sessions.fileViewer.pageUnavailable": "文件已更改或无法读取，请重新打开预览。"
+  "sessions.fileViewer.pageUnavailable": "文件已更改或无法读取，请重新打开预览。",
+  "sessions.copyContextMarkdown": "复制上下文为 Markdown",
+  "sessions.copyContextMarkdownHint": "复制从开头到此条消息的对话，包含此条",
+  "sessions.copyContextIncomplete": "复制时，最后一条回复仍在生成。",
+  "composer.pastedFileInlineLabel": "[文本文件 · {{charCount}} 字符]",
+  "composer.pastedFileTitle": "文本附件",
+  "composer.pastedFileSendHint": "以文件发送，修改自动保存到当前草稿。",
+  "composer.copyPastedText": "复制全文",
+  "composer.pastedTextToBody": "转为正文",
+  "composer.pastedFileInvalid": "文本附件为空、过大，或发送目标不可用。",
+  "composer.tooManyTextAttachments": "附件数量过多，请删除文件或转为正文。",
+  "composer.textToFile": "将正文转为文件"
 }
