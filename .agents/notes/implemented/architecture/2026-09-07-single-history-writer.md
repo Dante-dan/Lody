@@ -37,8 +37,12 @@ existing bounded retry policy.
 Tool fields except identity, stored input-config fields, and same-proposal metadata
 parse only authored changes. Retained malformed fields do not block independent edits.
 Steer provenance survives read normalization; legacy built-in CLI selectors normalize
-on new writes only. Queue promotion removes the exact queued row after history accepts
-it, with stable turn ids protecting retries. Proposal decisions resolve the current
+on new writes only. Queue promotion removes the exact queued row after history and
+activation publication succeed. A history-only commit retries the pointer without
+appending again; terminal acknowledgements prevent replay, and another pending
+activation retains the queue row instead of being overwritten. The real SessionDocument /
+Loro regression injects repeated metadata failures and verifies those resulting states.
+Proposal decisions resolve the current
 proposal by id rather than replacing an earlier rendered entry.
 
 Correlated notice name/meta schemas include fork origin and shared operation completion.

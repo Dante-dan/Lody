@@ -31,8 +31,10 @@ writer/materializer 来自 #376，但不依赖 ConversationView。后续窗口�
 
 工具除身份外的字段、已存 inputConfig、同一 proposal 的 meta 只解析实际改动。
 未变的损坏旧字段不阻断独立更新。steer 标记保留到读取归一化；旧 built-in CLI
-选择器只在新写入时归一化。队列提升在历史接受后才移除同一队列行，稳定 turn id
-保护重试。proposal 决策按 id 查最新状态，不覆盖较早渲染的整条记录。
+选择器只在新写入时归一化。队列提升在历史和激活指针都写入成功后才移除同一队列行。
+只写成历史时，重试只补指针，不重复追加；终态确认防止重放，另有待派发消息时保留
+队列行，不覆盖它的指针。真实 SessionDocument / Loro 回归通过连续注入元数据写入
+失败，检查这些最终状态。proposal 决策按 id 查最新状态，不覆盖较早渲染的整条记录。
 
 notice 的 name/meta 关联包含 fork origin；operation completion 复用共享 schema。
 编译契约检查非法命令、嵌套字段覆盖与 notice 关联，不用源码字符串断言替代它。

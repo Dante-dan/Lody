@@ -24,7 +24,7 @@ Contract: specs/session-orchestration.md.
 
 ## Dispatch
 
-- Queue promotion preserves frozen Turn fields and removes its row only after history accepts it.
+- Queue promotion preserves frozen fields; remove its row only after history and activation succeed.
 - Absent session meta is "unknown", not foreign: hold the TTL-bounded RPC stash until meta lands;
   drop it only on a definitive verdict.
 - Subscribe to RPC offers BEFORE awaiting Doc Room join/sync and never dispatch from the RPC

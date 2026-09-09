@@ -4,9 +4,11 @@ import type { Logger } from '../src/utils/logger';
 import { SessionDispatchWatcher } from '../src/session/session-dispatch-watcher';
 import type { SessionExecutionService } from '../src/session/session-execution-service';
 import { SessionDocument, type LoroDocumentManager } from '../src/lib/loro/doc';
+import { LoroDoc } from 'loro-crdt';
 import { findNextDispatchableUserTurn } from '../src/session/session-dispatch-logic';
 import {
   buildMissingEmail,
+  createSessionMirror,
   getPendingUserTurnActivationId,
   hasPendingUserTurnActivation,
   type MessageContent,
@@ -1436,6 +1438,89 @@ describe('SessionDispatchWatcher', () => {
       }),
       { dispatchSource: 'queue' }
     );
+  });
+
+  it('repairs activation after a history-only queue commit without duplicating or replaying turns', async () => {
+    const id = 'queue-retry' as SessionId;
+    let meta = {
+      id,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: '2026-09-09',
+      cliType: 'builtin',
+      agentType: 'codex',
+      status: { type: 'idle' },
+      latestUserMsgId: 'previous',
+      lastHandledUserMsgId: 'previous',
+    } as SessionMeta;
+    let rejectPointer = true;
+    const repo = {
+      getDocMeta: async () => ({ meta }),
+      upsertDocMeta: async (_room: string, patch: Partial<SessionMeta>) => {
+        if (rejectPointer) throw new Error('pointer-unavailable');
+        meta = { ...meta, ...patch };
+      },
+    };
+    const doc = new SessionDocument(repo as never, id, async () => {}, createSilentLogger());
+    const loro = new LoroDoc();
+    doc.mirror = createSessionMirror({ doc: loro, initialState: { session: { id }, history: [] } });
+    const watcher = createWatcher({
+      logger: createSilentLogger(),
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      workspaceDocument: { repo } as never,
+      executionService: {} as SessionExecutionService,
+      canUseMachine: createAllowMachineAccess(),
+    });
+    const promote = (
+      watcher as unknown as {
+        promoteNextQueuedMessage: (
+          doc: SessionDocument,
+          meta: SessionMeta,
+          history: SessionHistoryInput[]
+        ) => Promise<SessionHistoryInput | null>;
+      }
+    ).promoteNextQueuedMessage.bind(watcher);
+    const enqueue = () =>
+      doc.pushMessageQueue({
+        userTurnId: 'queued',
+        task: 'hello',
+        userId: 'user-1',
+        timestamp: '2026-09-09',
+        acpSessionConfig: {
+          prompt: 'hello',
+          cliType: 'builtin',
+          agentType: 'codex',
+        },
+      } as never);
+    try {
+      await enqueue();
+      const attempt = () =>
+        promote(doc, meta, doc.mirror!.getState().history as SessionHistoryInput[]);
+      await expect(attempt()).rejects.toThrow('pointer-unavailable');
+      expect(loro.getList('history').length).toBe(1);
+      expect(await doc.getMessageQueue()).toHaveLength(1);
+      await expect(attempt()).rejects.toThrow('pointer-unavailable');
+      expect(await doc.getMessageQueue()).toHaveLength(1);
+      rejectPointer = false;
+      meta.latestUserMsgId = 'other';
+      expect(await attempt()).toBeNull();
+      expect(meta.latestUserMsgId).toBe('other');
+      expect(await doc.getMessageQueue()).toHaveLength(1);
+      meta.lastHandledUserMsgId = 'other';
+      expect((await attempt())?.id).toBe('queued');
+      expect(getPendingUserTurnActivationId(meta)).toBe('queued');
+      expect(await doc.getMessageQueue()).toHaveLength(0);
+      expect(loro.getList('history').length).toBe(1);
+      // A resurrected queue row must not replay even if history status is stale.
+      meta.lastHandledUserMsgId = 'queued';
+      await enqueue();
+      expect(await attempt()).toBeNull();
+      expect(hasPendingUserTurnActivation(meta)).toBe(false);
+      expect(await doc.getMessageQueue()).toHaveLength(0);
+    } finally {
+      doc.mirror.dispose();
+    }
   });
 
   it('drops a resurrected queue item whose user turn already exists in history', async () => {

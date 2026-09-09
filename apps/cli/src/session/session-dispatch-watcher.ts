@@ -2057,7 +2057,7 @@ export class SessionDispatchWatcher {
    * a history entry. This handles the case where the web client enqueues messages
    * via the message queue API instead of writing directly to the session history.
    *
-   * Remove its queue row only after history accepts it. This I/O operation
+   * Remove its queue row only after history and activation accept it. This I/O operation
    * lives in the watcher rather than in
    * the pure turn-finding logic.
    */
@@ -2088,7 +2088,37 @@ export class SessionDispatchWatcher {
       }
 
       const queuedTurnId = queuedItem.userTurnId?.trim() || `queued-${queuedItem.$cid}`;
-      if (history.some((entry) => entry.id === queuedTurnId)) {
+      const existing = history.find((entry) => entry.id === queuedTurnId);
+      if (existing) {
+        if (existing.role === 'user' && isActivationAwaitingHistory(history, queuedTurnId)) {
+          const currentMeta = await sessionDoc.getMetaState();
+          if (!currentMeta) return null;
+          const alreadyExecuted =
+            currentMeta.lastHandledUserMsgId === queuedTurnId ||
+            currentMeta.settledActivationUserMsgId === queuedTurnId ||
+            currentMeta.lastMissingHistoryUserMsgId === queuedTurnId ||
+            this.deps.executionService.getTerminalUserTurnStatusWithoutEntry?.(
+              meta.id,
+              queuedTurnId
+            ) !== undefined ||
+            history.some(
+              (entry) =>
+                entry.role === 'assistant' &&
+                entry.userTurnId === queuedTurnId &&
+                typeof entry.endedAt === 'number'
+            );
+          if (!alreadyExecuted) {
+            // History may have committed before activation publication failed. Do not
+            // discard the retry record until the missing second write succeeds.
+            const pending = getPendingUserTurnActivationId(currentMeta);
+            if (pending && pending !== queuedTurnId) return null;
+            await this.deps.workspaceDocument.repo.upsertDocMeta(getSessionRoomId(meta.id), {
+              latestUserMsgId: queuedTurnId,
+            });
+            await sessionDoc.removeMessageQueueItem(queuedItem.$cid);
+            return existing;
+          }
+        }
         await sessionDoc.removeMessageQueueItem(queuedItem.$cid);
         this.deps.logger.debug(
           `[${meta.id}] Dropping already-promoted queued message ${queuedItem.$cid}`
