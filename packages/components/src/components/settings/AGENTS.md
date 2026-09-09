@@ -16,6 +16,10 @@ rolls back — is in the root [AGENTS.md](../../../../../AGENTS.md).
   and the panel clips its overflow, so a `md:`-width label column silently hides the
   control.
 - Agent configuration lives in `agent-config-dialog.tsx` plus `env-vars-textarea.tsx`.
+  Codex offers ChatGPT sign-in or a Base URL + API Key path. The latter persists
+  `CODEX_API_KEY` separately from a generated `CODEX_CONFIG` custom provider with
+  `requires_openai_auth=false`; additional env cannot override those managed keys,
+  and arbitrary user-authored `CODEX_CONFIG` remains untouched.
   DeepSeek Harness official vs custom endpoint is dialog form state only: persist
   `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` (official always writes
   `https://api.deepseek.com`) and never a new AgentConfigMeta field. Model ids come from

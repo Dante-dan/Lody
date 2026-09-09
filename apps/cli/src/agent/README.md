@@ -139,9 +139,11 @@ Which authentication path runs is decided by the provider, not the caller: a man
 runs its pinned login command, and everything else (registry and custom ACP) opens a
 temporary standard ACP connection in the same bounded lifecycle. Kimi runs `acp --login`;
 Grok runs the official `login --device-auth`; Claude Code runs the official
-`auth login --claudeai` subscription flow; Codex always runs the official
+`auth login --claudeai` subscription flow. Codex normally runs the official
 `login --device-auth` ChatGPT flow so Web can complete authentication against a remote
-machine.
+machine. A Codex provider configured with Base URL + API Key instead receives a custom
+`model_providers` entry through `CODEX_CONFIG`, reads the secret from `CODEX_API_KEY`, and
+sets `requires_openai_auth = false`, so no ChatGPT login is offered for that config.
 
 Remote Web transport stores only an ephemeral-ECDH/AES-GCM envelope in the 24-hour request
 stream; the target machine keeps the recipient private key in memory and decrypts
