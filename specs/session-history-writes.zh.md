@@ -60,7 +60,7 @@ Translation: stale
 - `packages/shared/src/{history-writer,history-write-schema,session-mirror}.ts`
 - `packages/shared/tests/history-writer.test.ts` 与 `history-writer.contract.ts`
 - [决策记录](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.zh.md)
-- [业务字段修复与待定 hash 决策](../.agents/notes/implemented/bug-fix/2026-09-08-history-writer-business-fields.zh.md)
-- [外部历史基线修复](../.agents/notes/implemented/bug-fix/2026-09-08-imported-history-baseline.zh.md)
+- [业务字段修复与待定 hash 决策](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.zh.md)
+- [外部历史基线修复](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.zh.md)
 
 这是供人工审阅的草稿；实现和测试通过不代表 Spec 已获批准。

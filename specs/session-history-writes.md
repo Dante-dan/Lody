@@ -78,7 +78,7 @@ Non-history control-field validation remains outside this HistoryWriter contract
 - `packages/shared/src/{history-writer,history-write-schema,session-mirror}.ts`
 - `packages/shared/tests/history-writer.test.ts` and `history-writer.contract.ts`
 - [Decision](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.md)
-- [Business-field repair and pending hash decision](../.agents/notes/implemented/bug-fix/2026-09-08-history-writer-business-fields.md)
-- [Imported-history baseline repair](../.agents/notes/implemented/bug-fix/2026-09-08-imported-history-baseline.md)
+- [Business-field repair and pending hash decision](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.md)
+- [Imported-history baseline repair](../.agents/notes/implemented/architecture/2026-09-07-single-history-writer.md)
 
 Draft for human review; implementation and passing tests do not grant Spec approval.
