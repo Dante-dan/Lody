@@ -18,8 +18,9 @@ export const field = stylex.defineVars({
   paddingBlock: space[2],
   radiusSmall: radius.small,
   radiusMedium: radius.medium,
-  textSmall: text.footnoteSize,
-  textMedium: text.subheadlineSize,
+  // One step for the whole 28 / 32 / 36 ladder. 12 belongs to the label and the
+  // help text; a control's own content is never sized like the text about it.
+  text: text.subheadlineSize,
   labelSize: text.footnoteSize,
   labelLeading: text.footnoteLeading,
   gap: space[1.5],

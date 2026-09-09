@@ -21,19 +21,19 @@ const styles = stylex.create({
     height: field.heightSmall,
     paddingInline: field.paddingXSmall,
     borderRadius: field.radiusSmall,
-    fontSize: field.textSmall,
+    fontSize: field.text,
   },
   medium: {
     height: field.heightMedium,
     paddingInline: field.paddingXMedium,
     borderRadius: field.radiusMedium,
-    fontSize: field.textMedium,
+    fontSize: field.text,
   },
   large: {
     height: field.heightLarge,
     paddingInline: field.paddingXLarge,
     borderRadius: field.radiusMedium,
-    fontSize: field.textMedium,
+    fontSize: field.text,
   },
 });
 

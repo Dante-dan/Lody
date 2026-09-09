@@ -34,7 +34,7 @@ const styles = stylex.create({
     paddingBlock: field.paddingBlock,
     paddingInline: field.paddingXMedium,
     borderRadius: field.radiusMedium,
-    fontSize: field.textMedium,
+    fontSize: field.text,
     lineHeight: text.subheadlineLeading,
     minHeight: field.textareaMinHeight,
   },

@@ -86,14 +86,44 @@ the moment it takes focus.
 | `ring-ring`                    | `field.ring` (`accent`), 2px             |
 | `aria-invalid` colours         | `field.invalidRing` (`destructive`), 2px |
 | `disabled:bg-muted opacity-60` | `field.disabledOpacity`, no colour swap  |
-| input `text-base md:text-sm`   | `field.textMedium` (13) at weight 500    |
+| input `text-base md:text-sm`   | `field.text` (13) at weight 500          |
 | label `text-sm`                | `field.labelSize` (12) at weight 500     |
 
 The control's own text follows the rules' control step — 13 at weight 500 with
-`text.controlTracking`, 12 at the 28px size — rather than the prose weight a
-text field might suggest. Dimensions that land on the space scale reference it
-(`space.2`, `space.3`, `space.1.5`); the 10px inline padding of the 32px control
-is the one literal, because the scale has no half step between 8 and 12.
+`text.controlTracking` — rather than the prose weight a text field might
+suggest. Dimensions that land on the space scale reference it (`space.2`,
+`space.3`, `space.1.5`); the 10px inline padding of the 32px control is the one
+literal, because the scale has no half step between 8 and 12.
+
+### One type step for the whole ladder
+
+The first cut sized control text by step: 12 at 28, 13 at 32 and 36, copying
+what Button already did. That is wrong for this system, and the reason is the
+system's own grammar rather than a typographic preference.
+
+These rules give each channel one job and then forbid a second: `accent` marks
+live state and is "never a button fill", `separator` divides rows and is "never
+around a surface", disabled is an opacity and "not a color". Type size is
+already spoken for the same way — controls 13, prose 14, labels and help 12 —
+which is the type axis restating what the colour axis says with `label`,
+`secondaryLabel` and `tertiaryLabel`: the thing, about the thing, a hint.
+Density already has its own channels, the 28 / 32 / 36 height and the radius
+that compensates for it. Letting size drive type as well is the channel
+overloading the rest of the document bans.
+
+The concrete collision: `field.textSmall` and `field.labelSize` both resolved to
+`footnoteSize`, so at the 28 step a control's own value was typographically
+indistinguishable from the label describing it, in a system whose first colour
+rule is that those two are different things.
+
+So the ladder is one step, and one token carries it: `field.text` and
+`button.text` replace the per-size text tokens, because tokens whose values
+happen to match are an invitation to drift apart later. Button's `small` moves
+from 12 to 13 with it; a compact button and a dialog button are the same command
+at two densities and should not disagree about how their label is set. Button's
+`mini` keeps 12 and is left alone: at 24px it is not on the ladder the rules
+define, and whether it belongs to the ladder or to the "16px things" the radius
+rule mentions is a separate question this change does not settle.
 
 ## Discovered defect: the shell suppresses every outline ring
 

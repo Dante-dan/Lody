@@ -14,9 +14,11 @@ export const button = stylex.defineVars({
   radiusMini: '6px',
   radiusSmall: radius.small,
   radiusMedium: radius.medium,
+  // The 28 / 32 / 36 ladder is one control step, so one token carries it: a
+  // per-size token whose values happen to match is an invitation to drift.
+  // `mini` is not on that ladder, so it keeps its own.
   textMini: text.footnoteSize,
-  textSmall: text.footnoteSize,
-  textMedium: text.subheadlineSize,
+  text: text.subheadlineSize,
   gap: '6px',
   primaryBackground: colors.label,
   primaryLabel: colors.background,

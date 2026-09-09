@@ -220,7 +220,7 @@ const styles = stylex.create({
     borderRadius: field.radiusMedium,
     cornerShape: corner.shape,
     color: field.value,
-    fontSize: field.textMedium,
+    fontSize: field.text,
     fontWeight: 500,
     letterSpacing: text.controlTracking,
   },

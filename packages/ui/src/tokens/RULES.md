@@ -56,8 +56,8 @@ one colour in one place instead of one per component.
 | disabled    | 45% opacity on the control; the label and help dim with it        |
 | selected    | `selectedFill` on the row that is current, not on the control     |
 
-The control's own text follows the control rule: 13 at weight 500 with
-`text.controlTracking`, 12 at the 28px step. Label at 12 weight 500 in
+The control's own text follows the control rule at every size on the ladder: 13
+at weight 500 with `text.controlTracking`. Label at 12 weight 500 in
 `field.label`, help at 12 weight 400 in `field.hint`, error at 12 weight 400 in
 `field.error`, stacked at `field.gap`. Disabled reads `field.disabledOpacity`
 rather than a literal, so the control and its label cannot drift apart.
