@@ -9,7 +9,8 @@ a matching file-type icon, without a pill background or border. Hover and keyboa
 focus remain visible, and line references retain their existing navigation behavior.
 
 For a binary file without an inline viewer, the preview explains that it cannot
-render the file. On Electron with the session running on this machine, it offers
+render the file in the shared rounded notice card, with full-width stacked actions
+and Copy file path. On Electron with the session running on this machine, it offers
 Open in default app and Reveal in Finder (or the host's file manager). Reveal
 selects the file without launching its associated application. The preview and
 More menu use the same system action and the same file identity, including local

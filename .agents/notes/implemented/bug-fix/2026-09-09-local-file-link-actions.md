@@ -10,7 +10,9 @@ PR: https://github.com/LodyAI/Lody/pull/555
 Assistant file links used filled pills, and successful binary previews omitted
 system actions already available on preview errors. The renderer now uses blue
 links with matching file-type icons, and binary previews receive the existing
-local Open and Reveal callbacks. Local absolute paths are preserved; remote shell
+local Open and Reveal callbacks. Binary notices reuse the unavailable-file card
+with full-width stacked actions and the shared Copy file path callback, keeping
+binary-specific copy while aligning both sidebar states. Local absolute paths are preserved; remote shell
 access remains unavailable. The reported native application-not-found message
 has not been reproduced, so the absolute-path rejection is a confirmed separate
 defect, not proof of that message's cause.

@@ -99,3 +99,6 @@ binary notice. Local files receive Open in default app and Reveal callbacks from
 `useSessionFileActions`, shared with the More menu. Failures log the requested and
 resolved paths locally and offer Copy error details with a reason-specific next step. See the
 [file action spec](../../../../../specs/local-file-link-actions.md).
+
+Binary previews share `SessionFileNoticeCard` with unavailable-file states, including
+the same card spacing, full-width actions and Copy file path callback.
