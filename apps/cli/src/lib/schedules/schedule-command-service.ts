@@ -1,6 +1,5 @@
 import {
   DEFAULT_SCHEDULE_DESTINATION,
-  canonicalScheduleJson,
   getMachineRoomId,
   getMachineFlockDocId,
   getMachineFlockLocalProjects,
@@ -16,8 +15,8 @@ import {
   readMachineFlockRowsFromFlock,
   ScheduleCommandSchema,
   ScheduleRepository,
+  scheduleProposalRuleToTrigger,
   validateSchedulePrompt,
-  validateScheduleTrigger,
   type AgentConfigId,
   type MachineId,
   type MachineMeta,
@@ -30,6 +29,7 @@ import type { AuthContext } from '../command-runtime';
 import type { LoroDocumentManager } from '../loro/doc';
 import type { WorkspaceSummary } from '../workspace';
 import { readMergedAgentConfigById } from '../agent-config-machine-flock';
+import { publishScheduleProposal } from './schedule-proposal';
 import {
   destinationSessionProblem,
   scheduleDestinationSessionId,
@@ -95,38 +95,40 @@ export async function executeScheduleCommand(
   }
   if (command.action === 'propose') {
     if (!requesterSessionId) throw new Error('A proposal requires an invoking Session');
-    validateScheduleTrigger(command.trigger);
+    // The rule must already be a schedule the editor could show, so a card the
+    // person confirms cannot fail validation afterwards.
+    scheduleProposalRuleToTrigger(command.rule, getServerNow());
     validateSchedulePrompt(command.prompt);
     const session = await manager.getOrCreateSessionDoc(requesterSessionId);
-    const text = `Scheduled task proposal — review in Schedules before enabling.\n\n\`\`\`json\n${canonicalScheduleJson(command)}\n\`\`\``;
-    const entryId = `schedule-proposal-${command.requestId}`;
-    await session.updateHistory((history) => {
-      const previous = history.find((entry) => entry.id === entryId);
-      if (previous) {
-        if (
-          previous.role !== 'system' ||
-          previous.items?.[0]?.type !== 'text' ||
-          previous.items[0].text !== text
-        )
-          throw new Error('Idempotency key conflict');
-        return history;
+    const sessionRecord = await manager.repo.getDocMeta(getSessionRoomId(requesterSessionId));
+    const sessionMeta = sessionRecord?.meta as SessionMeta | undefined;
+    const actorConfig = sessionMeta?.agentConfigId
+      ? await readMergedAgentConfigById(
+          manager.repo,
+          workspaceId,
+          auth.machineId as MachineId,
+          sessionMeta.agentConfigId as AgentConfigId
+        ).catch(() => undefined)
+      : undefined;
+    const outcome = await publishScheduleProposal(
+      session,
+      {
+        proposalId: command.requestId,
+        title: command.title,
+        prompt: command.prompt,
+        rule: command.rule,
+        ...(command.destination ? { destination: command.destination } : {}),
+        ...(command.target ? { target: command.target } : {}),
+      },
+      {
+        ...(sessionMeta?.agentConfigId ? { agentConfigId: sessionMeta.agentConfigId } : {}),
+        ...(actorConfig?.config?.name ? { name: actorConfig.config.name } : {}),
       }
-      return [
-        ...history,
-        {
-          id: entryId,
-          role: 'system',
-          timestamp: new Date(getServerNow()).toISOString(),
-          items: [{ type: 'text', text }],
-          fileDiff: [],
-          finished: true,
-        },
-      ];
-    });
+    );
     await manager.repo.flush();
     if (!localOnly && !(await session.waitUntilSynced()))
       throw new Error('Proposal saved locally; sync pending. Retry with the same requestId.');
-    return { ok: true, requestId: command.requestId, enabled: false };
+    return { ok: true, requestId: command.requestId, enabled: false, ...outcome };
   }
   const id = command.scheduleId;
   if (command.action !== 'create' || (await repository.list()).some((row) => row.scheduleId === id))

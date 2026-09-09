@@ -29,6 +29,13 @@
   Official MCP has list/show/propose/pause only, with the invoking owner and
   driving turn's `scheduleToolsEnabled` checked again by the service. Human
   commands are not a security boundary against an Agent with shell access.
+  `propose` takes a NAMED rule (`ScheduleProposalRuleSchema`), never cron, and
+  validates it as a trigger before writing; it publishes one idempotent
+  `schedule_proposal` system notice per `requestId` through
+  `schedule-proposal.ts` and reports the person's outcome on a repeated call.
+  The tool description tells the agent to ask rather than guess when the
+  prompt, rule or destination is unclear — that guidance is the product
+  behaviour, so keep it in step with what the card can resolve.
 - Permission validation uses ACP `_permission` category or advertised legacy
   modes, never option-id spelling. No credentials or provider exception content
   may be written to Registry runtime rows or Schedule logs.

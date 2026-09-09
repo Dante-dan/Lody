@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { ScheduleDefinitionSchema, ScheduleTriggerSchema } from './schedule-types';
+import {
+  ScheduleProposalDestinationSchema,
+  ScheduleProposalRuleSchema,
+  ScheduleProposalTargetSchema,
+} from './message-schemas';
+import { ScheduleDefinitionSchema } from './schedule-types';
 
 const id = z
   .string()
@@ -56,7 +61,10 @@ export const ScheduleCommandSchema = z.discriminatedUnion('action', [
       requestId: id,
       title: z.string().trim().min(1).max(200),
       prompt: z.string().min(1).max(32768),
-      trigger: ScheduleTriggerSchema,
+      // Named rules only — an agent never writes cron.
+      rule: ScheduleProposalRuleSchema,
+      destination: ScheduleProposalDestinationSchema.optional(),
+      target: ScheduleProposalTargetSchema.optional(),
     })
     .strict(),
 ]);

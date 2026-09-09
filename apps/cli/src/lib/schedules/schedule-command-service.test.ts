@@ -207,3 +207,83 @@ it('bounds MCP prompt output and returns usable Registry pagination metadata', a
   expect(result.truncated.promptCharsOmitted).toBe(1000);
   expect(await executeScheduleCommand(h.context, { action: 'list', limit: 1, offset: 1 })).toMatchObject({ schedules: [], matched: 1 });
 });
+
+describe('proposing a schedule from a conversation', () => {
+  const propose = (h: Awaited<ReturnType<typeof fixture>>, extra: Record<string, unknown> = {}) =>
+    executeScheduleCommand(h.context, {
+      action: 'propose',
+      requestId: 'nightly',
+      title: 'Nightly review',
+      prompt: 'Review today’s commits and list anything risky.',
+      rule: { kind: 'daily', hour: 21, minute: 0 },
+      ...extra,
+    } as ScheduleCommand);
+
+  it('writes one card into the invoking conversation, idempotently', async () => {
+    const h = await fixture();
+    h.context.requesterSessionId = 'session' as never;
+    await expect(propose(h)).resolves.toMatchObject({ ok: true, pending: true, enabled: false });
+    await expect(propose(h)).resolves.toMatchObject({ ok: true, pending: true });
+    const cards = h.history().filter((entry) => entry.id === 'schedule-proposal-nightly');
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({
+      role: 'system',
+      items: [
+        {
+          type: 'system_notice',
+          name: 'schedule_proposal',
+          meta: {
+            proposalId: 'nightly',
+            title: 'Nightly review',
+            rule: { kind: 'daily', hour: 21, minute: 0 },
+            proposedBy: { kind: 'agent' },
+          },
+        },
+      ],
+    });
+  });
+
+  it('refuses to reuse a request id for a different proposal', async () => {
+    const h = await fixture();
+    h.context.requesterSessionId = 'session' as never;
+    await propose(h);
+    await expect(propose(h, { title: 'Something else' })).rejects.toThrow('Idempotency');
+  });
+
+  it('reports the outcome once the person has acted on the card', async () => {
+    const h = await fixture();
+    h.context.requesterSessionId = 'session' as never;
+    await propose(h);
+    // The renderer writes the outcome back onto the same item.
+    const session = await h.context.manager.getOrCreateSessionDoc('session' as never);
+    await session.updateHistory((history) =>
+      history.map((entry) =>
+        entry.id === 'schedule-proposal-nightly'
+          ? {
+              ...entry,
+              items: [{ ...entry.items![0]!, meta: { ...entry.items![0]!.meta, outcome: 'created', scheduleId: 'nightly' } }],
+            }
+          : entry
+      )
+    );
+    await expect(propose(h)).resolves.toMatchObject({
+      ok: true,
+      pending: false,
+      outcome: 'created',
+      scheduleId: 'nightly',
+    });
+  });
+
+  it('rejects a rule the editor could not show, before writing anything', async () => {
+    const h = await fixture();
+    h.context.requesterSessionId = 'session' as never;
+    await expect(propose(h, { rule: { kind: 'weekly', weekdays: [], hour: 9, minute: 0 } })).rejects.toThrow();
+    await expect(propose(h, { rule: { kind: 'cron', expression: '0 9 * * *', timeZone: 'UTC' } })).rejects.toThrow();
+    expect(h.history()).toHaveLength(0);
+  });
+
+  it('requires an invoking conversation', async () => {
+    const h = await fixture();
+    await expect(propose(h)).rejects.toThrow('invoking Session');
+  });
+});

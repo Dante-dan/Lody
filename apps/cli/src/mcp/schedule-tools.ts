@@ -1,6 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { ScheduleTriggerSchema, type ScheduleCommand } from '@lody/shared';
+import {
+  ScheduleProposalDestinationSchema,
+  ScheduleProposalRuleSchema,
+  ScheduleProposalTargetSchema,
+  type ScheduleCommand,
+} from '@lody/shared';
 
 type Dependencies = { enabled: boolean; execute: (command: ScheduleCommand) => Promise<unknown> };
 const id = z
@@ -66,14 +71,31 @@ export function registerScheduleTools(server: McpServer, deps: Dependencies): vo
   server.registerTool(
     'lody_schedule_propose',
     {
-      description:
-        'Write a durable scheduled-task proposal for human review. Does not create or enable automation. The human chooses the machine, Agent, permission and Project in Schedules before saving. Reuse requestId on retry.',
+      description: [
+        'Propose a scheduled task from what the user described. This writes a card into the',
+        'current chat with a Create button; the user creates the schedule by pressing it — do not',
+        'promise it is scheduled until they do. Never call this while the description is still',
+        'vague: before proposing you must know (1) what the agent should do on each run, written',
+        'as the full prompt it will receive with no reference to this conversation, (2) when —',
+        'one of the named rules below, or manual for run-on-demand, and (3) optionally where the',
+        'result goes. If any of these is missing or ambiguous, ask the user a short question',
+        'instead of guessing. Rule shapes: manual; minutes {every}; hours {every}; daily /',
+        'weekdays {hour, minute}; weekly {weekdays: 0-6 with 0=Sunday, hour, minute}; monthly',
+        '{days: 1-31, hour, minute}; once {at: RFC3339}. Times are in the user’s own time zone',
+        'unless they named one. The Agent, permission mode, machine and project default to this',
+        'conversation’s; set `target` only when the user explicitly named a different Agent Role,',
+        'Agent, machine or project (resolve names to ids with lody_session_create_options).',
+        'Destination: new_session (a fresh chat per run, default), own_session (one chat this task',
+        'keeps continuing), or existing_session {sessionId}. Reuse requestId when retrying.',
+      ].join(' '),
       inputSchema: z
         .object({
           requestId: id,
           title: z.string().trim().min(1).max(200),
           prompt: z.string().min(1).max(32768),
-          trigger: ScheduleTriggerSchema,
+          rule: ScheduleProposalRuleSchema,
+          destination: ScheduleProposalDestinationSchema.optional(),
+          target: ScheduleProposalTargetSchema.optional(),
         })
         .strict(),
     },

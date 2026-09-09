@@ -187,6 +187,7 @@ import type {
   MachineId,
   MessageTextSpan,
   SessionFilePayload,
+  ScheduleProposalMeta,
   TaskProposalMeta,
 } from '@lody/shared';
 import { MessageTextWithChips } from '@/components/mentions/message-text-chips';
@@ -201,7 +202,8 @@ import { ContainerQueryProvider } from './container-query-provider';
 import { usePermissionResponse } from '@/hooks/use-permission-response';
 import { usePlanModeExitApprovalNotifier } from '@/hooks/use-plan-mode-exit-approval';
 import { TaskProposalNotice } from '@/components/tasks/task-proposal-notice';
-import { tasksFeatureEnabledAtom } from '@/atoms/settings';
+import { ScheduleProposalNotice } from '@/components/schedules/schedule-proposal-notice';
+import { schedulesFeatureEnabledAtom, tasksFeatureEnabledAtom } from '@/atoms/settings';
 import { shouldRenderSystemRowItem } from './message-content-guards';
 import { getChatFailedDiagnosticCopy } from './chat-failed-diagnostic-copy';
 import { extractReadableChatFailedMessage } from './chat-failed-error-report';
@@ -1851,8 +1853,9 @@ const SystemMessageRowView = ({
   onNavigateSession?: (target: SessionNavigationTarget) => void;
 }) => {
   const tasksEnabled = useAtomValue(tasksFeatureEnabledAtom);
+  const schedulesEnabled = useAtomValue(schedulesFeatureEnabledAtom);
   const systemItems = message.items.flatMap((item, itemIndex) =>
-    shouldRenderSystemRowItem(item, tasksEnabled) ? [{ item, itemIndex }] : []
+    shouldRenderSystemRowItem(item, tasksEnabled, schedulesEnabled) ? [{ item, itemIndex }] : []
   );
 
   if (systemItems.length === 0) {
@@ -1866,6 +1869,14 @@ const SystemMessageRowView = ({
           <TaskProposalNotice
             key={`task-proposal-${itemIndex}`}
             meta={(item.meta ?? { proposalId: '', title: '' }) as TaskProposalMeta}
+            sessionId={sessionId}
+            entryId={message.id}
+            itemIndex={itemIndex}
+          />
+        ) : item.type === 'system_notice' && item.name === 'schedule_proposal' && item.meta ? (
+          <ScheduleProposalNotice
+            key={`schedule-proposal-${itemIndex}`}
+            meta={item.meta as ScheduleProposalMeta}
             sessionId={sessionId}
             entryId={message.id}
             itemIndex={itemIndex}

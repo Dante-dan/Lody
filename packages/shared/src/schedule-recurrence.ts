@@ -1,3 +1,4 @@
+import type { ScheduleProposalRule } from './ai';
 import { validateScheduleTrigger } from './schedule-time';
 import type { ScheduleTrigger } from './schedule-types';
 
@@ -373,4 +374,61 @@ export function scheduleRecurrenceTimeZone(recurrence: ScheduleRecurrence): stri
     default:
       return recurrence.timeZone;
   }
+}
+
+/**
+ * A proposed rule as the editor's recurrence, or `null` for `manual`.
+ *
+ * The proposal leaves the zone to the person's device unless the agent was told
+ * one; steps take the same zone so `0 *​/6` stays aligned to that clock.
+ */
+export function scheduleProposalRuleToRecurrence(
+  rule: ScheduleProposalRule,
+  deviceTimeZone = getDeviceTimeZone()
+): ScheduleRecurrence | null {
+  switch (rule.kind) {
+    case 'manual':
+      return null;
+    case 'minutes':
+      return { kind: 'minutes', every: rule.every, timeZone: deviceTimeZone };
+    case 'hours':
+      return { kind: 'hours', every: rule.every, timeZone: deviceTimeZone };
+    case 'once':
+      return { kind: 'once', at: rule.at };
+    case 'daily':
+    case 'weekdays':
+      return {
+        kind: rule.kind,
+        hour: rule.hour,
+        minute: rule.minute,
+        timeZone: rule.timeZone ?? deviceTimeZone,
+      };
+    case 'weekly':
+      return {
+        kind: 'weekly',
+        weekdays: normalizeScheduleWeekdays(rule.weekdays as ScheduleWeekday[]),
+        hour: rule.hour,
+        minute: rule.minute,
+        timeZone: rule.timeZone ?? deviceTimeZone,
+      };
+    case 'monthly':
+      return {
+        kind: 'monthly',
+        days: [...new Set(rule.days)].sort((a, b) => a - b),
+        hour: rule.hour,
+        minute: rule.minute,
+        timeZone: rule.timeZone ?? deviceTimeZone,
+      };
+  }
+  throw new Error('Unsupported schedule proposal rule');
+}
+
+/** The trigger a proposed rule means, given the person's zone. */
+export function scheduleProposalRuleToTrigger(
+  rule: ScheduleProposalRule,
+  now: number,
+  deviceTimeZone = getDeviceTimeZone()
+): ScheduleTrigger {
+  const recurrence = scheduleProposalRuleToRecurrence(rule, deviceTimeZone);
+  return recurrence ? recurrenceToTrigger(recurrence, now) : { kind: 'manual' };
 }

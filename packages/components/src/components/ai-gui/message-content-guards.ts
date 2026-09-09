@@ -204,13 +204,16 @@ export const normalizeMessageContent = (value: unknown): MessageContent | null =
  */
 export const shouldRenderSystemRowItem = <T extends { type: string }>(
   item: T,
-  tasksEnabled: boolean
-): item is Extract<
-  T,
-  { type: 'system_notice' | 'worktree_script' | 'operation_completion' }
-> => {
+  tasksEnabled: boolean,
+  schedulesEnabled = false
+): item is Extract<T, { type: 'system_notice' | 'worktree_script' | 'operation_completion' }> => {
   if (item.type === 'system_notice' && 'name' in item && item.name === 'task_proposal') {
     return tasksEnabled;
+  }
+  // Same gate as the Schedules navigation: a proposal card must not be the one
+  // place the feature leaks out before the beta flag is on.
+  if (item.type === 'system_notice' && 'name' in item && item.name === 'schedule_proposal') {
+    return schedulesEnabled;
   }
   return (
     item.type === 'system_notice' ||

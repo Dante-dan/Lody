@@ -54,6 +54,18 @@
   mismatch, and the container hides the Project row and follows the chat's
   Agent when one is picked. `ScheduleDestinationRows` is the presentational
   piece; the container resolves the chat from `sessionListAtom`.
+- An agent can PROPOSE a schedule but never create one. `lody_schedule_propose`
+  writes a `schedule_proposal` system notice (like a task proposal) and
+  `ScheduleProposalNotice` renders it in the conversation; pressing Create on
+  the card IS the creation — no form follows — with `proposalId` as the schedule
+  id so a double click cannot make two. The card resolves its target through
+  `resolveScheduleProposalTarget`: everything defaults to the conversation the
+  proposal was made in (Agent, its effective mode from history, machine,
+  project) and a named Role / Agent / machine / project overrides only that
+  part. A named Agent without a Role gets Lody's builtin default mode, never the
+  conversation's — that mode belongs to a different Agent. The card runs the
+  same `collectScheduleSaveBlockers` as the editor and disables Create with the
+  reasons shown, and it is gated by the same developer + beta flag.
 - Owner-only reduction of authority (pause/delete) remains possible when the
   machine is gone or outdated. Creating/editing/resuming/running requires the
   target Machine protocol capability. Never fall back to a different Agent.

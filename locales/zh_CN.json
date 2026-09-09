@@ -3896,5 +3896,16 @@
   "schedules.destination.requireChat": "请选择要发送到的对话。",
   "schedules.destination.agentMismatch": "请使用该对话已在用的 Agent。",
   "schedules.destination.machineMismatch": "该对话在另一台机器上。",
+  "schedules.proposal.title": "把它设为定时任务？",
+  "schedules.proposal.by": "由 {{name}} 提议",
+  "schedules.proposal.create": "创建",
+  "schedules.proposal.dismiss": "忽略",
+  "schedules.proposal.created": "已创建定时任务",
+  "schedules.proposal.dismissed": "已忽略提议",
+  "schedules.proposal.open": "打开",
+  "schedules.proposal.roleNotFound": "指定的 Agent 角色已不存在。",
+  "schedules.proposal.agentNotFound": "指定的 Agent 不可用。",
+  "schedules.proposal.machineMismatch": "该 Agent 不在指定的机器上运行。",
+  "schedules.proposal.noAgent": "这个对话没有可用的 Agent。",
   "schedules.errors.SCHEDULES_DISABLED": "此机器的定时执行已由运行环境暂停。"
 }
