@@ -1,6 +1,12 @@
 import { Input as BaseInput } from '@base-ui/react/input';
 import * as stylex from '@stylexjs/stylex';
-import { forwardRef, type ComponentProps, type ReactElement, type Ref } from 'react';
+import {
+  forwardRef,
+  type ComponentProps,
+  type CSSProperties,
+  type ReactElement,
+  type Ref,
+} from 'react';
 import { appendClassName } from '../internal/class-name';
 import { text } from '../tokens/scales.stylex';
 import { field } from './field.tokens.stylex';
@@ -18,6 +24,8 @@ export interface TextareaProps extends Omit<
   resize?: TextareaResize;
   render?: ReactElement;
   className?: string;
+  /** Layout a caller owns, such as a surface's own font size. Not visual identity. */
+  style?: CSSProperties;
 }
 
 const styles = stylex.create({

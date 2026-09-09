@@ -19,7 +19,9 @@ into the token rules and the gallery. Building it exposed that the product
 shell's `*:focus, *:focus-visible { outline: none !important }` suppresses every
 outline-based focus ring, including the migrated Button's, so the field ring is a
 box-shadow instead; Button still carries the suppressed outline and is not fixed
-here. No caller is migrated, so the Radix and Tailwind files remain.
+here. Every in-repo caller then moved onto the composition and the three Radix
+and Tailwind files were deleted, which is what took the mapping from a board
+into the product.
 
 ## Problem
 
@@ -154,10 +156,32 @@ drawn on a non-interactive stand-in because a board cannot hold focus while it i
 read. Only Chromium was checked. `pnpm check` was not run to completion for the
 whole repository in this session.
 
+## Migrating the callers
+
+Every `Input`, `Textarea` and `Label` import in `packages/components` and
+`site-docs` now points at `@lody/ui`, and `input.tsx`, `label.tsx` and
+`textarea.tsx` are deleted with their barrel exports, which is the package rule
+that a Radix file goes when its in-repo callers reach zero. `Label` becomes
+`Field.Label`, imported as `UiField` wherever a surface already had a local
+`Field` of its own; `site-docs` drops its ambient `@/ui/textarea` declaration.
+
+Spending the contract on real call sites found two holes in it:
+
+- `Textarea` accepted no `style`. The props were built by omitting `style` from
+  `<textarea>` the way Base UI does, but Base UI re-adds it and this did not, so
+  a surface that sets its own font size on the composer could not. `style` is
+  back as `CSSProperties`; it carries layout a caller owns, not visual identity.
+- `PasswordInput` typed its props from a raw `<input>`, so the HTML `size`
+  attribute collided with the token step of the same name. A wrapper around a
+  primitive follows the primitive's props, so it now extends `InputProps`.
+
+`form.tsx` also kept typing `FormLabel` from `@radix-ui/react-label` while
+rendering a Base UI label. The type follows the element it renders.
+
 ## Follow-ups
 
-No caller moved: 93 `<Input>`, 30 `<Textarea>` and 67 `<Label>` uses across 71
-files still import the Radix and Tailwind versions, and those files are deleted
-only when their in-repo callers reach zero. Migrating them is the next step and
-is where the mapping above is spent. Checkbox, Select and Switch join the same
-`field` group rather than opening their own.
+`Button` still has no visible keyboard focus ring in the desktop shell; the two
+open fixes are in the discovered-defect section above. Checkbox, Select and
+Switch join the same `field` group rather than opening their own. Callers that
+still pass Tailwind classes to a migrated control are carrying layout, not
+visual identity, and are worth a pass once more of the family has moved.
