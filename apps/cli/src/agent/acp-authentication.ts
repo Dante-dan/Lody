@@ -23,9 +23,11 @@ import {
   ACP_AUTHORIZATION_URL_MAX_LENGTH,
   getLodyElicitationMeta,
   getManagedBuiltinRuntimeByAgentType,
+  getLodyCodexCustomProvider,
   hasBuiltinEnvAuthentication,
   isAcpAuthenticationFormWithinByteLimit,
   isManagedBuiltinAgentType,
+  LODY_CODEX_API_KEY_ENV,
 } from '@lody/shared';
 
 import { withoutElectronBootstrapCredentials } from '@/electron-bootstrap-env';
@@ -532,6 +534,7 @@ export class AcpAuthenticationManager {
     customAcp?: CustomAcpLaunchSpec;
     runtimeOverrides?: BuiltinRuntimeOverrides;
     env?: Record<string, string>;
+    storeCodexApiKey?: (apiKey: string) => Promise<void>;
     onProgress?: (event: AcpAuthenticationProgressEvent) => void;
   }): Promise<AcpAuthenticationResult> {
     const isBuiltinAuthentication =
@@ -593,6 +596,34 @@ export class AcpAuthenticationManager {
         return await this.authenticateProtocolDrivenAcp(options, running);
       }
       const agentType = options.agentType as BuiltinCliType;
+      const codexProvider = agentType === 'codex' ? getLodyCodexCustomProvider(options.env) : null;
+      if (
+        codexProvider &&
+        !options.env?.[LODY_CODEX_API_KEY_ENV]?.trim() &&
+        options.storeCodexApiKey
+      ) {
+        const interactionId = randomUUID();
+        const inputPromise = this.waitForAuthenticationInput(running, interactionId);
+        if (!inputPromise) throw new Error('Codex credential input is already pending');
+        options.onProgress?.({
+          status: 'input-required',
+          interactionId,
+          message: 'Enter the API key for this Codex endpoint',
+          form: {
+            title: 'Codex API Key',
+            fields: [{ id: 'apiKey', type: 'secret', label: 'API Key', required: true }],
+          },
+        });
+        const input = await inputPromise;
+        if (input.action !== 'accept') {
+          throw new DOMException('Codex credential setup was cancelled', 'AbortError');
+        }
+        const apiKey = typeof input.content?.apiKey === 'string' ? input.content.apiKey.trim() : '';
+        if (!apiKey) throw new Error('Codex API key is required');
+        await options.storeCodexApiKey(apiKey);
+        options.onProgress?.({ status: 'authenticated' });
+        return { success: true, disposition: 'authenticated' };
+      }
       const launch = await resolveBuiltinAuthenticationProcessLaunch({
         cliType: options.cliType,
         agentType: options.agentType,

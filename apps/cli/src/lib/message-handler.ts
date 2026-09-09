@@ -8376,7 +8376,8 @@ export class MessageHandler {
     if (
       message.action === 'start' &&
       response.success &&
-      response.disposition === 'authenticated'
+      response.disposition === 'authenticated' &&
+      response.capabilitiesRefreshed === true
     ) {
       try {
         // Re-read and probe the durable task's own config. Never publish based

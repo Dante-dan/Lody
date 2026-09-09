@@ -101,6 +101,7 @@ import type { RateLimit } from 'acp-extension-core';
 import { createCliSqliteRepoStore } from './sqlite-repo-store';
 import { streamsRoomBinding, type StreamsRoomBinding } from './streams-room-binding';
 import { formatErrorMessage } from '@/utils/format-error';
+import { hydrateCodexProviderCredential } from '@/agent/provider-credential-store';
 import {
   listMergedAgentConfigs,
   readMachineBuiltinAgentOptOuts,
@@ -1402,7 +1403,9 @@ export class LoroDocumentManager {
   ): Promise<AgentConfigMeta | null> {
     const config = await this.getAgentConfigById(agentConfigId, machineId);
     if (config) {
-      return isValidDaemonLaunchConfig(config, agentConfigId, machineId) ? config : null;
+      return isValidDaemonLaunchConfig(config, agentConfigId, machineId)
+        ? await hydrateCodexProviderCredential(this.workspaceId, config)
+        : null;
     }
 
     const handle = await this.repo.openFlockDoc(getMachineFlockDocId(this.workspaceId, machineId));
@@ -1418,7 +1421,7 @@ export class LoroDocumentManager {
     const setup = getMachineFlockProviderSetups(rows)[agentConfigId];
     return setup?.machineId === machineId &&
       isValidDaemonLaunchConfig(setup.config, agentConfigId, machineId)
-      ? setup.config
+      ? await hydrateCodexProviderCredential(this.workspaceId, setup.config)
       : null;
   }
 

@@ -23,6 +23,7 @@ import type { LoroRepo } from 'loro-repo';
 import type { SessionExecutionService } from '@/session/session-execution-service';
 import { formatErrorMessage } from '@/utils/format-error';
 import type { Logger } from '@/utils/logger';
+import { clearCodexProviderCredential } from '@/agent/provider-credential-store';
 
 type ProviderSetupExecution = Pick<
   SessionExecutionService,
@@ -40,6 +41,7 @@ export type ProviderSetupManagerOptions = {
   execution: ProviderSetupExecution;
   sync: ProviderSetupSyncScheduler;
   logger: Logger;
+  clearCredential?: typeof clearCodexProviderCredential;
 };
 
 const RESUMABLE_STATUSES = new Set<ProviderSetupStatus>([
@@ -61,6 +63,7 @@ export class ProviderSetupManager {
   private readonly execution: ProviderSetupExecution;
   private readonly sync: ProviderSetupSyncScheduler;
   private readonly logger: Logger;
+  private readonly clearCredential: typeof clearCodexProviderCredential;
   private drainPromise: Promise<void> | null = null;
   private drainRequested = false;
   private stopped = false;
@@ -72,6 +75,7 @@ export class ProviderSetupManager {
     this.execution = options.execution;
     this.sync = options.sync;
     this.logger = options.logger;
+    this.clearCredential = options.clearCredential ?? clearCodexProviderCredential;
   }
 
   kick(): Promise<void> {
@@ -227,6 +231,7 @@ export class ProviderSetupManager {
     ).filter((cancellation) => cancellation.machineId === this.machineId);
     let changed = false;
     for (const cancellation of cancellations) {
+      await this.clearCredential(this.workspaceId, cancellation.id);
       changed =
         applyProviderSetupCancellationToFlock(
           handle.flock,

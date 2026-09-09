@@ -3,6 +3,7 @@ import {
   AGENT_CONFIG_DOC_PREFIX,
   getMachineFlockAgentConfigs,
   getMachineFlockProviderSetups,
+  getLodyCodexCustomProvider,
   getMachineFlockDocId,
   getServerNow,
   hasBuiltinRuntimeOverrideValues,
@@ -14,6 +15,7 @@ import {
   machineFlockKeys,
   findBuiltinAgentOptOutToRetract,
   planBuiltinAgentOptOutForDeletedConfig,
+  providerSetupContainsCredential,
   readMachineFlockRowsFromFlock,
   serializeMachineFlockKey,
   type AgentBrandId,
@@ -93,6 +95,9 @@ async function writeProviderSetupToMachineFlock(
   runtime: WorkspaceRuntime,
   setup: ProviderSetupTask
 ): Promise<MachineFlockRowMap> {
+  if (providerSetupContainsCredential(setup.config)) {
+    throw new Error('Provider setup rows cannot contain credentials');
+  }
   const flockDocId = getMachineFlockDocId(runtime.workspaceId, setup.machineId);
   const key = machineFlockKeys.providerSetup(setup.id);
   await runtime.writer.flockRowPut(flockDocId, key, setup);
@@ -383,13 +388,16 @@ export const cmdCreateProviderSetupAtom = atom(null, async (get, set, config: Ag
   ) {
     throw new Error('Provider setup is only supported for managed builtin agents');
   }
+  if (providerSetupContainsCredential(config)) {
+    throw new Error('Provider setup rows cannot contain credentials');
+  }
   const now = getServerNow();
   const setup: ProviderSetupTask = {
     v: 1,
     id: config.id,
     machineId: config.machineId,
     config,
-    status: 'queued',
+    status: getLodyCodexCustomProvider(config.env) ? 'awaiting-auth' : 'queued',
     attempt: 1,
     createdAt: now,
     updatedAt: now,

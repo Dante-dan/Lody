@@ -5,6 +5,8 @@ import { useNavigate } from '@tanstack/react-router';
 import { useCloudMutation } from '@lody/platform/react';
 import { cloudOperations } from '@/lib/cloud-api-operations';
 import {
+  getLodyCodexCustomProvider,
+  removeLodyCodexCustomProviderEnv,
   type AcpSessionMonitorSnapshot,
   type AgentConfigId,
   type AgentConfigMeta,
@@ -40,6 +42,7 @@ import { useAgentConfigMigration } from '@/hooks/use-agent-config-migration';
 import { useMachineFlockAgentConfigsForMachineIds } from '@/hooks/use-machine-flock-agent-configs';
 import { resyncMachineFlockRows } from '@/hooks/use-machine-flock-rows';
 import { useMachineAcpBinaryActions } from '@/hooks/use-machine-acp-binary-actions';
+import { useCodexProviderCredential } from '@/hooks/use-codex-provider-credential';
 import { useProviderSetupRuntimeProgress } from '@/hooks/use-provider-setup-runtime-progress';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { canDeleteOfflineMachine, canManageAllMachines } from '@/lib/machine-deletion';
@@ -182,6 +185,7 @@ export function MachineAgentSettings({
   const setSettingsDialogOpen = useSetAtom(settingsDialogOpenAtom);
   const sessionMetaCache = useAtomValue(sessionMetaCacheAtom);
   const workspaceId = useAtomValue(currentWorkspaceIdAtom);
+  const provisionCodexCredential = useCodexProviderCredential(runtime, workspaceId);
   const workspaceSlug = useAtomValue(currentWorkspaceSlugAtom);
   const getConvexErrorMessage = useConvexErrorMessage();
   // Remote daemon restart/upgrade is brokered through the cloud control plane
@@ -912,8 +916,24 @@ export function MachineAgentSettings({
           } else {
             await createConfig(config);
           }
+          if (payload.codexApiKey) {
+            try {
+              await provisionCodexCredential({
+                machineId: config.machineId,
+                configId: config.id,
+                apiKey: payload.codexApiKey,
+              });
+            } catch (error) {
+              if (payload.backgroundSetup) await deleteSetup(config.id);
+              else await deleteConfig(config.id);
+              throw error;
+            }
+          }
         } else {
-          await updateConfig({
+          const removingCodexCredential =
+            getLodyCodexCustomProvider(dialogMode.config.env) !== null &&
+            getLodyCodexCustomProvider(payload.env) === null;
+          const nextConfig: AgentConfigMeta = {
             id: dialogMode.config.id as AgentConfigId,
             machineId: dialogMode.config.machineId,
             name: payload.name,
@@ -926,7 +946,26 @@ export function MachineAgentSettings({
             prompt: payload.prompt,
             titleGeneration: payload.titleGeneration,
             brandId: payload.brandId,
-          });
+          };
+          await updateConfig(nextConfig);
+          if (payload.codexApiKey) {
+            try {
+              await provisionCodexCredential({
+                machineId: nextConfig.machineId,
+                configId: nextConfig.id,
+                apiKey: payload.codexApiKey,
+              });
+            } catch (error) {
+              await updateConfig(dialogMode.config);
+              throw error;
+            }
+          }
+          if (removingCodexCredential) {
+            await refreshCapabilities({
+              machineId: nextConfig.machineId,
+              configId: nextConfig.id,
+            }).catch(() => undefined);
+          }
         }
       } catch (error) {
         console.error('Failed to save agent config:', error);
@@ -938,7 +977,18 @@ export function MachineAgentSettings({
         throw error;
       }
     },
-    [dialogMachine, dialogMode, createConfig, createSetup, updateConfig, t]
+    [
+      dialogMachine,
+      dialogMode,
+      createConfig,
+      createSetup,
+      deleteConfig,
+      deleteSetup,
+      provisionCodexCredential,
+      refreshCapabilities,
+      updateConfig,
+      t,
+    ]
   );
 
   const handleRetrySetup = useCallback(
@@ -968,6 +1018,16 @@ export function MachineAgentSettings({
   const handleDeleteConfig = useCallback(
     async (config: AgentConfigMeta) => {
       try {
+        if (getLodyCodexCustomProvider(config.env)) {
+          await updateConfig({
+            ...config,
+            env: removeLodyCodexCustomProviderEnv(config.env),
+          });
+          await refreshCapabilities({
+            machineId: config.machineId,
+            configId: config.id,
+          }).catch(() => undefined);
+        }
         await deleteConfig(config.id);
       } catch (error) {
         console.error('Failed to delete agent config:', error);
@@ -975,7 +1035,7 @@ export function MachineAgentSettings({
         throw error;
       }
     },
-    [deleteConfig, t]
+    [deleteConfig, refreshCapabilities, t, updateConfig]
   );
 
   const showBanner = mode === 'agents' && migration.status === 'running';

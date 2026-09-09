@@ -118,6 +118,7 @@ function createHarnessForFlock<TFlock extends MachineFlockWritableFlock>(
     ...overrides,
   } as ProviderSetupManagerOptions['execution'];
   const markMachineFlockDocDirty = vi.fn();
+  const clearCredential = vi.fn(async () => undefined);
   const manager = new ProviderSetupManager({
     repo,
     workspaceId,
@@ -125,8 +126,9 @@ function createHarnessForFlock<TFlock extends MachineFlockWritableFlock>(
     execution,
     sync: { markMachineFlockDocDirty },
     logger: createSilentLogger(),
+    clearCredential,
   });
-  return { flock, flush, execution, markMachineFlockDocDirty, manager };
+  return { flock, flush, execution, markMachineFlockDocDirty, clearCredential, manager };
 }
 
 function createHarness(overrides: Partial<ProviderSetupManagerOptions['execution']> = {}) {
@@ -372,6 +374,7 @@ describe('ProviderSetupManager', () => {
         cancellation: expect.objectContaining({ id: setupId, machineId }),
       });
     }
+    expect(harness.clearCredential).toHaveBeenCalledWith(workspaceId, setupId);
     harness.manager.stop();
   });
 });

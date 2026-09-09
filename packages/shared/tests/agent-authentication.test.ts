@@ -42,18 +42,12 @@ describe('hasBuiltinEnvAuthentication', () => {
     const env = buildLodyCodexCustomProviderEnv(
       {},
       {
-        apiKey: 'sk-test',
         baseUrl: 'https://relay.example.com/v1',
       }
     );
     expect(hasBuiltinEnvAuthentication('codex', env)).toBe(true);
   });
 
-  it('does not treat an incomplete managed Codex provider as authenticated', () => {
-    const env = buildLodyCodexCustomProviderEnv({}, { apiKey: '', baseUrl: '' });
-
-    expect(hasBuiltinEnvAuthentication('codex', env)).toBe(false);
-  });
 });
 
 describe('supportsBuiltinAuthentication', () => {

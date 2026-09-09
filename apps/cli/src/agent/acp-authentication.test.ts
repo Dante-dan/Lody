@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import { PassThrough } from 'node:stream';
 import * as acp from '@agentclientprotocol/sdk';
-import { ACP_AUTHORIZATION_URL_MAX_LENGTH } from '@lody/shared';
+import { ACP_AUTHORIZATION_URL_MAX_LENGTH, buildLodyCodexCustomProviderEnv } from '@lody/shared';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -48,6 +48,38 @@ describe('AcpAuthenticationManager', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('accepts a managed Codex API key only through the secret interaction', async () => {
+    const storeCodexApiKey = vi.fn(async () => {});
+    const spawnProcess = vi.fn();
+    const manager = new AcpAuthenticationManager(createSilentLogger(), {
+      spawnProcess: spawnProcess as never,
+    });
+    const result = manager.authenticate({
+      requestId: 'codex-credential',
+      cliType: 'builtin',
+      agentType: 'codex',
+      env: buildLodyCodexCustomProviderEnv({}, { baseUrl: 'https://relay.example.com/v1' }),
+      storeCodexApiKey,
+      onProgress: (progress) => {
+        if (progress.status !== 'input-required') return;
+        expect(progress.form.fields).toEqual([
+          expect.objectContaining({ id: 'apiKey', type: 'secret' }),
+        ]);
+        expect(
+          manager.submitAuthenticationInput(
+            'codex-credential',
+            progress.interactionId,
+            JSON.stringify({ action: 'accept', content: { apiKey: 'sk-encrypted-input' } })
+          )
+        ).toEqual({ success: true, disposition: 'input-accepted' });
+      },
+    });
+
+    await expect(result).resolves.toEqual({ success: true, disposition: 'authenticated' });
+    expect(storeCodexApiKey).toHaveBeenCalledWith('sk-encrypted-input');
+    expect(spawnProcess).not.toHaveBeenCalled();
   });
 
   it('reserves the login slot before asynchronous launch preparation', async () => {

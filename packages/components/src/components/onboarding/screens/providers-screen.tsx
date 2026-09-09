@@ -14,6 +14,8 @@ import {
 } from 'lucide-react';
 import {
   REGISTRY_ACP_AGENTS,
+  getLodyCodexCustomProvider,
+  removeLodyCodexCustomProviderEnv,
   getBuiltinAgentByAgentType,
   isManagedBuiltinAgentType,
   type AgentBrandId,
@@ -59,6 +61,7 @@ import { useVisibleMachineMetas } from '@/hooks/use-visible-machine-metas';
 import { useMachineFlockAgentConfigsForMachineIds } from '@/hooks/use-machine-flock-agent-configs';
 import { resyncMachineFlockRows } from '@/hooks/use-machine-flock-rows';
 import { useMachineAcpBinaryActions } from '@/hooks/use-machine-acp-binary-actions';
+import { useCodexProviderCredential } from '@/hooks/use-codex-provider-credential';
 import { useProviderSetupRuntimeProgress } from '@/hooks/use-provider-setup-runtime-progress';
 import { AgentIcon } from '@/components/icons/agent-icon';
 import { AgentReadinessMark } from '@/components/shared/agent-readiness-mark';
@@ -693,6 +696,7 @@ export function ProvidersScreen({
   const analytics = useOnboardingAnalytics();
   const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
   const workspaceId = useAtomValue(currentWorkspaceIdAtom);
+  const provisionCodexCredential = useCodexProviderCredential(runtime, workspaceId);
   const localMachineId = useAtomValue(localMachineIdAtom);
   const localProbeAttempted = useAtomValue(localProbeAttemptedAtom);
   const { machines } = useVisibleMachineMetas();
@@ -1059,10 +1063,26 @@ export function ProvidersScreen({
           } else {
             await createConfig(config);
           }
+          if (payload.codexApiKey) {
+            try {
+              await provisionCodexCredential({
+                machineId: config.machineId,
+                configId: config.id,
+                apiKey: payload.codexApiKey,
+              });
+            } catch (error) {
+              if (payload.backgroundSetup) await deleteSetup(config.id);
+              else await deleteConfig(config.id);
+              throw error;
+            }
+          }
           setSelectedProviderId(config.id);
         } else {
           invalidateTestRun(dialogMode.config.id);
-          await updateConfig({
+          const removingCodexCredential =
+            getLodyCodexCustomProvider(dialogMode.config.env) !== null &&
+            getLodyCodexCustomProvider(payload.env) === null;
+          const nextConfig: AgentConfigMeta = {
             id: dialogMode.config.id,
             machineId: dialogMode.config.machineId,
             name: payload.name,
@@ -1075,7 +1095,26 @@ export function ProvidersScreen({
             prompt: payload.prompt,
             titleGeneration: payload.titleGeneration,
             brandId: payload.brandId,
-          });
+          };
+          await updateConfig(nextConfig);
+          if (payload.codexApiKey) {
+            try {
+              await provisionCodexCredential({
+                machineId: nextConfig.machineId,
+                configId: nextConfig.id,
+                apiKey: payload.codexApiKey,
+              });
+            } catch (error) {
+              await updateConfig(dialogMode.config);
+              throw error;
+            }
+          }
+          if (removingCodexCredential) {
+            await refreshCapabilities({
+              machineId: nextConfig.machineId,
+              configId: nextConfig.id,
+            }).catch(() => undefined);
+          }
           // Editing can change credentials or the launch command; keep Test as
           // an explicit optional action instead of treating save as verification.
           clearFailureReason(dialogMode.config.id);
@@ -1108,9 +1147,13 @@ export function ProvidersScreen({
       clearFailureReason,
       createConfig,
       createSetup,
+      deleteConfig,
+      deleteSetup,
       dialogMode,
       invalidateTestRun,
       localMachineId,
+      provisionCodexCredential,
+      refreshCapabilities,
       t,
       updateConfig,
     ]
@@ -1193,6 +1236,16 @@ export function ProvidersScreen({
     try {
       setDeleting(true);
       invalidateTestRun(pendingDelete.id);
+      if (getLodyCodexCustomProvider(pendingDelete.env)) {
+        await updateConfig({
+          ...pendingDelete,
+          env: removeLodyCodexCustomProviderEnv(pendingDelete.env),
+        });
+        await refreshCapabilities({
+          machineId: pendingDelete.machineId,
+          configId: pendingDelete.id,
+        }).catch(() => undefined);
+      }
       await deleteConfig(pendingDelete.id);
       clearFailureReason(pendingDelete.id);
       setTestStatuses((prev) => {

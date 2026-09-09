@@ -5,36 +5,40 @@ Translation: pending
 
 ## Abstract
 
-Codex setup previously exposed only ChatGPT device login even though the bundled adapter can
-route Codex through a custom model provider. The provider dialog now offers a Base URL + API
-Key mode in onboarding and Settings, persists a generated Codex provider configuration, and
-uses it for the same live verification that gates creation. ChatGPT remains the default, and
-manually authored Codex configuration is left intact. Custom endpoints must implement the
-Responses API; Chat Completions-only relays remain incompatible with the current Codex wire
-protocol.
+Codex setup offers ChatGPT device login and a Base URL + API Key mode in onboarding and
+Settings. The custom mode uses a generated Responses API provider while keeping its credential
+on the execution host.
 
 ## Decision
 
-The existing `AgentConfigMeta.env` field remains the durable contract, avoiding a new schema or
-daemon protocol version. Lody stores the secret in `CODEX_API_KEY` and stores only an `env_key`
-reference, Base URL, `wire_api = "responses"`, and `requires_openai_auth = false` in
-`CODEX_CONFIG`. A reserved `lody-custom-endpoint` provider id identifies the block that the
-dedicated form may edit or remove. Other JSON fields and model providers survive both adding
-the block and switching back to ChatGPT.
+Workspace state stores only non-secret provider metadata. The renderer passes the API key through
+the existing encrypted ACP authentication-input exchange. The target CLI stores it under
+`provider-credentials` with owner-only permissions and binds it to the complete launch-relevant
+configuration. Capability probes and sessions inject the key only on an exact binding match.
 
-Using only `OPENAI_BASE_URL` and `OPENAI_API_KEY` was rejected for the guided path. Current
-Codex configuration represents third-party endpoints as named model providers, and the
-explicit `requires_openai_auth = false` setting is what prevents the adapter from falling into
-ChatGPT login. Keeping raw environment editing as the only setup path was also rejected because
-it is undiscoverable during onboarding and easy to configure inconsistently.
+The provider uses a Lody-owned environment key and a separate ownership marker. The marker records
+the previous `model_provider` selector so switching back to ChatGPT is reversible without
+copying an existing `CODEX_API_KEY` or reserved provider into Lody state. Invalid JSON and
+namespace collisions fail rather than being normalized or overwritten.
 
-Codex is also present in onboarding's always-visible provider showcase, so a fresh user can
-open the preselected credential form directly. Runtime download and ownership are unchanged.
+The feature requires a negotiated `codexCustomEndpointCredentials` capability. Its setup row
+starts in `awaiting-auth`, receives no secret, and enters the existing setup saga only after the
+target CLI has stored and verified the credential. Remote HTTP endpoints are rejected; HTTPS and
+loopback HTTP are accepted.
 
-## Evidence and limits
+## Failure and cleanup
 
-The intended behavior is owned by the [draft specification](../../../../specs/codex-custom-endpoint-authentication.md).
-Shared tests cover configuration generation, secret separation, preservation, removal, and
-authentication classification. Dialog tests cover creation-before-probe ordering, hydration,
-and switching back to ChatGPT. The endpoint is validated as HTTP(S), but only the live provider
-probe can establish that a particular relay implements the Responses API correctly.
+A failed live probe restores the prior local credential record. Create failure cancels the setup,
+and setup cancellation removes the local record on the target daemon. Switching to ChatGPT or
+deleting the provider first removes the generated metadata and triggers a machine refresh, whose
+launch resolver deletes the now-unreferenced credential before the durable config is removed.
+
+## Evidence
+
+The [draft specification](../../../../specs/codex-custom-endpoint-authentication.md) owns the
+behavior. Shared tests cover endpoint policy, reversible overlays, collision rejection, malformed
+configuration, and setup-row rejection. CLI tests cover secret interaction, local storage,
+rollback, and binding mismatch. Component tests cover the one-shot payload and the actual Flock
+writer boundary. A controlled loopback relay run with bundled Codex 0.153.4 observed a streamed
+`POST /v1/responses` request with the configured model and matching bearer credential; the relay
+returned an intentional 401 after recording only the boolean credential match.

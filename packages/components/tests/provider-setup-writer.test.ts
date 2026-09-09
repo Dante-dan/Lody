@@ -1,6 +1,8 @@
 import { createStore } from 'jotai';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  buildLodyCodexCustomProviderEnv,
+  LODY_CODEX_API_KEY_ENV,
   machineFlockKeys,
   serializeMachineFlockKey,
   type AgentConfigId,
@@ -87,7 +89,7 @@ describe('ProviderSetup WorkspaceWriter integration', () => {
       description: undefined,
       cliType: 'builtin',
       agentType: 'codex',
-      env: {},
+      env: buildLodyCodexCustomProviderEnv({}, { baseUrl: 'https://relay.example.com/v1' }),
       prompt: '',
     };
 
@@ -99,13 +101,15 @@ describe('ProviderSetup WorkspaceWriter integration', () => {
       expect.objectContaining({
         id: setupId,
         machineId,
-        status: 'queued',
+        status: 'awaiting-auth',
         attempt: 1,
       }),
     ]);
     expect(store.get(getAllProviderSetupsAtom)).toEqual([
-      expect.objectContaining({ id: setupId, status: 'queued', attempt: 1 }),
+      expect.objectContaining({ id: setupId, status: 'awaiting-auth', attempt: 1 }),
     ]);
+    const writtenSetup = flockRowPut.mock.calls[0]?.[2] as { config: AgentConfigMeta };
+    expect(writtenSetup.config.env[LODY_CODEX_API_KEY_ENV]).toBeUndefined();
     expect(mirrorRows.size).toBe(0);
 
     const createdSetup = store.get(getAllProviderSetupsAtom)[0]!;

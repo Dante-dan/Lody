@@ -203,6 +203,16 @@ export type ProviderSetupTask = {
   failureCode?: ProviderSetupFailureCode;
 };
 
+const PROVIDER_SETUP_SECRET_ENV_KEY =
+  /(?:api[_-]?key|auth|bearer|credential|password|passwd|secret|token)/i;
+
+/** Setup rows are workspace-readable and may contain only non-secret launch metadata. */
+export function providerSetupContainsCredential(config: AgentConfigMeta): boolean {
+  return Object.entries(config.env).some(
+    ([key, value]) => value.length > 0 && PROVIDER_SETUP_SECRET_ENV_KEY.test(key)
+  );
+}
+
 /**
  * Convergent cancellation intent for a provider setup id.
  *
@@ -1549,7 +1559,8 @@ const normalizeProviderSetupTask = (value: unknown): ProviderSetupTask | undefin
     config.machineId !== value.machineId ||
     config.cliType !== 'builtin' ||
     !isBuiltinAgentType(config.agentType) ||
-    hasBuiltinRuntimeOverrideValues(config.runtimeOverrides)
+    hasBuiltinRuntimeOverrideValues(config.runtimeOverrides) ||
+    providerSetupContainsCredential(config)
   ) {
     return undefined;
   }

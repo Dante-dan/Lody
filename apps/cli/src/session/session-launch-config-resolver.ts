@@ -17,6 +17,7 @@ import {
   type WorkspaceId,
 } from '@lody/shared';
 import { formatErrorMessage } from '@/utils/format-error';
+import { hydrateCodexProviderCredential } from '@/agent/provider-credential-store';
 
 type LoggerLike = {
   debug(message: string): void;
@@ -28,7 +29,7 @@ type RepoLike = {
 
 export type AgentConfigLaunchFields = Pick<
   AgentConfigMeta,
-  'customAcp' | 'runtimeOverrides' | 'env'
+  'id' | 'machineId' | 'cliType' | 'agentType' | 'customAcp' | 'runtimeOverrides' | 'env'
 >;
 
 type WorkspaceDocumentLike = {
@@ -182,7 +183,11 @@ export async function resolveSessionLaunchConfig(input: {
   }
 
   if (snapshot.agentConfig) {
-    return snapshot.resolution;
+    const hydrated = await hydrateCodexProviderCredential(input.workspaceId, snapshot.agentConfig);
+    return resolveSessionLaunchConfigFromSources({
+      legacy: snapshot.legacy,
+      agentConfig: hydrated,
+    });
   }
 
   try {
@@ -196,7 +201,10 @@ export async function resolveSessionLaunchConfig(input: {
         agentConfig: null,
       });
     }
-    return resolveSessionLaunchConfigFromSources({ legacy: snapshot.legacy, agentConfig });
+    return resolveSessionLaunchConfigFromSources({
+      legacy: snapshot.legacy,
+      agentConfig: await hydrateCodexProviderCredential(input.workspaceId, agentConfig),
+    });
   } catch (error) {
     input.logger.debug(
       `[${input.sessionId}] Failed to read agent config ${

@@ -64,6 +64,7 @@ import {
   type ManagedRuntimeName,
   type ManagedRuntimeProgressEvent,
 } from '@/agent/managed-agent-runtime';
+import { hydrateCodexProviderCredential } from '@/agent/provider-credential-store';
 import { buildGitHubCloneUrl, deriveRepoIdFromGitHubRepo, redactUrlAuth } from '@/utils/github';
 import {
   GitCredentialBroker,
@@ -882,6 +883,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     if (!agentConfigMatchesPreparation(agentConfig, spec, this.machineId)) {
       throw new Error(`Agent config no longer matches preparation ${spec.preparationId}`);
     }
+    agentConfig = await hydrateCodexProviderCredential(this.workspaceId, agentConfig);
     const user = await this.preparationUserResolver.resolve(spec.requestedByUserId);
     signal.throwIfAborted();
 

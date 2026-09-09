@@ -8,6 +8,8 @@ import {
   buildLodyCodexCustomProviderEnv,
   CODEX_API_KEY_ENV,
   CODEX_CONFIG_ENV,
+  CODEX_CUSTOM_ENDPOINT_CREDENTIALS_PROTOCOL_VERSION,
+  LODY_CODEX_API_KEY_ENV,
   PROVIDER_SETUP_PROTOCOL_VERSION,
   getAcpCapabilityCacheKey,
   type AgentConfigId,
@@ -600,7 +602,10 @@ describe('AgentConfigDialog', () => {
         kind: 'create',
         initialForm: { name: 'Codex Relay', cliType: 'builtin', agentType: 'codex' },
       },
-      createMachine('Relay workstation'),
+      createMachine('Relay workstation', {
+        providerSetup: PROVIDER_SETUP_PROTOCOL_VERSION,
+        codexCustomEndpointCredentials: CODEX_CUSTOM_ENDPOINT_CREDENTIALS_PROTOCOL_VERSION,
+      }),
       onSubmit,
       vi.fn(async () => ({ status: 'installed' as const })),
       onRefreshCapabilities
@@ -626,32 +631,33 @@ describe('AgentConfigDialog', () => {
     await act(async () => {
       createButton.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    await vi.waitFor(() => expect(onRefreshCapabilities).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(onSubmit).toHaveBeenCalledOnce());
 
     const payload = onSubmit.mock.calls[0]?.[0];
-    expect(payload?.env[CODEX_API_KEY_ENV]).toBe('sk-relay-test');
+    expect(payload?.codexApiKey).toBe('sk-relay-test');
+    expect(payload?.backgroundSetup).toBe(true);
+    expect(payload?.env[CODEX_API_KEY_ENV]).toBeUndefined();
+    expect(payload?.env[LODY_CODEX_API_KEY_ENV]).toBeUndefined();
     expect(payload?.env[CODEX_CONFIG_ENV]).not.toContain('sk-relay-test');
     expect(JSON.parse(payload?.env[CODEX_CONFIG_ENV] ?? '{}')).toMatchObject({
       model_provider: 'lody-custom-endpoint',
       model_providers: {
         'lody-custom-endpoint': {
           base_url: 'https://relay.example.com/v1',
-          env_key: CODEX_API_KEY_ENV,
+          env_key: LODY_CODEX_API_KEY_ENV,
           wire_api: 'responses',
           requires_openai_auth: false,
         },
       },
     });
-    expect(onSubmit.mock.invocationCallOrder[0]).toBeLessThan(
-      onRefreshCapabilities.mock.invocationCallOrder[0]!
-    );
+    expect(onRefreshCapabilities).not.toHaveBeenCalled();
     expect(document.body.textContent).not.toContain('Sign in with ChatGPT');
   });
 
   it('hydrates a Codex custom endpoint and does not offer ChatGPT reauthentication', async () => {
     const env = buildLodyCodexCustomProviderEnv(
       { EXTRA_FLAG: '1' },
-      { apiKey: 'sk-existing', baseUrl: 'https://relay.example.com/v1' }
+      { baseUrl: 'https://relay.example.com/v1' }
     );
     await renderDialog(
       {
@@ -673,9 +679,7 @@ describe('AgentConfigDialog', () => {
     expect(document.body.querySelector<HTMLInputElement>('#codex-base-url')?.value).toBe(
       'https://relay.example.com/v1'
     );
-    expect(document.body.querySelector<HTMLInputElement>('#codex-api-key')?.value).toBe(
-      'sk-existing'
-    );
+    expect(document.body.querySelector<HTMLInputElement>('#codex-api-key')?.value).toBe('');
     expect(findSignInAgainButton()).toBeUndefined();
   });
 
@@ -686,7 +690,7 @@ describe('AgentConfigDialog', () => {
         EXTRA_FLAG: '1',
         CODEX_CONFIG: JSON.stringify({ model: 'gpt-custom' }),
       },
-      { apiKey: 'sk-existing', baseUrl: 'https://relay.example.com/v1' }
+      { baseUrl: 'https://relay.example.com/v1' }
     );
     await renderDialog(
       {

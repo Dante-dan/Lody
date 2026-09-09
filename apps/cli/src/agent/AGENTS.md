@@ -81,8 +81,8 @@ context/acp-agent-edit-evidence.md; adapter repos: [apps/cli/AGENTS.md](../../AG
 - The single per-agent slot covers launch preparation as well as the child process;
   timeout/cancel terminate it and release it for Retry, and a cancel or timeout during cleanup
   still wins. Stop the process before returning success.
-- Authorization data must never enter logs, chat, Flock, or config; raw provider output and
-  secret defaults must never reach retained progress.
+- Authorization data never enters logs, chat, Flock, or config. Custom-endpoint keys use the
+  [encrypted machine-local flow](README.md#authentication); inject only on an exact launch binding.
 - Claude capability refresh runs its native status command first so missing credentials surface
   as structured auth-required state before adapter startup; explicit environment-authenticated
   paths bypass it.

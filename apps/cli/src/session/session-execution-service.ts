@@ -92,6 +92,7 @@ import {
   AcpAuthenticationManager,
   type AcpAuthenticationProgressEvent,
 } from '@/agent/acp-authentication';
+import { storeCodexProviderCredential } from '@/agent/provider-credential-store';
 import { formatErrorMessage } from '@/utils/format-error';
 import type { Logger } from '@/utils/logger';
 import { startTraceSpan, traceAsync } from '@/utils/trace-span';
@@ -5155,6 +5156,7 @@ export class SessionExecutionService {
         ...event,
       });
     };
+    let rollbackCredential: (() => Promise<void>) | undefined;
     const result = await this.acpAuthenticationManager.authenticate({
       requestId: message.requestId,
       cliType: config.cliType,
@@ -5162,9 +5164,21 @@ export class SessionExecutionService {
       customAcp: config.customAcp,
       runtimeOverrides: config.runtimeOverrides,
       env: config.env,
+      storeCodexApiKey: async (apiKey) => {
+        rollbackCredential = await storeCodexProviderCredential(
+          this.deps.workspaceId,
+          config,
+          apiKey
+        );
+      },
       onProgress,
     });
     if (result.success && result.disposition === 'authenticated') {
+      const verifiedConfig =
+        (await this.deps.workspaceDocument.getAgentConfigForMachineLaunch(
+          message.configId,
+          this.deps.machineId
+        )) ?? config;
       const refreshController = new AbortController();
       const refreshTimeoutMs = Math.max(
         1,
@@ -5183,11 +5197,11 @@ export class SessionExecutionService {
             machineId: message.machineId,
             workspaceId: message.workspaceId,
             configId: message.configId,
-            cliType: config.cliType,
-            agentType: config.agentType,
-            customAcp: config.customAcp,
-            runtimeOverrides: config.runtimeOverrides,
-            env: config.env,
+            cliType: verifiedConfig.cliType,
+            agentType: verifiedConfig.agentType,
+            customAcp: verifiedConfig.customAcp,
+            runtimeOverrides: verifiedConfig.runtimeOverrides,
+            env: verifiedConfig.env,
           },
           { signal: refreshController.signal }
         );
@@ -5207,6 +5221,7 @@ export class SessionExecutionService {
         clearTimeout(refreshTimeout);
       }
       if (!refresh.success) {
+        await rollbackCredential?.().catch(() => undefined);
         return {
           ...resolvedBase,
           ...result,

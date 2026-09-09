@@ -6,22 +6,34 @@ Translation: pending
 ## Scenario
 
 A user setting up Codex may authenticate with ChatGPT, or may have an API key for an
-OpenAI-compatible gateway. Onboarding and Settings must expose both choices in the Codex
-provider form. The gateway path requires a Base URL and API Key and must state that the
-endpoint needs to support the OpenAI Responses API.
+OpenAI-compatible gateway. Onboarding and Settings expose both choices in the Codex provider
+form. The gateway must support the OpenAI Responses API.
 
 ## Behavior
 
-ChatGPT remains the default and retains the existing device-login flow. Choosing Base URL +
-API Key creates a Codex custom model provider that routes requests to the supplied URL, reads
-its secret from `CODEX_API_KEY`, uses the Responses wire API, and does not require OpenAI
-account authentication. Provider verification must use the persisted draft containing those
-exact values; an authentication result from another configuration is not sufficient.
+ChatGPT remains the default and retains the device-login flow. Base URL + API Key creates a
+Codex model provider that uses the Responses wire API and does not require OpenAI account
+authentication. Credential-bearing endpoints must use HTTPS; HTTP is allowed only for localhost
+and IP loopback. The shared builder enforces the same rule as the form.
 
-The dedicated form owns only the provider entry it generates. It may not expose its API key
-inside `CODEX_CONFIG`, allow the additional-environment editor to override its managed keys,
-or rewrite unrelated fields and providers in an existing valid `CODEX_CONFIG`. Returning to
-ChatGPT removes only the generated provider and its key. Arbitrary hand-written Codex
+The API key is one-shot renderer state. It must never enter `AgentConfig.env`, a
+`ProviderSetupTask`, logs, or another workspace-readable document. The renderer submits it
+through the encrypted Machine ACP authentication-input path. The target CLI stores it in an
+owner-only machine-local credential record and injects it under the generated provider's
+`env_key` only when the current launch configuration matches the record's binding. A changed
+endpoint, proxy, runtime, agent type, or custom launch command must fail closed.
+
+Creation uses a non-secret durable setup draft. The target machine accepts the credential,
+performs the live provider probe, and publishes the final non-secret AgentConfig only after that
+probe succeeds. Failed verification rolls back the staged credential; cancellation removes the
+setup and its local credential. Machines that do not advertise the credential protocol cannot
+submit this mode.
+
+The dedicated form owns only the provider entry and ownership marker it generates. Returning to
+ChatGPT restores the prior `model_provider` selector and removes the generated provider, marker,
+and machine-local credential. Existing `CODEX_API_KEY`, unrelated providers, and other
+environment values remain unchanged. A malformed `CODEX_CONFIG`, reserved provider-id
+collision, or marker collision is rejected instead of overwritten. Arbitrary hand-written Codex
 configuration remains an advanced environment override.
 
 The custom endpoint changes authentication and request routing, not runtime ownership. Lody
@@ -30,10 +42,9 @@ runtime binary override.
 
 ## Evidence
 
-- [Shared Codex provider configuration](../packages/shared/src/codex-provider-config.ts)
+- [Shared provider configuration](../packages/shared/src/codex-provider-config.ts)
+- [Machine-local credential store](../apps/cli/src/agent/provider-credential-store.ts)
 - [Provider form](../packages/components/src/components/settings/agent-config-dialog.tsx)
-- [Codex adapter runtime options](../packages/acp-extension-codex/README.md#runtime-options)
 - [CLI authentication lifecycle](../apps/cli/src/agent/README.md#authentication)
 
-This revision records the requested integration as a draft; it has no linked human approval
-of the specification revision.
+This revision records the requested integration as a draft; it has no linked human approval.

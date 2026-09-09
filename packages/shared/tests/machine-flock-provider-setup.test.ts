@@ -80,4 +80,13 @@ describe('machine flock provider setup rows', () => {
     expect(parsed?.value).not.toHaveProperty('authorizationUrl');
     expect(parsed?.value).not.toHaveProperty('userCode');
   });
+
+  it('rejects a setup config containing credential environment values', () => {
+    expect(
+      parseMachineFlockRow(machineFlockKeys.providerSetup(setupId), {
+        ...setup,
+        config: { ...setup.config, env: { CODEX_API_KEY: 'sk-must-not-sync' } },
+      })
+    ).toBeUndefined();
+  });
 });

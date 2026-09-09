@@ -49,7 +49,7 @@ export const hasBuiltinEnvAuthentication = (
   }
   if (agentType !== 'codex') return false;
   const customProvider = getLodyCodexCustomProvider(env);
-  return Boolean(customProvider?.apiKey && customProvider.baseUrl.trim());
+  return Boolean(customProvider?.baseUrl.trim());
 };
 
 /**

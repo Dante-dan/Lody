@@ -15,8 +15,12 @@ import {
   getStaticBuiltinAcpCapabilities,
   getBuiltinTitleGenerationDefaults,
   getLodyCodexCustomProvider,
+  isAllowedCredentialEndpoint,
+  LODY_CODEX_API_KEY_ENV,
+  LODY_CODEX_PROVIDER_STATE_ENV,
   getRegistryAcpLaunchKind,
   machineSupportsProviderSetupProtocol,
+  machineSupportsCodexCustomEndpointCredentials,
   isManagedBuiltinAgentType,
   isAcpCapabilityCacheEntryCurrent,
   parseCustomAcpCommandLine,
@@ -599,6 +603,8 @@ export type AgentConfigSubmitPayload = {
   brandId?: AgentBrandId;
   /** Persist as a durable target-machine setup instead of publishing immediately. */
   backgroundSetup?: true;
+  /** One-shot secret sent through the encrypted machine authentication flow. */
+  codexApiKey?: string;
 };
 
 export type AgentConfigDialogMode =
@@ -737,7 +743,7 @@ function hydrateCodexAuthenticationForm(form: AgentConfigFormData): AgentConfigF
     ...form,
     codexAuthenticationMode:
       form.codexAuthenticationMode ?? (customProvider ? 'api-key' : 'chatgpt'),
-    codexApiKey: form.codexApiKey ?? customProvider?.apiKey ?? '',
+    codexApiKey: form.codexApiKey ?? '',
     codexBaseUrl: form.codexBaseUrl ?? customProvider?.baseUrl ?? '',
   };
 }
@@ -835,7 +841,6 @@ function buildCodexSubmitEnv(formData: AgentConfigFormData): Record<string, stri
     return removeLodyCodexCustomProviderEnv(formData.env);
   }
   return buildLodyCodexCustomProviderEnv(formData.env, {
-    apiKey: formData.codexApiKey ?? '',
     baseUrl: formData.codexBaseUrl ?? '',
   });
 }
@@ -1211,6 +1216,9 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
       description: undefined,
       brandId: resolvedBrandId,
       ...(backgroundManagedBuiltinSetup ? { backgroundSetup: true } : {}),
+      ...(isCodexBuiltinForm(formData) && formData.codexAuthenticationMode === 'api-key'
+        ? { codexApiKey: formData.codexApiKey?.trim() }
+        : {}),
     };
   }, [
     activeCredentialMode,
@@ -1566,7 +1574,12 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
   const additionalEnv = isDeepSeekBuiltin
     ? omitDeepSeekProtectedEnv(formData.env)
     : managesCodexEnvironment
-      ? omitKeys(formData.env, [CODEX_API_KEY_ENV, CODEX_CONFIG_ENV])
+      ? omitKeys(formData.env, [
+          CODEX_API_KEY_ENV,
+          CODEX_CONFIG_ENV,
+          LODY_CODEX_API_KEY_ENV,
+          LODY_CODEX_PROVIDER_STATE_ENV,
+        ])
       : formData.env;
   const envCount = Object.keys(additionalEnv).length;
 
@@ -1790,6 +1803,15 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
       }
     }
     if (isCodexBuiltin && codexAuthenticationMode === 'api-key') {
+      if (
+        !machineSupportsProviderSetupProtocol(machine) ||
+        !machineSupportsCodexCustomEndpointCredentials(machine)
+      ) {
+        return t(
+          'agents.disableReason.codexCredentialProtocol',
+          'Update Lody on this machine to configure a Codex API key securely'
+        );
+      }
       if (!(formData.codexApiKey ?? '').trim()) {
         return t('agents.disableReason.missingCodexApiKey', 'Please enter your Codex API Key');
       }
@@ -1797,10 +1819,10 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
       if (!baseUrl) {
         return t('agents.disableReason.missingCodexBaseUrl', 'Please enter a Base URL');
       }
-      if (!isValidHttpUrl(baseUrl)) {
+      if (!isAllowedCredentialEndpoint(baseUrl)) {
         return t(
           'agents.disableReason.invalidCodexBaseUrl',
-          'Please enter a valid HTTP or HTTPS Base URL'
+          'Use HTTPS, or HTTP only for a loopback endpoint'
         );
       }
     }
@@ -2514,7 +2536,7 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
               <p className="mb-2 text-xs text-muted-foreground">
                 {t(
                   'settings.agent.dialog.codex.envHint',
-                  'CODEX_API_KEY and the generated CODEX_CONFIG are set above and cannot be overridden here.'
+                  'The generated CODEX_CONFIG and machine-local credential slot are managed above.'
                 )}
               </p>
             ) : null}
@@ -2526,12 +2548,15 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
                   return;
                 }
                 if (managesCodexEnvironment) {
-                  const next = omitKeys(env, [CODEX_API_KEY_ENV, CODEX_CONFIG_ENV]);
-                  if (formData.env[CODEX_API_KEY_ENV]) {
-                    next[CODEX_API_KEY_ENV] = formData.env[CODEX_API_KEY_ENV];
-                  }
-                  if (formData.env[CODEX_CONFIG_ENV]) {
-                    next[CODEX_CONFIG_ENV] = formData.env[CODEX_CONFIG_ENV];
+                  const managedKeys = [
+                    CODEX_API_KEY_ENV,
+                    CODEX_CONFIG_ENV,
+                    LODY_CODEX_API_KEY_ENV,
+                    LODY_CODEX_PROVIDER_STATE_ENV,
+                  ];
+                  const next = omitKeys(env, managedKeys);
+                  for (const key of managedKeys) {
+                    if (formData.env[key]) next[key] = formData.env[key];
                   }
                   updateEnvironment(next);
                   return;
@@ -3050,7 +3075,7 @@ function CodexAuthenticationPanel({
             label={t('settings.agent.dialog.codex.baseUrlLabel', 'Base URL')}
             hint={t(
               'settings.agent.dialog.codex.baseUrlHelp',
-              'Required HTTP or HTTPS endpoint with OpenAI Responses API support. Include /v1 when your provider requires it.'
+              'Required HTTPS endpoint with OpenAI Responses API support. Loopback HTTP is allowed for local development.'
             )}
           >
             <Input
@@ -3072,7 +3097,7 @@ function CodexAuthenticationPanel({
             label={t('settings.agent.dialog.codex.apiKeyLabel', 'API Key')}
             hint={t(
               'settings.agent.dialog.codex.apiKeyHelp',
-              'Saved with this provider and passed to Codex through CODEX_API_KEY.'
+              'Sent securely to this machine, stored locally, and injected only when Codex starts.'
             )}
             icon={<KeyRound className="h-3.5 w-3.5" aria-hidden="true" />}
           >
