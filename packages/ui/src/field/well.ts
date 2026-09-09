@@ -27,11 +27,13 @@ export const well = stylex.create({
     },
     color: field.value,
     fontFamily: 'inherit',
-    fontWeight: 400,
+    // Controls are 13 at weight 500 with controlTracking; the size step sets
+    // the size, this sets the weight and tracking for every control here.
+    fontWeight: 500,
     letterSpacing: text.controlTracking,
     cornerShape: corner.shape,
     outlineStyle: 'none',
-    opacity: { default: 1, ':disabled': 0.45 },
+    opacity: { default: 1, ':disabled': field.disabledOpacity },
     cursor: { default: 'auto', ':disabled': 'default' },
     transitionProperty: 'box-shadow, opacity',
     transitionDuration: duration.fast,

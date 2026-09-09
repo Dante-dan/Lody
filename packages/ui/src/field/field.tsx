@@ -52,9 +52,9 @@ const styles = stylex.create({
   },
   hint: { color: field.hint },
   error: { color: field.error },
-  // Disabled is 45% opacity on the thing itself; the control dims through its
-  // own `:disabled`, so nothing here stacks a second layer on top of it.
-  dimmed: { opacity: 0.45 },
+  // Disabled is one opacity for the family; the control dims through its own
+  // `:disabled`, so nothing here stacks a second layer on top of it.
+  dimmed: { opacity: field.disabledOpacity },
 });
 
 export const FieldRoot = forwardRef<HTMLDivElement, FieldRootProps>(function FieldRoot(

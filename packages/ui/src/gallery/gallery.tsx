@@ -221,6 +221,8 @@ const styles = stylex.create({
     cornerShape: corner.shape,
     color: field.value,
     fontSize: field.textMedium,
+    fontWeight: 500,
+    letterSpacing: text.controlTracking,
   },
 });
 

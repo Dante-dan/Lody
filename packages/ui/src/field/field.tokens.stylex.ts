@@ -1,6 +1,6 @@
 import * as stylex from '@stylexjs/stylex';
 import { colors, shadow } from '../tokens/colors.stylex';
-import { control, radius, text } from '../tokens/scales.stylex';
+import { control, radius, space, text } from '../tokens/scales.stylex';
 
 /**
  * One token group for the whole field family — label, control, help and error.
@@ -11,19 +11,23 @@ export const field = stylex.defineVars({
   heightSmall: control.small,
   heightMedium: control.medium,
   heightLarge: control.large,
-  paddingXSmall: '8px',
+  paddingXSmall: space[2],
+  // 10px sits between space.2 and space.3; the 32px control needs the half step.
   paddingXMedium: '10px',
-  paddingXLarge: '12px',
-  paddingYBlock: '8px',
+  paddingXLarge: space[3],
+  paddingBlock: space[2],
   radiusSmall: radius.small,
   radiusMedium: radius.medium,
   textSmall: text.footnoteSize,
   textMedium: text.subheadlineSize,
   labelSize: text.footnoteSize,
   labelLeading: text.footnoteLeading,
-  gap: '6px',
+  gap: space[1.5],
   ringWidth: '2px',
   textareaMinHeight: '72px',
+  // The rules put disabled at 45% opacity on the control. It is one value for
+  // the whole family, so the control and its label cannot drift apart.
+  disabledOpacity: '0.45',
   background: colors.wellBackground,
   well: shadow.inset,
   value: colors.label,

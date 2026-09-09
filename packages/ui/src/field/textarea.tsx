@@ -23,7 +23,7 @@ export interface TextareaProps extends Omit<
 const styles = stylex.create({
   textarea: {
     display: 'block',
-    paddingBlock: field.paddingYBlock,
+    paddingBlock: field.paddingBlock,
     paddingInline: field.paddingXMedium,
     borderRadius: field.radiusMedium,
     fontSize: field.textMedium,

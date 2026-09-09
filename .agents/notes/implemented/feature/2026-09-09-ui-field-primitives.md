@@ -75,16 +75,23 @@ the moment it takes focus.
 
 ### The mapping this closes
 
-| Old Tailwind concept          | New token                                 |
-| ----------------------------- | ------------------------------------------ |
-| `bg-input-field`              | `field.background` (`wellBackground`)      |
-| `border-input-border`         | `field.well` (`shadow.inset`); no border   |
-| `text-input-foreground`       | `field.value` (`label`)                    |
-| `text-input-placeholder`      | `field.placeholder` (`tertiaryLabel`)      |
-| `ring-ring`                   | `field.ring` (`accent`), 2px               |
-| `aria-invalid` colours        | `field.invalidRing` (`destructive`), 2px   |
-| `disabled:bg-muted opacity-60`| 45% opacity on the control, no colour swap |
-| label `text-sm`               | `field.labelSize` (12) at weight 500       |
+| Old Tailwind concept           | New token                                |
+| ------------------------------ | ---------------------------------------- |
+| `bg-input-field`               | `field.background` (`wellBackground`)    |
+| `border-input-border`          | `field.well` (`shadow.inset`); no border |
+| `text-input-foreground`        | `field.value` (`label`)                  |
+| `text-input-placeholder`       | `field.placeholder` (`tertiaryLabel`)    |
+| `ring-ring`                    | `field.ring` (`accent`), 2px             |
+| `aria-invalid` colours         | `field.invalidRing` (`destructive`), 2px |
+| `disabled:bg-muted opacity-60` | `field.disabledOpacity`, no colour swap  |
+| input `text-base md:text-sm`   | `field.textMedium` (13) at weight 500    |
+| label `text-sm`                | `field.labelSize` (12) at weight 500     |
+
+The control's own text follows the rules' control step — 13 at weight 500 with
+`text.controlTracking`, 12 at the 28px size — rather than the prose weight a
+text field might suggest. Dimensions that land on the space scale reference it
+(`space.2`, `space.3`, `space.1.5`); the 10px inline padding of the 32px control
+is the one literal, because the scale has no half step between 8 and 12.
 
 ## Discovered defect: the shell suppresses every outline ring
 

@@ -47,17 +47,20 @@ border. One component token group, `field`, serves the whole family — input,
 textarea, and the selects, checkboxes and switches that follow — so a state has
 one colour in one place instead of one per component.
 
-| state       | what it is                                                          |
-| ----------- | ------------------------------------------------------------------- |
-| rest        | `field.background` and `field.well`; the value in `field.value`     |
-| placeholder | `field.placeholder`, the hint colour; it is a prompt, not a label   |
-| focus       | 2px `field.ring` (accent), tight to the control, no offset          |
-| invalid     | 2px `field.invalidRing` (destructive), at rest and while focused    |
-| disabled    | 45% opacity on the control; the label and help dim with it          |
-| selected    | `selectedFill` on the row that is current, not on the control       |
+| state       | what it is                                                        |
+| ----------- | ----------------------------------------------------------------- |
+| rest        | `field.background` and `field.well`; the value in `field.value`   |
+| placeholder | `field.placeholder`, the hint colour; it is a prompt, not a label |
+| focus       | 2px `field.ring` (accent), tight to the control, no offset        |
+| invalid     | 2px `field.invalidRing` (destructive), at rest and while focused  |
+| disabled    | 45% opacity on the control; the label and help dim with it        |
+| selected    | `selectedFill` on the row that is current, not on the control     |
 
-Label at 12 weight 500 in `field.label`, help at 12 weight 400 in `field.hint`,
-error at 12 weight 400 in `field.error`, stacked at `field.gap`.
+The control's own text follows the control rule: 13 at weight 500 with
+`text.controlTracking`, 12 at the 28px step. Label at 12 weight 500 in
+`field.label`, help at 12 weight 400 in `field.hint`, error at 12 weight 400 in
+`field.error`, stacked at `field.gap`. Disabled reads `field.disabledOpacity`
+rather than a literal, so the control and its label cannot drift apart.
 
 `Field.Root` owns the name, the disabled flag and validity. A control reads that
 state and picks its own classes from it; it does not take a second `invalid` or
