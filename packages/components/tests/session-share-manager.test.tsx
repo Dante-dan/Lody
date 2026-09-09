@@ -131,6 +131,36 @@ describe('session share management surface', () => {
     expect(props.onRevoke).toHaveBeenCalledWith(props.state.root);
   });
 
+  it('explains the unavailable badge once, and only while a candidate is actually ineligible', async () => {
+    await render();
+    expect(container.textContent).toContain('Not ready: needs cloud sync and author verification.');
+    // One shared explanation, not one repeated under every row.
+    expect(container.textContent!.split('needs cloud sync').length - 1).toBe(1);
+    props.state = {
+      ...props.state!,
+      candidates: props.state!.candidates.map((candidate) => ({
+        ...candidate,
+        available: true,
+        validUntil: 200,
+      })),
+    };
+    await render();
+    expect(container.textContent).not.toContain('needs cloud sync');
+  });
+
+  it('freezes target selection while a mutation is in flight but keeps the candidate filter usable', async () => {
+    props.filter = <input aria-label="Find related conversations" />;
+    props.busy = true;
+    await render();
+    for (const box of container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]'))
+      expect(box.disabled).toBe(true);
+    const filter = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Find related conversations"]'
+    );
+    expect(filter).toBeTruthy();
+    expect(filter?.disabled).toBe(false);
+  });
+
   it('stops presenting an expired grant as active without a new server record', async () => {
     props.now = 201;
     await render();

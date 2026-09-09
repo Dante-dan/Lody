@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { useAtomValue } from 'jotai';
 import { useTranslation } from 'react-i18next';
+import { Search } from 'lucide-react';
 import type { SessionMeta, WorkspaceId } from '@lody/shared';
 import { userAtom } from '@/atoms';
 import { sessionMetaCacheAtom } from '@/atoms/doc-meta';
@@ -11,7 +12,16 @@ import { useSessionShareManagement } from '@/hooks/use-session-share-management'
 import { SessionShareManager } from './session-share-manager';
 import { useKeyboardAwareScrollIntoView } from '@/hooks/use-keyboard-aware-scroll-into-view';
 
-/** Shared with stories; portal dialogs must account for the iOS overlay keyboard. */
+/**
+ * Shared with the manager stories and the product dialog.
+ *
+ * The panel is a fixed header over one scrolling body, not a single scrolling
+ * box: the manager's action row sticks to the bottom of that body, so the
+ * primary action stays reachable on a narrow phone and behind a soft keyboard.
+ * The keyboard hook must therefore observe the body, which is the element that
+ * actually scrolls, and the portal keeps shrinking/lifting for
+ * `--native-keyboard-height` because the root layout padding never reaches it.
+ */
 export function SessionShareDialogFrame({
   title,
   onClose,
@@ -22,8 +32,8 @@ export function SessionShareDialogFrame({
   children: ReactNode;
 }) {
   const { t } = useTranslation();
-  const content = useRef<HTMLDivElement>(null);
-  useKeyboardAwareScrollIntoView(content);
+  const body = useRef<HTMLDivElement>(null);
+  useKeyboardAwareScrollIntoView(body);
   return (
     <Dialog
       open
@@ -32,19 +42,27 @@ export function SessionShareDialogFrame({
       }}
     >
       <DialogContent
-        ref={content}
-        className="max-w-lg overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className="flex w-[calc(100vw-2rem)] max-w-lg flex-col gap-0 overflow-hidden p-0 sm:p-0"
         style={{
           top: 'calc((100dvh - var(--native-keyboard-height, 0px) + var(--safe-area-top, 0px) - max(0px, var(--safe-area-bottom, 0px) - var(--native-keyboard-height, 0px))) / 2)',
           maxHeight:
             'calc(100dvh - var(--native-keyboard-height, 0px) - 2rem - var(--safe-area-top, 0px) - max(0px, var(--safe-area-bottom, 0px) - var(--native-keyboard-height, 0px)))',
         }}
       >
-        <DialogHeader>
-          <DialogTitle>{t('sharing.manager.title', 'Share conversation')}</DialogTitle>
-          <DialogDescription className="break-words">{title}</DialogDescription>
+        <DialogHeader className="shrink-0 gap-1 border-b border-border px-4 py-3.5 text-left sm:px-5">
+          <DialogTitle className="pr-6 text-base">
+            {t('sharing.manager.title', 'Share conversation')}
+          </DialogTitle>
+          <DialogDescription className="line-clamp-2 break-words text-xs">
+            {title}
+          </DialogDescription>
         </DialogHeader>
-        {children}
+        <div
+          ref={body}
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        >
+          {children}
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -80,25 +98,32 @@ function ShareEditor({ workspaceId, session }: { workspaceId: WorkspaceId; sessi
     candidates.map((entry) => entry.sessionId)
   );
   return (
-    <>
-      {related.length > 0 && (
-        <Input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          aria-label={t('sharing.manager.search', 'Find related conversations')}
-          placeholder={t('sharing.manager.search', 'Find related conversations')}
-        />
-      )}
-      {matching.length > 96 && (
-        <p className="text-xs text-muted-foreground">
-          {t(
-            'sharing.manager.moreCandidates',
-            'Showing the first 96 matches. Search to find another conversation.'
-          )}
-        </p>
-      )}
-      <SessionShareManager sessionId={session.id} candidates={candidates} {...management} />
-    </>
+    <SessionShareManager
+      sessionId={session.id}
+      candidates={candidates}
+      // The filter belongs to the scope section it narrows, so the manager
+      // places it there rather than above the link this dialog is about.
+      filter={
+        related.length > 0 ? (
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              className="h-8 pl-8 text-sm"
+              aria-label={t('sharing.manager.search', 'Find related conversations')}
+              placeholder={t('sharing.manager.search', 'Find related conversations')}
+            />
+          </div>
+        ) : null
+      }
+      filterNote={
+        matching.length > 96
+          ? t('sharing.manager.moreCandidates', 'Showing the first 96 matches. Search to narrow.')
+          : null
+      }
+      {...management}
+    />
   );
 }
 

@@ -12,6 +12,14 @@ Parent component instructions apply. `CLAUDE.md` is a symlink; edit this file on
 - `SessionShareDialogFrame` is shared by the manager stories and product dialog;
   its portal must shrink/lift for `--native-keyboard-height` and keep focused fields
   in its own scroll region. Root layout keyboard padding does not reach this portal.
+  It is a fixed header over ONE scrolling body: the keyboard hook observes that body,
+  and the manager's action row plus its acknowledgement stay pinned to the body's
+  bottom so a long candidate list cannot hide the gate or the primary action.
+  State each meaning once, next to what it describes: the disclosure belongs on the
+  link, the selection rule on the selection, and the unavailability explanation is one
+  shared line, never repeated per row. The candidate filter arrives as the `filter`
+  prop and must render inside the section it narrows; only the target list sits in the
+  disabled `fieldset`, so filtering survives an in-flight mutation.
 - `hooks/use-session-share-management.ts` uses public cloud descriptors and server
   verified eligibility. Relationships only discover candidates; each target requires
   explicit selection. Preserve the draft's expected versions across concurrent edits.
@@ -25,6 +33,10 @@ Parent component instructions apply. `CLAUDE.md` is a symlink; edit this file on
   It must not import the app router or create a workspace runtime, Repo, Flock,
   read receipt, dispatch, or membership subscription. Navigation comes only from
   the authorized manifest; a stream's references do not authorize other streams.
+  Read-only is expressed by offering no write affordance, not by a standing banner;
+  the header's status region announces interruptions only. Its appearance control
+  reuses `theme-provider`'s cycle, `system` default and storage key — never a
+  reader-specific mode or key, which would compete with the app's cached choice.
 - `lib/session-share-navigation.ts` derives the target from `?tab` and the current
   manifest. Browser history preserves the access fragment; unsupported targets fall
   back to the root and never issue their own read. Tag snapshots with their target so

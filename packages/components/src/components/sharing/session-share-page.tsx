@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Monitor, Moon, Sun } from 'lucide-react';
 import type { SessionId } from '@lody/shared';
 import {
   SessionShareManifestSchema,
@@ -29,6 +30,46 @@ import {
   type ShareAttachmentAccess,
 } from './share-attachments';
 import { SessionShareErrorBoundary } from './session-share-error-boundary';
+import { Button } from '@/ui/button';
+import { nextCycledTheme, useTheme } from '@/theme-provider';
+
+/**
+ * The reader's only control. It reuses the app's ThemeProvider — the same
+ * light/dark/system cycle, resolution and cached selection — instead of a
+ * reader-specific mode, so a visitor who already chose a theme on this origin
+ * keeps it. localStorage is per-origin: a choice made on the app's domain
+ * cannot be read from the share domain, and each origin remembers its own.
+ */
+function ShareThemeToggle() {
+  const { t } = useTranslation();
+  const { theme, setTheme } = useTheme();
+  const mode =
+    theme === 'light'
+      ? t('settings.theme.light', 'Light')
+      : theme === 'dark'
+        ? t('settings.theme.dark', 'Dark')
+        : t('settings.theme.system', 'System');
+  const label = t('sharing.appearance', 'Appearance: {{mode}}', { mode });
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      className="h-8 w-8 shrink-0 text-muted-foreground"
+      aria-label={label}
+      title={label}
+      onClick={() => setTheme(nextCycledTheme(theme))}
+    >
+      {theme === 'light' ? (
+        <Sun className="h-4 w-4" aria-hidden="true" />
+      ) : theme === 'dark' ? (
+        <Moon className="h-4 w-4" aria-hidden="true" />
+      ) : (
+        <Monitor className="h-4 w-4" aria-hidden="true" />
+      )}
+    </Button>
+  );
+}
 
 export function SessionShareSurface(props: {
   manifest: SessionShareManifest | null;
@@ -103,41 +144,55 @@ export function SessionShareSurface(props: {
     storedTitle.length > 0 ? storedTitle : t('sharing.defaultTitle', 'Shared conversation');
   return (
     <main className="flex h-dvh min-h-0 flex-col bg-background text-foreground">
-      <header className="border-b border-border px-4 pb-3 pt-[max(1rem,env(safe-area-inset-top))] sm:px-8">
-        <div className="mx-auto flex max-w-5xl items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="truncate text-xs text-muted-foreground">{manifest.workspaceName}</p>
-            <h1 className="mt-1 truncate text-base font-medium">{title}</h1>
+      <header className="shrink-0 border-b border-border px-4 pb-2.5 pt-[max(0.75rem,env(safe-area-inset-top))] sm:px-8">
+        <div className="mx-auto max-w-5xl">
+          {/* Visitor context sits on the workspace line so the conversation title
+              always owns a full-width line, including on a narrow phone. */}
+          <div className="flex items-center gap-2">
+            <p className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+              {manifest.workspaceName}
+            </p>
+            <span className="shrink-0 whitespace-nowrap text-xs text-muted-foreground">
+              {t('sharing.anonymous', 'Anonymous visitor')}
+            </span>
+            <ShareThemeToggle />
           </div>
-          <span className="shrink-0 text-xs text-muted-foreground">
-            {t('sharing.anonymous', 'Anonymous visitor')}
-          </span>
-        </div>
-        <div className="mx-auto mt-2 max-w-5xl text-xs text-muted-foreground" role="status">
-          {status === 'paused' || snapshot.status === 'paused'
-            ? t('sharing.paused', 'Updates paused · Reconnecting…')
-            : snapshot.status === 'loading'
-              ? t('sharing.loading', 'Loading shared conversation…')
-              : t('sharing.readOnlyLive', 'Read only · Updates live')}
-        </div>
-        {manifest.targets.length > 1 && (
-          <nav
-            className="mx-auto mt-3 flex max-w-5xl gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            aria-label={t('sharing.conversations', 'Shared conversations')}
+          <h1 className="truncate text-[0.9375rem] font-medium leading-6">{title}</h1>
+          {/* Only interruptions are announced. A steady live read-only view is the
+              page's normal state and says so through its own absence of controls. */}
+          <div
+            className="text-xs text-muted-foreground empty:hidden [&:not(:empty)]:mt-1.5"
+            role="status"
           >
-            {manifest.targets.map((target) => (
-              <button
-                type="button"
-                key={target.sessionId}
-                aria-current={target.sessionId === sessionId ? 'page' : undefined}
-                onClick={() => props.onSelect(target.sessionId)}
-                className={`shrink-0 rounded-md px-3 py-1.5 text-sm ${target.sessionId === sessionId ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50'}`}
-              >
-                {target.title || t('sharing.defaultTitle', 'Shared conversation')}
-              </button>
-            ))}
-          </nav>
-        )}
+            {status === 'paused' || snapshot.status === 'paused'
+              ? t('sharing.paused', 'Updates paused · Reconnecting…')
+              : snapshot.status === 'loading'
+                ? t('sharing.loading', 'Loading shared conversation…')
+                : ''}
+          </div>
+          {manifest.targets.length > 1 && (
+            <nav
+              // Negative inset lets the first target's label sit on the same
+              // optical line as the title above it.
+              className="-mx-2.5 -mb-0.5 mt-1.5 flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              aria-label={t('sharing.conversations', 'Shared conversations')}
+            >
+              {manifest.targets.map((target) => (
+                <button
+                  type="button"
+                  key={target.sessionId}
+                  aria-current={target.sessionId === sessionId ? 'page' : undefined}
+                  onClick={() => props.onSelect(target.sessionId)}
+                  // Capped so a second target always peeks in: the row has to read
+                  // as navigation, not as a repeat of the heading above it.
+                  className={`max-w-[45%] shrink-0 truncate rounded-md px-2.5 py-1 text-[0.8125rem] sm:max-w-[16rem] ${target.sessionId === sessionId ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50'}`}
+                >
+                  {target.title || t('sharing.defaultTitle', 'Shared conversation')}
+                </button>
+              ))}
+            </nav>
+          )}
+        </div>
       </header>
       <SessionReadonlyContext.Provider value={attachments}>
         <SessionChatStreamView
