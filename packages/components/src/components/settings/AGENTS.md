@@ -30,6 +30,21 @@ rolls back — is in the root [AGENTS.md](../../../../../AGENTS.md).
   use the default interface font so they remain readable.
 - The Codex reset forecast chip in the provider row must not fetch on mount and must
   pass `nestedInDialog` for its dialog: [../codex-reset/AGENTS.md](../codex-reset/AGENTS.md).
+- The usage share card is a fixed-format report, not a second `ChatShareCard`: its two
+  aspects are exact pixel sizes, its period is the page's selected range, and its
+  headline is that range's timeline total, so page and image cannot disagree. Derive
+  every number through `usage-share-stats.ts`. Cost and member identification are each
+  off by default, and member slices carry display name and avatar only — never an
+  email. Both share cards use the one capture pipeline in `lib/share-image-export.ts`
+  and the one theme pinning in `components/share-theme-scope.ts`; do not fork either.
+  `StatsSettingsView` keeps the entry behind the opt-in `shareCard` prop with a lazy
+  dialog, because the public landing reuses that view. Typography and spacing come
+  from the card's own `TEXT`, `PAD_X`, and `RHYTHM` constants — never a fresh
+  `text-[…]` or an off-grid padding. `PAD_X` binds the footer too, so every band
+  shares one left edge. `ASPECT_SIZE` is the whole exported image including the
+  backdrop, so a framed card is 48px shorter — size the layout against the framed
+  case, and keep every band but the headline `shrink-0` so a card that does not fit
+  overflows visibly instead of eating its own padding.
 
 ## Agent Roles
 
