@@ -36,7 +36,7 @@ import {
   SESSION_DOC_PREFIX,
   type SessionStatus,
   LORO_STREAMS_BUCKET_ID,
-  sessionDocSchema,
+  createSessionMirror,
   ClientToServerSchema,
   ServerToClientSchema,
   type ClientToServer,
@@ -3659,17 +3659,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     // and does NOT require transport/workspaceId
     const persistedDoc = await repo.openPersistedDoc(roomId);
 
-    const mirror = new Mirror({
+    const mirror = createSessionMirror({
       doc: persistedDoc.doc as LoroDoc,
-      schema: sessionDocSchema,
-      // Temporary availability hotfix: old history must not reject unrelated writes.
-      // Remove only with a reviewed changed-input validation boundary (PR #460).
-      validateUpdates: false,
-      // Tolerate root keys written by peers running a newer schema version.
-      ignoreUnknownProperties: true,
       // Plan is now stored per-turn on history entries, not at root level
       initialState: { session: { id: sessionId }, history: [] },
-      debug: false,
     });
 
     const syncTracker = createTrackedRoomSyncTracker(roomId);
@@ -3801,6 +3794,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
           listener(syncLeaseCount > 0 || roomSub || syncJoinPromise ? state : 'idle');
         }),
       getState: () => mirror.getState(),
+      historyWriter: mirror.historyWriter,
       setState: (updater) => {
         mirror.setState(updater as never);
       },

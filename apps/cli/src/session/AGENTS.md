@@ -25,8 +25,7 @@ Contract: specs/session-orchestration.md.
 
 ## Dispatch
 
-- Queue-to-history promotion preserves every frozen Turn field, `agentRoleId` and
-  `agentRoleRevision` included.
+- Queue promotion preserves frozen fields; remove its row only after history and activation succeed.
 - Absent session meta is "unknown", not foreign: hold the TTL-bounded RPC stash until meta lands;
   drop it only on a definitive verdict.
 - Subscribe to RPC offers BEFORE awaiting Doc Room join/sync and never dispatch from the RPC
