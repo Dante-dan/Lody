@@ -101,7 +101,7 @@ function capabilityForOperation(name: string): PlatformCapability {
   }
   if (name === 'machines:setMachineSharedWithTeam') return 'teamSharing';
   if (name.startsWith('machines:')) return 'remoteMachines';
-  if (name.startsWith('localProjects:')) return 'teamSharing';
+  if (name.startsWith('localProjects:') || name.startsWith('sessionSharing:')) return 'teamSharing';
   throw new Error(`Cloud operation ${JSON.stringify(name)} has no capability assignment`);
 }
 
@@ -135,6 +135,20 @@ const action = <Reference extends FunctionReference<'action'>>(
  * public cloud client contract, never from generated server API declarations.
  */
 export const cloudOperations = {
+  sessionSharing: {
+    requestVerification: mutation<ConvexApi['sessionSharing']['requestVerification']>(
+      'sessionSharing:requestVerification'
+    ),
+    getManagement: query<ConvexApi['sessionSharing']['getManagement']>(
+      'sessionSharing:getManagement'
+    ),
+    create: mutation<ConvexApi['sessionSharing']['create']>('sessionSharing:create'),
+    updateTargets: mutation<ConvexApi['sessionSharing']['updateTargets']>(
+      'sessionSharing:updateTargets'
+    ),
+    reset: mutation<ConvexApi['sessionSharing']['reset']>('sessionSharing:reset'),
+    revoke: mutation<ConvexApi['sessionSharing']['revoke']>('sessionSharing:revoke'),
+  },
   activity: {
     recordMyWorkspaceDailyActiveUser: mutation<
       ConvexApi['activity']['recordMyWorkspaceDailyActiveUser']

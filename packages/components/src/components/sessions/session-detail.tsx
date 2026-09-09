@@ -147,11 +147,11 @@ import {
   type ConversationTabEntry,
   type ViewerTabEntry,
 } from '@/components/mobile/mobile-session-tab-sheet';
-import {
-  MobileSessionMenuSheet,
-  type MobileSessionMenuAction,
-  type MobileSessionMenuInfoRow,
+import type {
+  MobileSessionMenuAction,
+  MobileSessionMenuInfoRow,
 } from '@/components/mobile/mobile-session-menu-sheet';
+import { SessionShareMobileMenu } from '@/components/sharing/session-share-mobile-menu';
 import { MobileFileViewerDrawer } from '@/components/mobile/mobile-file-viewer-drawer';
 import { GlassIconButton } from '@/components/mobile/glass-icon-button';
 import { toast } from 'sonner';
@@ -5106,7 +5106,10 @@ const SessionDetail = ({
           onSelectViewer={handleMobileViewerSelect}
           onRestoreConversation={handleMobileRestoreConversation}
         />
-        <MobileSessionMenuSheet
+        <SessionShareMobileMenu
+          key={`${currentWorkspaceId}:${activeTabSessionId}`}
+          workspaceId={currentWorkspaceId}
+          session={activeDraftTab || hasActiveViewerTab ? null : activeTabSession}
           open={mobileMenuSheetOpen}
           onOpenChange={setMobileMenuSheetOpen}
           infoRows={mobileMenuInfoRows}
