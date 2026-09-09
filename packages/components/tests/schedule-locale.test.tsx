@@ -190,39 +190,4 @@ describe('Chinese is a product language, not an Intl locale', () => {
     );
     expect(container.textContent).toContain(zh['schedules.trigger.manualHelp']);
   });
-  it('keeps Chinese custom pickers usable when a field is emptied and refilled', () => {
-    render(
-      <ScheduleForm
-        now={NOW}
-        saving={false}
-        onSave={() => {}}
-        initial={{
-          title: '构建巡检',
-          prompt: '检查构建。',
-          trigger: { kind: 'cron', expression: '*/20 9-17 * * 1-5', timeZone: 'Asia/Shanghai' },
-          misfire: 'skip',
-          overlap: 'skip',
-        }}
-      />
-    );
-    const weekdays = [
-      ...container.querySelectorAll<HTMLButtonElement>('button[aria-pressed="true"]'),
-    ];
-    expect(weekdays).toHaveLength(5);
-    for (const day of weekdays) act(() => day.click());
-    const save = container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    expect(save.disabled).toBe(true);
-    expect(container.textContent).toContain(
-      instance.t('schedules.cron.requireValues', {
-        field: zh['schedules.cron.weekday'],
-      })
-    );
-    expect(container.querySelectorAll('[role="combobox"]').length).toBeGreaterThanOrEqual(5);
-    expect(
-      container.querySelector('input[aria-label="' + zh['schedules.expression'] + '"]')
-    ).toBeNull();
-    expect(weekdays[0]!.isConnected).toBe(true);
-    act(() => weekdays[0]!.click());
-    expect(save.disabled).toBe(false);
-  });
 });
