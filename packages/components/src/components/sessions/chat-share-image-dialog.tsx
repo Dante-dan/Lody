@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/ui/dialog';
 import { Label } from '@/ui/label';
 import { Input } from '@/ui/input';
-import { Button } from '@/ui/button';
+import { Button } from '@lody/ui/button';
 import { copyChatShareImage, exportChatShareImage } from '@/lib/chat-share-image-export';
 import { Switch } from '@/ui/switch';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
@@ -462,7 +462,7 @@ export function ChatShareImageDialog({
             </p>
           ) : null}
           <Button
-            variant="outline"
+            variant="secondary"
             onClick={() => void handleCopy()}
             disabled={exporting || !assetsReady || messages.length === 0}
           >

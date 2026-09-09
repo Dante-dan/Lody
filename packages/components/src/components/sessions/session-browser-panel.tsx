@@ -23,7 +23,7 @@ import {
 
 import { activeWorkspaceRuntimeAtom, userAtom } from '@/atoms';
 import { getMachineMetaByIdAtomFamily } from '@/atoms/machines';
-import { Button } from '@/ui/button';
+import { Button } from '@lody/ui/button';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -713,12 +713,14 @@ function SessionBrowserPanelController({
       publicState?.canGoBack &&
       getPublicBrowserBridge()
     ) {
-      void getPublicBrowserBridge()?.back(`session-browser-${session.id}`).then(
-        (result) => {
-          if (!result.ok) setError(result.error);
-        },
-        (commandError: unknown) => setError(errorMessage(commandError))
-      );
+      void getPublicBrowserBridge()
+        ?.back(`session-browser-${session.id}`)
+        .then(
+          (result) => {
+            if (!result.ok) setError(result.error);
+          },
+          (commandError: unknown) => setError(errorMessage(commandError))
+        );
       return;
     }
     if (currentAddress?.engine === 'managed-preview' && managedState?.canGoBack) {
@@ -741,12 +743,14 @@ function SessionBrowserPanelController({
       publicState?.canGoForward &&
       getPublicBrowserBridge()
     ) {
-      void getPublicBrowserBridge()?.forward(`session-browser-${session.id}`).then(
-        (result) => {
-          if (!result.ok) setError(result.error);
-        },
-        (commandError: unknown) => setError(errorMessage(commandError))
-      );
+      void getPublicBrowserBridge()
+        ?.forward(`session-browser-${session.id}`)
+        .then(
+          (result) => {
+            if (!result.ok) setError(result.error);
+          },
+          (commandError: unknown) => setError(errorMessage(commandError))
+        );
       return;
     }
     if (currentAddress?.engine === 'managed-preview' && managedState?.canGoForward) {
@@ -765,12 +769,14 @@ function SessionBrowserPanelController({
 
   const handleReload = useCallback(() => {
     if (currentAddress?.engine === 'public-web' && getPublicBrowserBridge()) {
-      void getPublicBrowserBridge()?.reload(`session-browser-${session.id}`).then(
-        (result) => {
-          if (!result.ok) setError(result.error);
-        },
-        (commandError: unknown) => setError(errorMessage(commandError))
-      );
+      void getPublicBrowserBridge()
+        ?.reload(`session-browser-${session.id}`)
+        .then(
+          (result) => {
+            if (!result.ok) setError(result.error);
+          },
+          (commandError: unknown) => setError(errorMessage(commandError))
+        );
       return;
     }
     if (viewerUrl) {
@@ -788,12 +794,14 @@ function SessionBrowserPanelController({
 
   const handleStop = useCallback(() => {
     if (currentAddress?.engine === 'public-web' && getPublicBrowserBridge()) {
-      void getPublicBrowserBridge()?.stop(`session-browser-${session.id}`).then(
-        (result) => {
-          if (!result.ok) setError(result.error);
-        },
-        (commandError: unknown) => setError(errorMessage(commandError))
-      );
+      void getPublicBrowserBridge()
+        ?.stop(`session-browser-${session.id}`)
+        .then(
+          (result) => {
+            if (!result.ok) setError(result.error);
+          },
+          (commandError: unknown) => setError(errorMessage(commandError))
+        );
       return;
     }
     if (currentAddress?.engine === 'managed-preview' && annotationAvailable) {
@@ -1004,8 +1012,8 @@ function SessionBrowserPanelController({
           <Button
             type="button"
             variant="ghost"
-            size="sm"
-            className="ml-auto h-6 px-2"
+            size="small"
+            className="ml-auto"
             onClick={() => setError(null)}
           >
             {t('common.dismiss', 'Dismiss')}

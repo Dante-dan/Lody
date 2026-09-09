@@ -12,7 +12,7 @@ import {
 } from '@lody/shared';
 import { toast } from 'sonner';
 import { Badge } from '@/ui/badge';
-import { Button } from '@/ui/button';
+import { Button } from '@lody/ui/button';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -207,8 +207,8 @@ export function ProviderRow({
           {onRefresh && (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:text-foreground"
+              size="small"
+              icon
               disabled={refreshing}
               aria-label={t(
                 'agents.acpCapabilities.refreshModelsAndModes',
@@ -229,9 +229,10 @@ export function ProviderRow({
           {onDelete && (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-7 w-7 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
               aria-label={t('common.delete', 'Delete')}
+              size="small"
+              icon
+              tone="destructive"
               onClick={(event) => {
                 event.stopPropagation();
                 setDeleteOpen(true);
@@ -277,7 +278,7 @@ export function ProviderRow({
                 event.preventDefault();
                 void handleDelete();
               }}
-              className={cn('bg-destructive text-destructive-foreground hover:bg-destructive/90')}
+              variant="destructive"
             >
               {deleting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               {t('common.delete', 'Delete')}

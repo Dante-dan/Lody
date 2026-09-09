@@ -9,7 +9,7 @@ import {
 import { createPortal } from 'react-dom';
 import { Maximize, X, ZoomIn, ZoomOut } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/ui/button';
+import { Button } from '@lody/ui/button';
 import { cn } from '@/lib/utils';
 
 /**
@@ -41,9 +41,8 @@ const MERMAID_DIAGRAM_MAX_INITIAL_ZOOM = 3;
 const MERMAID_DIAGRAM_ZOOM_STEP = 1.25;
 
 /**
- * `size="icon"` is 36px square. The viewer's controls sit at the top edge of a
- * phone screen, where the shared size is under the 44px touch-target floor
- * (iOS HIG / WCAG 2.5.5) that this whole fix is about.
+ * The shared Button sizes are under this viewer's 44px touch-target floor, so
+ * the toolbar keeps an explicit size at the top edge of a phone screen.
  */
 const CONTROL_CLASS_NAME = 'h-11 w-11 shrink-0 text-muted-foreground';
 
@@ -274,7 +273,8 @@ function OpenMermaidDiagramViewer({
         <Button
           type="button"
           variant="ghost"
-          size="icon"
+          size="small"
+          icon
           className={CONTROL_CLASS_NAME}
           onClick={() => zoomBy(1 / MERMAID_DIAGRAM_ZOOM_STEP)}
           disabled={zoom !== null && zoom <= MERMAID_DIAGRAM_MIN_ZOOM}
@@ -286,7 +286,7 @@ function OpenMermaidDiagramViewer({
         <Button
           type="button"
           variant="ghost"
-          size="icon"
+          size="small"
           className={cn(CONTROL_CLASS_NAME, 'w-auto min-w-11 px-2 font-mono text-xs tabular-nums')}
           onClick={resetZoom}
           title={resetZoomLabel}
@@ -297,7 +297,8 @@ function OpenMermaidDiagramViewer({
         <Button
           type="button"
           variant="ghost"
-          size="icon"
+          size="small"
+          icon
           className={CONTROL_CLASS_NAME}
           onClick={() => zoomBy(MERMAID_DIAGRAM_ZOOM_STEP)}
           disabled={zoom !== null && zoom >= MERMAID_DIAGRAM_MAX_ZOOM}
@@ -310,7 +311,8 @@ function OpenMermaidDiagramViewer({
           ref={closeRef}
           type="button"
           variant="ghost"
-          size="icon"
+          size="small"
+          icon
           data-testid="mermaid-diagram-viewer-close"
           className={CONTROL_CLASS_NAME}
           onClick={onClose}

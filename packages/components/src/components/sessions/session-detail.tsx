@@ -23,7 +23,7 @@ import {
   Users,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/ui/button';
+import { Button } from '@lody/ui/button';
 import { useRouter } from '@tanstack/react-router';
 import { useComposerNavigationFocus } from '../chat/submission/use-composer-navigation-focus';
 import { usePostHog } from '@posthog/react';
@@ -673,12 +673,13 @@ const TerminalDockToggleButton = memo(function TerminalDockToggleButton() {
     <Button
       type="button"
       variant="ghost"
-      size="icon"
+      size="small"
+      icon
       disabled={!canCreate}
       onClick={() => store.get(terminalControllerAtom)?.toggleOpen()}
       aria-label={label}
       title={label}
-      className={cn('h-7 w-7 shrink-0 text-muted-foreground', isOpen && 'text-foreground')}
+      className={cn('shrink-0', isOpen && '')}
     >
       <PanelBottom className="h-4 w-4" />
     </Button>
@@ -4572,7 +4573,7 @@ const SessionDetail = ({
           <p className="text-sm text-muted-foreground">
             {t('sessions.tabWaitingForSync', 'Waiting for this conversation to sync…')}
           </p>
-          <Button variant="ghost" size="sm" onClick={() => handleSessionTabSelect(sessionId)}>
+          <Button variant="ghost" size="small" onClick={() => handleSessionTabSelect(sessionId)}>
             {t('sessions.tabBackToMain', 'Back to main conversation')}
           </Button>
         </>
@@ -4598,7 +4599,7 @@ const SessionDetail = ({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)}>
+          <Button variant="secondary" onClick={() => setDeleteConfirmOpen(false)}>
             {t('common.cancel', 'Cancel')}
           </Button>
           <Button
@@ -4636,7 +4637,7 @@ const SessionDetail = ({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={() => setArchiveConfirmOpen(false)}>
+          <Button variant="secondary" onClick={() => setArchiveConfirmOpen(false)}>
             {t('common.cancel', 'Cancel')}
           </Button>
           <Button
@@ -4700,7 +4701,7 @@ const SessionDetail = ({
           </DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={cancelDirtyFork}>
+          <Button variant="secondary" onClick={cancelDirtyFork}>
             {t('common.cancel', 'Cancel')}
           </Button>
           <Button
@@ -5371,7 +5372,7 @@ const SessionDetail = ({
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon"
+                    icon
                     className={getSessionDetailTouchIconButtonClassName('-ml-1')}
                     /* Same order as the edge swipe: pop a directory level
                        first, close the drawer only at the root. */
@@ -5444,7 +5445,7 @@ const SessionDetail = ({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon"
+                      icon
                       className={getSessionDetailTouchIconButtonClassName('-ml-1')}
                       onClick={handleClosePrTab}
                       aria-label={t('common.back', 'Back')}
@@ -5509,7 +5510,7 @@ const SessionDetail = ({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon"
+                      icon
                       className={getSessionDetailTouchIconButtonClassName('-ml-1')}
                       onClick={handleCloseBrowserTab}
                       aria-label={t('common.back', 'Back')}
@@ -5643,14 +5644,15 @@ const SessionDetail = ({
     <Button
       type="button"
       variant="ghost"
-      size="icon"
+      size="small"
+      icon
       onClick={handleToggleSidebar}
       aria-label={
         isSidebarVisible
           ? t('sessions.sidebar.hide', 'Hide sidebar')
           : t('sessions.sidebar.show', 'Show sidebar')
       }
-      className={cn('h-7 w-7 shrink-0 text-muted-foreground', !isSidebarVisible && 'mr-[9px]')}
+      className={cn('shrink-0', !isSidebarVisible && 'mr-[9px]')}
     >
       <PanelRight className="h-4 w-4" />
     </Button>
@@ -5660,10 +5662,11 @@ const SessionDetail = ({
     <Button
       type="button"
       variant="ghost"
-      size="icon"
+      size="small"
+      icon
       onClick={() => showNavigationSidebar()}
       aria-label={t('sessions.leftSidebar.show', 'Show navigation sidebar')}
-      className="h-7 w-7 shrink-0 text-muted-foreground"
+      className="shrink-0"
     >
       <PanelLeft className="h-4 w-4" />
     </Button>
