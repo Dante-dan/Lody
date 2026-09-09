@@ -911,7 +911,7 @@ export function UiGallery({ palettes = 'both' }: UiGalleryProps) {
 
       <Section
         title="Field · label, control, help, error"
-        rule="One token group serves the whole family, so a state has one colour in one place. Field.Root owns name, disabled and validity; the label, control, help and error read that state instead of taking their own copies."
+        rule="One token group serves the whole family, so a state has one colour in one place. Field.Root owns name, disabled and validity; the label, control, help and error read that state instead of taking their own copies. Field.Root renders its validity as aria-invalid, and the ring follows that attribute, so a surface holding its own validation reaches the same state on a bare control."
       >
         <PaletteSplit palettes={palettes}>
           <Rows>
@@ -929,6 +929,10 @@ export function UiGallery({ palettes = 'both' }: UiGalleryProps) {
               </Field.Root>
             </FieldRow>
             <InvalidFieldRow />
+            <FieldRow legend={'invalid \u00b7 aria-invalid'}>
+              <Field.Label htmlFor="gallery-aria-invalid">Session title</Field.Label>
+              <Input id="gallery-aria-invalid" aria-invalid placeholder="Describe the task" />
+            </FieldRow>
             <FieldRow legend="disabled">
               <Field.Root name="title" disabled>
                 <Field.Label>Session title</Field.Label>

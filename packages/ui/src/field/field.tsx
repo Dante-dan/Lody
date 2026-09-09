@@ -1,6 +1,14 @@
 import { Field as BaseField } from '@base-ui/react/field';
+import { useRender } from '@base-ui/react/use-render';
 import * as stylex from '@stylexjs/stylex';
-import { forwardRef, type ComponentProps } from 'react';
+import {
+  createContext,
+  forwardRef,
+  useContext,
+  type ComponentProps,
+  type ReactElement,
+  type Ref,
+} from 'react';
 import { appendClassName } from '../internal/class-name';
 import { text } from '../tokens/scales.stylex';
 import { field } from './field.tokens.stylex';
@@ -57,28 +65,77 @@ const styles = stylex.create({
   dimmed: { opacity: field.disabledOpacity },
 });
 
+/**
+ * Whether a `Field.Root` is above this part. Base UI's Label, Description and
+ * Error throw without one, while its Control does not, so the parts below fall
+ * back to the plain element instead of taking the surface down with them. A
+ * label with `htmlFor`, or a line of help text, is meaningful on its own; the
+ * only thing lost outside a field is the field state, and there is none.
+ */
+const InsideField = createContext(false);
+
+/** A part rendered outside a field, with `render` still honoured. */
+function PlainPart({
+  tag,
+  sx,
+  caller,
+  elementRef,
+  render,
+  props,
+}: {
+  tag: 'label' | 'p' | 'div';
+  sx: ReturnType<typeof stylex.props>;
+  caller: string | undefined;
+  elementRef: Ref<HTMLElement>;
+  render: ReactElement | undefined;
+  props: Record<string, unknown>;
+}) {
+  return useRender({
+    render,
+    ref: elementRef,
+    defaultTagName: tag,
+    props: { ...props, className: appendClassName(sx.className, caller), style: sx.style },
+  });
+}
+
 export const FieldRoot = forwardRef<HTMLDivElement, FieldRootProps>(function FieldRoot(
   { className, ...rest },
   ref
 ) {
   const sx = stylex.props(styles.root);
   return (
-    <BaseField.Root
-      ref={ref}
-      {...rest}
-      className={appendClassName(sx.className, className)}
-      style={sx.style}
-    />
+    <InsideField.Provider value={true}>
+      <BaseField.Root
+        ref={ref}
+        {...rest}
+        className={appendClassName(sx.className, className)}
+        style={sx.style}
+      />
+    </InsideField.Provider>
   );
 });
 
 export const FieldLabel = forwardRef<HTMLLabelElement, FieldLabelProps>(function FieldLabel(
-  { className, ...rest },
+  { className, render, ...rest },
   ref
 ) {
+  const insideField = useContext(InsideField);
+  if (!insideField) {
+    return (
+      <PlainPart
+        tag="label"
+        sx={stylex.props(styles.label)}
+        caller={className}
+        elementRef={ref as Ref<HTMLElement>}
+        render={render as ReactElement | undefined}
+        props={rest}
+      />
+    );
+  }
   return (
     <BaseField.Label
       ref={ref}
+      render={render}
       {...rest}
       className={(state) =>
         appendClassName(
@@ -91,10 +148,24 @@ export const FieldLabel = forwardRef<HTMLLabelElement, FieldLabelProps>(function
 });
 
 export const FieldDescription = forwardRef<HTMLParagraphElement, FieldDescriptionProps>(
-  function FieldDescription({ className, ...rest }, ref) {
+  function FieldDescription({ className, render, ...rest }, ref) {
+    const insideField = useContext(InsideField);
+    if (!insideField) {
+      return (
+        <PlainPart
+          tag="p"
+          sx={stylex.props(styles.note, styles.hint)}
+          caller={className}
+          elementRef={ref as Ref<HTMLElement>}
+          render={render as ReactElement | undefined}
+          props={rest}
+        />
+      );
+    }
     return (
       <BaseField.Description
         ref={ref}
+        render={render}
         {...rest}
         className={(state) =>
           appendClassName(
@@ -108,13 +179,30 @@ export const FieldDescription = forwardRef<HTMLParagraphElement, FieldDescriptio
 );
 
 export const FieldError = forwardRef<HTMLDivElement, FieldErrorProps>(function FieldError(
-  { className, ...rest },
+  { className, render, match, ...rest },
   ref
 ) {
+  const insideField = useContext(InsideField);
   const sx = stylex.props(styles.note, styles.error);
+  // Outside a field there is no validity to match against, so the caller owns
+  // whether the message is on screen: rendering it is what they asked for.
+  if (!insideField) {
+    return (
+      <PlainPart
+        tag="div"
+        sx={sx}
+        caller={className}
+        elementRef={ref as Ref<HTMLElement>}
+        render={render as ReactElement | undefined}
+        props={rest}
+      />
+    );
+  }
   return (
     <BaseField.Error
       ref={ref}
+      render={render}
+      match={match}
       {...rest}
       className={appendClassName(sx.className, className)}
       style={sx.style}

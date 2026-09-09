@@ -21,7 +21,10 @@ into one component at a time. Source-consumed; consumers compile it through
   `!important`, which no layer order overrides.
 - Controls in the field family read validity and disabled from `Field.Root`
   through Base UI's state callback on `className`. A control does not take its
-  own `invalid` or `disabled` colour prop.
+  own `invalid` or `disabled` colour prop. The invalid ring also follows
+  `aria-invalid`, which `Field.Root` renders onto the control, so the ring and
+  what a screen reader announces are one fact; `src/field/invalid.ts` owns that
+  reading. StyleX cannot express an attribute selector, so it is read in JS.
 - Files that call `defineVars`, `createTheme` or `defineConsts` end in
   `.stylex.ts`. Their arguments are object literals; the compiler cannot
   evaluate helpers. Vars are imported from that file by a specifier ending in

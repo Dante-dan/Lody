@@ -3,6 +3,7 @@ import * as stylex from '@stylexjs/stylex';
 import { forwardRef, type ComponentProps } from 'react';
 import { appendClassName } from '../internal/class-name';
 import { field } from './field.tokens.stylex';
+import { isInvalid } from './invalid';
 import { well } from './well';
 
 export type InputSize = 'small' | 'medium' | 'large';
@@ -47,6 +48,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { size = 'medium', className, ...rest },
   ref
 ) {
+  const ariaInvalid = rest['aria-invalid'];
   return (
     <BaseInput
       ref={ref}
@@ -58,7 +60,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
             well.base,
             styles.input,
             sizeStyles[size],
-            state.valid === false && well.invalid
+            isInvalid(state.valid, ariaInvalid) && well.invalid
           ).className,
           className
         )

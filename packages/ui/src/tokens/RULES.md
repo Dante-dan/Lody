@@ -66,6 +66,12 @@ rather than a literal, so the control and its label cannot drift apart.
 state and picks its own classes from it; it does not take a second `invalid` or
 `disabled` prop for the caller to keep in sync.
 
+The invalid ring follows `aria-invalid`, which `Field.Root` renders onto its
+control, so the attribute is the state rather than a copy of it. What a screen
+reader announces and what a sighted person sees cannot disagree, and a surface
+that owns its own validation marks one control without a field around it. Every
+ARIA value except `false` is invalid, `grammar` and `spelling` included.
+
 ## Corners
 
 - `corner.shape` (squircle) on every radius. Round fallback outside Chromium.

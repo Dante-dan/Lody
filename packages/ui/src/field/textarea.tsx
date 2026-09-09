@@ -10,6 +10,7 @@ import {
 import { appendClassName } from '../internal/class-name';
 import { text } from '../tokens/scales.stylex';
 import { field } from './field.tokens.stylex';
+import { isInvalid } from './invalid';
 import { well } from './well';
 
 export type TextareaResize = 'vertical' | 'none';
@@ -49,6 +50,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
   // Base UI has no textarea part; `Input` is `Field.Control`, which renders
   // whatever `render` gives it and keeps the field wiring. The cast carries the
   // textarea element props Base UI types as input props but forwards untouched.
+  const ariaInvalid = rest['aria-invalid'];
   const props = rest as unknown as Omit<BaseProps, 'className' | 'render' | 'ref'>;
   return (
     <BaseInput
@@ -61,7 +63,7 @@ export const Textarea = forwardRef<HTMLTextAreaElement, TextareaProps>(function 
             well.base,
             styles.textarea,
             resize === 'none' ? styles.resizeNone : styles.resizeVertical,
-            state.valid === false && well.invalid
+            isInvalid(state.valid, ariaInvalid) && well.invalid
           ).className,
           className
         )

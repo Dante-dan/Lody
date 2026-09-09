@@ -167,8 +167,8 @@ across surfaces this change never touched.
 - Keeping `@radix-ui/react-label` and styling it. Rejected: the package depends
   on Base UI only, and a Radix label carries no field state.
 - Exporting a flat `Label` alongside `Field.Label`. Rejected: two names for one
-  component. `Field.Label` works outside a `Field.Root` with `htmlFor`, so the
-  standalone case is covered.
+  component. `Field.Label` covers the standalone case because this package makes
+  it work without a root; see the correction below.
 
 The gallery's own `Field` layout helper was renamed to `Sample` so the primitive
 can own the name. `ThemeRoot` now applies a list of component palette themes
@@ -219,6 +219,43 @@ Spending the contract on real call sites found two holes in it:
 
 `form.tsx` also kept typing `FormLabel` from `@radix-ui/react-label` while
 rendering a Base UI label. The type follows the element it renders.
+
+## Correction: the parts do require a root, and the ring follows aria-invalid
+
+Two claims in the first version of this note were wrong, and both reached the
+product.
+
+**`Field.Label` does not work outside a `Field.Root`.** Base UI's Label,
+Description and Error call `useFieldRootContext(false)`, whose `optional` flag
+is false, so they throw without a root; only Control passes `optional` and
+survives alone. This note had it backwards, and the caller migration was written
+against the wrong reading: all 25 files that render `UiField.Label` do so with
+no root, including the login page, every settings panel, onboarding and several
+dialogs. Loading the `UI/Switch` story reproduced it — a blank surface and
+`Base UI error #28` — so this was a crash on the way to shipping, not a
+theoretical gap.
+
+`Field.Label`, `Field.Description` and `Field.Error` now fall back to the plain
+`<label>`, `<p>` and `<div>` when no root is above them, styled identically and
+still honouring `render` through Base UI's `useRender`. A label with `htmlFor`
+is meaningful on its own; the only thing lost outside a field is field state,
+and outside a field there is none. Wrapping 25 surfaces in a root instead was
+rejected: it changes the DOM and layout of files this change should not be
+reshaping, to work around a primitive that should not crash.
+
+**The invalid ring ignored `aria-invalid`.** Reading validity only from Base
+UI's `state.valid` meant a caller that marks its own control — `agent-role-form`
+does — put `aria-invalid` on the DOM and got no ring: a screen reader announced
+invalid while nothing looked wrong. `Field.Root` renders its validity _as_
+`aria-invalid`, so the attribute is not a second source of truth but the
+rendered form of the one truth; `src/field/invalid.ts` reads it, and every ARIA
+value except `false` counts, `grammar` and `spelling` included. StyleX has no
+attribute selector, so the read happens in JS rather than in a condition.
+
+Both were found by review rather than by the tests, which is the gap worth
+naming: the package's tests render markup, so they can assert a class appears,
+but nothing here mounts a real surface. The Storybook check that reproduced the
+crash is manual.
 
 ## Follow-ups
 
