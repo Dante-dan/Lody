@@ -16,6 +16,7 @@ import {
   type ACPSessionId,
   type AgentConfigMeta,
   type AgentConfigId,
+  type ChatFailedReason,
   type LocalProjectId,
   type MachineId,
   type SessionGoalMessage,
@@ -38,6 +39,25 @@ import { markAssistantTurnFinished } from '../src/lib/assistant-turn-finalize';
 import { shouldWatchSession } from '../src/session/session-dispatch-logic';
 
 const capabilityConfigId = 'config-1' as AgentConfigId;
+
+/**
+ * A minimal synced conversation: enough for `buildReplayPromptFromHistory` to
+ * produce a non-empty replay, so restore paths that trade a resumable ACP
+ * session for a fresh one can prove they carried the context across.
+ */
+const PRIOR_CONVERSATION_HISTORY: SessionHistoryInput[] = [
+  {
+    id: 'turn-earlier-user',
+    role: 'user',
+    status: 'handled',
+    items: [{ type: 'text', text: 'remember the number 42' }],
+  } as SessionHistoryInput,
+  {
+    id: 'turn-earlier-assistant',
+    role: 'assistant',
+    items: [{ type: 'text', text: 'Noted: 42.' }],
+  } as SessionHistoryInput,
+];
 
 const createLaunchConfig = (overrides: Partial<AgentConfigMeta> = {}): AgentConfigMeta => ({
   id: capabilityConfigId,
@@ -2125,6 +2145,91 @@ describe('SessionExecutionService', () => {
     }
   );
 
+  it('closes the ACP session gracefully when a turn fails on expired credentials', async () => {
+    const sessionId = 'session-auth-expired' as SessionId;
+    const acpSessionId = 'acp-auth-expired' as ACPSessionId;
+    let history: Array<Record<string, unknown>> = [
+      { id: 'turn-user-1', role: 'user', status: 'pending', read: false },
+    ];
+    const agentClient = {
+      isCreated: vi.fn(() => true),
+      cancel: vi.fn(async () => {}),
+      prompt: vi.fn(async () => {
+        // Providers report an expired OAuth credential as a plain ACP internal
+        // error; the remedy text is theirs and is not guaranteed to be present.
+        throw {
+          code: -32603,
+          message: 'Internal error',
+          data: { details: 'OAuth session expired' },
+        };
+      }),
+      currentModel: undefined,
+    };
+    const exec = vi.fn(async (command: string, args: string[]) => {
+      const key = `${command} ${args.join(' ')}`;
+      if (key === 'git rev-parse --is-inside-work-tree') return 'true\n';
+      if (key === 'git rev-parse HEAD') return 'abc123\n';
+      return '';
+    });
+    const activeSession = {
+      sessionId,
+      acpSessionId,
+      agentClient,
+      terminalManager: {} as unknown,
+      getWorkdir: () => '/tmp',
+      getHostWorkdir: () => '/tmp',
+      getParentSessionId: () => undefined,
+      exec,
+      terminate: vi.fn(async () => {}),
+      updateGitIdentity: vi.fn(),
+      createAgent: vi.fn(async () => acpSessionId),
+      applyExecutionPlaneLimits: vi.fn(async () => {}),
+    };
+    const sessionDoc = {
+      getMetaState: vi.fn(async () => ({ isArchived: false })),
+      setStatus: vi.fn(async () => {}),
+      waitUntilSynced: vi.fn(async () => {}),
+      getHistory: vi.fn(async () => history),
+      updateHistory: vi.fn(async (updater: (prev: typeof history) => typeof history) => {
+        history = updater(history);
+      }),
+    };
+    const deps = createBaseDeps({});
+    const sessionManager = deps.sessionManager as unknown as {
+      getSession: ReturnType<typeof vi.fn>;
+      terminateSession: ReturnType<typeof vi.fn>;
+    };
+    const workspaceDocument = deps.workspaceDocument as unknown as {
+      getOrCreateSessionDoc: ReturnType<typeof vi.fn>;
+    };
+    sessionManager.getSession.mockReturnValue(activeSession);
+    workspaceDocument.getOrCreateSessionDoc.mockResolvedValue(sessionDoc);
+
+    const service = new SessionExecutionService(deps);
+    await service.continueSession({
+      type: 'session/chat',
+      sessionId,
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      project: undefined,
+      acpSessionConfig: { prompt: 'hi', cliType: 'builtin', agentType: 'claude' },
+      userTurnId: 'turn-user-1',
+      userId: 'user-1',
+      userName: 'User',
+      userEmail: 'user@example.com',
+    });
+
+    expect(deps.recordChatFailure).toHaveBeenCalledWith(
+      sessionDoc,
+      'acp_auth_required',
+      'OAuth session expired'
+    );
+    // Forcing the kill here skips `session/close`, and adapters that flush their
+    // transcript on close would lose the artifact `loadSession` needs — so the
+    // next turn after signing back in would have nothing left to resume into.
+    expect(sessionManager.terminateSession).toHaveBeenCalledWith(sessionId, false);
+  });
+
   it('does not write legacy code-session tags when Code Collab is enabled for new turns', async () => {
     let history: Array<Record<string, unknown>> = [
       {
@@ -2885,6 +2990,134 @@ describe('SessionExecutionService', () => {
     );
     expect(agentClient.prompt).toHaveBeenCalledWith(
       'acp-fresh-restore',
+      [{ type: 'text', text: 'built prompt' }],
+      { signal: expect.any(AbortSignal) }
+    );
+  });
+
+  it('waits for late-syncing history before replacing an unresumable ACP session', async () => {
+    // Reproduces the daemon-restart race: the turn is delivered over RPC before
+    // the history CRDT catches up, so the first read sees only the new turn.
+    // Replacing the agent against that read would answer as if the earlier
+    // conversation never happened.
+    const meta = { repoFullName: 'owner/repo', isArchived: false };
+    const currentTurn: SessionHistoryInput = {
+      id: 'turn-current',
+      role: 'user',
+      timestamp: '2026-09-08T05:31:00.000Z',
+      status: 'pending',
+      fileDiff: [],
+      items: [{ type: 'text', text: 'and now?' }],
+    };
+    const earlierTurn: SessionHistoryInput = {
+      id: 'turn-earlier',
+      role: 'user',
+      timestamp: '2026-09-08T05:30:00.000Z',
+      status: 'handled',
+      fileDiff: [],
+      items: [{ type: 'text', text: 'Build this on the two MIT packages.' }],
+    };
+    let history: SessionHistoryInput[] = [currentTurn];
+    let notifyMirror: (() => void) | undefined;
+    const sessionDoc = {
+      getMetaState: vi.fn(async () => meta),
+      setStatus: vi.fn(async () => {}),
+      setBaseBranch: vi.fn(async () => {}),
+      getHistory: vi.fn(async () => history),
+      updateHistory: vi.fn(
+        async (updater: (prev: SessionHistoryInput[]) => SessionHistoryInput[]) => {
+          history = updater(history);
+        }
+      ),
+      mirror: {
+        subscribe: (listener: () => void) => {
+          notifyMirror = listener;
+          // Deliver the backlog on the next microtask, the way a room join
+          // does — no timers, so the wait resolves on the signal alone.
+          queueMicrotask(() => {
+            history = [earlierTurn, currentTurn];
+            notifyMirror?.();
+          });
+          return () => {
+            notifyMirror = undefined;
+          };
+        },
+      },
+    };
+    const agentClient = {
+      isCreated: vi.fn(() => true),
+      cancel: vi.fn(async () => {}),
+      prompt: vi.fn(async () => ({})),
+      currentModel: undefined,
+    };
+    const restoredSession = {
+      sessionId: 'session-late-history' as SessionId,
+      acpSessionId: 'acp-replacement' as ACPSessionId,
+      agentClient,
+      terminalManager: {} as unknown,
+      getWorkdir: () => '/tmp',
+      getHostWorkdir: () => '/tmp',
+      getParentSessionId: () => undefined,
+      exec: vi.fn(async () => ''),
+      terminate: vi.fn(async () => {}),
+      updateGitIdentity: vi.fn(),
+      createAgent: vi.fn(async () => 'acp-replacement'),
+      applyExecutionPlaneLimits: vi.fn(async () => {}),
+    };
+    const createSession = vi
+      .fn(async () => restoredSession as unknown)
+      .mockImplementationOnce(async () => {
+        throw new Error('[ACP_RESUME_FAILED] loadSession: session artifact missing');
+      });
+    const buildAcpPromptBlocks = vi.fn(async () => [{ type: 'text', text: 'built prompt' }] as any);
+    const deps = createBaseDeps({
+      sessionManager: {
+        getSession: vi.fn(() => null),
+        getPendingSession: vi.fn(() => null),
+        createSession,
+        setSessionError: vi.fn(),
+        terminateSession: vi.fn(),
+        refreshGhTokenForSession: vi.fn(async () => {}),
+      } as unknown as SessionManager,
+      workspaceDocument: {
+        repo: {
+          upsertDocMeta: vi.fn(async () => {}),
+          getDocMeta: vi.fn(async () => undefined),
+        },
+        getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+        updateAcpCapabilities: vi.fn(async () => {}),
+      } as unknown as LoroDocumentManager,
+      buildAcpPromptBlocks,
+    });
+
+    const service = new SessionExecutionService(deps);
+    await service.continueSession({
+      type: 'session/chat',
+      sessionId: 'session-late-history' as SessionId,
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      project: { kind: 'github', repoFullName: 'owner/repo', branch: 'main' },
+      acpSessionConfig: {
+        prompt: 'and now?',
+        cliType: 'builtin',
+        agentType: 'codex',
+        resume: 'acp-existing' as ACPSessionId,
+      },
+      userTurnId: 'turn-current',
+      userId: 'user-1',
+      userName: 'User',
+      userEmail: 'user@example.com',
+    });
+
+    expect(createSession).toHaveBeenCalledTimes(2);
+    expect(deps.recordChatFailure).not.toHaveBeenCalled();
+    expect(buildAcpPromptBlocks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replayPromptText: expect.stringContaining('Build this on the two MIT packages.'),
+      })
+    );
+    expect(agentClient.prompt).toHaveBeenCalledWith(
+      'acp-replacement',
       [{ type: 'text', text: 'built prompt' }],
       { signal: expect.any(AbortSignal) }
     );
@@ -4202,13 +4435,24 @@ describe('SessionExecutionService', () => {
     );
   });
 
-  it.each([
+  it.each<{
+    name: string;
+    errors: unknown[];
+    expectedReason: ChatFailedReason;
+    expectedMessage: unknown;
+    resumeSessionId: ACPSessionId | undefined;
+    history: SessionHistoryInput[];
+    /** How many times the restore path may reach `createSession`. */
+    expectedCreateSessionCalls: number;
+  }>([
     {
       name: 'reports an ordinary restore failure',
       errors: [new Error('restore failed')],
       expectedReason: 'session_restore_failed',
       expectedMessage: 'restore failed',
       resumeSessionId: undefined,
+      history: [],
+      expectedCreateSessionCalls: 1,
     },
     {
       name: 'reports authentication required from the initial restore',
@@ -4216,6 +4460,8 @@ describe('SessionExecutionService', () => {
       expectedReason: 'acp_auth_required',
       expectedMessage: 'Authentication required',
       resumeSessionId: undefined,
+      history: [],
+      expectedCreateSessionCalls: 1,
     },
     {
       name: 'reports authentication required from fallback restore',
@@ -4226,8 +4472,43 @@ describe('SessionExecutionService', () => {
       expectedReason: 'acp_auth_required',
       expectedMessage: 'Authentication required',
       resumeSessionId: 'acp-existing' as ACPSessionId,
+      history: PRIOR_CONVERSATION_HISTORY,
+      expectedCreateSessionCalls: 2,
     },
-  ])('$name', async ({ errors, expectedReason, expectedMessage, resumeSessionId }) => {
+    {
+      name: 'refuses a context-free fallback when history has not synced',
+      errors: [new Error('acp_resume_failed: session unavailable')],
+      expectedReason: 'session_restore_failed',
+      expectedMessage: expect.stringContaining('has not synced the earlier conversation'),
+      resumeSessionId: 'acp-existing' as ACPSessionId,
+      history: [],
+      // The fallback must not even be attempted: creating it would persist a
+      // fresh acpSessionId over the one that still points at the agent's
+      // transcript, for a session we cannot carry any context into.
+      expectedCreateSessionCalls: 1,
+    },
+    {
+      name: 'reports authentication required when the resume failure wraps an auth error',
+      errors: [
+        new Error('[ACP_RESUME_FAILED] loadSession: Internal error', {
+          cause: {
+            code: -32603,
+            message: 'Internal error',
+            data: { details: 'OAuth session expired' },
+          },
+        }),
+      ],
+      expectedReason: 'acp_auth_required',
+      expectedMessage: '[ACP_RESUME_FAILED] loadSession: Internal error',
+      resumeSessionId: 'acp-existing' as ACPSessionId,
+      history: PRIOR_CONVERSATION_HISTORY,
+      // Signing in again makes the original ACP session resumable, so the
+      // resume pointer must survive: no replacement session is created.
+      expectedCreateSessionCalls: 1,
+    },
+  ])('$name', async (testCase) => {
+    const { errors, expectedReason, expectedMessage, resumeSessionId, history } = testCase;
+    const expectedCreateSessionCalls = testCase.expectedCreateSessionCalls;
     const upsertDocMeta = vi.fn(async () => {});
     const sessionDoc = {
       getMetaState: vi.fn(async () => ({
@@ -4236,7 +4517,7 @@ describe('SessionExecutionService', () => {
       })),
       setStatus: vi.fn(async () => {}),
       setBaseBranch: vi.fn(async () => {}),
-      getHistory: vi.fn(async () => []),
+      getHistory: vi.fn(async () => history),
       updateHistory: vi.fn(async () => {}),
     };
     const sessionManager = {
@@ -4297,6 +4578,7 @@ describe('SessionExecutionService', () => {
       expectedReason,
       expectedMessage
     );
+    expect(sessionManager.createSession).toHaveBeenCalledTimes(expectedCreateSessionCalls);
     expect(upsertDocMeta).toHaveBeenCalledWith('session-session-restore-fail', {
       lastHandledUserMsgId: 'turn-restore-fail',
       processingUserMsgId: undefined,

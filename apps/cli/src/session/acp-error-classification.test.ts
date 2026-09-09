@@ -143,6 +143,78 @@ describe('ACP error classification', () => {
     expect(shouldTerminateOnACPError(parsed, 'acp_auth_required')).toBe(true);
   });
 
+  it.each([
+    'OAuth session expired',
+    'Your OAuth token has expired.',
+    'API key expired — reconnect the provider',
+    'Request rejected: expired access token',
+  ])('maps expired-credential errors without a remedy to acp_auth_required: %s', (details) => {
+    const parsed = parseACPError({
+      code: ACP_ERROR_CODES.INTERNAL_ERROR,
+      message: 'Internal error',
+      data: { details },
+    });
+
+    if (!parsed) {
+      throw new Error('expected ACP error to parse');
+    }
+    expect(isAuthenticationRequiredACPError(parsed)).toBe(true);
+    expect(mapACPErrorToFailureReason(parsed)).toBe('acp_auth_required');
+  });
+
+  it.each([
+    'The TLS certificate expired on 2026-01-01',
+    'Your free trial expired',
+    'Cache entry expired; refetching',
+  ])('does not read unrelated expiries as a sign-in prompt: %s', (details) => {
+    const parsed = parseACPError({
+      code: ACP_ERROR_CODES.INTERNAL_ERROR,
+      message: 'Internal error',
+      data: { details },
+    });
+
+    if (!parsed) {
+      throw new Error('expected ACP error to parse');
+    }
+    expect(isAuthenticationRequiredACPError(parsed)).toBe(false);
+    expect(mapACPErrorToFailureReason(parsed)).toBe('acp_internal_error');
+  });
+
+  it('sees authentication failures through the resume wrapper', () => {
+    // AgentClient.startSession rewraps a failed loadSession like this. Reading
+    // only the outer error would send the restore path down the fallback that
+    // replaces the resumable ACP session with a fresh one.
+    const wrapped = new Error('[ACP_RESUME_FAILED] loadSession: Internal error', {
+      cause: {
+        code: ACP_ERROR_CODES.INTERNAL_ERROR,
+        message: 'Internal error',
+        data: { details: 'OAuth session expired' },
+      },
+    });
+
+    expect(isAuthenticationRequiredACPError(wrapped)).toBe(true);
+  });
+
+  it('sees the dedicated auth-required code through the resume wrapper', () => {
+    const wrapped = new Error('[ACP_RESUME_FAILED] resumeSession failed', {
+      cause: { code: ACP_ERROR_CODES.AUTH_REQUIRED, message: 'Authentication required' },
+    });
+
+    expect(isAuthenticationRequiredACPError(wrapped)).toBe(true);
+  });
+
+  it('does not read an ordinary resume failure as an authentication failure', () => {
+    const wrapped = new Error('[ACP_RESUME_FAILED] loadSession: Internal error', {
+      cause: {
+        code: ACP_ERROR_CODES.INTERNAL_ERROR,
+        message: 'Internal error',
+        data: { details: 'Session artifact is corrupt' },
+      },
+    });
+
+    expect(isAuthenticationRequiredACPError(wrapped)).toBe(false);
+  });
+
   it('does not treat unrelated token refresh errors as provider login failures', () => {
     const parsed = parseACPError({
       code: ACP_ERROR_CODES.INTERNAL_ERROR,
