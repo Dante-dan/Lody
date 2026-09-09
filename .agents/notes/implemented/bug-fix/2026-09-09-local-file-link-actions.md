@@ -3,6 +3,8 @@
 Status: implemented
 Translation: pending
 
+PR: https://github.com/LodyAI/Lody/pull/555
+
 ## Abstract
 
 Assistant file links used filled pills, and successful binary previews omitted
