@@ -1,3 +1,4 @@
+import { isNewWindowClick, openDesktopWindow } from '@/lib/desktop-window';
 import {
   type ComponentPropsWithoutRef,
   type PointerEvent as ReactPointerEvent,
@@ -71,6 +72,7 @@ export type LoroSidebarOrganizeMode = SidebarOrganizeMode;
 
 export type LoroSidebarWorkspace = {
   id: string;
+  slug?: string;
   name: string;
   logo?: string | null;
   /** Paid plan tier for the Plus/Enterprise badge; null/undefined = free. */
@@ -923,7 +925,18 @@ export const LoroSidebar = memo(function LoroSidebar({
                       onValueChange={(value) => onWorkspaceSelected?.(value)}
                     >
                       {workspaces.map((ws) => (
-                        <DropdownMenuRadioItem key={ws.id} value={ws.id} className="gap-2">
+                        <DropdownMenuRadioItem
+                          key={ws.id}
+                          value={ws.id}
+                          className="gap-2"
+                          onClickCapture={(event) => {
+                            if (!ws.slug || !isNewWindowClick(event)) return;
+                            if (openDesktopWindow(undefined, ws.slug)) {
+                              event.preventDefault();
+                              event.stopPropagation();
+                            }
+                          }}
+                        >
                           <WorkspaceAvatar
                             workspace={{ name: ws.name, logo: ws.logo }}
                             className="h-5 w-5 shrink-0 text-[10px]"

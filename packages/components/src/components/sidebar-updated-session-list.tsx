@@ -1,3 +1,5 @@
+import { openSessionOnModifiedClick } from '@/lib/desktop-window';
+import { SessionWindowMenuItem } from './session-window-menu-item';
 import {
   memo,
   useCallback,
@@ -703,6 +705,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
       : null;
   const handleAnchorClick = useAnchor
     ? (event: ReactMouseEvent<HTMLAnchorElement>) => {
+        if (openSessionOnModifiedClick(event, item.id)) return;
         if (
           event.metaKey ||
           event.ctrlKey ||
@@ -828,8 +831,9 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
       onClick={
         useAnchor
           ? undefined
-          : () => {
+          : (event) => {
               if (!onSelect) return;
+              if (openSessionOnModifiedClick(event, item.id)) return;
               onSelect(item.id);
             }
       }
@@ -968,6 +972,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
     <ContextMenu onOpenChange={setRowMenuOpen}>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
+        <SessionWindowMenuItem sessionId={item.id} />
         <SessionRowOpenedByMenuItems
           opener={openedByOpener}
           goToOpener={

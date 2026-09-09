@@ -1,3 +1,4 @@
+import { SessionWindowMenuItem } from '../session-window-menu-item';
 import {
   MessageSelectionContext,
   MessageSelectionToolbar,
@@ -1164,6 +1165,7 @@ export function SessionHeaderMenu({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[200px] max-w-[320px]">
+          <SessionWindowMenuItem sessionId={session.id} dropdown />
           {/* One compact context group keeps useful identity visible. Separate labels make
               every value pay for two rows, while a submenu hides context behind another step. */}
           {!compact && showSessionContext ? (

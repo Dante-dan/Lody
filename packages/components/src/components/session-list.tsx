@@ -1,3 +1,5 @@
+import { openSessionOnModifiedClick } from '@/lib/desktop-window';
+import { SessionWindowMenuItem } from './session-window-menu-item';
 import { cn } from '@/lib/utils';
 import {
   closestCenter,
@@ -841,6 +843,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
             );
             const handleAnchorClick = useAnchor
               ? (event: ReactMouseEvent<HTMLAnchorElement>) => {
+                  if (openSessionOnModifiedClick(event, session.sessionId)) return;
                   if (
                     event.metaKey ||
                     event.ctrlKey ||
@@ -922,8 +925,9 @@ const SessionGroupSection = memo(function SessionGroupSection({
                 onClick={
                   useAnchor
                     ? undefined
-                    : () => {
+                    : (event) => {
                         if (!isSelectable) return;
+                        if (openSessionOnModifiedClick(event, session.sessionId)) return;
                         onSelectSession?.(session.sessionId);
                       }
                 }
@@ -1040,6 +1044,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
               <ContextMenu key={session.sessionId}>
                 <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
                 <ContextMenuContent className="min-w-[180px]">
+                  <SessionWindowMenuItem sessionId={session.sessionId} />
                   <SessionRowOpenedByMenuItems
                     opener={openedByOpener}
                     separateToggle={hasStandardMenuActions}

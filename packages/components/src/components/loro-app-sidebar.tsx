@@ -1,3 +1,5 @@
+import { openSessionOnModifiedClick } from '@/lib/desktop-window';
+import { SessionWindowMenuItem } from './session-window-menu-item';
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { startSessionMentionDrag } from '@/lib/session-mention-drag';
 import { useSidebarKeyboardNav } from '@/hooks/use-sidebar-keyboard-nav';
@@ -687,7 +689,8 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
           ? 'text-sidebar-selection-foreground'
           : 'text-sidebar-foreground dark:text-sidebar-foreground/75'
       )}
-      onClick={() => {
+      onClick={(event) => {
+        if (openSessionOnModifiedClick(event, session.id)) return;
         onNavigate(session.id);
       }}
       onKeyDown={(event) => {
@@ -759,6 +762,7 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
     <ContextMenu onOpenChange={setRowMenuOpen}>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent className="min-w-[180px]">
+        <SessionWindowMenuItem sessionId={session.id} />
         <SessionRowOpenedByMenuItems
           opener={openedByOpener}
           goToOpener={
@@ -2554,6 +2558,7 @@ export function LoroAppSidebar({ className }: LoroAppSidebarProps) {
       .filter((org) => Boolean(org))
       .map((org) => ({
         id: org.id,
+        slug: org.slug,
         name: org.name,
         logo: resolveWorkspaceIdentityLogo(org.logo, multiWorkspaceAvailable),
         planTier: planTierByWorkspaceId.get(org.id) ?? null,
