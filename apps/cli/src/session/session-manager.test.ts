@@ -218,31 +218,6 @@ describe('SessionManager cleanup phases', () => {
   });
 });
 
-describe('SessionManager internal restart', () => {
-  it('removes the stale runtime without publishing session termination', async () => {
-    const manager = new SessionManager(
-      createLogger(),
-      'token',
-      'machine-1' as MachineId,
-      'workspace-1' as WorkspaceId,
-      createWorkspaceDocument(new Map()),
-      {
-        sessionSandboxFactory: async () => createNoopSessionSandbox(),
-        cloudPort: createTestCloudPort(),
-      }
-    );
-    const sessionId = 'identity-restart-session' as SessionId;
-    await createSessionInner(manager, createSessionConfig({ sessionId }));
-    const terminated = vi.fn();
-    manager.on('terminated', terminated);
-
-    await manager.terminateSessionForRestart(sessionId);
-
-    expect(manager.getSession(sessionId)).toBeNull();
-    expect(terminated).not.toHaveBeenCalled();
-  });
-});
-
 describe('SessionManager child session workdir resolution', () => {
   let tempHome: string;
 
@@ -897,14 +872,15 @@ describe('SessionManager durable create ownership', () => {
 });
 
 describe('SessionManager preparation compatibility', () => {
-  it('silently replaces an adopted preparation with a stale Git identity', async () => {
+  it('keeps an adopted preparation when its Git identity changes', async () => {
     const logger = createLogger();
+    const workspaceDocument = createWorkspaceDocument(new Map());
     const manager = new SessionManager(
       logger,
       'token',
       'machine-1' as MachineId,
       'workspace-1' as WorkspaceId,
-      createWorkspaceDocument(new Map()),
+      workspaceDocument,
       {
         sessionSandboxFactory: async () => createNoopSessionSandbox(),
         cloudPort: createTestCloudPort(),
@@ -913,7 +889,7 @@ describe('SessionManager preparation compatibility', () => {
     const sessionId = 'stale-prepared-git-identity' as SessionId;
     const config = createSessionConfig({ sessionId });
     const preparedSession = new Session(config, logger, process.cwd(), createNoopSessionSandbox());
-    vi.spyOn(preparedSession, 'updateGitIdentity').mockReturnValue(true);
+    const updateIdentity = vi.spyOn(preparedSession, 'updateGitIdentity');
     const dispose = vi.fn(async () => await preparedSession.terminate(true));
     const prepared = {
       session: preparedSession,
@@ -926,23 +902,33 @@ describe('SessionManager preparation compatibility', () => {
       adopt: vi.fn(async () => undefined),
       dispose,
     };
-    const coldSession = { sessionId } as ISession;
+    const sessionDoc = await workspaceDocument.getOrCreateSessionDoc(sessionId);
+    sessionDoc.setACPSessionId = vi.fn(async () => undefined);
     const internals = manager as unknown as {
       finishPreparedSession(config: SessionConfig, prepared: typeof prepared): Promise<ISession>;
       createSessionInnerWithAgent(config: SessionConfig): Promise<ISession>;
     };
     const coldCreate = vi
       .spyOn(internals, 'createSessionInnerWithAgent')
-      .mockResolvedValue(coldSession);
+      .mockRejectedValue(new Error('unexpected cold restart'));
     const terminated = vi.fn();
     manager.on('terminated', terminated);
 
-    await expect(internals.finishPreparedSession(config, prepared)).resolves.toBe(coldSession);
+    const incomingConfig = { ...config, userEmail: 'changed@example.com' };
+    await expect(internals.finishPreparedSession(incomingConfig, prepared)).resolves.toBe(
+      preparedSession
+    );
 
     expect(dispose).not.toHaveBeenCalled();
     expect(terminated).not.toHaveBeenCalled();
-    expect(manager.getSession(sessionId)).toBeNull();
-    expect(coldCreate).toHaveBeenCalledWith(config, undefined);
+    expect(manager.getSession(sessionId)).toBe(preparedSession);
+    expect(coldCreate).not.toHaveBeenCalled();
+    expect(updateIdentity).toHaveBeenCalledWith(
+      config.userName,
+      'changed@example.com',
+      config.requesterUserId,
+      { preferMachineIdentity: true }
+    );
   });
 
   it('rejects a prepared session with different initial config option values', async () => {

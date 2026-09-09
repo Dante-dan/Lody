@@ -1165,21 +1165,9 @@ describe('SessionExecutionService', () => {
       getParentSessionId: () => undefined,
       exec: vi.fn(async () => ''),
       terminate: vi.fn(async () => {}),
-      updateGitIdentity: vi.fn(() => true),
+      updateGitIdentity: vi.fn(),
       createAgent: vi.fn(async () => 'acp-owner'),
       applyExecutionPlaneLimits: vi.fn(async () => {}),
-    };
-    const restoredPrompt = vi.fn(async () => ({}));
-    const restoredSession = {
-      ...oldSession,
-      acpSessionId: 'acp-owner' as ACPSessionId,
-      agentClient: {
-        isCreated: vi.fn(() => true),
-        cancel: vi.fn(async () => {}),
-        prompt: restoredPrompt,
-        currentModel: undefined,
-      },
-      updateGitIdentity: vi.fn(() => false),
     };
     const sessionDoc = {
       getMetaState: vi.fn(async () => ({
@@ -1194,8 +1182,7 @@ describe('SessionExecutionService', () => {
       }),
     };
     const terminateSession = vi.fn(async () => {});
-    const terminateSessionForRestart = vi.fn(async () => {});
-    const createSession = vi.fn(async () => restoredSession);
+    const createSession = vi.fn();
     const deps = createBaseDeps({
       sessionManager: {
         getSession: vi.fn(() => oldSession),
@@ -1203,7 +1190,6 @@ describe('SessionExecutionService', () => {
         createSession,
         setSessionError: vi.fn(),
         terminateSession,
-        terminateSessionForRestart,
         refreshGhTokenForSession: vi.fn(async () => {}),
       } as unknown as SessionManager,
       workspaceDocument: {
@@ -1231,19 +1217,15 @@ describe('SessionExecutionService', () => {
       userEmail: 'teammate@example.com',
     });
 
-    expect(terminateSessionForRestart).toHaveBeenCalledWith(sessionId);
     expect(terminateSession).not.toHaveBeenCalled();
-    expect(createSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterUserId: 'user-2',
-        userEmail: 'teammate@example.com',
-      }),
-      { resumeSessionId: 'acp-owner' }
-    );
-    expect(oldPrompt).not.toHaveBeenCalled();
-    expect(restoredPrompt).toHaveBeenCalledOnce();
-    expect(terminateSessionForRestart.mock.invocationCallOrder[0]).toBeLessThan(
-      restoredPrompt.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
+    expect(oldSession.terminate).not.toHaveBeenCalled();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(oldPrompt).toHaveBeenCalledOnce();
+    expect(oldSession.updateGitIdentity).toHaveBeenCalledWith(
+      'Teammate',
+      'teammate@example.com',
+      'user-2',
+      { preferMachineIdentity: false }
     );
   });
 
