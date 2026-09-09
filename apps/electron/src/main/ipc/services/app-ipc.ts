@@ -15,6 +15,7 @@ import {
 import { getIpcServiceDeps } from '../ipc-service-deps'
 import { getDevbarConfig, getDevbarMetrics } from '../../services/devbar-service'
 import { setMenuLanguage } from '../../menu'
+import { localFileActionError } from '../../services/local-file-action-error'
 import { hasPathLauncher, launchLocalPath } from '../../services/local-path-launcher-service'
 import { parseWindowBadge } from '../../services/window-badge-service'
 import {
@@ -287,8 +288,8 @@ export class AppIpc extends IpcService {
     }
     try {
       await access(targetPath)
-    } catch {
-      return { revealed: false as const, error: 'not_found' }
+    } catch (error) {
+      return { revealed: false as const, error: localFileActionError(error) }
     }
     shell.showItemInFolder(targetPath)
     return { revealed: true as const }
@@ -309,8 +310,8 @@ export class AppIpc extends IpcService {
     }
     try {
       await access(targetPath)
-    } catch {
-      return { opened: false as const, error: 'not_found' }
+    } catch (error) {
+      return { opened: false as const, error: localFileActionError(error) }
     }
     // `shell.openPath` resolves to '' on success and to the failure message
     // otherwise; it never rejects.

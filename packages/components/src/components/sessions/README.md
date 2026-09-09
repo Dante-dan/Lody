@@ -91,3 +91,11 @@ What each file in this directory is responsible for. Binding rules live in
 - [File surfaces](../../../../../.agents/docs/sessions-file-surfaces.md)
 - [Render-cost invariants](../../../../../.agents/docs/sessions-render-cost.md)
 - [Stories and Storybook fidelity](../../../../../.agents/docs/sessions-stories.md)
+
+## Binary previews
+
+`session-file-binary-preview.tsx` renders supported images and otherwise shows a
+binary notice. Local files receive Open in default app and Reveal callbacks from
+`useSessionFileActions`, shared with the More menu. Failures log the requested and
+resolved paths locally and offer Copy error details with a reason-specific next step. See the
+[file action spec](../../../../../specs/local-file-link-actions.md).
