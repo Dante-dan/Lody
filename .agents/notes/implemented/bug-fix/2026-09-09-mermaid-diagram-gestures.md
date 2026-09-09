@@ -99,6 +99,11 @@ the wheel over the diagram left the container at 0 while the control still scrol
 `matrix(0.9, 0, 0, 0.9, 100, 60)` — displaced, and still holding a zoom from the
 swallowed wheel.
 
+The first CI run failed without a failing test: shifting test timing exposed a
+latent teardown race in an unrelated suite, recorded in
+[a React commit outside act](../testing/2026-09-09-react-commit-teardown-leak.md)
+and fixed in the same pull request.
+
 Limits: touch was not exercised; the `touch-action` fix is a computed-style
 observation, not a finger on a phone, and two-finger pinch is absent by design.
 The full `pnpm check` was not run — this worktree needs its submodules initialized
