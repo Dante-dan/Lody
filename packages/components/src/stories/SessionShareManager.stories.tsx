@@ -1,12 +1,10 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { useState } from 'react';
-import { Search } from 'lucide-react';
 import {
   SessionShareManager,
   type SessionShareManagerProps,
 } from '@/components/sharing/session-share-manager';
 import { SessionShareDialogFrame } from '@/components/sharing/session-share-dialog';
-import { Input } from '@/ui/input';
 
 const now = 1_800_000_000_000;
 const entry = {
@@ -49,23 +47,6 @@ const state = {
   })),
 };
 
-/** Mirrors the product dialog's filter so the scope section is laid out for real. */
-function CandidateFilter() {
-  const [value, setValue] = useState('');
-  return (
-    <div className="relative">
-      <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-      <Input
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
-        className="h-8 pl-8 text-sm"
-        aria-label="Find related conversations"
-        placeholder="Find related conversations"
-      />
-    </div>
-  );
-}
-
 const meta = {
   title: 'Sharing/SessionShareManager',
   component: SessionShareManager,
@@ -89,8 +70,6 @@ const meta = {
     conflict: false,
     error: null,
     notice: null,
-    filter: <CandidateFilter />,
-    filterNote: null,
     onSelect: () => {},
     onReload: () => {},
     onCreate: () => {},
@@ -125,21 +104,41 @@ export const SourceUnavailable: Story = {
     selected: ['main'],
   },
 };
-/** A title that cannot fit, plus a truncated candidate list and a result message. */
+/** A title that cannot fit, alongside a result message. */
 export const LongTitleAndNotice: Story = {
   args: {
     frameTitle:
       'Reworking the conversation sharing dialog so that long session titles, narrow phones and the on-screen keyboard all stay usable',
-    filterNote: 'Showing the first 96 matches. Search to narrow.',
     notice: 'Share link copied.',
-    candidates: [
-      ...candidates,
-      {
-        sessionId: 'verbose',
-        title:
-          'Investigating why attachment previews expire earlier than the surrounding conversation history does',
-      },
-    ],
+  },
+};
+/** Nothing to decide: no related conversations, so the switch is not rendered. */
+export const NoSubConversations: Story = {
+  args: {
+    state: {
+      ...state,
+      root: { ...entry, sessionIds: ['main'], readableSessionIds: ['main'] },
+      sources: [],
+      candidates: [state.candidates[0]!],
+    },
+    candidates: [candidates[0]!],
+    selected: ['main'],
+  },
+};
+/** Every related conversation is still syncing, so the switch cannot be turned on. */
+export const NoReadySubConversations: Story = {
+  args: {
+    state: {
+      ...state,
+      root: null,
+      sources: [],
+      candidates: state.candidates.map((candidate) => ({
+        ...candidate,
+        available: candidate.sessionId === 'main',
+        validUntil: candidate.sessionId === 'main' ? now + 60_000 : null,
+      })),
+    },
+    selected: ['main'],
   },
 };
 export const Failure: Story = {

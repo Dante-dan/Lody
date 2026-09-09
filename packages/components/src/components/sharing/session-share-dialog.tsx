@@ -1,12 +1,10 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useMemo, useRef, type ReactNode } from 'react';
 import { useAtomValue } from 'jotai';
 import { useTranslation } from 'react-i18next';
-import { Search } from 'lucide-react';
 import type { SessionMeta, WorkspaceId } from '@lody/shared';
 import { userAtom } from '@/atoms';
 import { sessionMetaCacheAtom } from '@/atoms/doc-meta';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/ui/dialog';
-import { Input } from '@/ui/input';
 import { getSessionShareCandidates } from '@/lib/session-share-candidates';
 import { useSessionShareManagement } from '@/hooks/use-session-share-management';
 import { SessionShareManager } from './session-share-manager';
@@ -71,60 +69,24 @@ export function SessionShareDialogFrame({
 function ShareEditor({ workspaceId, session }: { workspaceId: WorkspaceId; session: SessionMeta }) {
   const { t } = useTranslation();
   const meta = useAtomValue(sessionMetaCacheAtom);
-  const [search, setSearch] = useState('');
-  const related = useMemo(
-    () => getSessionShareCandidates(session.id, Object.values(meta)),
-    [meta, session.id]
-  );
-  const matching = useMemo(
-    () =>
-      related.filter(
-        (entry) =>
-          !search || (entry.title ?? '').toLocaleLowerCase().includes(search.toLocaleLowerCase())
-      ),
-    [related, search]
-  );
+  // Discovery only proposes; the switch still resolves to an explicit id set that
+  // the server verifies target by target.
   const candidates = useMemo(
     () =>
-      [session, ...matching.slice(0, 96)].map((entry) => ({
-        sessionId: entry.id,
-        title: (entry.title ?? '') || t('sessions.untitled', 'Untitled session'),
-      })),
-    [matching, session, t]
+      [session, ...getSessionShareCandidates(session.id, Object.values(meta)).slice(0, 96)].map(
+        (entry) => ({
+          sessionId: entry.id,
+          title: (entry.title ?? '') || t('sessions.untitled', 'Untitled session'),
+        })
+      ),
+    [meta, session, t]
   );
   const management = useSessionShareManagement(
     workspaceId,
     session.id,
     candidates.map((entry) => entry.sessionId)
   );
-  return (
-    <SessionShareManager
-      sessionId={session.id}
-      candidates={candidates}
-      // The filter belongs to the scope section it narrows, so the manager
-      // places it there rather than above the link this dialog is about.
-      filter={
-        related.length > 0 ? (
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              className="h-8 pl-8 text-sm"
-              aria-label={t('sharing.manager.search', 'Find related conversations')}
-              placeholder={t('sharing.manager.search', 'Find related conversations')}
-            />
-          </div>
-        ) : null
-      }
-      filterNote={
-        matching.length > 96
-          ? t('sharing.manager.moreCandidates', 'Showing the first 96 matches. Search to narrow.')
-          : null
-      }
-      {...management}
-    />
-  );
+  return <SessionShareManager sessionId={session.id} candidates={candidates} {...management} />;
 }
 
 /** Mounted only while open: closed headers do not query or traverse session metadata. */

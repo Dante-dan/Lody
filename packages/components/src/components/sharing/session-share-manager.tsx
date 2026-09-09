@@ -1,9 +1,9 @@
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SessionShareManagement, SessionShareManagementEntry } from '@lody/cloud-api';
 import { SESSION_SHARE_MAX_TARGETS } from '@lody/shared/session-sharing';
 import { Button } from '@/ui/button';
-import { Checkbox } from '@/ui/checkbox';
+import { Switch } from '@/ui/switch';
 import { cn } from '@/lib/utils';
 import {
   AlertDialog,
@@ -28,10 +28,6 @@ export type SessionShareManagerProps = {
   conflict: boolean;
   error: string | null;
   notice: string | null;
-  /** Optional control that narrows the candidate list, rendered inside its section. */
-  filter?: ReactNode;
-  /** Shown under the filter when the candidate list was truncated. */
-  filterNote?: string | null;
   onSelect: (ids: string[]) => void;
   onReload: () => void;
   onCreate: () => void;
@@ -45,14 +41,15 @@ export type SessionShareManagerProps = {
  * Controlled, responsive management UI shared by Web, Electron and Mobile.
  *
  * One vertical read: what the link is and does, what it covers, then the
- * consent and the actions. Each meaning is stated once — the disclosure sits on
- * the link it describes, the selection rule sits on the selection, and the
- * action row sticks to the bottom of the dialog's scrolling body so the primary
- * action stays reachable on a phone.
+ * actions. Sub-conversations are one switch rather than a checklist, so the
+ * author makes a single decision instead of auditing a list. The stored grant is
+ * still an explicit id set, so the switch means "the sub-conversations that
+ * exist and are ready now" — later ones are never added on their own, and the
+ * copy says so. The action row sticks to the bottom of the dialog's scrolling
+ * body so the primary action stays reachable on a phone.
  */
 export function SessionShareManager(props: SessionShareManagerProps) {
   const { t } = useTranslation();
-  const [acknowledged, setAcknowledged] = useState(false);
   const [confirmation, setConfirmation] = useState<
     | { kind: 'reset'; version: string }
     | { kind: 'revoke'; entry: SessionShareManagementEntry }
@@ -75,16 +72,24 @@ export function SessionShareManager(props: SessionShareManagerProps) {
     !!root &&
     (selected.length !== root.sessionIds.length ||
       selected.some((id, index) => id !== root.sessionIds[index]));
-  const mutationDisabled = busy || props.conflict || !acknowledged || !qualified;
+  const mutationDisabled = busy || props.conflict || !qualified;
   const candidateMap = new Map(props.candidates.map((entry) => [entry.sessionId, entry]));
-  // Keep previously selected targets visible even after local discovery loses them.
-  const candidateIds = [...new Set([props.sessionId, ...selected, ...candidateMap.keys()])];
   const title = (id: string) =>
     (state?.candidates.find((entry) => entry.sessionId === id)?.title ?? '') ||
     (candidateMap.get(id)?.title ?? '') ||
     t('sharing.manager.unknownTarget', 'Unavailable conversation');
   const others = state?.sources.filter((entry) => entry.rootSessionId !== props.sessionId) ?? [];
-  const someUnavailable = candidateIds.some((id) => !eligible(id));
+  // Discovery order is deterministic, so the capped set is stable across renders.
+  const children = [...new Set([...selected, ...candidateMap.keys()])].filter(
+    (id) => id !== props.sessionId
+  );
+  const readyChildren = children.filter(eligible);
+  const shareableChildren = readyChildren.slice(0, SESSION_SHARE_MAX_TARGETS - 1);
+  const truncatedChildren = readyChildren.length > shareableChildren.length;
+  // An existing grant may still list a target that has since become unavailable;
+  // the switch reads as on so turning it off is what repairs the selection.
+  const sharesChildren = selected.some((id) => id !== props.sessionId);
+  const rootReady = eligible(props.sessionId);
   const status = rootLive
     ? t('sharing.manager.active', 'Link active')
     : root?.status === 'revoked'
@@ -160,7 +165,7 @@ export function SessionShareManager(props: SessionShareManagerProps) {
               <p className="mt-2 text-xs leading-5 text-muted-foreground">
                 {t(
                   'sharing.manager.disclosure',
-                  'Anyone with the link reads the selected conversations in full — original documents, history, attachments and later updates. Links can be forwarded and are not end-to-end encrypted.'
+                  'Anyone with the link can read the shared conversations in full — original documents, history, attachments and later updates. Links can be forwarded and are not end-to-end encrypted.'
                 )}
               </p>
               {root?.status === 'active' && root.canManage && !hasSecret && (
@@ -172,85 +177,41 @@ export function SessionShareManager(props: SessionShareManagerProps) {
                 </p>
               )}
             </section>
-            {canManage && (
-              <section className="space-y-2">
-                <div className="flex items-baseline justify-between gap-3">
-                  <h3 className="font-medium">
-                    {t('sharing.manager.scope', 'Conversations in this link')}
-                  </h3>
-                  <span
-                    className="shrink-0 text-xs tabular-nums text-muted-foreground"
-                    aria-label={t(
-                      'sharing.manager.limitLabel',
-                      '{{count}} of {{max}} conversations selected',
-                      { count: selected.length, max: SESSION_SHARE_MAX_TARGETS }
-                    )}
-                  >
-                    {t('sharing.manager.limit', '{{count}} / {{max}}', {
-                      count: selected.length,
-                      max: SESSION_SHARE_MAX_TARGETS,
-                    })}
+            {canManage && children.length > 0 && (
+              <section className="rounded-lg border border-border px-3 py-2.5">
+                <label className="flex cursor-pointer items-center justify-between gap-3">
+                  <span className="font-medium">
+                    {t('sharing.manager.includeChildren', 'Include sub-conversations')}
                   </span>
-                </div>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  {t(
-                    'sharing.manager.explicit',
-                    'New conversations are never added automatically.'
-                  )}
+                  <Switch
+                    className="shrink-0"
+                    checked={sharesChildren}
+                    disabled={busy || props.conflict || shareableChildren.length === 0}
+                    onCheckedChange={(value) =>
+                      props.onSelect(
+                        value ? [props.sessionId, ...shareableChildren] : [props.sessionId]
+                      )
+                    }
+                  />
+                </label>
+                <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+                  {shareableChildren.length === 0
+                    ? t(
+                        'sharing.manager.childrenNotReady',
+                        'None of the sub-conversations are ready to share yet. They need to finish syncing to the cloud.'
+                      )
+                    : t(
+                        'sharing.manager.childrenReady',
+                        'Shares the {{count}} sub-conversations that are ready now. Later ones are not added automatically.',
+                        { count: shareableChildren.length }
+                      )}
                 </p>
-                {props.filter}
-                {props.filterNote != null && props.filterNote !== '' && (
-                  <p className="text-xs text-muted-foreground">{props.filterNote}</p>
-                )}
-                {/* Only the targets are frozen mid-mutation; narrowing a long
-                    candidate list stays available while a save is in flight. */}
-                <fieldset disabled={busy || props.conflict}>
-                  <legend className="sr-only">
-                    {t('sharing.manager.scope', 'Conversations in this link')}
-                  </legend>
-                  <div className="-mx-1 max-h-52 overflow-y-auto overscroll-contain px-1">
-                  {candidateIds.map((id) => {
-                    const checked = selected.includes(id);
-                    const available = eligible(id);
-                    return (
-                      <label
-                        key={id}
-                        className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-2 hover:bg-hover"
-                      >
-                        <Checkbox
-                          className="mt-0.5 shrink-0"
-                          checked={checked}
-                          disabled={
-                            busy ||
-                            props.conflict ||
-                            id === props.sessionId ||
-                            (!checked &&
-                              (!available || selected.length >= SESSION_SHARE_MAX_TARGETS))
-                          }
-                          onCheckedChange={(value) =>
-                            props.onSelect(
-                              value === true
-                                ? [...selected, id]
-                                : selected.filter((target) => target !== id)
-                            )
-                          }
-                        />
-                        <span className="min-w-0 flex-1 break-words">{title(id)}</span>
-                        {!available && (
-                          <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[0.6875rem] leading-4 text-muted-foreground">
-                            {t('sharing.manager.notVerified', 'Not ready')}
-                          </span>
-                        )}
-                      </label>
-                    );
-                  })}
-                  </div>
-                </fieldset>
-                {someUnavailable && (
-                  <p className="text-xs leading-5 text-muted-foreground">
+                {truncatedChildren && (
+                  <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
                     {t(
-                      'sharing.manager.notVerifiedHint',
-                      'Not ready: needs cloud sync and author verification.'
+                      'sharing.manager.childrenLimit',
+                      'One link covers at most {{max}} conversations, so only the first {{count}} are included.',
+                      { max: SESSION_SHARE_MAX_TARGETS, count: shareableChildren.length }
                     )}
                   </p>
                 )}
@@ -303,25 +264,17 @@ export function SessionShareManager(props: SessionShareManagerProps) {
           </>
         )}
       </div>
-      {/* The consent gate travels with the buttons it gates, so a long candidate
-          list can never scroll it out of sight while the actions stay pinned. */}
+      {/* Results and actions stay pinned to the body's bottom so neither is
+          scrolled out of reach on a phone. */}
       {state && (canManage || messages.length > 0) && (
         <div className="sticky bottom-0 space-y-3 border-t border-border bg-background px-4 py-3 sm:px-5">
-          {canManage && (
-            <label className="flex cursor-pointer items-start gap-2.5">
-              <Checkbox
-                className="mt-0.5"
-                checked={acknowledged}
-                disabled={busy}
-                onCheckedChange={(value) => setAcknowledged(value === true)}
-              />
-              <span className="text-xs leading-5">
-                {t(
-                  'sharing.manager.acknowledge',
-                  'I understand anyone with this link can read everything selected.'
-                )}
-              </span>
-            </label>
+          {canManage && !rootReady && (
+            <p className="text-xs leading-5 text-muted-foreground">
+              {t(
+                'sharing.manager.rootNotReady',
+                'This conversation is not ready to share yet. It needs to finish syncing to the cloud.'
+              )}
+            </p>
           )}
           {messages.map((message) => (
             <p
@@ -350,12 +303,14 @@ export function SessionShareManager(props: SessionShareManagerProps) {
                   >
                     {t('sharing.manager.reset', 'Reset link')}
                   </Button>
-                  {root.status === 'active' && (
+                  {/* Only appears once the switch has actually changed something,
+                      so a conversation with nothing to change shows no dead control. */}
+                  {root.status === 'active' && changed && (
                     <Button
-                      disabled={mutationDisabled || !changed || !rootLive || !hasSecret}
+                      disabled={mutationDisabled || !rootLive || !hasSecret}
                       onClick={props.onSave}
                     >
-                      {t('sharing.manager.save', 'Save selection')}
+                      {t('sharing.manager.save', 'Save changes')}
                     </Button>
                   )}
                 </>

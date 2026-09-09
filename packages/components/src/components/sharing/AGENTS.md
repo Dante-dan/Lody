@@ -13,17 +13,19 @@ Parent component instructions apply. `CLAUDE.md` is a symlink; edit this file on
   its portal must shrink/lift for `--native-keyboard-height` and keep focused fields
   in its own scroll region. Root layout keyboard padding does not reach this portal.
   It is a fixed header over ONE scrolling body: the keyboard hook observes that body,
-  and the manager's action row plus its acknowledgement stay pinned to the body's
-  bottom so a long candidate list cannot hide the gate or the primary action.
-  State each meaning once, next to what it describes: the disclosure belongs on the
-  link, the selection rule on the selection, and the unavailability explanation is one
-  shared line, never repeated per row. The candidate filter arrives as the `filter`
-  prop and must render inside the section it narrows; only the target list sits in the
-  disabled `fieldset`, so filtering survives an in-flight mutation.
+  and the manager's action row stays pinned to the body's bottom.
+  Sub-conversations are ONE switch, not a checklist, and there is no separate consent
+  checkbox: the disclosure on the link card is the notice. The switch resolves to an
+  explicit id set of the descendants that are eligible RIGHT NOW, capped at
+  `SESSION_SHARE_MAX_TARGETS`; never let it imply that later ones join by themselves,
+  and never let it pull in an ineligible target. State each meaning once, next to what
+  it describes. Explain a blocked action rather than only disabling it — an unshareable
+  root says why — and render Save only when something actually changed.
 - `hooks/use-session-share-management.ts` uses public cloud descriptors and server
-  verified eligibility. Relationships only discover candidates; each target requires
-  explicit selection. Preserve the draft's expected versions across concurrent edits.
-  Expire displayed access on the lease clock even without a reactive query update.
+  verified eligibility. Relationships only discover candidates; the stored grant stays
+  an explicit id list the server verifies target by target, whatever the UI shows.
+  Preserve the draft's expected versions across concurrent edits. Expire displayed
+  access on the lease clock even without a reactive query update.
 - `lib/session-share-secrets.ts` owns device-local secrets scoped to user/workspace/link
   and credential version, not scope version. Persist only successful create/reset results;
   a missing secret requires reset. These are credentials, not recoverable cache entries;

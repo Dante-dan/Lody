@@ -84,23 +84,49 @@ describe('session share management surface', () => {
     expect(node).toBeTruthy();
     await act(async () => node?.click());
   }
-  const acknowledge = () =>
-    click(container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]')[3]);
+  const toggle = () => container.querySelector<HTMLButtonElement>('[role="switch"]');
 
-  it('requires explicit selection and disclosure acknowledgement, and rejects unavailable candidates', async () => {
+  it('creates a root-only link without extra confirmation and never widens it silently', async () => {
     props.state = { ...props.state!, root: null, sources: [] };
     await render();
-    const boxes = container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]');
-    expect(boxes[0]?.disabled).toBe(true);
-    expect(boxes[1]?.getAttribute('aria-checked')).toBe('false');
-    expect(boxes[2]?.disabled).toBe(true);
-    expect(button('Create share link')?.disabled).toBe(true);
-    await click(boxes[1]);
-    expect(props.onSelect).toHaveBeenCalledWith(['root', 'child']);
-    await acknowledge();
+    // One decision, and it starts off: a new link covers only this conversation.
+    expect(toggle()?.getAttribute('aria-checked')).toBe('false');
     expect(button('Create share link')?.disabled).toBe(false);
     await click(button('Create share link'));
     expect(props.onCreate).toHaveBeenCalledOnce();
+    expect(props.onSelect).not.toHaveBeenCalled();
+  });
+
+  it('adds every ready sub-conversation at once and excludes the ones that are not', async () => {
+    props.state = { ...props.state!, root: null, sources: [] };
+    await render();
+    await click(toggle());
+    // 'local' is unavailable, so the switch must not pull it in.
+    expect(props.onSelect).toHaveBeenCalledWith(['root', 'child']);
+  });
+
+  it('turns the switch off back to the root alone', async () => {
+    props.selected = ['root', 'child'];
+    await render();
+    expect(toggle()?.getAttribute('aria-checked')).toBe('true');
+    await click(toggle());
+    expect(props.onSelect).toHaveBeenCalledWith(['root']);
+  });
+
+  it('explains a root that cannot be shared yet instead of only disabling the action', async () => {
+    props.state = {
+      ...props.state!,
+      root: null,
+      sources: [],
+      candidates: props.state!.candidates.map((candidate) => ({
+        ...candidate,
+        available: false,
+        validUntil: null,
+      })),
+    };
+    await render();
+    expect(button('Create share link')?.disabled).toBe(true);
+    expect(container.textContent).toContain('This conversation is not ready to share yet');
   });
 
   it('requires reset on a device without the secret and invalidates an open reset confirmation after a concurrent change', async () => {
@@ -108,8 +134,7 @@ describe('session share management surface', () => {
     props.selected = ['root', 'child'];
     await render();
     expect(button('Copy share link')).toBeUndefined();
-    await acknowledge();
-    expect(button('Save selection')?.disabled).toBe(true);
+    expect(button('Save changes')?.disabled).toBe(true);
     await click(button('Reset link'));
     props.state = { ...props.state!, root: { ...entry, credentialVersion: 2 } };
     await render();
@@ -123,42 +148,29 @@ describe('session share management surface', () => {
     props.copyableShareIds = [];
     await render();
     expect(button('Reset link')).toBeUndefined();
-    expect(button('Save selection')).toBeUndefined();
-    expect(container.querySelector('[role="checkbox"]')).toBeNull();
+    expect(button('Save changes')).toBeUndefined();
+    expect(container.querySelector('[role="switch"]')).toBeNull();
     await click(button('Revoke link'));
     expect(props.onRevoke).not.toHaveBeenCalled();
     await click(button('Confirm'));
     expect(props.onRevoke).toHaveBeenCalledWith(props.state.root);
   });
 
-  it('explains the unavailable badge once, and only while a candidate is actually ineligible', async () => {
-    await render();
-    expect(container.textContent).toContain('Not ready: needs cloud sync and author verification.');
-    // One shared explanation, not one repeated under every row.
-    expect(container.textContent!.split('needs cloud sync').length - 1).toBe(1);
+  it('hides the sub-conversation switch entirely when there is nothing to include', async () => {
     props.state = {
       ...props.state!,
-      candidates: props.state!.candidates.map((candidate) => ({
-        ...candidate,
-        available: true,
-        validUntil: 200,
-      })),
+      candidates: [{ sessionId: 'root', title: 'Root', available: true, validUntil: 200 }],
     };
+    props.candidates = [{ sessionId: 'root', title: 'Root' }];
     await render();
-    expect(container.textContent).not.toContain('needs cloud sync');
+    expect(toggle()).toBeNull();
+    expect(container.textContent).not.toContain('Include sub-conversations');
   });
 
-  it('freezes target selection while a mutation is in flight but keeps the candidate filter usable', async () => {
-    props.filter = <input aria-label="Find related conversations" />;
+  it('freezes the sub-conversation switch while a mutation is in flight', async () => {
     props.busy = true;
     await render();
-    for (const box of container.querySelectorAll<HTMLButtonElement>('[role="checkbox"]'))
-      expect(box.disabled).toBe(true);
-    const filter = container.querySelector<HTMLInputElement>(
-      'input[aria-label="Find related conversations"]'
-    );
-    expect(filter).toBeTruthy();
-    expect(filter?.disabled).toBe(false);
+    expect(toggle()?.disabled).toBe(true);
   });
 
   it('stops presenting an expired grant as active without a new server record', async () => {
@@ -166,7 +178,6 @@ describe('session share management surface', () => {
     await render();
     expect(container.textContent).toContain('Link is currently unavailable');
     expect(button('Copy share link')).toBeUndefined();
-    await acknowledge();
     expect(button('Reset link')?.disabled).toBe(true);
   });
 });
