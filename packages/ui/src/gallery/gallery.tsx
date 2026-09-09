@@ -1,6 +1,7 @@
 import * as stylex from '@stylexjs/stylex';
 import { Fragment, type ReactNode } from 'react';
 import { Button } from '../button/button';
+import { button } from '../button/button.tokens.stylex';
 import { Field } from '../field/field';
 import { field } from '../field/field.tokens.stylex';
 import { Input } from '../field/input';
@@ -207,8 +208,24 @@ const styles = stylex.create({
     color: colors.tertiaryLabel,
     overflowWrap: 'anywhere',
   },
-  // A field cannot hold focus while the board is read, so the focus ring is
-  // drawn once on a non-interactive stand-in built from the same field tokens.
+  // A board cannot hold focus while it is read, so each focus ring is drawn once
+  // on a non-interactive stand-in built from the same tokens the control uses.
+  buttonFocusReplica: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    boxSizing: 'border-box',
+    height: control.medium,
+    paddingInline: '12px',
+    borderRadius: radius.medium,
+    cornerShape: corner.shape,
+    backgroundColor: button.secondaryBackground,
+    boxShadow: `${button.secondaryShadow}, 0 0 0 ${button.ringWidth} ${button.ring}`,
+    color: colors.label,
+    fontSize: text.subheadlineSize,
+    fontWeight: 500,
+    letterSpacing: text.controlTracking,
+  },
   focusReplica: {
     display: 'flex',
     alignItems: 'center',
@@ -557,6 +574,21 @@ function InvalidFieldRow() {
   );
 }
 
+function ButtonFocusRow() {
+  const { ref, value } = useMeasured<HTMLDivElement>('box-shadow');
+  return (
+    <Row>
+      <LegendKey>focus</LegendKey>
+      <Cluster>
+        <div ref={ref} {...stylex.props(styles.buttonFocusReplica)}>
+          Keyboard focus
+        </div>
+      </Cluster>
+      <span {...stylex.props(styles.readout)}>{value}</span>
+    </Row>
+  );
+}
+
 function FocusRingRow() {
   const { ref, value } = useMeasured<HTMLDivElement>('box-shadow');
   return (
@@ -798,7 +830,7 @@ export function UiGallery({ palettes = 'both' }: UiGalleryProps) {
 
       <Section
         title="Button · states, tone, shape, icons"
-        rule="Disabled is 45% opacity on the whole control, not a colour. Destructive tone tints a quiet variant; the destructive variant fills."
+        rule="Disabled is 45% opacity on the whole control, not a colour. Destructive tone tints a quiet variant; the destructive variant fills. The focus ring is a box-shadow composed with the variant's own edge, never an outline."
       >
         <PaletteSplit palettes={palettes}>
           <Rows>
@@ -864,6 +896,7 @@ export function UiGallery({ palettes = 'both' }: UiGalleryProps) {
                 </Button>
               </Cluster>
             </Row>
+            <ButtonFocusRow />
             <Row>
               <LegendKey>render</LegendKey>
               <Cluster>

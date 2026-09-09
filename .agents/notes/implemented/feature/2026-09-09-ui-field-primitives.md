@@ -141,12 +141,24 @@ shadow, which the same base layer cannot override because its companion
 also the more robust mechanism, so it is now the rule for the package rather
 than a local workaround.
 
-Button is left alone. Its ring would have to be restated per variant, since each
-variant already owns a different `box-shadow`, and changing a shipped primitive's
-appearance is outside this pilot. Two fixes are open: give Button the same
-box-shadow ring, or scope the global reset so it stops covering `@lody/ui`
-primitives. Until one lands, Button has no visible keyboard focus ring inside the
-desktop shell.
+Button follows. Its ring has to be restated per variant rather than added by a
+second class, because CSS cannot append to a `box-shadow` list, and each variant
+already owns a different edge: `primary` and `destructive` an ink highlight,
+`secondary` a raised shadow, `ghost` and `link` nothing. Each variant therefore
+declares its own `:focus-visible` value composing that edge with the ring, and
+`button.ring` joins the palette theme so it resolves inside a forced subtree.
+
+`:active` stays `none`, which is the press the rules describe — translate 1px
+and drop the edge. Putting the ring there instead would draw it on an ordinary
+mouse press, because a pointer press matches `:active` while `:focus-visible`
+stays false. The cost is that a keyboard-held press loses the ring for as long
+as the key is down, which is the smaller of the two errors.
+
+The alternative was scoping the shell's global reset so it stops covering
+`@lody/ui` primitives. It was rejected: that reset is the legacy focus system
+for every remaining Radix control, the hashed StyleX classes give it nothing
+stable to exclude, and narrowing it would resurface browser default outlines
+across surfaces this change never touched.
 
 ## Other alternatives considered
 

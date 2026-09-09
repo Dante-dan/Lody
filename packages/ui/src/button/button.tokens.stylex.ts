@@ -27,6 +27,8 @@ export const button = stylex.defineVars({
   secondaryShadow: shadow.raised,
   ghostLabel: colors.secondaryLabel,
   ghostHover: colors.hoverFill,
+  ring: colors.accent,
+  ringWidth: '2px',
 });
 
 /**
@@ -45,4 +47,5 @@ export const buttonPaletteTheme = stylex.createTheme(button, {
   secondaryShadow: shadow.raised,
   ghostLabel: colors.secondaryLabel,
   ghostHover: colors.hoverFill,
+  ring: colors.accent,
 });
