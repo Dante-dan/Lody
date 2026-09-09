@@ -72,5 +72,4 @@ Local typechecks, tests, and isolated browser integration were exercised during
 implementation; the PR gate must validate the final integrated revision.
 Public tests cannot establish hosted token enforcement, service replication,
 attachment lifecycle configuration, or native-device keyboard behavior. The
-draft spec remains unapproved and its translation pending. A PR link will be
-added after creation.
+draft spec remains unapproved and its translation pending. Implementation review: [PR #539](https://github.com/LodyAI/Lody/pull/539).
