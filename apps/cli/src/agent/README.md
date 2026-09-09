@@ -42,15 +42,19 @@ context/message-flow.md "Upstream".
 
 ### Grok permission handling
 
-Grok's TUI combines the runtime YOLO setting with client-side `AllowOnce` responses.
-`lody-acp-extension.ts` owns this compatibility rule for builtin Grok only;
-`agent-client.ts` evaluates it against the accepted session config and exposes config
-subscriptions. `MessageHandler` persists the selected outcome in the existing permission
-history. Enabling Always Approve also drains already waiting requests and clears their UI
-state and subscriptions. New requests without `allow_once` stay interactive; the queue
-drain cancels such requests, matching the TUI without creating lasting grants. User
-questions and other providers do not participate. The Grok adapter passes native requests
-through so this durable flow remains their single owner.
+Grok's TUI combines the runtime YOLO setting with client-side approval responses.
+The current Grok adapter handles incoming Always Approve requests before they
+reach Lody: it prefers `allow_once`, then uses `allow_always` if that is the only
+allow kind. Auto is removed from both adapter and static capabilities; legacy
+startup Auto restores as Ask. Adapter-resolved requests do not create Lody
+permission-request history, while ordinary tool updates still pass through.
+
+`lody-acp-extension.ts` retains the builtin Grok compatibility fallback for older
+adapters and requests already forwarded to Lody. It uses only `allow_once`, and
+`MessageHandler` persists that outcome through the durable permission flow.
+Accepted config changes drain waiting requests and clear UI state/subscriptions;
+questions and mode switches remain interactive. Composer edits are unsent preferences, so selecting
+Always Approve in the input does not itself change an active session.
 
 ### ACP start concurrency
 
