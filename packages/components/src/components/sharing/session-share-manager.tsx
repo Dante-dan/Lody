@@ -74,11 +74,6 @@ export function SessionShareManager(props: SessionShareManagerProps) {
       selected.some((id, index) => id !== root.sessionIds[index]));
   const mutationDisabled = busy || props.conflict || !qualified;
   const candidateMap = new Map(props.candidates.map((entry) => [entry.sessionId, entry]));
-  const title = (id: string) =>
-    (state?.candidates.find((entry) => entry.sessionId === id)?.title ?? '') ||
-    (candidateMap.get(id)?.title ?? '') ||
-    t('sharing.manager.unknownTarget', 'Unavailable conversation');
-  const others = state?.sources.filter((entry) => entry.rootSessionId !== props.sessionId) ?? [];
   // Discovery order is deterministic, so the capped set is stable across renders.
   const children = [...new Set([...selected, ...candidateMap.keys()])].filter(
     (id) => id !== props.sessionId
@@ -215,50 +210,6 @@ export function SessionShareManager(props: SessionShareManagerProps) {
                     )}
                   </p>
                 )}
-              </section>
-            )}
-            {others.length > 0 && (
-              <section className="space-y-1 border-t border-border pt-4">
-                <h3 className="font-medium">
-                  {t('sharing.manager.otherSources', 'Other links including this conversation')}
-                </h3>
-                <p className="text-xs leading-5 text-muted-foreground">
-                  {t(
-                    'sharing.manager.independent',
-                    'Revoking one link does not affect the others.'
-                  )}
-                </p>
-                <ul className="pt-1">
-                  {others.map((entry) => (
-                    <li
-                      key={entry.shareId}
-                      className="flex items-center justify-between gap-3 py-1.5"
-                    >
-                      <span className="min-w-0 break-words">
-                        {(entry.title ?? '') || title(entry.rootSessionId)}
-                        <span className="block text-xs text-muted-foreground">
-                          {entry.status === 'revoked'
-                            ? t('sharing.manager.revoked', 'Link revoked')
-                            : (entry.validUntil ?? 0) > now &&
-                                entry.readableSessionIds.includes(props.sessionId)
-                              ? t('sharing.manager.active', 'Link active')
-                              : t('sharing.manager.unavailable', 'Link is currently unavailable')}
-                        </span>
-                      </span>
-                      {entry.canRevoke && entry.status === 'active' && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="shrink-0"
-                          disabled={busy}
-                          onClick={() => setConfirmation({ kind: 'revoke', entry })}
-                        >
-                          {t('sharing.manager.revoke', 'Revoke link')}
-                        </Button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
               </section>
             )}
           </>

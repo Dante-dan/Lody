@@ -156,6 +156,24 @@ describe('session share management surface', () => {
     expect(props.onRevoke).toHaveBeenCalledWith(props.state.root);
   });
 
+  it('does not surface other links that include this conversation', async () => {
+    const foreign = {
+      ...entry,
+      title: 'Another conversation',
+      shareId: 'foreign-share',
+      rootSessionId: 'other',
+      sessionIds: ['other', 'root'],
+      readableSessionIds: ['other', 'root'],
+    };
+    props.state = { ...props.state!, sources: [entry, foreign] };
+    await render();
+    expect(container.textContent).not.toContain('Another conversation');
+    // The only revocation offered is for this conversation's own link.
+    expect(
+      [...container.querySelectorAll('button')].filter((node) => node.textContent === 'Revoke link')
+    ).toHaveLength(1);
+  });
+
   it('hides the sub-conversation switch entirely when there is nothing to include', async () => {
     props.state = {
       ...props.state!,

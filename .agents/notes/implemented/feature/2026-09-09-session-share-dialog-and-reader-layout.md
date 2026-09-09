@@ -50,6 +50,13 @@ disclosure on the link card is the notice; it states the four things a user cann
 infer — original documents, history and attachments, later updates, and that links
 are forwardable and not end-to-end encrypted.
 
+The dialog also stopped listing other grants that include this conversation. That
+section answered a question ("which other links can still read this?") that readers
+did not recognise as being about _other_ conversations' links, and it cost a heading,
+an explanatory line and a row per grant in a dialog whose point is one decision. The
+`sources` data is still fetched — `copyableShareIds` needs it — only the section is
+gone.
+
 Two things that were only "disabled" now explain themselves: a root that has not
 finished syncing says so above the actions instead of leaving Create inert with no
 reason, and Save renders only once something actually changed rather than sitting
@@ -91,6 +98,15 @@ conversations still never join on their own. What was given up is the ability to
 a partial subset: an author who wants some but not all descendants can no longer say so,
 and toggling off then on widens a legacy partial grant to everything currently ready.
 That trade was accepted deliberately in favour of one decision instead of a checklist.
+
+Hiding the other-grants list is a second deliberate gap, and a sharper one. Q12 in
+`docs/session-sharing.md` requires the management surface to show every still-valid
+sharing source precisely so that revoking one link is not mistaken for "this
+conversation is no longer shared anywhere". With the section gone, an author who
+revokes the link shown here can still be readable through a grant rooted at another
+conversation, and nothing in the dialog says so. The requirement was not reinterpreted
+away: it is recorded as an open gap in that document, and the section is expected to
+return in a clearer form rather than stay absent.
 
 ## Evidence and limits
 

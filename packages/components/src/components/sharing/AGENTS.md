@@ -21,6 +21,10 @@ Parent component instructions apply. `CLAUDE.md` is a symlink; edit this file on
   and never let it pull in an ineligible target. State each meaning once, next to what
   it describes. Explain a blocked action rather than only disabling it — an unshareable
   root says why — and render Save only when something actually changed.
+  The dialog currently shows ONLY this conversation's own link. Other grants that also
+  cover it are deliberately not listed, so revoking here does not necessarily stop all
+  outside access; keep `state.sources` intact for `copyableShareIds` and do not present
+  revocation as a full stop.
 - `hooks/use-session-share-management.ts` uses public cloud descriptors and server
   verified eligibility. Relationships only discover candidates; the stored grant stays
   an explicit id list the server verifies target by target, whatever the UI shows.

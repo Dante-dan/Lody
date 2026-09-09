@@ -3980,8 +3980,6 @@
   "sharing.manager.create": "创建分享链接",
   "sharing.manager.save": "保存修改",
   "sharing.manager.reset": "重置链接",
-  "sharing.manager.otherSources": "包含此对话的其他链接",
-  "sharing.manager.independent": "撤销其中一个链接不影响其他链接。",
   "sharing.manager.conflict": "分享设置已在其他设备上变更。请先重新加载再修改。",
   "sharing.manager.reload": "重新加载选择",
   "sharing.manager.confirmReset": "旧链接将失效并生成新链接。读者可能先完成正在进行的下载，访问才会结束。",
@@ -3995,7 +3993,6 @@
   "sharing.manager.copied": "已复制分享链接。",
   "sharing.manager.revokedNotice": "链接已撤销。正在进行的读取可能需要短暂时间才会停止。",
   "sharing.manager.title": "分享对话",
-  "sharing.manager.unknownTarget": "不可用的对话",
   "sharing.renderError": "无法显示此对话",
   "sharing.renderErrorDetail": "分享文档可能包含暂不支持的内容，请尝试重新加载页面。",
   "sharing.reloadPage": "重新加载页面"
