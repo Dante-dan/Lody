@@ -1504,6 +1504,7 @@ export type MessageContent =
   | SessionGoalContent
   | {
       type: 'tool_call';
+      _meta?: { [k: string]: unknown } | null;
       toolCallId: string;
       title?: string | null;
       status: ToolCallStatus;
@@ -1552,10 +1553,12 @@ export type MessageContent =
       commands: AvailableCommand[];
     }
   | {
-      type: 'system_notice';
-      name: SystemNoticeName;
-      meta?: SystemNoticeMeta[SystemNoticeName];
-    }
+      [Name in SystemNoticeName]: {
+        type: 'system_notice';
+        name: Name;
+        meta?: SystemNoticeMeta[Name];
+      };
+    }[SystemNoticeName]
   | OperationCompletionContent
   | OperationProgressContent
   | {
@@ -1663,5 +1666,8 @@ export type ACPSessionConfig = {
  * Persisted per-user-turn dispatch config.
  * Keep this looser than `ACPSessionConfig` so older docs and partial writes remain readable.
  */
-export type SessionTurnInputConfig = Partial<ACPSessionConfig>;
+export type SessionTurnInputConfig = Partial<ACPSessionConfig> & {
+  /** An accepted steer has no independently editable provider turn boundary. */
+  _lodyDeliveryKind?: import('./message-schemas').SessionHistoryDeliveryKind;
+};
 import type { OperationCompletionContent, OperationProgressContent } from './session-orchestration';
