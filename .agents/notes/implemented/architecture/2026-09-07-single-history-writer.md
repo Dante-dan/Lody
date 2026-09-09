@@ -9,7 +9,7 @@ Translation: current
 
 PR #460 replaces whole-session write validation with one shared HistoryWriter for
 CLI and renderer. New or changed input is parsed before mutation; unchanged opaque
-history is preserved. Target-local streaming and a pinned Mirror text-event patch
+history is preserved. Target-local streaming and the upstream Mirror text-event path
 reduce repeated work without changing storage. Full-history readers, bulk copying,
 overlapping rollback conflicts and real 3000-round acceptance remain unresolved.
 
@@ -87,11 +87,12 @@ ACP text/thought-only batches use target-local updateEntry; tool/subagent/mixed 
 retain cross-turn routing. Existing Text edits keep container ids and primitive strings
 stay primitive. No storage migration, attachment externalization or #359 hash-v2 rollout.
 
-The pinned Mirror 2.3.1 patch (Loro 1.15.1) copies only ancestors of a single existing
-text leaf. It preserves descriptors, old snapshots and notifications; missing baselines,
-tree/accessor/structural/multi-event paths use the original implementation. Array copies
-still scale with ancestor width. Future #443 storage hints/patches must compose with it,
-not replace it. This text-only patch itself has no storage-format dependency.
+Mirror 2.3.2 (Loro 1.15.1) carries the text-event path optimization upstream. It copies
+only ancestors of a single existing text leaf, preserves descriptors, old snapshots and
+notifications, and uses the original implementation for missing baselines,
+tree/accessor/structural/multi-event paths. Ordinary dense array ancestors use validated
+value copies; unusual arrays retain descriptor copying. The local 2.3.1 patch was removed;
+this reader optimization has no storage-format dependency.
 
 Run `bun packages/shared/tests/history-writer.perf.ts`. For paired old/new reader runs,
 set HISTORY_BENCH_BASELINE_ENTRY to unpatched Mirror 2.3.1, HISTORY_BENCH_PAIRED_ONLY=1,

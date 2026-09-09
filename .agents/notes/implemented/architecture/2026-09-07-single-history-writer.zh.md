@@ -68,10 +68,10 @@ parser 测试另验证转换和 refinement 保留。
 tool/subagent/mixed 保留跨 turn 路由。旧 Text 修改保留 CID，primitive 不升级。
 没有存储迁移、附件外置或 #359 的 hash-v2 改动。
 
-固定 Mirror 2.3.1 补丁配合 Loro 1.15.1，只复制单个已存在文本叶子的祖先路径，
+Mirror 2.3.2（配合 Loro 1.15.1）已包含上游文本事件路径优化，只复制单个已存在文本叶子的祖先路径，
 保留描述符、旧快照与通知。缺少基线、tree/accessor/结构/多事件继续原实现。
-数组复制仍随祖先宽度增长。以后 #443 存储 hint/补丁须组合，不能覆盖此补丁；
-此文本补丁本身不依赖存储格式变更。
+普通稠密数组祖先使用校验后的值复制，特殊数组保留描述符复制。本地 2.3.1 补丁已删除；
+这个读取优化本身不依赖存储格式变更。
 
 运行 `bun packages/shared/tests/history-writer.perf.ts`。新旧 reader 对照设置
 HISTORY_BENCH_BASELINE_ENTRY 指向未打补丁的 Mirror 2.3.1，
