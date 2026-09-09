@@ -45,5 +45,5 @@ Translation: pending
 `tsgo`、`prettier` 缺失处停止。定向检查通过；没有完整应用或真实模型回合验证。
 
 本次修改分为 [Grok 扩展 PR #15](https://github.com/LodyAI/acp-extension-grok/pull/15)
-和依赖 #503 的 Lody 集成 PR。
+和依赖 #503 的 [Lody 集成 PR #533](https://github.com/LodyAI/Lody/pull/533)。
 英文翻译待补。
