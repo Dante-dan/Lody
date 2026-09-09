@@ -5,7 +5,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  computeAnchoredScrollCorrection,
   computeInitialDiagramZoom,
+  computePinchZoomFactor,
   MERMAID_DIAGRAM_MAX_ZOOM,
 } from '../src/components/ai-gui/mermaid-diagram-viewer';
 
@@ -142,6 +144,46 @@ describe('computeInitialDiagramZoom', () => {
   });
 });
 
+describe('diagram pinch arithmetic', () => {
+  it('undoes itself when the pinch reverses, at any zoom level', () => {
+    expect(computePinchZoomFactor(-12) * computePinchZoomFactor(12)).toBeCloseTo(1, 10);
+    expect(computePinchZoomFactor(-4)).toBeGreaterThan(1);
+    expect(computePinchZoomFactor(4)).toBeLessThan(1);
+  });
+
+  it('bounds a mouse notch so one step cannot throw the diagram to a zoom limit', () => {
+    // A wheel notch reports ~100 where a trackpad pinch reports a few pixels.
+    expect(computePinchZoomFactor(-400)).toBe(computePinchZoomFactor(-25));
+    expect(computePinchZoomFactor(-400)).toBeLessThan(1.3);
+  });
+
+  it('scrolls the pinched point back under the pointer', () => {
+    // A diagram that doubled around the point under the pointer: what was at its
+    // centre now sits 500px further right, so the surface follows by 500px.
+    expect(
+      computeAnchoredScrollCorrection({
+        anchor: { clientX: 500, clientY: 300, ratioX: 0.5, ratioY: 0.5 },
+        diagramLeft: 0,
+        diagramTop: 0,
+        diagramWidth: 2000,
+        diagramHeight: 1200,
+      })
+    ).toEqual({ left: 500, top: 300 });
+  });
+
+  it('leaves the surface alone when the resize kept the point in place', () => {
+    expect(
+      computeAnchoredScrollCorrection({
+        anchor: { clientX: 400, clientY: 200, ratioX: 0.25, ratioY: 0.5 },
+        diagramLeft: 300,
+        diagramTop: 100,
+        diagramWidth: 400,
+        diagramHeight: 200,
+      })
+    ).toEqual({ left: 0, top: 0 });
+  });
+});
+
 describe('mermaid full-screen viewer', () => {
   let root: Root | undefined;
   let container: HTMLDivElement | undefined;
@@ -264,5 +306,84 @@ describe('mermaid full-screen viewer', () => {
 
     expect(container?.querySelector('[data-streamdown="mermaid"]')).toBeNull();
     expect(container?.querySelector('[aria-label="Open diagram"]')).toBeNull();
+  });
+
+  it('leaves a wheel over a diagram in a message to the page', async () => {
+    const diagram = await renderMarkdown();
+    const svg = diagram.querySelector('svg') as SVGSVGElement;
+
+    // Stands in for the conversation's own wheel listeners, which sit on the
+    // scroll viewport above the message.
+    const abovePage: number[] = [];
+    const listener = (event: Event) => abovePage.push((event as WheelEvent).deltaY);
+    container?.addEventListener('wheel', listener);
+
+    const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 120 });
+    await act(async () => {
+      svg.dispatchEvent(wheel);
+    });
+    container?.removeEventListener('wheel', listener);
+
+    // Streamdown's pan/zoom canvas would have taken this one and zoomed instead.
+    expect(wheel.defaultPrevented).toBe(false);
+    expect(abovePage).toEqual([120]);
+  });
+
+  it('zooms the open viewer on a pinch and leaves a plain wheel to scrolling', async () => {
+    const diagram = await renderMarkdown();
+    await clickOn(diagram);
+    const surface = viewerSurface() as HTMLElement;
+    const zoomLabel = () => document.body.querySelector('[title="Reset zoom"]')?.textContent;
+    expect(zoomLabel()).toBe('100%');
+
+    const scroll = new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: -40 });
+    await act(async () => {
+      surface.dispatchEvent(scroll);
+    });
+    // An unmodified wheel is the surface's own scrolling, which is how it pans.
+    expect(scroll.defaultPrevented).toBe(false);
+    expect(zoomLabel()).toBe('100%');
+
+    // A trackpad pinch: a ctrl-modified wheel, which would otherwise zoom the
+    // whole window.
+    const pinch = new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaY: -20,
+    });
+    await act(async () => {
+      surface.dispatchEvent(pinch);
+    });
+    expect(pinch.defaultPrevented).toBe(true);
+    expect(zoomLabel()).toBe('122%');
+  });
+
+  it('pans the open viewer by dragging the diagram, without closing on release', async () => {
+    const diagram = await renderMarkdown();
+    await clickOn(diagram);
+    const surface = viewerSurface() as HTMLElement;
+    const svg = surface.querySelector('svg[data-diagram="sequence"]') as Element;
+    surface.scrollLeft = 100;
+    surface.scrollTop = 100;
+
+    const pointer = (type: string, clientX: number, clientY: number) =>
+      new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY });
+    await act(async () => {
+      svg.dispatchEvent(pointer('pointerdown', 200, 200));
+      surface.dispatchEvent(pointer('pointermove', 180, 170));
+      surface.dispatchEvent(pointer('pointerup', 180, 170));
+    });
+
+    expect(surface.scrollLeft).toBe(120);
+    expect(surface.scrollTop).toBe(130);
+
+    // The drag ended over the backdrop, but letting go of a pan is not a click
+    // off the diagram.
+    await clickOn(surface);
+    expect(viewer()).toBeTruthy();
+    // The next real click still closes.
+    await clickOn(surface);
+    expect(viewer()).toBeNull();
   });
 });

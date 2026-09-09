@@ -20,7 +20,9 @@ the reasoning behind those rules.
   work) and a hover preview; `conversation-outline-arrival-intent.ts` decides when
   a pointer heading for a tick counts as arrival.
 - `markdown-renderer.tsx` wraps Streamdown; `mermaid-diagram-viewer.tsx` is the
-  full-screen diagram surface, and `markdown-diff-block.tsx` the inline diff.
+  full-screen diagram surface and `markdown-diff-block.tsx` the inline diff.
+  Diagram invariants live in
+  [mermaid-diagram-rendering.md](mermaid-diagram-rendering.md).
 - `message-content-guards.ts` gates which shared `MessageContent` variants render.
 - `chat-failed-error-report.ts` / `chat-failed-detail-dialog.tsx` own raw error
   extraction and its modal; `terminal-component.tsx` / `terminal-preview.ts` own
@@ -62,11 +64,11 @@ the reasoning behind those rules.
   cost is unbounded on a long turn.
 - **The gutter rule.** Virtua rows are absolutely positioned and ignore scroller
   padding, so the rail has to come from `ConversationColumn`.
-- **The Mermaid viewer replacement.** Streamdown's own overlay put its only exit at
-  a raw `top-4 right-4` — inside a phone's status-bar inset — while its content
-  layer covered the backdrop and swallowed every tap, so a touch user could not
-  leave it. An agent's sequence diagram scaled to a phone screen is also
-  unreadable, which is why the replacement opens at natural size and pans.
+- **The Mermaid viewer replacement, and the still preview in a message.**
+  Streamdown's own overlay could not be left on touch, and the pan/zoom canvas it
+  wraps every diagram in swallowed page scrolls that merely passed under one.
+  Both, and the gestures that replaced them, are in
+  [mermaid-diagram-rendering.md](mermaid-diagram-rendering.md).
 
 ## Creation progress
 

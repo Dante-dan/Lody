@@ -178,6 +178,17 @@ const MARKDOWN_BASE_CLASSNAME =
   '[&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-muted-foreground/40 [&_a:hover]:decoration-muted-foreground ' +
   '[&_.katex-display]:!my-5 [&_.katex-display]:overflow-x-auto [&_.katex-display]:overflow-y-hidden [&_.katex-display]:py-1 ' +
   '[&_[data-streamdown="mermaid-block"]]:!my-5 ' +
+  // Streamdown wraps every diagram in a pan/zoom canvas that claims the gesture
+  // through inline styles: `touch-action: none` stops a finger resting on a
+  // diagram from scrolling the conversation, and a `grab` cursor advertises a
+  // drag that only shifts the preview inside its own frame. A diagram in a
+  // message is a still preview that opens `MermaidDiagramViewer`; panning and
+  // zooming belong to that viewer, so the canvas transform is pinned and the
+  // gesture handed back to the page. The canvas also takes the wheel from a
+  // listener, which CSS cannot reach — see `releaseDiagramWheelToPage` below.
+  '[&_[data-streamdown="mermaid"]_[role="application"]]:!touch-auto ' +
+  '[&_[data-streamdown="mermaid"]_[role="application"]]:!transform-none ' +
+  '[&_[data-streamdown="mermaid"]>div]:!cursor-zoom-in ' +
   '[&_[data-streamdown="code-block"]]:!my-4 ' +
   '[&_table]:!my-0 [&_table]:w-full [&_table]:border-collapse [&_table]:text-[0.92em] [&_table]:leading-[1.5] ' +
   '[&_th]:border-b [&_th]:border-border/70 [&_th]:bg-muted/45 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-foreground/80 ' +
@@ -1234,6 +1245,56 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
       clearMarkedDiagrams();
     };
   }, [hasMermaidBlock, openDiagramLabel]);
+
+  // Streamdown's pan/zoom canvas listens for `wheel` non-passively and calls
+  // `preventDefault()` on every one of them, so a page scroll that merely passes
+  // under a diagram is swallowed and becomes a zoom instead. Turning
+  // `controls.mermaid.panZoom` off only hides that canvas's buttons — the
+  // listener stays, and it sits on Streamdown's own element, so the gesture has
+  // to be taken from it in the capture phase above.
+  //
+  // The interceptor never calls `preventDefault()`: the browser's own scrolling
+  // is exactly what is being handed back. `stopPropagation()` alone would also
+  // hide the gesture from the conversation's wheel listeners further up
+  // (releasing stick-to-bottom, abandoning an outline jump), so an uncancelable
+  // copy is re-dispatched from the markdown root, whose path excludes the canvas.
+  useEffect(() => {
+    const root = containerRef.current;
+    if (!root || !hasMermaidBlock) {
+      return undefined;
+    }
+
+    const releaseDiagramWheelToPage = (event: WheelEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element) || !target.closest(MERMAID_DIAGRAM_SELECTOR)) {
+        return;
+      }
+      event.stopPropagation();
+      root.dispatchEvent(
+        new WheelEvent('wheel', {
+          bubbles: true,
+          cancelable: false,
+          composed: true,
+          deltaX: event.deltaX,
+          deltaY: event.deltaY,
+          deltaZ: event.deltaZ,
+          deltaMode: event.deltaMode,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          altKey: event.altKey,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+        })
+      );
+    };
+
+    const options = { capture: true, passive: true } as const;
+    root.addEventListener('wheel', releaseDiagramWheelToPage, options);
+    return () => {
+      root.removeEventListener('wheel', releaseDiagramWheelToPage, { capture: true });
+    };
+  }, [hasMermaidBlock]);
   const components = useMemo(
     () =>
       createMarkdownComponents({
