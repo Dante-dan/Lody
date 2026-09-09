@@ -24,6 +24,8 @@ const identifier = z
 const timestamp = z.number().int().nonnegative().max(8_640_000_000_000_000);
 
 export const ScheduleTriggerSchema = z.discriminatedUnion('kind', [
+  /** Never planned by the clock; only "Run now" creates a run. */
+  z.object({ kind: z.literal('manual') }).strict(),
   z.object({ kind: z.literal('once'), at: instant }).strict(),
   z
     .object({
@@ -41,6 +43,26 @@ export const ScheduleTriggerSchema = z.discriminatedUnion('kind', [
     .strict(),
 ]);
 export type ScheduleTrigger = z.infer<typeof ScheduleTriggerSchema>;
+
+/**
+ * Where each run's prompt goes.
+ *
+ * - `new_session`: a fresh chat per run (the original behaviour).
+ * - `own_session`: one chat that belongs to this schedule, created on the first
+ *   run and reused afterwards. Its id is derived from the schedule id and an
+ *   `epoch`, so "start a new chat" is just `epoch + 1` — no id to store, and a
+ *   retry can never create a second chat.
+ * - `existing_session`: a chat the person picked. The schedule's agent must be
+ *   that chat's agent; the chat's workspace is used, so the schedule has no
+ *   project of its own.
+ */
+export const ScheduleDestinationSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('new_session') }).strict(),
+  z.object({ kind: z.literal('own_session'), epoch: z.number().int().nonnegative() }).strict(),
+  z.object({ kind: z.literal('existing_session'), sessionId: z.string().min(1) }).strict(),
+]);
+export type ScheduleDestination = z.infer<typeof ScheduleDestinationSchema>;
+export const DEFAULT_SCHEDULE_DESTINATION: ScheduleDestination = { kind: 'new_session' };
 
 export const ScheduleAgentSchema = z
   .object({
@@ -82,6 +104,7 @@ export const ScheduleDefinitionSchema = z
     // Optional: a schedule may be a plain chat with an Agent, with no
     // repository or working directory attached at all.
     project: ProjectRefSchema.transform((value) => value as ProjectRef).optional(),
+    destination: ScheduleDestinationSchema.default(DEFAULT_SCHEDULE_DESTINATION),
     retryPolicy: z
       .object({
         dispatchMaxAttempts: z.number().int().min(1).max(SCHEDULE_DISPATCH_MAX_ATTEMPTS),
@@ -121,6 +144,7 @@ export const ScheduleRegistryRowSchema = ScheduleDefinitionSchema.pick({
   activationId: true,
   activeFrom: true,
   trigger: true,
+  destination: true,
   createdAt: true,
   updatedAt: true,
 }).extend({

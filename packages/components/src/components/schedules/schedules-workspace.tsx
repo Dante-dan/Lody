@@ -16,14 +16,17 @@ import { v4 as uuid } from 'uuid';
 import { AlertTriangle, ArrowLeft, Pause, Play, Trash2, X, Zap } from 'lucide-react';
 import { useCloudQuery } from '@lody/platform/react';
 import {
+  DEFAULT_SCHEDULE_DESTINATION,
   getServerNow,
   machineSupportsSchedulesProtocol,
+  scheduleOwnSessionId,
   ScheduleRepository,
   type SessionId,
   type SessionMeta,
   type AgentConfigId,
   type AgentConfigMeta,
   type ProjectRef,
+  type ScheduleDestination,
   type ScheduleDocument,
   type ScheduleRegistryRow,
   type TaskAgentRef,
@@ -63,6 +66,7 @@ import {
 } from './schedule-view';
 import { PropertyRow, PropertyRowWide } from './schedule-property-row';
 import { collectScheduleSaveBlockers } from './schedule-save-blockers';
+import { ScheduleDestinationRows, type PickableSession } from './schedule-destination-rows';
 
 export function SchedulesWorkspace({ scheduleId }: { scheduleId?: string }) {
   const enabled = useAtomValue(schedulesFeatureEnabledAtom);
@@ -289,7 +293,11 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
         />
       ) : scheduleId === 'new' ? (
         <div className="overflow-auto">
-          <ScheduleEditor key={`${runtime?.workspaceId}:new`} onSaved={open} />
+          <ScheduleEditor
+            key={`${runtime?.workspaceId}:new`}
+            onSaved={open}
+            onOpenSession={openSession}
+          />
         </div>
       ) : !detail.ready ? (
         <p className="p-5">{t('schedules.loading', 'Loading schedules…')}</p>
@@ -404,6 +412,7 @@ function SchedulesContent({ scheduleId }: { scheduleId?: string }) {
                   : undefined
             }
             onSaved={open}
+            onOpenSession={openSession}
           />
           <ScheduleSessionHistory scheduleId={scheduleId} />
         </div>
@@ -416,10 +425,12 @@ function ScheduleEditor({
   document,
   disabledReason,
   onSaved,
+  onOpenSession,
 }: {
   document?: ScheduleDocument;
   disabledReason?: string;
   onSaved: (id: string) => void;
+  onOpenSession: (id: string) => void;
 }) {
   const { t } = useTranslation();
   const activeRuntime = useAtomValue(activeWorkspaceRuntimeAtom);
@@ -444,6 +455,9 @@ function ScheduleEditor({
       : null
   );
   const [project, setProject] = useState<ProjectRef | null>(document?.definition.project ?? null);
+  const [destination, setDestination] = useState<ScheduleDestination>(
+    document?.definition.destination ?? DEFAULT_SCHEDULE_DESTINATION
+  );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [identity] = useState(() => ({
@@ -453,6 +467,47 @@ function ScheduleEditor({
   }));
   const selected = agents.find((config) => config.id === agent?.agentConfigId);
   const machine = selected ? machines.get(selected.machineId) : undefined;
+
+  // Chats runs may be appended to. Only the person's own, unarchived chats:
+  // the daemon refuses any other owner, so offering them would only produce a
+  // blocked schedule.
+  const sessions = useAtomValue(sessionListAtom);
+  const archivedSessions = useAtomValue(archivedSessionListAtom);
+  const describeSession = (meta: SessionMeta): PickableSession => ({
+    id: meta.id,
+    title: meta.title || t('schedules.destination.untitledChat', 'Untitled chat'),
+    detail: [
+      agents.find((entry) => entry.id === meta.agentConfigId)?.name,
+      machines.get(meta.machineId as never)?.name,
+    ]
+      .filter(Boolean)
+      .join(' · '),
+  });
+  const pickableSessions = useMemo(
+    () => sessions.filter((meta) => meta.userId === user?.id).map(describeSession),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- describeSession reads stable atoms
+    [sessions, user?.id, agents, machines]
+  );
+  const ownSessionId =
+    destination.kind === 'own_session'
+      ? scheduleOwnSessionId(identity.scheduleId, destination.epoch)
+      : undefined;
+  const destinationMeta =
+    destination.kind === 'existing_session'
+      ? [...sessions, ...archivedSessions].find((meta) => meta.id === destination.sessionId)
+      : ownSessionId
+        ? [...sessions, ...archivedSessions].find((meta) => meta.id === ownSessionId)
+        : undefined;
+  const chooseDestination = (next: ScheduleDestination) => {
+    setDestination(next);
+    if (next.kind === 'existing_session' && next.sessionId) {
+      const meta = sessions.find((entry) => entry.id === next.sessionId);
+      // Follow the chat's Agent; the person still picks the permission mode.
+      if (meta?.agentConfigId && meta.agentConfigId !== agent?.agentConfigId)
+        setAgent({ agentConfigId: meta.agentConfigId as AgentConfigId });
+    }
+    if (next.kind !== 'new_session') setProject(null);
+  };
   const machineLocalProjectIds = useMemo(
     () =>
       new Set(
@@ -472,6 +527,15 @@ function ScheduleEditor({
       machine,
       project,
       machineLocalProjectIds,
+      destination,
+      // A chat with no recorded Agent cannot host appended turns; treat it as
+      // driven by nothing, which the mismatch check then reports.
+      destinationSession: destinationMeta
+        ? {
+            agentConfigId: destinationMeta.agentConfigId ?? '',
+            machineId: destinationMeta.machineId,
+          }
+        : null,
     },
     t
   );
@@ -507,7 +571,8 @@ function ScheduleEditor({
               trigger: value.trigger,
               machineId: selected.machineId,
               agent,
-              ...(project ? { project } : {}),
+              ...(project && destination.kind === 'new_session' ? { project } : {}),
+              destination,
               misfirePolicy: { kind: value.misfire },
               overlapPolicy: value.overlap,
               retryPolicy: { dispatchMaxAttempts: 5, dispatchMaxAgeMs: 86_400_000 },
@@ -535,6 +600,23 @@ function ScheduleEditor({
       onSave={(value) => void save(value)}
       runConfig={
         <>
+          <ScheduleDestinationRows
+            value={destination}
+            onChange={chooseDestination}
+            sessions={pickableSessions}
+            ownSession={
+              destination.kind === 'own_session' && destinationMeta
+                ? describeSession(destinationMeta)
+                : null
+            }
+            pickedSession={
+              destination.kind === 'existing_session' && destinationMeta
+                ? describeSession(destinationMeta)
+                : null
+            }
+            onOpenSession={onOpenSession}
+            disabled={!!disabledReason}
+          />
           <PropertyRowWide label={t('schedules.agent', 'Agent')}>
             <AgentRunConfigMenu
               requireExplicitPermission
@@ -549,27 +631,31 @@ function ScheduleEditor({
               disabled={!!disabledReason}
             />
           </PropertyRowWide>
-          <PropertyRowWide label={t('schedules.project', 'Project')}>
-            <ProjectRefSelector
-              triggerVariant="property-row"
-              value={project}
-              onChange={setProject}
-              localProjects={[...local.projects.values()]
-                .filter((entry) => entry.machineId === selected?.machineId)
-                .map((entry) => ({
-                  key: entry.key,
-                  machineId: entry.machineId,
-                  localProjectId: entry.project.id,
-                  name: entry.project.name,
-                  rootPath: entry.project.rootPath,
-                }))}
-              repositories={(repos ?? []).flatMap((r) =>
-                r.repoFullName || r.fullName ? [{ fullName: (r.repoFullName ?? r.fullName)! }] : []
-              )}
-              onAddLocalProject={() => openSettings('projects')}
-              onConnectGitRepo={() => openSettings('github')}
-            />
-          </PropertyRowWide>
+          {destination.kind === 'new_session' ? (
+            <PropertyRowWide label={t('schedules.project', 'Project')}>
+              <ProjectRefSelector
+                triggerVariant="property-row"
+                value={project}
+                onChange={setProject}
+                localProjects={[...local.projects.values()]
+                  .filter((entry) => entry.machineId === selected?.machineId)
+                  .map((entry) => ({
+                    key: entry.key,
+                    machineId: entry.machineId,
+                    localProjectId: entry.project.id,
+                    name: entry.project.name,
+                    rootPath: entry.project.rootPath,
+                  }))}
+                repositories={(repos ?? []).flatMap((r) =>
+                  r.repoFullName || r.fullName
+                    ? [{ fullName: (r.repoFullName ?? r.fullName)! }]
+                    : []
+                )}
+                onAddLocalProject={() => openSettings('projects')}
+                onConnectGitRepo={() => openSettings('github')}
+              />
+            </PropertyRowWide>
+          ) : null}
           {project?.kind === 'local' ? (
             <PropertyRow
               label={t('schedules.worktreeLabel', 'Isolated worktree')}
@@ -591,7 +677,7 @@ function ScheduleEditor({
               />
             </PropertyRow>
           ) : null}
-          {!project ? (
+          {!project && destination.kind === 'new_session' ? (
             <p className="px-3 py-2 text-xs text-muted-foreground">
               {t(
                 'schedules.chatOnlyHelp',

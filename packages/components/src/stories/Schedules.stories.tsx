@@ -7,7 +7,9 @@ import {
 } from '../components/schedules/schedule-view';
 import { PropertyRow, PropertyRowWide } from '../components/schedules/schedule-property-row';
 import { Switch } from '../ui/switch';
-import type { ScheduleRegistryRow, ScheduleRuntimeRow } from '@lody/shared';
+import { ScheduleDestinationRows } from '../components/schedules/schedule-destination-rows';
+import type { ScheduleDestination, ScheduleRegistryRow, ScheduleRuntimeRow } from '@lody/shared';
+import { useState } from 'react';
 
 /** Frozen clock so "Next run" and the editor preview never drift. */
 const NOW = Date.parse('2026-09-06T09:12:00+08:00');
@@ -23,6 +25,7 @@ const row: ScheduleRegistryRow = {
   createdAt: 0,
   updatedAt: 0,
   trigger: { kind: 'cron', expression: '0 9 * * MON-FRI', timeZone: 'Asia/Shanghai' },
+  destination: { kind: 'new_session' },
   elevatedPermissions: false,
   agentConfigId: 'agent',
   definitionFingerprint: '0'.repeat(64),
@@ -72,6 +75,23 @@ const rows: ScheduleRegistryRow[] = [
     scheduleId: 'release-notes',
     title: 'Draft release notes',
     trigger: { kind: 'cron', expression: '*/20 9-17 * * 1-5', timeZone: 'Asia/Shanghai' },
+  },
+  {
+    ...row,
+    scheduleId: 'daily-journal',
+    title: 'Daily journal',
+    trigger: { kind: 'cron', expression: '0 21 * * *', timeZone: 'Asia/Shanghai' },
+    destination: { kind: 'own_session', epoch: 0 },
+    projectKind: undefined,
+    projectKey: undefined,
+  },
+  {
+    ...row,
+    scheduleId: 'deploy-checklist',
+    title: 'Run the deploy checklist',
+    trigger: { kind: 'manual' },
+    projectKind: undefined,
+    projectKey: undefined,
   },
 ];
 
@@ -144,10 +164,41 @@ export const ReadOnly: Story = {
 };
 export const AwaitingMachine: Story = { args: { runtimes: [] } };
 
+const chats = [
+  { id: 'c1', title: 'Release planning', detail: 'Code reviewer · MacBook Pro' },
+  { id: 'c2', title: 'Daily journal', detail: 'Writer · MacBook Pro' },
+  { id: 'c3', title: 'Refactor auth module', detail: 'Code reviewer · Studio' },
+];
+
 /** Run configuration rows are owned by the workspace; stories stand in for them. */
-function RunConfigFixture({ chatOnly = false }: { chatOnly?: boolean }) {
+function RunConfigFixture({
+  chatOnly = false,
+  destination: initialDestination = { kind: 'new_session' },
+  ownChatExists = false,
+}: {
+  chatOnly?: boolean;
+  destination?: ScheduleDestination;
+  ownChatExists?: boolean;
+}) {
+  const [destination, setDestination] = useState<ScheduleDestination>(initialDestination);
   return (
     <>
+      <ScheduleDestinationRows
+        value={destination}
+        onChange={setDestination}
+        sessions={chats}
+        ownSession={
+          destination.kind === 'own_session' && ownChatExists && destination.epoch === 0
+            ? chats[1]
+            : null
+        }
+        pickedSession={
+          destination.kind === 'existing_session'
+            ? (chats.find((chat) => chat.id === destination.sessionId) ?? null)
+            : null
+        }
+        onOpenSession={() => {}}
+      />
       <PropertyRowWide label="Agent">
         <button
           type="button"
@@ -157,16 +208,18 @@ function RunConfigFixture({ chatOnly = false }: { chatOnly?: boolean }) {
           Code reviewer · Sonnet · Ask each time
         </button>
       </PropertyRowWide>
-      <PropertyRowWide label="Project">
-        <button
-          type="button"
-          className="flex h-8 w-full items-center justify-end gap-2 rounded-md px-2 text-[13px] hover:bg-hover"
-        >
-          <FolderGit2 className="size-3.5 opacity-70" />
-          {chatOnly ? 'No project' : 'loro-dev/lody'}
-        </button>
-      </PropertyRowWide>
-      {chatOnly ? (
+      {destination.kind === 'new_session' ? (
+        <PropertyRowWide label="Project">
+          <button
+            type="button"
+            className="flex h-8 w-full items-center justify-end gap-2 rounded-md px-2 text-[13px] hover:bg-hover"
+          >
+            <FolderGit2 className="size-3.5 opacity-70" />
+            {chatOnly ? 'No project' : 'loro-dev/lody'}
+          </button>
+        </PropertyRowWide>
+      ) : null}
+      {destination.kind !== 'new_session' ? null : chatOnly ? (
         <p className="px-3 py-2 text-xs text-muted-foreground">
           Without a project each run is a plain chat with the Agent — no repository is checked out.
         </p>
@@ -264,35 +317,62 @@ export const EditorInterval: Story = editor({
     overlap: 'skip',
   },
 });
-/** A rule the named picker cannot express opens as Custom — as field pickers. */
-export const EditorCustomRule: Story = editor({
+export const EditorEveryFewHours: Story = editor({
+  initial: {
+    title: 'Dependency sweep',
+    prompt: 'Check dependencies for new advisories.',
+    trigger: { kind: 'cron', expression: '0 */6 * * *', timeZone: 'Asia/Shanghai' },
+    misfire: 'skip',
+    overlap: 'skip',
+  },
+});
+export const EditorMonthly: Story = editor({
+  initial: {
+    title: 'Invoice reminder',
+    prompt: 'Draft the invoice reminder.',
+    trigger: { kind: 'cron', expression: '0 9 1,15 * *', timeZone: 'Asia/Shanghai' },
+    misfire: 'run_once',
+    overlap: 'queue_one',
+  },
+});
+export const EditorManual: Story = editor({
+  initial: {
+    title: 'Run the deploy checklist',
+    prompt: 'Walk through the deploy checklist and report anything that fails.',
+    trigger: { kind: 'manual' },
+    misfire: 'run_once',
+    overlap: 'queue_one',
+  },
+});
+export const EditorOwnChatPending: Story = editor({
+  runConfig: <RunConfigFixture destination={{ kind: 'own_session', epoch: 0 }} />,
+  initial: {
+    title: 'Daily journal',
+    prompt: 'Ask me how the day went and note the answer.',
+    trigger: { kind: 'cron', expression: '0 21 * * *', timeZone: 'Asia/Shanghai' },
+    misfire: 'run_once',
+    overlap: 'queue_one',
+  },
+});
+export const EditorOwnChatCreated: Story = editor({
+  runConfig: <RunConfigFixture destination={{ kind: 'own_session', epoch: 0 }} ownChatExists />,
+  initial: {
+    title: 'Daily journal',
+    prompt: 'Ask me how the day went and note the answer.',
+    trigger: { kind: 'cron', expression: '0 21 * * *', timeZone: 'Asia/Shanghai' },
+    misfire: 'run_once',
+    overlap: 'queue_one',
+  },
+});
+export const EditorExistingChat: Story = editor({
+  runConfig: <RunConfigFixture destination={{ kind: 'existing_session', sessionId: 'c1' }} />,
+});
+/** A rule from an older version that the picker cannot name stays read-only. */
+export const EditorUnsupportedRule: Story = editor({
   initial: {
     title: 'Business-hours sweep',
     prompt: 'Check the build every twenty minutes during business hours.',
     trigger: { kind: 'cron', expression: '*/20 9-17 * * 1-5', timeZone: 'Asia/Shanghai' },
-    misfire: 'skip',
-    overlap: 'skip',
-  },
-});
-/** Discrete times and months, all through pickers. */
-export const EditorCustomLists: Story = editor({
-  initial: {
-    title: 'Half-year check-in',
-    prompt: 'Summarise the last six months.',
-    trigger: { kind: 'cron', expression: '0,30 8 1,15 1,7 *', timeZone: 'Asia/Shanghai' },
-    misfire: 'skip',
-    overlap: 'skip',
-  },
-});
-/**
- * Syntax this build does not model (`MON#2`) stays in its own field, verbatim
- * and editable, while its neighbours keep their pickers.
- */
-export const EditorCustomUnmodelled: Story = editor({
-  initial: {
-    title: 'Second Monday review',
-    prompt: 'Review on the second Monday of the month.',
-    trigger: { kind: 'cron', expression: '0 9 * * MON#2', timeZone: 'Asia/Shanghai' },
     misfire: 'skip',
     overlap: 'skip',
   },

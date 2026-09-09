@@ -29,41 +29,31 @@
   still gate save, resume and run.
   Run now confirms saved configuration and may overlap existing work. Pause does
   not cancel an already submitted Session.
-- Frequency is always edited through pickers, never by typing cron. The persisted
-  trigger union is unchanged; `schedule-recurrence.ts` maps the named rules
-  (daily/weekdays/weekly/monthly/interval/once) both ways, and `Custom` is edited
-  field by field through `schedule-cron-fields.ts` + `CronFieldRow`. A whole-
-  expression text box exists but is opt-in and never the default.
-- Two things keep that from narrowing what a person can express: every field
-  offers every mode (a trimmed menu would blank a stored mode it does not list),
-  and a field whose spelling the pickers cannot reproduce stays `raw`, verbatim,
-  in its own text box. So `parse`/`format` round-trip byte for byte, and an
-  untouched rule is re-emitted unchanged — saving can never silently rewrite an
-  existing plan or invalidate its fingerprint.
-- **The five fields are the edit state.** `ScheduleRecurrence['custom']` carries
-  `fields` (plus a `draftText` while the whole expression is being typed), and
-  nothing re-derives an edit mode by serializing and re-parsing. Deriving it is
-  what made a `raw` field snap back to a range the moment its text happened to
-  parse, and made an emptied selection produce a four-field string that removed
-  every picker and stranded the person in a cron text box.
-- An incomplete field is a first-class state, not a short expression:
-  `formatCronExpression` throws, `withCronField` returns `null`, and the form
-  names the unfinished field above a disabled Save. Never emit a partial rule.
-  A step has an optional `window` object: absence means unrestricted, while an
-  object with missing bounds is unfinished. Keep both inputs visible even when
-  both bounds are cleared; only Remove range discards the window.
-- Switching a field's mode must not change which instants fire. Only `*` means
-  unrestricted, and cron ORs day-of-month with day-of-week — so replacing `*`
-  with an exhaustive `1,2,…,31` or `1-31` turns a weekdays-only rule into a
-  daily one while looking like a representation change. From `*`, `list` and
-  `range` start UNFINISHED; values carry over only between already-finite modes.
-  When both day-of-month and weekday restrict, the editor states the OR out
-  loud. Cover mode switches with real croner `match` assertions, not text.
+- Frequency is a short menu, not a cron editor: every day / every weekday /
+  every week (days) / every month (dates) / every few hours / every few minutes /
+  once. `schedule-recurrence.ts` maps each both ways onto the unchanged
+  persisted trigger union. Steps that divide the clock are written as aligned
+  cron (`*​/15`, `0 *​/6`); others as intervals. A stored rule the menu cannot
+  name is `unsupported`: shown read-only with its summary and a Replace action,
+  re-emitted verbatim on save, never edited as text. There is no cron input
+  anywhere in this UI; do not add one back.
 - Cron day-of-week accepts 0 AND 7 for Sunday, so a RANGE must be expanded from
   its raw bounds and folded onto 0 only afterwards. Folding first turns `0-7`
   (every day) into `0-0` and reads it as Sundays only — a loss that is invisible
   until an unrelated time or zone edit rewrites the rule. Tests must cover a
   Sunday-7 range across an edit, not just its untouched round trip.
+- A schedule is either timed or `manual` (`trigger.kind === 'manual'`): never
+  planned by the clock, run only from Run now. The editor keeps the last timed
+  rule while the toggle is on Manual, so flipping back does not reset it.
+- Destination (`definition.destination`) says where runs go: a new chat per run,
+  ONE chat the schedule owns (`own_session`, created by the first run, its id
+  derived from schedule id + `epoch`, so "Start a new chat" is `epoch + 1` and
+  no id is ever stored), or a chat the person picked (`existing_session`). Once
+  runs go into a real chat, that chat fixes the Agent and machine and the
+  schedule has no project of its own — `collectScheduleSaveBlockers` names the
+  mismatch, and the container hides the Project row and follows the chat's
+  Agent when one is picked. `ScheduleDestinationRows` is the presentational
+  piece; the container resolves the chat from `sessionListAtom`.
 - Owner-only reduction of authority (pause/delete) remains possible when the
   machine is gone or outdated. Creating/editing/resuming/running requires the
   target Machine protocol capability. Never fall back to a different Agent.

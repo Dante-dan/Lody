@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import type { AgentConfigMeta, MachineMeta, ProjectRef, SessionId } from '@lody/shared';
+import type {
+  AgentConfigMeta,
+  MachineMeta,
+  ProjectRef,
+  SessionId,
+  SessionMeta,
+} from '@lody/shared';
 
 import {
   buildScheduleRunTarget,
   buildScheduleSessionCreateOptions,
+  destinationSessionProblem,
+  scheduleDestinationSessionId,
   scheduleRequiredLocalProjectId,
 } from './schedule-run-preparation';
 
@@ -96,5 +104,75 @@ describe('What a run requires from the owning machine', () => {
     expect(scheduleRequiredLocalProjectId({ kind: 'local', localProjectId: 'p1' as never })).toBe(
       'p1'
     );
+  });
+});
+
+describe('Where a run is sent', () => {
+  const machineId = 'machine';
+  const meta = (overrides: Partial<SessionMeta> = {}) =>
+    ({
+      id: 's1',
+      userId: 'owner',
+      machineId,
+      agentConfigId: 'agent',
+      ...overrides,
+    }) as SessionMeta;
+
+  it('names the same chat for every run of an owned-chat schedule, and a new one per epoch', () => {
+    const own = { kind: 'own_session', epoch: 0 } as const;
+    expect(scheduleDestinationSessionId('sched', own)).toBe(
+      scheduleDestinationSessionId('sched', own)
+    );
+    expect(scheduleDestinationSessionId('sched', { kind: 'own_session', epoch: 1 })).not.toBe(
+      scheduleDestinationSessionId('sched', own)
+    );
+    expect(scheduleDestinationSessionId('other', own)).not.toBe(
+      scheduleDestinationSessionId('sched', own)
+    );
+    expect(scheduleDestinationSessionId('sched', { kind: 'new_session' })).toBeUndefined();
+    expect(
+      scheduleDestinationSessionId('sched', { kind: 'existing_session', sessionId: 'picked' })
+    ).toBe('picked');
+  });
+
+  it('lets an owned chat be created by the first run, but never a picked chat', () => {
+    const base = { userId: 'owner', machineId, agentConfigId: 'agent' };
+    expect(
+      destinationSessionProblem({
+        ...base,
+        destination: { kind: 'own_session', epoch: 0 },
+        session: { kind: 'absent' },
+      })
+    ).toBeNull();
+    expect(
+      destinationSessionProblem({
+        ...base,
+        destination: { kind: 'existing_session', sessionId: 's1' },
+        session: { kind: 'absent' },
+      })
+    ).toBe('SESSION_UNAVAILABLE');
+  });
+
+  it('refuses a chat that is deleted, someone else’s, elsewhere, or driven by another Agent', () => {
+    const base = { userId: 'owner', machineId, agentConfigId: 'agent' };
+    const destination = { kind: 'existing_session', sessionId: 's1' } as const;
+    expect(
+      destinationSessionProblem({
+        ...base,
+        destination,
+        session: { kind: 'present', meta: meta() },
+      })
+    ).toBeNull();
+    expect(destinationSessionProblem({ ...base, destination, session: { kind: 'deleted' } })).toBe(
+      'SESSION_UNAVAILABLE'
+    );
+    for (const wrong of [{ userId: 'other' }, { machineId: 'laptop' }, { agentConfigId: 'writer' }])
+      expect(
+        destinationSessionProblem({
+          ...base,
+          destination,
+          session: { kind: 'present', meta: meta(wrong) },
+        })
+      ).toBe('SESSION_UNAVAILABLE');
   });
 });

@@ -1,15 +1,11 @@
 import type { TFunction } from 'i18next';
 import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import {
-  CRON_FIELD_ORDER,
   getDeviceTimeZone,
-  type CronFields,
   normalizeScheduleWeekdays,
-  parseCronExpression,
   scheduleRecurrenceTimeZone,
   triggerToRecurrence,
-  type CronField,
-  type CronFieldId,
+  type ScheduleDestination,
   type ScheduleRecurrence,
   type ScheduleTrigger,
   type ScheduleWeekday,
@@ -40,29 +36,12 @@ export function weekdayNames(
   return Array.from({ length: 7 }, (_, day) => format.format(new Date(Date.UTC(2023, 0, 1 + day))));
 }
 
-/** Locale month names, indexed from January. */
-export function monthNames(locale: string | undefined, width: 'short' | 'long'): string[] {
-  const format = new Intl.DateTimeFormat(intl(locale), { month: width, timeZone: 'UTC' });
-  return Array.from({ length: 12 }, (_, month) =>
-    format.format(new Date(Date.UTC(2023, month, 1)))
-  );
-}
-
 export function formatTimeOfDay(hour: number, minute: number, locale?: string): string {
   return new Intl.DateTimeFormat(intl(locale), {
     hour: 'numeric',
     minute: '2-digit',
     timeZone: 'UTC',
   }).format(new Date(Date.UTC(2023, 0, 1, hour, minute)));
-}
-
-function formatDuration(t: TFunction, everyMs: number): string {
-  const minutes = Math.round(everyMs / 60_000);
-  if (minutes % 1440 === 0)
-    return t('schedules.everyDays', { count: minutes / 1440, defaultValue: '{{count}} day' });
-  if (minutes % 60 === 0)
-    return t('schedules.everyHours', { count: minutes / 60, defaultValue: '{{count}} hour' });
-  return t('schedules.everyMinutes', { count: minutes, defaultValue: '{{count}} minute' });
 }
 
 function formatWeekdayList(weekdays: readonly ScheduleWeekday[], locale?: string): string {
@@ -79,6 +58,20 @@ export function describeRecurrence(
   locale?: string
 ): string {
   switch (recurrence.kind) {
+    case 'minutes':
+      return t('schedules.summary.interval', 'Every {{duration}}', {
+        duration: t('schedules.everyMinutes', {
+          count: recurrence.every,
+          defaultValue: '{{count}} minutes',
+        }),
+      });
+    case 'hours':
+      return t('schedules.summary.interval', 'Every {{duration}}', {
+        duration: t('schedules.everyHours', {
+          count: recurrence.every,
+          defaultValue: '{{count}} hours',
+        }),
+      });
     case 'daily':
       return t('schedules.summary.daily', 'Every day at {{time}}', {
         time: formatTimeOfDay(recurrence.hour, recurrence.minute, locale),
@@ -95,113 +88,56 @@ export function describeRecurrence(
           })
         : t('schedules.requireWeekday', 'Choose at least one day of the week.');
     case 'monthly':
-      return t('schedules.summary.monthly', 'Day {{day}} of every month at {{time}}', {
-        day: recurrence.dayOfMonth,
-        time: formatTimeOfDay(recurrence.hour, recurrence.minute, locale),
-      });
-    case 'interval':
-      return t('schedules.summary.interval', 'Every {{duration}}', {
-        duration: formatDuration(t, recurrence.everyMs),
-      });
+      return recurrence.days.length
+        ? t('schedules.summary.monthly', 'Day {{days}} of every month at {{time}}', {
+            days: new Intl.ListFormat(intl(locale), { style: 'short', type: 'conjunction' }).format(
+              recurrence.days.map(String)
+            ),
+            time: formatTimeOfDay(recurrence.hour, recurrence.minute, locale),
+          })
+        : t('schedules.requireMonthDay', 'Choose at least one day of the month.');
     case 'once':
       return t('schedules.summary.once', 'Once, on {{time}}', {
         time: formatInstant(Date.parse(recurrence.at), getDeviceTimeZone(), locale),
       });
-    case 'custom':
-      return recurrence.draftText !== undefined
-        ? recurrence.draftText
-        : describeCronFields(recurrence.fields, t, locale);
+    case 'unsupported':
+      return t('schedules.summary.unsupported', 'Advanced rule ({{rule}})', {
+        rule:
+          recurrence.trigger.kind === 'cron'
+            ? recurrence.trigger.expression
+            : recurrence.trigger.kind === 'interval'
+              ? t('schedules.everyMinutes', {
+                  count: Math.round(recurrence.trigger.everyMs / 60_000),
+                  defaultValue: '{{count}} minutes',
+                })
+              : recurrence.trigger.at,
+      });
   }
-  throw new Error('Unsupported schedule recurrence');
 }
 
-/** i18n suffix for the unit a cron field counts. */
-const cronUnitKey = (id: CronFieldId): string =>
-  ({
-    minute: 'minutes',
-    hour: 'hours',
-    dayOfMonth: 'days',
-    month: 'months',
-    weekday: 'weekdays',
-  })[id];
-
-/**
- * A custom rule in words.
- *
- * Only the fields that actually constrain anything are mentioned, so
- * `*​/20 9-17 * * 1-5` reads as three clauses rather than five. A field this
- * build cannot name is quoted as-is instead of being guessed at, and an
- * expression that is not five fields falls back to the raw text — the list must
- * never claim a rule means something it does not.
- */
-export function describeCronExpression(expression: string, t: TFunction, locale?: string): string {
-  const fields = parseCronExpression(expression);
-  return fields ? describeCronFields(fields, t, locale) : expression;
-}
-
-/** The same sentence, from the fields a person is editing. */
-export function describeCronFields(fields: CronFields, t: TFunction, locale?: string): string {
-  const list = (id: CronFieldId, values: number[]): string => {
-    const names =
-      id === 'weekday'
-        ? weekdayNames(locale, 'short')
-        : id === 'month'
-          ? monthNames(locale, 'short')
-          : null;
-    const label = (value: number) =>
-      names ? (names[id === 'month' ? value - 1 : value] ?? String(value)) : String(value);
-    return new Intl.ListFormat(intl(locale), { style: 'short', type: 'conjunction' }).format(
-      values.map(label)
-    );
-  };
-  const clause = (id: CronFieldId, field: CronField): string | null => {
-    const unit = t(`schedules.cron.unit.${cronUnitKey(id)}`, cronUnitKey(id));
-    switch (field.mode) {
-      case 'every':
-        return null;
-      case 'step':
-        return field.window?.from !== undefined && field.window?.to !== undefined
-          ? t(
-              'schedules.cron.clause.stepInRange',
-              'every {{step}} {{unit}} from {{from}} to {{to}}',
-              {
-                step: field.step,
-                unit,
-                from: field.window?.from,
-                to: field.window?.to,
-              }
-            )
-          : t('schedules.cron.clause.step', 'every {{step}} {{unit}}', { step: field.step, unit });
-      case 'range':
-        return t('schedules.cron.clause.range', '{{unit}} {{from}} to {{to}}', {
-          unit,
-          from: field.from,
-          to: field.to,
-        });
-      case 'list':
-        return t('schedules.cron.clause.list', '{{unit}} {{values}}', {
-          unit,
-          values: list(id, field.values),
-        });
-      case 'raw':
-        return t('schedules.cron.clause.raw', '{{unit}} “{{text}}”', { unit, text: field.text });
-    }
-    throw new Error('Unsupported cron field mode');
-  };
-  const clauses = CRON_FIELD_ORDER.map((id) => clause(id, fields[id])).filter(
-    (entry): entry is string => entry !== null
-  );
-  if (!clauses.length) return t('schedules.cron.clause.everyMinute', 'Every minute');
-  return clauses.join(t('schedules.cron.clauseSeparator', ', '));
-}
-
+/** A trigger in words; a manual one has no rule to describe. */
 export function describeTrigger(trigger: ScheduleTrigger, t: TFunction, locale?: string): string {
+  if (trigger.kind === 'manual') return t('schedules.trigger.manual', 'Manual');
   return describeRecurrence(triggerToRecurrence(trigger), t, locale);
+}
+
+/** Where runs go, in words. */
+export function describeDestination(destination: ScheduleDestination, t: TFunction): string {
+  switch (destination.kind) {
+    case 'new_session':
+      return t('schedules.destination.newSession', 'New chat each run');
+    case 'own_session':
+      return t('schedules.destination.ownSession', 'One chat for this task');
+    case 'existing_session':
+      return t('schedules.destination.existingSession', 'An existing chat');
+  }
 }
 
 /** The zone a trigger's wall clock is authored in. */
 export function triggerTimeZone(trigger: ScheduleTrigger): string {
-  return scheduleRecurrenceTimeZone(triggerToRecurrence(trigger));
+  return trigger.kind === 'manual'
+    ? getDeviceTimeZone()
+    : scheduleRecurrenceTimeZone(triggerToRecurrence(trigger));
 }
 
 export function formatInstant(at: number, timeZone: string, locale?: string): string {

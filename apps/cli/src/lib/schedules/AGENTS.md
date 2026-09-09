@@ -40,6 +40,17 @@
   the PRODUCTION `prepareSessionInput` for this — an `ownerTarget` bypasses
   project resolution, so only that path proves the resulting `SessionMeta`
   carries no `project`, `repoFullName` or `baseBranch`.
+- A `manual` trigger is never due and has no next slot; only a Registry manual
+  request plans it. `definition.destination` chooses the Session: `new_session`
+  derives one per run, `own_session` derives ONE from schedule id + epoch, and
+  `existing_session` is the person's chosen chat. `scheduleRunIds` is the single
+  place that decides this; turn and source ids stay unique per run. Before
+  handoff, `destinationSessionProblem` requires a shared chat to be absent (owned
+  only) or the owner's, on this machine, driven by this Agent — the exact fields
+  `materializePreparedSessionInput` refuses to change — and reports
+  `SESSION_UNAVAILABLE` as a recoverable configuration problem. The command
+  service applies the same rule on create/edit and rejects a project on a
+  schedule that sends into a chat.
 - Dispose Task/Schedule workers before tearing down a workspace's Lody runtime.
   Timers and active evaluations must not survive workspace revocation.
 - Deterministic tests use injected clocks, explicit sync barriers and temporary

@@ -18,6 +18,8 @@ export const scheduleDocSchema = schema({
     // Absent for chat-only schedules; `schema.Any` carries no value generic,
     // so the read path is what re-establishes the `ProjectRef` type.
     project: schema.Any({ required: false }),
+    // Older documents predate destinations; the Zod default supplies one.
+    destination: schema.Any({ required: false }),
     retryPolicy: schema.Any<ScheduleDefinition['retryPolicy']>(),
     createdAt: schema.Number(),
     updatedAt: schema.Number(),

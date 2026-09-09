@@ -12,6 +12,7 @@ import {
   scheduleRegistryKeys,
 } from './schedule-registry';
 import {
+  DEFAULT_SCHEDULE_DESTINATION,
   ScheduleActivitySchema,
   ScheduleDefinitionSchema,
   ScheduleTombstoneSchema,
@@ -29,7 +30,7 @@ export type ScheduleDraft = Pick<
   | 'agent'
   | 'project'
   | 'retryPolicy'
-> & { prompt: string };
+> & { prompt: string; destination?: ScheduleDefinition['destination'] };
 
 export type ScheduleRepositoryPort = {
   openPersistedDoc: (id: string) => Promise<{ doc: unknown }>;
@@ -134,6 +135,12 @@ export class ScheduleRepository {
     const previous = args.create
       ? await this.read(args.scheduleId)
       : await this.owned(args.scheduleId, args.actorId);
+    // A draft may omit the destination; stored definitions never do, and the
+    // idempotency comparison must see the same shape on both sides.
+    const incoming: ScheduleDraft = {
+      ...args.draft,
+      destination: args.draft.destination ?? DEFAULT_SCHEDULE_DESTINATION,
+    };
     const prior = previous?.timeline.find((entry) => entry.id === args.activityId);
     if (prior) {
       const {
@@ -144,6 +151,7 @@ export class ScheduleRepository {
         overlapPolicy,
         agent,
         project,
+        destination,
         retryPolicy,
       } = previous!.definition;
       const draft = {
@@ -154,6 +162,7 @@ export class ScheduleRepository {
         overlapPolicy,
         agent,
         project,
+        destination,
         retryPolicy,
         prompt: previous!.prompt,
       };
@@ -161,7 +170,7 @@ export class ScheduleRepository {
         prior.actorId !== args.actorId ||
         previous!.definition.ownerId !== args.actorId ||
         prior.kind !== (args.create ? 'created' : 'edited') ||
-        canonicalScheduleJson(draft) !== canonicalScheduleJson(args.draft)
+        canonicalScheduleJson(draft) !== canonicalScheduleJson(incoming)
       )
         throw new Error('Idempotency key conflict');
       // Explicit replay completes a doc-first write; discovery never publishes it.
@@ -169,7 +178,7 @@ export class ScheduleRepository {
       return previous!;
     }
     if (args.create && previous) throw new Error('Schedule id already exists');
-    const { prompt, ...draft } = args.draft;
+    const { prompt, ...draft } = incoming;
     const definition = ScheduleDefinitionSchema.parse({
       ...draft,
       scheduleId: args.scheduleId,

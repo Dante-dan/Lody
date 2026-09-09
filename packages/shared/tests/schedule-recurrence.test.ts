@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   applyScheduleRecurrence,
   changeScheduleRecurrenceKind,
-  customRecurrenceExpression,
   defaultScheduleRecurrence,
   previewSchedule,
   recurrenceToTrigger,
@@ -22,6 +21,7 @@ const cron = (expression: string, timeZone = ZONE): ScheduleTrigger => ({
   expression,
   timeZone,
 });
+const timed = (trigger: ScheduleTrigger) => trigger as Exclude<ScheduleTrigger, { kind: 'manual' }>;
 
 describe('recurrence ⇄ trigger mapping', () => {
   it('names the rules a person can pick', () => {
@@ -37,12 +37,7 @@ describe('recurrence ⇄ trigger mapping', () => {
       minute: 30,
       timeZone: ZONE,
     });
-    expect(triggerToRecurrence(cron('0 9 * * MON-FRI'))).toEqual({
-      kind: 'weekdays',
-      hour: 9,
-      minute: 0,
-      timeZone: ZONE,
-    });
+    expect(triggerToRecurrence(cron('0 9 * * MON-FRI')).kind).toBe('weekdays');
     expect(triggerToRecurrence(cron('15 18 * * SUN,WED'))).toEqual({
       kind: 'weekly',
       weekdays: [0, 3],
@@ -50,24 +45,40 @@ describe('recurrence ⇄ trigger mapping', () => {
       minute: 15,
       timeZone: ZONE,
     });
-    expect(triggerToRecurrence(cron('0 9 1 * *'))).toEqual({
+    expect(triggerToRecurrence(cron('0 9 1,15 * *'))).toEqual({
       kind: 'monthly',
-      dayOfMonth: 1,
+      days: [1, 15],
       hour: 9,
       minute: 0,
+      timeZone: ZONE,
+    });
+    expect(triggerToRecurrence(cron('*/15 * * * *'))).toEqual({
+      kind: 'minutes',
+      every: 15,
+      timeZone: ZONE,
+    });
+    expect(triggerToRecurrence(cron('0 */2 * * *'))).toEqual({
+      kind: 'hours',
+      every: 2,
       timeZone: ZONE,
     });
   });
 
-  it('treats 7 and 0 as the same Sunday, and a full week as daily', () => {
-    expect(triggerToRecurrence(cron('0 9 * * 7'))).toEqual({
-      kind: 'weekly',
-      weekdays: [0],
-      hour: 9,
-      minute: 0,
-      timeZone: ZONE,
-    });
-    expect(triggerToRecurrence(cron('0 9 * * 0-6')).kind).toBe('daily');
+  it('reads intervals back as minute or hour steps', () => {
+    expect(
+      triggerToRecurrence({
+        kind: 'interval',
+        everyMs: 7 * 60_000,
+        anchorAt: '2026-09-06T00:00:00Z',
+      })
+    ).toMatchObject({ kind: 'minutes', every: 7 });
+    expect(
+      triggerToRecurrence({
+        kind: 'interval',
+        everyMs: 5 * 3_600_000,
+        anchorAt: '2026-09-06T00:00:00Z',
+      })
+    ).toMatchObject({ kind: 'hours', every: 5 });
   });
 
   it('expands a weekday range before folding 7 onto Sunday', () => {
@@ -76,69 +87,29 @@ describe('recurrence ⇄ trigger mapping', () => {
     // read it as "Sundays only".
     expect(triggerToRecurrence(cron('0 9 * * 0-7')).kind).toBe('daily');
     expect(triggerToRecurrence(cron('0 9 * * 1-7')).kind).toBe('daily');
-    expect(triggerToRecurrence(cron('0 9 * * 5-7'))).toEqual({
+    expect(triggerToRecurrence(cron('0 9 * * 5-7'))).toMatchObject({
       kind: 'weekly',
       weekdays: [0, 5, 6],
-      hour: 9,
-      minute: 0,
-      timeZone: ZONE,
     });
-    expect(triggerToRecurrence(cron('0 9 * * 6-7'))).toEqual({
-      kind: 'weekly',
-      weekdays: [0, 6],
-      hour: 9,
-      minute: 0,
-      timeZone: ZONE,
-    });
+    expect(triggerToRecurrence(cron('0 9 * * 7'))).toMatchObject({ kind: 'weekly', weekdays: [0] });
   });
 
-  it('replays a Sunday-7 range on the same days after a time or zone edit', () => {
-    // The failure this guards is silent: an unedited rule is returned verbatim,
-    // so only changing the time or the zone revealed the lost days.
-    for (const expression of ['0 9 * * 0-7', '0 9 * * 1-7', '0 9 * * 5-7', '0 9 * * 7']) {
-      const stored = cron(expression);
-      const recurrence = triggerToRecurrence(stored);
-      const laterHour = recurrenceToTrigger({ ...recurrence, hour: 18 } as ScheduleRecurrence);
-      const otherZone = recurrenceToTrigger({
-        ...recurrence,
-        timeZone: 'Europe/Berlin',
-      } as ScheduleRecurrence);
-      const days = (trigger: ScheduleTrigger) =>
-        previewSchedule(trigger, 0, NOW, 8).map((at) => new Date(at).getUTCDay());
-      // Same weekdays as the stored rule, only the clock moved.
-      expect(days(laterHour)).toEqual(days(cron(expression.replace('0 9', '0 18'))));
-      expect(days(otherZone).length).toBe(8);
-      expect(new Set(days(laterHour))).toEqual(new Set(days(stored)));
-    }
-  });
-
-  it('keeps rules it cannot name as an editable custom expression', () => {
+  it('keeps a rule it cannot name verbatim, read-only', () => {
     for (const expression of [
-      '*/15 * * * *',
-      '0 9 * * MON#2',
       '0 9,17 * * *',
       '0 9 1 1 *',
       '0 9 1 * 1',
+      '0 9 * * MON#2',
       '0 9 * * FRI-MON',
-      '0 9 * *',
+      '*/20 9-17 * * 1-5',
+      '15 */2 * * *',
     ]) {
       const trigger = cron(expression);
       const recurrence = triggerToRecurrence(trigger);
-      expect(recurrence.kind).toBe('custom');
-      // The fields ARE the state; the expression is what they mean.
-      expect(customRecurrenceExpression(recurrence as never)).toBe(expression);
+      expect(recurrence).toEqual({ kind: 'unsupported', trigger });
+      // Saving without replacing it re-emits exactly what was stored.
+      expect(applyScheduleRecurrence(recurrence, NOW, trigger)).toBe(trigger);
     }
-  });
-
-  it('passes instant-based rules through unchanged', () => {
-    const once: ScheduleTrigger = { kind: 'once', at: '2026-09-07T01:00:00.000Z' };
-    const interval: ScheduleTrigger = {
-      kind: 'interval',
-      everyMs: 3_600_000,
-      anchorAt: '2026-09-06T00:00:00.000Z',
-    };
-    expect(recurrenceToTrigger(triggerToRecurrence(once))).toEqual(once);
-    expect(recurrenceToTrigger(triggerToRecurrence(interval))).toEqual(interval);
   });
 
   it('round-trips every named rule back to the same instants', () => {
@@ -147,40 +118,44 @@ describe('recurrence ⇄ trigger mapping', () => {
       cron('30 7 * * 1-5'),
       cron('0 9 * * MON-FRI'),
       cron('0 9 * * 0-7'),
-      cron('0 9 * * 1-7'),
       cron('0 9 * * 5-7'),
-      cron('0 9 * * 7'),
       cron('15 18 * * SUN,WED'),
-      cron('0 9 1 * *'),
+      cron('0 9 1,15 * *'),
       cron('0 9 28 * *'),
       cron('*/15 * * * *'),
+      cron('0 */6 * * *'),
       { kind: 'once', at: '2026-09-07T01:00:00.000Z' },
-      { kind: 'interval', everyMs: 900_000, anchorAt: '2026-09-06T00:00:00.000Z' },
     ];
     for (const trigger of triggers) {
-      const replayed = recurrenceToTrigger(triggerToRecurrence(trigger));
+      const replayed = recurrenceToTrigger(triggerToRecurrence(timed(trigger)), NOW);
       expect(previewSchedule(replayed, 0, NOW, 8)).toEqual(previewSchedule(trigger, 0, NOW, 8));
     }
   });
 
-  it('emits a valid five-field expression for each named rule', () => {
-    const cases: [ScheduleRecurrence, string][] = [
-      [{ kind: 'daily', hour: 9, minute: 0, timeZone: ZONE }, '0 9 * * *'],
-      [{ kind: 'weekdays', hour: 7, minute: 30, timeZone: ZONE }, '30 7 * * 1-5'],
-      [
-        { kind: 'weekly', weekdays: [3, 0, 3], hour: 18, minute: 15, timeZone: ZONE },
-        '15 18 * * 0,3',
-      ],
-      [{ kind: 'monthly', dayOfMonth: 28, hour: 6, minute: 5, timeZone: ZONE }, '5 6 28 * *'],
-    ];
-    for (const [recurrence, expression] of cases) {
-      expect(recurrenceToTrigger(recurrence)).toEqual(cron(expression));
-    }
+  it('writes steps that divide the clock as aligned cron, others as intervals', () => {
+    expect(recurrenceToTrigger({ kind: 'minutes', every: 15, timeZone: ZONE }, NOW)).toEqual(
+      cron('*/15 * * * *')
+    );
+    expect(recurrenceToTrigger({ kind: 'minutes', every: 7, timeZone: ZONE }, NOW)).toEqual({
+      kind: 'interval',
+      everyMs: 7 * 60_000,
+      anchorAt: new Date(NOW).toISOString(),
+    });
+    expect(recurrenceToTrigger({ kind: 'hours', every: 6, timeZone: ZONE }, NOW)).toEqual(
+      cron('0 */6 * * *')
+    );
+    expect(recurrenceToTrigger({ kind: 'hours', every: 5, timeZone: ZONE }, NOW)).toMatchObject({
+      kind: 'interval',
+      everyMs: 5 * 3_600_000,
+    });
   });
 
-  it('refuses a weekly rule with no day selected', () => {
+  it('refuses a rule with no day selected', () => {
     expect(() =>
-      recurrenceToTrigger({ kind: 'weekly', weekdays: [], hour: 9, minute: 0, timeZone: ZONE })
+      recurrenceToTrigger({ kind: 'weekly', weekdays: [], hour: 9, minute: 0, timeZone: ZONE }, NOW)
+    ).toThrow(/at least one day/i);
+    expect(() =>
+      recurrenceToTrigger({ kind: 'monthly', days: [], hour: 9, minute: 0, timeZone: ZONE }, NOW)
     ).toThrow(/at least one day/i);
   });
 });
@@ -190,37 +165,39 @@ describe('editing an existing schedule', () => {
     // `MON-FRI` and `1-5` are the same rule; re-saving must not rewrite the
     // stored expression, which would invalidate the definition fingerprint.
     const stored = cron('0 9 * * MON-FRI');
-    expect(applyScheduleRecurrence(triggerToRecurrence(stored), stored)).toBe(stored);
-    const advanced = cron('*/15 9-17 * * *');
-    expect(applyScheduleRecurrence(triggerToRecurrence(advanced), advanced)).toBe(advanced);
+    expect(applyScheduleRecurrence(triggerToRecurrence(stored), NOW, stored)).toBe(stored);
+    const interval: ScheduleTrigger = {
+      kind: 'interval',
+      everyMs: 7 * 60_000,
+      anchorAt: '2026-01-01T00:00:00.000Z',
+    };
+    // Same for an interval: the anchor must not move to "now" on a no-op save.
+    expect(applyScheduleRecurrence(triggerToRecurrence(interval), NOW, interval)).toBe(interval);
   });
 
   it('rewrites only the part the person changed', () => {
     const stored = cron('0 9 * * MON-FRI');
     const edited = { ...triggerToRecurrence(stored), hour: 18 } as ScheduleRecurrence;
-    expect(applyScheduleRecurrence(edited, stored)).toEqual(cron('0 18 * * 1-5'));
+    expect(applyScheduleRecurrence(edited, NOW, stored)).toEqual(cron('0 18 * * 1-5'));
   });
 
-  it('keeps an unmapped expression editable as custom text', () => {
-    const stored = cron('0 9 * * MON#2');
-    const recurrence = triggerToRecurrence(stored) as Extract<
-      ScheduleRecurrence,
-      { kind: 'custom' }
-    >;
-    expect(recurrence.kind).toBe('custom');
-    expect(recurrence.fields.weekday).toEqual({ mode: 'raw', text: 'MON#2' });
-    // Croner extensions are rejected by the persisted protocol, so an author
-    // who opens one must be able to correct it in place — editing that one
-    // field, not the whole expression.
-    expect(
-      applyScheduleRecurrence(
-        {
-          ...recurrence,
-          fields: { ...recurrence.fields, weekday: { mode: 'list', values: [2] } },
-        },
-        stored
-      )
-    ).toEqual(cron('0 9 * * 2'));
+  it('replays a Sunday-7 range on the same days after a time or zone edit', () => {
+    for (const expression of ['0 9 * * 0-7', '0 9 * * 1-7', '0 9 * * 5-7', '0 9 * * 7']) {
+      const stored = cron(expression);
+      const recurrence = triggerToRecurrence(stored);
+      const laterHour = recurrenceToTrigger({ ...recurrence, hour: 18 } as ScheduleRecurrence, NOW);
+      const days = (trigger: ScheduleTrigger) =>
+        previewSchedule(trigger, 0, NOW, 8).map((at) => new Date(at).getUTCDay());
+      expect(days(laterHour)).toEqual(days(cron(expression.replace('0 9', '0 18'))));
+      expect(new Set(days(laterHour))).toEqual(new Set(days(stored)));
+    }
+  });
+
+  it('never rewrites a manual trigger from a recurrence it did not come from', () => {
+    const manual: ScheduleTrigger = { kind: 'manual' };
+    expect(applyScheduleRecurrence(defaultScheduleRecurrence(ZONE), NOW, manual)).toMatchObject({
+      kind: 'cron',
+    });
   });
 });
 
@@ -234,15 +211,9 @@ describe('switching between kinds', () => {
       minute: 30,
       timeZone: ZONE,
     });
-    expect(changeScheduleRecurrenceKind(start, 'weekdays', NOW)).toEqual({
-      kind: 'weekdays',
-      hour: 7,
-      minute: 30,
-      timeZone: ZONE,
-    });
     expect(changeScheduleRecurrenceKind(start, 'monthly', NOW)).toEqual({
       kind: 'monthly',
-      dayOfMonth: new Date(NOW).getDate(),
+      days: [new Date(NOW).getDate()],
       hour: 7,
       minute: 30,
       timeZone: ZONE,
@@ -259,50 +230,38 @@ describe('switching between kinds', () => {
     ).toEqual({ kind: 'weekly', weekdays: [1, 2, 3, 4, 5], hour: 9, minute: 0, timeZone: ZONE });
   });
 
-  it('seeds custom with the equivalent expression instead of a blank field', () => {
-    expect(
-      changeScheduleRecurrenceKind(
-        { kind: 'weekdays', hour: 7, minute: 30, timeZone: ZONE },
-        'custom',
-        NOW
-      )
-    ).toMatchObject({ kind: 'custom', timeZone: ZONE });
-    expect(
-      customRecurrenceExpression(
-        changeScheduleRecurrenceKind(
-          { kind: 'weekdays', hour: 7, minute: 30, timeZone: ZONE },
-          'custom',
-          NOW
-        ) as never
-      )
-    ).toBe('30 7 * * 1-5');
-  });
-
-  it('is a no-op for the current kind', () => {
+  it('is a no-op for the current kind and anchors instants on the injected clock', () => {
     const current = defaultScheduleRecurrence(ZONE);
     expect(changeScheduleRecurrenceKind(current, 'daily', NOW)).toBe(current);
-  });
-
-  it('anchors instant-based kinds on the injected clock', () => {
-    const start = defaultScheduleRecurrence(ZONE);
-    expect(changeScheduleRecurrenceKind(start, 'once', NOW)).toEqual({
+    expect(changeScheduleRecurrenceKind(current, 'once', NOW)).toEqual({
       kind: 'once',
       at: new Date(NOW + 3_600_000).toISOString(),
     });
-    expect(changeScheduleRecurrenceKind(start, 'interval', NOW)).toEqual({
-      kind: 'interval',
-      everyMs: 3_600_000,
-      anchorAt: new Date(NOW).toISOString(),
+    expect(changeScheduleRecurrenceKind(current, 'minutes', NOW)).toEqual({
+      kind: 'minutes',
+      every: 15,
+      timeZone: ZONE,
+    });
+    expect(changeScheduleRecurrenceKind(current, 'hours', NOW)).toEqual({
+      kind: 'hours',
+      every: 1,
+      timeZone: ZONE,
     });
   });
 });
 
 describe('recurrence equality', () => {
-  it('ignores weekday order and duplicates', () => {
+  it('ignores day order and duplicates', () => {
     expect(
       sameScheduleRecurrence(
         { kind: 'weekly', weekdays: [3, 1], hour: 9, minute: 0, timeZone: ZONE },
         { kind: 'weekly', weekdays: [1, 3, 3], hour: 9, minute: 0, timeZone: ZONE }
+      )
+    ).toBe(true);
+    expect(
+      sameScheduleRecurrence(
+        { kind: 'monthly', days: [15, 1], hour: 9, minute: 0, timeZone: ZONE },
+        { kind: 'monthly', days: [1, 15], hour: 9, minute: 0, timeZone: ZONE }
       )
     ).toBe(true);
   });

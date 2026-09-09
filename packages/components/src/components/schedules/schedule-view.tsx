@@ -15,7 +15,6 @@ import {
   applyScheduleRecurrence,
   defaultScheduleRecurrence,
   getServerNow,
-  incompleteScheduleRecurrenceFields,
   previewSchedule,
   triggerToRecurrence,
   type ScheduleRecurrence,
@@ -24,15 +23,13 @@ import {
   type ScheduleTrigger,
 } from '@lody/shared';
 import { Button } from '@/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/ui/collapsible';
 import { Input } from '@/ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
 import { Skeleton } from '@/ui/skeleton';
 import { Textarea } from '@/ui/textarea';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import {
+  describeDestination,
   describeStatus,
   describeTrigger,
   formatInstant,
@@ -40,7 +37,7 @@ import {
   triggerTimeZone,
   type ScheduleStatus,
 } from './schedule-format';
-import { PropertyRow, ScheduleSection, ghostSelectTriggerClass } from './schedule-property-row';
+import { ScheduleSection } from './schedule-property-row';
 import { ScheduleRecurrenceEditor } from './schedule-recurrence-editor';
 
 export function matchingScheduleRuntime(row: ScheduleRegistryRow, runtimes: ScheduleRuntimeRow[]) {
@@ -121,8 +118,13 @@ function ScheduleListRow({
   const zone = triggerTimeZone(row.trigger);
   const status = describeStatus(t, row.enabled, runtime?.queueState);
   const next = row.enabled ? runtime?.nextScheduledAt : undefined;
+  // A run that is appended to a chat has that chat's workspace, so the
+  // destination is the more useful fact than a project it does not have.
   const project =
-    context?.project ?? (row.projectKey || null) ?? t('schedules.chatOnly', 'Chat only');
+    row.destination.kind !== 'new_session'
+      ? describeDestination(row.destination, t)
+      : (context?.project ?? (row.projectKey || null) ?? t('schedules.chatOnly', 'Chat only'));
+  const manual = row.trigger.kind === 'manual';
   const offline = context ? context.presence !== 'online' : false;
   return (
     <div
@@ -163,6 +165,8 @@ function ScheduleListRow({
               {formatInstant(next, zone, i18n.language)} · {zone}
             </TooltipContent>
           </Tooltip>
+        ) : manual ? (
+          <span className="truncate">{t('schedules.trigger.onDemand', 'On demand')}</span>
         ) : row.enabled ? (
           <Tooltip>
             <TooltipTrigger asChild>
@@ -393,15 +397,17 @@ export type ScheduleFormValue = {
   overlap: 'skip' | 'queue_one';
 };
 
+type TriggerMode = 'timed' | 'manual';
+
 /**
  * The schedule editor.
  *
  * Three questions in the order a person answers them: what to run, when, and
- * with what. Title and prompt carry their guidance in the placeholder rather
- * than in a label above an empty box — the accessible name stays on the field.
- * There is no confirmation checkbox: pressing Save with a permission mode and a
- * machine already chosen IS the decision, and repeating it as a tick-box only
- * taught people to tick without reading.
+ * where the result goes. Title and prompt carry their guidance in the
+ * placeholder rather than in a label above an empty box — the accessible name
+ * stays on the field. There is no confirmation checkbox and no "advanced"
+ * drawer: misfire and overlap keep sensible defaults, and pressing Save with a
+ * permission mode and a machine already chosen IS the decision.
  */
 export function ScheduleForm({
   initial,
@@ -413,7 +419,7 @@ export function ScheduleForm({
   onSave,
 }: {
   initial: ScheduleFormValue;
-  /** Agent / Project / worktree rows, owned by the workspace container. */
+  /** Destination / Agent / Project rows, owned by the workspace container. */
   runConfig?: ReactNode;
   saveBlockers?: string[];
   saving: boolean;
@@ -424,49 +430,36 @@ export function ScheduleForm({
 }) {
   const { t, i18n } = useTranslation();
   const [value, setValue] = useState(initial);
-  const [recurrence, setRecurrence] = useState<ScheduleRecurrence>(() =>
-    triggerToRecurrence(initial.trigger)
+  const [mode, setMode] = useState<TriggerMode>(
+    initial.trigger.kind === 'manual' ? 'manual' : 'timed'
   );
-  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // The last timed rule survives a round trip through "manual", so switching
+  // back does not reset a carefully chosen time.
+  const [recurrence, setRecurrence] = useState<ScheduleRecurrence>(() =>
+    initial.trigger.kind === 'manual'
+      ? defaultScheduleRecurrence()
+      : triggerToRecurrence(initial.trigger)
+  );
 
   // Reuse the stored trigger verbatim while the rule is untouched, so opening
-  // and saving an advanced schedule cannot rewrite its expression.
+  // and saving an existing schedule cannot rewrite its expression.
   const resolved = useMemo(() => {
+    if (mode === 'manual') return { trigger: { kind: 'manual' } as ScheduleTrigger, times: [] };
     try {
-      const trigger = applyScheduleRecurrence(recurrence, initial.trigger);
+      const trigger = applyScheduleRecurrence(recurrence, now, initial.trigger);
       return { trigger, times: previewSchedule(trigger, 0, now) };
     } catch {
-      // Name the part that is unfinished. An incomplete custom field is the
-      // common case — the person just switched a field to "On selected" and has
-      // not chosen yet — and "check the time rule" would not tell them where.
-      const incomplete = incompleteScheduleRecurrenceFields(recurrence);
       return {
         error:
           recurrence.kind === 'weekly' && recurrence.weekdays.length === 0
             ? t('schedules.requireWeekday', 'Choose at least one day of the week.')
-            : incomplete.length
-              ? t('schedules.cron.requireValues', 'Choose a value for {{field}}.', {
-                  field: incomplete
-                    .map((id) =>
-                      t(`schedules.cron.${id}`, id as string).toLocaleLowerCase(
-                        toIntlLocaleOrEn(i18n.language)
-                      )
-                    )
-                    .join(t('schedules.cron.clauseSeparator', ', ')),
-                })
+            : recurrence.kind === 'monthly' && recurrence.days.length === 0
+              ? t('schedules.requireMonthDay', 'Choose at least one day of the month.')
               : t('schedules.invalidTime', 'Check the time rule and time zone.'),
       };
     }
-  }, [i18n.language, initial.trigger, now, recurrence, t]);
+  }, [initial.trigger, mode, now, recurrence, t]);
 
-  const misfireLabels: Record<ScheduleFormValue['misfire'], string> = {
-    skip: t('schedules.skipMissed', 'Skip old runs'),
-    run_once: t('schedules.runLatest', 'Run the latest missed time'),
-  };
-  const overlapLabels: Record<ScheduleFormValue['overlap'], string> = {
-    skip: t('schedules.skipOverlap', 'Skip the new run'),
-    queue_one: t('schedules.queueLatest', 'Keep the latest waiting run'),
-  };
   const requirementsId = useId();
   const blockers = [
     ...(!value.title.trim() ? [t('schedules.requireName', 'Enter a schedule name.')] : []),
@@ -511,100 +504,79 @@ export function ScheduleForm({
         />
       </div>
 
-      <ScheduleSection title={t('schedules.frequency', 'Frequency')}>
-        <ScheduleRecurrenceEditor value={recurrence} onChange={setRecurrence} now={now} />
-        <div
-          className="bg-muted/25 px-3 py-2 text-xs text-muted-foreground"
-          aria-live="polite"
-          aria-atomic="true"
-        >
-          {resolved.error ? (
-            <span className="text-status-warning" role="alert">
-              {resolved.error}
-            </span>
-          ) : resolved.times?.length ? (
-            <>
-              <span className="font-medium text-foreground/80">
-                {t('schedules.nextRuns', 'Next runs')}
-              </span>
-              <span className="ml-2">
-                {resolved.times
-                  .slice(0, 3)
-                  .map((at) => formatUpcoming(at, zone, now, i18n.language))
-                  .join(' · ')}
-              </span>
-              <span className="ml-2 opacity-70">{zone}</span>
-            </>
-          ) : (
-            t('schedules.noFuture', 'No future run under this rule.')
-          )}
-        </div>
+      <ScheduleSection
+        title={t('schedules.trigger.label', 'Trigger')}
+        action={
+          <div
+            role="radiogroup"
+            aria-label={t('schedules.trigger.label', 'Trigger')}
+            className="flex rounded-md bg-muted/60 p-0.5"
+          >
+            {(['timed', 'manual'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                role="radio"
+                aria-checked={mode === option}
+                onClick={() => setMode(option)}
+                className={cn(
+                  'rounded-[5px] px-2 py-0.5 text-[11px] font-medium transition-colors',
+                  mode === option
+                    ? 'bg-background text-foreground shadow-xs'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {option === 'timed'
+                  ? t('schedules.trigger.timed', 'On a schedule')
+                  : t('schedules.trigger.manual', 'Manual')}
+              </button>
+            ))}
+          </div>
+        }
+      >
+        {mode === 'manual' ? (
+          <p className="px-3 py-2.5 text-[13px] text-muted-foreground">
+            {t(
+              'schedules.trigger.manualHelp',
+              'Runs only when you press Run. Keep the prompt and target ready for whenever you need it.'
+            )}
+          </p>
+        ) : (
+          <>
+            <ScheduleRecurrenceEditor value={recurrence} onChange={setRecurrence} now={now} />
+            <div
+              className="bg-muted/25 px-3 py-2 text-xs text-muted-foreground"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              {resolved.error ? (
+                <span className="text-status-warning" role="alert">
+                  {resolved.error}
+                </span>
+              ) : resolved.times?.length ? (
+                <>
+                  <span className="font-medium text-foreground/80">
+                    {t('schedules.nextRuns', 'Next runs')}
+                  </span>
+                  <span className="ml-2">
+                    {resolved.times
+                      .slice(0, 3)
+                      .map((at) => formatUpcoming(at, zone, now, i18n.language))
+                      .join(' · ')}
+                  </span>
+                  <span className="ml-2 opacity-70">{zone}</span>
+                </>
+              ) : (
+                t('schedules.noFuture', 'No future run under this rule.')
+              )}
+            </div>
+          </>
+        )}
       </ScheduleSection>
 
       {runConfig ? (
-        <ScheduleSection title={t('schedules.runsWith', 'Runs with')}>{runConfig}</ScheduleSection>
+        <ScheduleSection title={t('schedules.sendTo', 'Send to')}>{runConfig}</ScheduleSection>
       ) : null}
-
-      <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
-        <CollapsibleTrigger asChild>
-          <button
-            type="button"
-            className="flex items-center gap-1 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
-          >
-            <ChevronRight
-              className={cn('size-3 transition-transform', advancedOpen && 'rotate-90')}
-              aria-hidden="true"
-            />
-            {t('schedules.advanced', 'Advanced')}
-          </button>
-        </CollapsibleTrigger>
-        <CollapsibleContent className="pt-1.5">
-          <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70 bg-card/40">
-            <PropertyRow label={t('schedules.misfire', 'If a run is missed')}>
-              <Select
-                value={value.misfire}
-                onValueChange={(next) =>
-                  setValue({ ...value, misfire: next as ScheduleFormValue['misfire'] })
-                }
-              >
-                <SelectTrigger
-                  aria-label={t('schedules.misfire', 'If a run is missed')}
-                  // A narrow panel truncates the value; the full text stays
-                  // reachable without opening the menu.
-                  title={misfireLabels[value.misfire]}
-                  className={ghostSelectTriggerClass}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="skip">{misfireLabels.skip}</SelectItem>
-                  <SelectItem value="run_once">{misfireLabels.run_once}</SelectItem>
-                </SelectContent>
-              </Select>
-            </PropertyRow>
-            <PropertyRow label={t('schedules.overlap', 'If the previous run is active')}>
-              <Select
-                value={value.overlap}
-                onValueChange={(next) =>
-                  setValue({ ...value, overlap: next as ScheduleFormValue['overlap'] })
-                }
-              >
-                <SelectTrigger
-                  aria-label={t('schedules.overlap', 'If the previous run is active')}
-                  title={overlapLabels[value.overlap]}
-                  className={ghostSelectTriggerClass}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="skip">{overlapLabels.skip}</SelectItem>
-                  <SelectItem value="queue_one">{overlapLabels.queue_one}</SelectItem>
-                </SelectContent>
-              </Select>
-            </PropertyRow>
-          </div>
-        </CollapsibleContent>
-      </Collapsible>
 
       {error ? (
         <p className="text-sm text-destructive" role="alert">
@@ -646,11 +618,11 @@ export function ScheduleForm({
 }
 
 /** Default form value for a brand new schedule: run every day at 09:00. */
-export function newScheduleFormValue(): ScheduleFormValue {
+export function newScheduleFormValue(now = getServerNow()): ScheduleFormValue {
   return {
     title: '',
     prompt: '',
-    trigger: applyScheduleRecurrence(defaultScheduleRecurrence()),
+    trigger: applyScheduleRecurrence(defaultScheduleRecurrence(), now),
     misfire: 'run_once',
     overlap: 'queue_one',
   };

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_SCHEDULE_DESTINATION,
   canonicalScheduleJson,
   getMachineRoomId,
   getMachineFlockDocId,
@@ -29,6 +30,10 @@ import type { AuthContext } from '../command-runtime';
 import type { LoroDocumentManager } from '../loro/doc';
 import type { WorkspaceSummary } from '../workspace';
 import { readMergedAgentConfigById } from '../agent-config-machine-flock';
+import {
+  destinationSessionProblem,
+  scheduleDestinationSessionId,
+} from './schedule-run-preparation';
 
 export type ScheduleCommandContext = {
   manager: LoroDocumentManager;
@@ -194,6 +199,32 @@ export async function executeScheduleCommand(
       );
       if (!projects[draft.project.localProjectId])
         throw new Error('Choose a Project on the target machine');
+    }
+    const destination = draft.destination ?? DEFAULT_SCHEDULE_DESTINATION;
+    const destinationSessionId = scheduleDestinationSessionId(id, destination);
+    if (destinationSessionId) {
+      // A shared chat carries its own workspace; a schedule sending into one
+      // must not also claim a project of its own.
+      if (draft.project) throw new Error('A schedule that sends into a chat has no project');
+      await sync(getSessionRoomId(destinationSessionId));
+      const sessionRecord = await manager.repo.getDocMeta(getSessionRoomId(destinationSessionId));
+      const problem = destinationSessionProblem({
+        destination,
+        session: !sessionRecord?.meta
+          ? { kind: 'absent' }
+          : isLoroRepoDocDeleted(sessionRecord)
+            ? { kind: 'deleted' }
+            : { kind: 'present', meta: sessionRecord.meta as SessionMeta },
+        userId: auth.userId,
+        machineId: machine.id,
+        agentConfigId: configId,
+      });
+      if (problem)
+        throw new Error(
+          destination.kind === 'existing_session'
+            ? 'Choose one of your own chats on the target machine, driven by the same Agent'
+            : 'This schedule’s chat uses a different Agent; start a new chat to change it'
+        );
     }
     if (!localOnly) {
       const { buildProjectOptions } = await import('../task-automation/task-automation-start');

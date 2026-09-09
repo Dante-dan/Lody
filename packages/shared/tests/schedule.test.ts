@@ -124,8 +124,16 @@ describe('Schedule persistence contract', () => {
     ).toBe(first);
     expect(scheduleDefinitionFingerprint({ definition: d, prompt: 'different' })).not.toBe(first);
     const key = scheduleRunKey('test', 'activation', 123);
-    expect(scheduleRunIds(key)).toEqual(scheduleRunIds(key));
-    expect(new Set(Object.values(scheduleRunIds(key))).size).toBe(3);
+    expect(
+      scheduleRunIds(key, { scheduleId: 'test', destination: { kind: 'new_session' } })
+    ).toEqual(scheduleRunIds(key, { scheduleId: 'test', destination: { kind: 'new_session' } }));
+    expect(
+      new Set(
+        Object.values(
+          scheduleRunIds(key, { scheduleId: 'test', destination: { kind: 'new_session' } })
+        )
+      ).size
+    ).toBe(3);
   });
   it('honors tombstones regardless of row order', () => {
     const row = buildScheduleRegistryRow({

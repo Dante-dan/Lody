@@ -28,6 +28,7 @@ import { ScheduleStore, type ScheduleRun } from './schedule-store';
 import {
   buildScheduleRunTarget,
   buildScheduleSessionCreateOptions,
+  scheduleDestinationSessionId,
   scheduleRequiredLocalProjectId,
 } from './schedule-run-preparation';
 
@@ -235,5 +236,134 @@ describe('Chat-only schedule handoff', () => {
     await run({ kind: 'local', localProjectId: 'p1' as never, useWorktree: true }, (context) => {
       expect(context.options[0]).toMatchObject({ localProject: 'p1', worktree: true });
     });
+  });
+});
+
+/**
+ * An owned chat: every run of the schedule is a new turn in ONE Session. The
+ * ids come from the same derivation the engine uses, through the real ledger
+ * and Loro history, so this fails if a retry or a second run ever creates a
+ * second chat.
+ */
+describe('Owned-chat schedule handoff', () => {
+  it('sends two runs into one Session as two prepared turns', async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), 'lody-schedule-own-'));
+    const store = new ScheduleStore<PreparedSessionInput>(path.join(directory, 'runs.sqlite'));
+    const metas = new Map<string, SessionMeta>();
+    const mirrors = new Map<string, Mirror<typeof sessionDocSchema>>();
+    const manager = {
+      repo: {
+        getDocMeta: async (id: string) => (metas.has(id) ? { meta: metas.get(id) } : undefined),
+        upsertDocMeta: async (id: string, patch: Partial<SessionMeta>) => {
+          metas.set(id, { ...metas.get(id), ...patch } as SessionMeta);
+        },
+        flush: async () => {},
+      },
+      getOrCreateSessionDoc: async (id: string) => {
+        if (!mirrors.has(id))
+          mirrors.set(
+            id,
+            new Mirror({
+              doc: new LoroDoc(),
+              schema: sessionDocSchema,
+              initialState: { history: [] },
+            })
+          );
+        const mirror = mirrors.get(id)!;
+        return {
+          getHistory: async () => mirror.getState().history,
+          updateHistory: async (update: (h: SessionHistoryInput[]) => SessionHistoryInput[]) => {
+            mirror.setState({ ...mirror.getState(), history: update(mirror.getState().history) });
+          },
+        };
+      },
+    } as unknown as LoroDocumentManager;
+    const document: ScheduleDocument = {
+      definition: {
+        ...definition(),
+        scheduleId: 'own',
+        trigger: { kind: 'manual' },
+        destination: { kind: 'own_session', epoch: 0 },
+      },
+      prompt: 'Daily note.',
+      timeline: [],
+    };
+    const fingerprint = buildScheduleRegistryRow(document).definitionFingerprint;
+    const sessions = new Set<string>();
+    const turns: string[] = [];
+    const ports: ScheduleEnginePorts<PreparedSessionInput> = {
+      workspaceId: 'workspace',
+      machineId: 'machine',
+      userId: 'owner',
+      store,
+      slots: new AgentExecutionSlots(),
+      now: () => 60_000,
+      ready: () => true,
+      disabled: () => false,
+      list: async () => [buildScheduleRegistryRow(document)],
+      read: async () => document,
+      validateTarget: async () => {},
+      prepare: async (scheduled) => {
+        sessions.add(scheduled.sessionId);
+        turns.push(scheduled.userTurnId);
+        return {
+          sessionId: scheduled.sessionId as PreparedSessionInput['sessionId'],
+          meta: {
+            id: scheduled.sessionId,
+            machineId: 'machine',
+            userId: 'owner',
+            agentConfigId: 'agent',
+            title: 'Daily note',
+            scheduleId: 'own',
+          } as SessionMeta,
+          userTurn: {
+            id: scheduled.userTurnId,
+            role: 'user',
+            status: 'prepared',
+            read: true,
+            timestamp: new Date(60_000).toISOString(),
+            items: [{ type: 'text', text: scheduled.prompt }],
+            fileDiff: [],
+            inputConfig: { scheduleToolsEnabled: true },
+          },
+        } satisfies PreparedSessionInput;
+      },
+      materialize: (prepared) => materializePreparedSessionInput(manager, prepared),
+      isDispatched: (prepared) => isPreparedSessionDispatched(manager, prepared),
+      dispatch: (prepared) => commitPreparedSessionDispatch(manager, prepared),
+      // The chat is idle between runs, so the second run may be handed off.
+      isFinished: async () => true,
+      publish: async () => {},
+      onError: () => {},
+    };
+    const engine = new ScheduleEngine(ports);
+    try {
+      // A manual trigger is never planned by the clock…
+      await engine.evaluate();
+      expect(store.unfinished('workspace')).toHaveLength(0);
+      // …only by request. Two requests, evaluated one after the other.
+      store.planManual('workspace', document, fingerprint, 'first', 60_000);
+      await engine.evaluate();
+      store.planManual('workspace', document, fingerprint, 'second', 61_000);
+      await engine.evaluate();
+
+      expect(sessions.size).toBe(1);
+      expect(new Set(turns).size).toBe(2);
+      const [sessionId] = sessions;
+      expect(sessionId).toBe(
+        scheduleDestinationSessionId('own', { kind: 'own_session', epoch: 0 })
+      );
+      expect(mirrors.size).toBe(1);
+      const history = mirrors.get(sessionId!)!.getState().history;
+      expect(history.filter((entry) => entry.role === 'user').map((entry) => entry.id)).toEqual(
+        turns
+      );
+      expect(metas.get(getSessionRoomId(sessionId as never))?.latestUserMsgId).toBe(turns[1]);
+    } finally {
+      await engine.stop();
+      store.close();
+      for (const mirror of mirrors.values()) mirror.dispose();
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

@@ -6,6 +6,7 @@ import {
   ScheduleTombstoneSchema,
   scheduleUsesElevatedPermissions,
   validateSchedulePrompt,
+  type ScheduleDestination,
   type ScheduleDocument,
   type ScheduleRegistryRow,
 } from './schedule-types';
@@ -76,6 +77,7 @@ export function buildScheduleRegistryRow(document: ScheduleDocument): ScheduleRe
     activationId: d.activationId,
     activeFrom: d.activeFrom,
     trigger: d.trigger,
+    destination: d.destination,
     agentConfigId: d.agent.agentConfigId,
     projectKind: d.project?.kind,
     projectKey: d.project
@@ -100,24 +102,46 @@ export function scheduleRunKey(
 export function manualScheduleRunKey(scheduleId: string, manualRunId: string): string {
   return digest([scheduleId, 'manual', manualRunId]);
 }
-export function scheduleRunIds(runKey: string): {
+/**
+ * The chat this schedule owns for `own_session`. Derived, never stored: the
+ * same schedule and epoch always name the same chat, so a retry, a restart or
+ * a second device cannot create a duplicate, and "start a new chat" is only a
+ * new epoch.
+ */
+export function scheduleOwnSessionId(scheduleId: string, epoch: number): SessionId {
+  return uuidV8(['lody.schedule.v1', 'own-session', scheduleId, epoch]) as SessionId;
+}
+
+function uuidV8(payload: unknown): string {
+  // RFC 9562 UUIDv8 with a domain-separated SHA-256 payload.
+  const bytes = digest(payload).slice(0, 32).split('');
+  bytes[12] = '8';
+  bytes[16] = ((parseInt(bytes[16]!, 16) & 3) | 8).toString(16);
+  const hex = bytes.join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Identifiers for one run. The turn and source entry are unique per run; the
+ * Session is unique per run only for `new_session` — the other destinations
+ * send every run into one chat.
+ */
+export function scheduleRunIds(
+  runKey: string,
+  target: { scheduleId: string; destination: ScheduleDestination }
+): {
   sessionId: SessionId;
   userTurnId: string;
   sourceEntryId: string;
 } {
-  // RFC 9562 UUIDv8 with a domain-separated SHA-256 payload.
-  const id = (purpose: string): string => {
-    const bytes = digest(['lody.schedule.v1', purpose, runKey]).slice(0, 32).split('');
-    bytes[12] = '8';
-    bytes[16] = ((parseInt(bytes[16]!, 16) & 3) | 8).toString(16);
-    const hex = bytes.join('');
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-  };
-  return {
-    sessionId: id('session') as SessionId,
-    userTurnId: id('turn'),
-    sourceEntryId: id('source'),
-  };
+  const id = (purpose: string): string => uuidV8(['lody.schedule.v1', purpose, runKey]);
+  const sessionId =
+    target.destination.kind === 'own_session'
+      ? scheduleOwnSessionId(target.scheduleId, target.destination.epoch)
+      : target.destination.kind === 'existing_session'
+        ? (target.destination.sessionId as SessionId)
+        : (id('session') as SessionId);
+  return { sessionId, userTurnId: id('turn'), sourceEntryId: id('source') };
 }
 
 export type ScheduleRegistryScanRow = { key: readonly unknown[]; value?: unknown };

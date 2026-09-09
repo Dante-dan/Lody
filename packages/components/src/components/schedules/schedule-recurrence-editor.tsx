@@ -1,44 +1,30 @@
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { Check, ChevronDown, Globe } from 'lucide-react';
 import {
-  CRON_FIELD_ORDER,
-  SCHEDULE_INTERVAL_UNITS,
+  SCHEDULE_HOUR_STEPS,
+  SCHEDULE_MINUTE_STEPS,
   SCHEDULE_RECURRENCE_KINDS,
   SCHEDULE_WEEKDAYS,
   changeScheduleRecurrenceKind,
   getDeviceTimeZone,
   normalizeScheduleWeekdays,
-  cronFieldsCombineDayAndWeekday,
-  formatCronExpression,
-  incompleteCronFieldIds,
-  parseCronExpression,
-  type ScheduleIntervalUnitId,
   type ScheduleRecurrence,
   type ScheduleRecurrenceKind,
   type ScheduleWeekday,
 } from '@lody/shared';
-import { Button } from '@/ui/button';
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '@/ui/command';
-import { Input } from '@/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/ui/select';
 import { cn } from '@/lib/utils';
-import { CronFieldRow } from './schedule-cron-field-editor';
-import { weekdayNames } from './schedule-format';
+import { describeRecurrence, weekdayNames } from './schedule-format';
 import { PropertyRow, ghostSelectTriggerClass, ghostValueClass } from './schedule-property-row';
 
 /** `<input type="datetime-local">` needs a wall-clock string, not an instant. */
 const toLocalInput = (iso: string): string => {
   const at = new Date(iso);
   return new Date(at.getTime() - at.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
-};
-
-const splitInterval = (everyMs: number): { amount: number; unit: ScheduleIntervalUnitId } => {
-  for (const unit of [...SCHEDULE_INTERVAL_UNITS].reverse()) {
-    if (everyMs % unit.ms === 0) return { amount: everyMs / unit.ms, unit: unit.id };
-  }
-  return { amount: Math.max(1, Math.round(everyMs / 60_000)), unit: 'minutes' };
 };
 
 function TimeZoneField({
@@ -64,10 +50,15 @@ function TimeZoneField({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild disabled={disabled}>
-        <button type="button" aria-label={label} disabled={disabled} className={ghostValueClass}>
-          <Globe className="size-3.5 shrink-0 opacity-60" />
+        <button
+          type="button"
+          aria-label={label}
+          disabled={disabled}
+          className={cn(ghostValueClass, 'h-7 px-1.5 text-xs text-muted-foreground')}
+        >
+          <Globe className="size-3 shrink-0 opacity-60" />
           <span className="truncate">{value}</span>
-          <ChevronDown className="size-3.5 shrink-0 opacity-50" />
+          <ChevronDown className="size-3 shrink-0 opacity-50" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[min(20rem,calc(100vw-2rem))] p-0">
@@ -95,35 +86,42 @@ function TimeZoneField({
   );
 }
 
-function WeekdayPicker({
-  value,
+/** Small square toggles; one row of seven for weekdays, a 7-wide grid for dates. */
+function DayToggles({
+  values,
+  options,
   onChange,
   disabled,
+  grid,
 }: {
-  value: readonly ScheduleWeekday[];
-  onChange: (next: ScheduleWeekday[]) => void;
+  values: readonly number[];
+  options: readonly { value: number; short: string; long: string }[];
+  onChange: (next: number[]) => void;
   disabled?: boolean;
+  grid?: boolean;
 }) {
-  const { i18n } = useTranslation();
-  const narrow = weekdayNames(i18n.language, 'narrow');
-  const long = weekdayNames(i18n.language, 'long');
-  const selected = new Set(value);
+  const selected = new Set(values);
   return (
-    <div className="flex flex-wrap justify-end gap-1">
-      {SCHEDULE_WEEKDAYS.map((day) => {
-        const on = selected.has(day);
+    <div
+      className={cn(
+        'flex flex-wrap justify-end gap-1',
+        grid && 'grid grid-cols-7 justify-items-end'
+      )}
+    >
+      {options.map((option) => {
+        const on = selected.has(option.value);
         return (
           <button
-            key={day}
+            key={option.value}
             type="button"
             disabled={disabled}
             aria-pressed={on}
-            aria-label={long[day]}
+            aria-label={option.long}
             onClick={() =>
               onChange(
-                normalizeScheduleWeekdays(
-                  on ? [...selected].filter((entry) => entry !== day) : [...selected, day]
-                )
+                on
+                  ? values.filter((entry) => entry !== option.value)
+                  : [...values, option.value].sort((a, b) => a - b)
               )
             }
             className={cn(
@@ -133,7 +131,7 @@ function WeekdayPicker({
                 : 'bg-muted/60 text-muted-foreground hover:bg-hover hover:text-foreground'
             )}
           >
-            {narrow[day]}
+            {option.short}
           </button>
         );
       })}
@@ -142,122 +140,35 @@ function WeekdayPicker({
 }
 
 /**
- * "Custom" as pickers, with an explicit text escape hatch.
+ * Rows that slide in and out as the rule changes shape.
  *
- * The five fields are the state. Nothing here re-derives an edit mode by
- * serializing and re-parsing the expression, which is what made a `raw` field
- * snap back to a range the moment its text happened to parse, and made an
- * emptied selection produce a four-field string that collapsed every picker.
- * An incomplete field simply is not serialized; the form reports it and blocks
- * Save.
+ * Height animates from the row's own content, so the card grows to fit the
+ * seven weekday toggles or the 31-day grid rather than jumping. Reduced motion
+ * collapses to an instant switch.
  */
-function CustomRuleEditor({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: Extract<ScheduleRecurrence, { kind: 'custom' }>;
-  onChange: (next: Extract<ScheduleRecurrence, { kind: 'custom' }>) => void;
-  disabled?: boolean;
-}) {
-  const { t } = useTranslation();
-  const showText = value.draftText !== undefined;
+function Reveal({ id, children }: { id: string; children: React.ReactNode }) {
+  const reduce = useReducedMotion();
   return (
-    <>
-      {showText ? (
-        <PropertyRow
-          label={t('schedules.repeat.expression', 'Expression')}
-          hint={t('schedules.cronHint', 'Standard five-field cron: minute hour day month weekday.')}
-        >
-          <Input
-            required
-            spellCheck={false}
-            disabled={disabled}
-            aria-label={t('schedules.expression', 'Five-field cron expression')}
-            className="h-8 w-full max-w-56 font-mono text-[13px]"
-            value={value.draftText}
-            onChange={(event) => {
-              // The draft is what the person typed. Fields follow it only when
-              // it parses, so a half-typed rule neither reverts nor is lost.
-              const draftText = event.target.value;
-              const parsed = parseCronExpression(draftText);
-              onChange({ ...value, draftText, ...(parsed ? { fields: parsed } : {}) });
-            }}
-          />
-        </PropertyRow>
-      ) : (
-        CRON_FIELD_ORDER.map((id) => (
-          <CronFieldRow
-            key={id}
-            id={id}
-            field={value.fields[id]}
-            disabled={disabled}
-            onChange={(field) => onChange({ ...value, fields: { ...value.fields, [id]: field } })}
-          />
-        ))
-      )}
-      {!showText && cronFieldsCombineDayAndWeekday(value.fields) ? (
-        <p className="px-3 py-2 text-xs text-muted-foreground">
-          {t(
-            'schedules.cron.dayOrWeekdayHint',
-            'A date and a weekday are both set. Cron runs when EITHER matches, not both.'
-          )}
-        </p>
-      ) : null}
-    </>
-  );
-}
-
-function CustomEditingToggleRow({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: Extract<ScheduleRecurrence, { kind: 'custom' }>;
-  onChange: (next: Extract<ScheduleRecurrence, { kind: 'custom' }>) => void;
-  disabled?: boolean;
-}) {
-  const { t } = useTranslation();
-  const showText = value.draftText !== undefined;
-  const incomplete = incompleteCronFieldIds(value.fields).length > 0;
-  const draftParses = showText && parseCronExpression(value.draftText!) !== null;
-  return (
-    <PropertyRow label={t('schedules.cron.editing', 'Editing')}>
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        // Returning to the pickers needs a rule they can show; leaving them
-        // needs a rule that can be written down.
-        disabled={disabled || (showText ? !draftParses : incomplete)}
-        className="h-8 px-2 text-xs font-normal text-muted-foreground"
-        onClick={() => {
-          if (!showText) {
-            onChange({ ...value, draftText: formatCronExpression(value.fields) });
-            return;
-          }
-          const parsed = parseCronExpression(value.draftText!);
-          if (parsed) {
-            const { draftText: _draftText, ...rest } = value;
-            onChange({ ...rest, fields: parsed });
-          }
-        }}
-      >
-        {showText
-          ? t('schedules.cron.usePickers', 'Use pickers')
-          : t('schedules.cron.editAsText', 'Edit as text')}
-      </Button>
-    </PropertyRow>
+    <motion.div
+      key={id}
+      layout
+      initial={reduce ? false : { height: 0, opacity: 0 }}
+      animate={{ height: 'auto', opacity: 1 }}
+      exit={reduce ? undefined : { height: 0, opacity: 0 }}
+      transition={{ duration: 0.18, ease: 'easeOut' }}
+      className="overflow-hidden"
+    >
+      {children}
+    </motion.div>
   );
 }
 
 /**
- * The time rule, as rows that appear only once they apply.
+ * The time rule, as the few shapes people actually set.
  *
- * Everything a person can pick is a named rule; the persisted trigger is
- * derived by `@lody/shared`. Custom is the last option rather than the default
- * surface, so nobody has to read cron to set a daily reminder — but an existing
- * expression this picker cannot name still opens here, verbatim and editable.
+ * Every option is a named rule; the persisted trigger is derived by
+ * `@lody/shared`. There is no cron here: a stored rule the picker cannot name
+ * is shown read-only with a "Replace" affordance, never rewritten.
  */
 export function ScheduleRecurrenceEditor({
   value,
@@ -270,23 +181,52 @@ export function ScheduleRecurrenceEditor({
   now: number;
   disabled?: boolean;
 }) {
-  const { t } = useTranslation();
-  const kindLabels: Record<ScheduleRecurrenceKind, string> = {
+  const { t, i18n } = useTranslation();
+  const kindLabels: Record<Exclude<ScheduleRecurrenceKind, 'unsupported'>, string> = {
     daily: t('schedules.repeat.daily', 'Every day'),
     weekdays: t('schedules.repeat.weekdays', 'Every weekday'),
     weekly: t('schedules.repeat.weekly', 'Every week'),
     monthly: t('schedules.repeat.monthly', 'Every month'),
-    interval: t('schedules.repeat.interval', 'Interval'),
+    hours: t('schedules.repeat.hours', 'Every few hours'),
+    minutes: t('schedules.repeat.minutes', 'Every few minutes'),
     once: t('schedules.repeat.once', 'Once'),
-    custom: t('schedules.repeat.custom', 'Custom'),
   };
   const hasWallClock =
-    value.kind !== 'once' && value.kind !== 'interval' && value.kind !== 'custom';
+    value.kind === 'daily' ||
+    value.kind === 'weekdays' ||
+    value.kind === 'weekly' ||
+    value.kind === 'monthly';
   const timeValue = hasWallClock
     ? `${String(value.hour).padStart(2, '0')}:${String(value.minute).padStart(2, '0')}`
     : '';
-  const intervalValue = value.kind === 'interval' ? value : null;
-  const interval = intervalValue ? splitInterval(intervalValue.everyMs) : null;
+  const shortWeekdays = weekdayNames(i18n.language, 'narrow');
+  const longWeekdays = weekdayNames(i18n.language, 'long');
+
+  if (value.kind === 'unsupported') {
+    return (
+      <PropertyRow
+        label={t('schedules.repeat.label', 'Repeat')}
+        hint={t(
+          'schedules.repeat.unsupportedHint',
+          'This rule was created with an older version and can no longer be edited here. Replace it to change it.'
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <span className="truncate text-[13px] text-muted-foreground">
+            {describeRecurrence(value, t, i18n.language)}
+          </span>
+          <button
+            type="button"
+            disabled={disabled}
+            className="shrink-0 text-[13px] text-primary underline-offset-2 hover:underline disabled:opacity-50"
+            onClick={() => onChange(changeScheduleRecurrenceKind(value, 'daily', now))}
+          >
+            {t('schedules.repeat.replace', 'Replace')}
+          </button>
+        </div>
+      </PropertyRow>
+    );
+  }
 
   return (
     <>
@@ -294,9 +234,16 @@ export function ScheduleRecurrenceEditor({
         <Select
           value={value.kind}
           disabled={disabled}
-          onValueChange={(kind) =>
-            onChange(changeScheduleRecurrenceKind(value, kind as ScheduleRecurrenceKind, now))
-          }
+          onValueChange={(kind) => {
+            if ((SCHEDULE_RECURRENCE_KINDS as readonly string[]).includes(kind))
+              onChange(
+                changeScheduleRecurrenceKind(
+                  value,
+                  kind as Exclude<ScheduleRecurrenceKind, 'unsupported'>,
+                  now
+                )
+              );
+          }}
         >
           <SelectTrigger
             aria-label={t('schedules.repeat.label', 'Repeat')}
@@ -314,150 +261,140 @@ export function ScheduleRecurrenceEditor({
         </Select>
       </PropertyRow>
 
-      {value.kind === 'weekly' ? (
-        <PropertyRow label={t('schedules.repeat.on', 'On')}>
-          <WeekdayPicker
-            value={value.weekdays}
-            disabled={disabled}
-            onChange={(weekdays) => onChange({ ...value, weekdays })}
-          />
-        </PropertyRow>
-      ) : null}
-
-      {value.kind === 'monthly' ? (
-        <PropertyRow label={t('schedules.repeat.dayOfMonth', 'Day of month')}>
-          <Select
-            value={String(value.dayOfMonth)}
-            disabled={disabled}
-            onValueChange={(day) => onChange({ ...value, dayOfMonth: Number(day) })}
-          >
-            <SelectTrigger
-              aria-label={t('schedules.repeat.dayOfMonth', 'Day of month')}
-              className={ghostSelectTriggerClass}
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {Array.from({ length: 31 }, (_, index) => index + 1).map((day) => (
-                <SelectItem key={day} value={String(day)}>
-                  {day}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </PropertyRow>
-      ) : null}
-
-      {interval && intervalValue ? (
-        <PropertyRow label={t('schedules.repeat.every', 'Every')}>
-          <div className="flex items-center justify-end gap-1.5">
-            <Input
-              type="number"
-              min={1}
-              step={1}
-              disabled={disabled}
-              aria-label={t('schedules.repeat.every', 'Every')}
-              className="h-8 w-16 text-right"
-              value={interval.amount}
-              onChange={(event) => {
-                const amount = Math.max(1, Math.round(Number(event.target.value) || 1));
-                const unit = SCHEDULE_INTERVAL_UNITS.find((entry) => entry.id === interval.unit)!;
-                onChange({ ...intervalValue, everyMs: amount * unit.ms });
-              }}
-            />
-            <Select
-              value={interval.unit}
-              disabled={disabled}
-              onValueChange={(id) => {
-                const unit = SCHEDULE_INTERVAL_UNITS.find((entry) => entry.id === id)!;
-                onChange({ ...intervalValue, everyMs: interval.amount * unit.ms });
-              }}
-            >
-              <SelectTrigger
-                aria-label={t('schedules.repeat.unit', 'Interval unit')}
-                className={cn(ghostSelectTriggerClass, 'w-auto')}
+      <AnimatePresence initial={false} mode="popLayout">
+        {value.kind === 'minutes' || value.kind === 'hours' ? (
+          <Reveal id="every">
+            <PropertyRow label={t('schedules.repeat.every', 'Every')}>
+              <Select
+                value={String(value.every)}
+                disabled={disabled}
+                // A controlled Select can emit '' while its option list is
+                // swapped (hours → minutes); that is not a choice.
+                onValueChange={(every) => {
+                  const step = Number(every);
+                  if (Number.isInteger(step) && step > 0) onChange({ ...value, every: step });
+                }}
               >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {SCHEDULE_INTERVAL_UNITS.map((unit) => (
-                  <SelectItem key={unit.id} value={unit.id}>
-                    {t(`schedules.unit.${unit.id}`, unit.id)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </PropertyRow>
-      ) : null}
+                <SelectTrigger
+                  aria-label={t('schedules.repeat.every', 'Every')}
+                  className={ghostSelectTriggerClass}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(value.kind === 'minutes' ? SCHEDULE_MINUTE_STEPS : SCHEDULE_HOUR_STEPS).map(
+                    (step) => (
+                      <SelectItem key={step} value={String(step)}>
+                        {value.kind === 'minutes'
+                          ? t('schedules.everyMinutes', {
+                              count: step,
+                              defaultValue: '{{count}} minutes',
+                            })
+                          : t('schedules.everyHours', {
+                              count: step,
+                              defaultValue: '{{count}} hours',
+                            })}
+                      </SelectItem>
+                    )
+                  )}
+                </SelectContent>
+              </Select>
+            </PropertyRow>
+          </Reveal>
+        ) : null}
 
-      {hasWallClock ? (
-        <PropertyRow label={t('schedules.repeat.at', 'At')}>
-          <input
-            type="time"
-            required
-            disabled={disabled}
-            aria-label={t('schedules.repeat.at', 'At')}
-            className={cn(ghostValueClass, 'w-auto')}
-            value={timeValue}
-            onChange={(event) => {
-              const [hour, minute] = event.target.value.split(':');
-              if (hour === undefined || minute === undefined) return;
-              onChange({ ...value, hour: Number(hour), minute: Number(minute) });
-            }}
-          />
-        </PropertyRow>
-      ) : null}
+        {value.kind === 'weekly' ? (
+          <Reveal id="weekdays">
+            <PropertyRow label={t('schedules.repeat.on', 'On')}>
+              <DayToggles
+                values={value.weekdays}
+                disabled={disabled}
+                options={SCHEDULE_WEEKDAYS.map((day: ScheduleWeekday) => ({
+                  value: day,
+                  short: shortWeekdays[day]!,
+                  long: longWeekdays[day]!,
+                }))}
+                onChange={(weekdays) =>
+                  onChange({
+                    ...value,
+                    weekdays: normalizeScheduleWeekdays(weekdays as ScheduleWeekday[]),
+                  })
+                }
+              />
+            </PropertyRow>
+          </Reveal>
+        ) : null}
 
-      {value.kind === 'once' || value.kind === 'interval' ? (
-        <PropertyRow
-          label={
-            value.kind === 'once'
-              ? t('schedules.repeat.runAt', 'Run at')
-              : t('schedules.repeat.startingAt', 'Starting')
-          }
-          hint={t('schedules.deviceZone', 'This device’s time zone ({{zone}})', {
-            zone: getDeviceTimeZone(),
-          })}
-        >
-          <input
-            type="datetime-local"
-            required
-            disabled={disabled}
-            aria-label={
-              value.kind === 'once'
-                ? t('schedules.repeat.runAt', 'Run at')
-                : t('schedules.repeat.startingAt', 'Starting')
-            }
-            className={cn(ghostValueClass, 'w-auto')}
-            value={toLocalInput(value.kind === 'once' ? value.at : value.anchorAt)}
-            onChange={(event) => {
-              if (!event.target.value) return;
-              const at = new Date(event.target.value).toISOString();
-              onChange(value.kind === 'once' ? { ...value, at } : { ...value, anchorAt: at });
-            }}
-          />
-        </PropertyRow>
-      ) : null}
+        {value.kind === 'monthly' ? (
+          <Reveal id="days">
+            <PropertyRow label={t('schedules.repeat.onDays', 'On days')} align="start">
+              <DayToggles
+                grid
+                values={value.days}
+                disabled={disabled}
+                options={Array.from({ length: 31 }, (_, index) => ({
+                  value: index + 1,
+                  short: String(index + 1),
+                  long: t('schedules.repeat.dayOfMonthN', 'Day {{day}}', { day: index + 1 }),
+                }))}
+                onChange={(days) => onChange({ ...value, days })}
+              />
+            </PropertyRow>
+          </Reveal>
+        ) : null}
 
-      {value.kind === 'custom' ? (
-        <CustomRuleEditor value={value} onChange={onChange} disabled={disabled} />
-      ) : null}
+        {hasWallClock ? (
+          <Reveal id="time">
+            <PropertyRow label={t('schedules.repeat.at', 'At')}>
+              <div className="flex items-center gap-1">
+                <input
+                  type="time"
+                  required
+                  disabled={disabled}
+                  aria-label={t('schedules.repeat.at', 'At')}
+                  className={cn(ghostValueClass, 'w-auto')}
+                  value={timeValue}
+                  onChange={(event) => {
+                    const [hour, minute] = event.target.value.split(':');
+                    if (hour === undefined || minute === undefined) return;
+                    onChange({ ...value, hour: Number(hour), minute: Number(minute) });
+                  }}
+                />
+                <TimeZoneField
+                  value={value.timeZone}
+                  disabled={disabled}
+                  label={t('schedules.timeZone', 'Time zone')}
+                  onChange={(timeZone) => onChange({ ...value, timeZone })}
+                />
+              </div>
+            </PropertyRow>
+          </Reveal>
+        ) : null}
 
-      {value.kind !== 'once' && value.kind !== 'interval' ? (
-        <PropertyRow label={t('schedules.timeZone', 'Time zone')}>
-          <TimeZoneField
-            value={value.timeZone}
-            disabled={disabled}
-            label={t('schedules.timeZone', 'Time zone')}
-            onChange={(timeZone) => onChange({ ...value, timeZone })}
-          />
-        </PropertyRow>
-      ) : null}
-
-      {value.kind === 'custom' ? (
-        <CustomEditingToggleRow value={value} onChange={onChange} disabled={disabled} />
-      ) : null}
+        {value.kind === 'once' ? (
+          <Reveal id="once">
+            <PropertyRow
+              label={t('schedules.repeat.runAt', 'Run at')}
+              hint={t('schedules.deviceZone', 'This device’s time zone ({{zone}})', {
+                zone: getDeviceTimeZone(),
+              })}
+            >
+              <input
+                type="datetime-local"
+                required
+                disabled={disabled}
+                aria-label={t('schedules.repeat.runAt', 'Run at')}
+                className={cn(ghostValueClass, 'w-auto')}
+                value={toLocalInput(value.at)}
+                onChange={(event) => {
+                  if (!event.target.value) return;
+                  onChange({ ...value, at: new Date(event.target.value).toISOString() });
+                }}
+              />
+            </PropertyRow>
+          </Reveal>
+        ) : null}
+      </AnimatePresence>
     </>
   );
 }

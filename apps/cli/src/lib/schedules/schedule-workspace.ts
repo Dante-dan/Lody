@@ -30,6 +30,8 @@ import { streamsRoomBinding } from '../loro/streams-room-binding';
 import {
   buildScheduleRunTarget,
   buildScheduleSessionCreateOptions,
+  destinationSessionProblem,
+  scheduleDestinationSessionId,
   scheduleRequiredLocalProjectId,
 } from './schedule-run-preparation';
 import { readTaskIndexRowsForWorkspace } from '../task-automation/task-automation-scheduler';
@@ -116,6 +118,25 @@ export async function createScheduleWorkspace(args: {
     });
     if (!hasExplicitSchedulePermission(agent, capability))
       throw new ScheduleConfigurationError('PERMISSION_UNAVAILABLE');
+    const destinationSessionId = scheduleDestinationSessionId(
+      run.definition.scheduleId,
+      run.definition.destination
+    );
+    if (destinationSessionId) {
+      const sessionRecord = await manager.repo.getDocMeta(getSessionRoomId(destinationSessionId));
+      const problem = destinationSessionProblem({
+        destination: run.definition.destination,
+        session: !sessionRecord?.meta
+          ? { kind: 'absent' }
+          : isLoroRepoDocDeleted(sessionRecord)
+            ? { kind: 'deleted' }
+            : { kind: 'present', meta: sessionRecord.meta as SessionMeta },
+        userId: auth.userId,
+        machineId: auth.machineId,
+        agentConfigId: agent.agentConfigId,
+      });
+      if (problem) throw new ScheduleConfigurationError(problem);
+    }
     return buildScheduleRunTarget({
       targetMachine: machine,
       agentConfig: agentConfig.config,

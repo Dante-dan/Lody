@@ -37,12 +37,20 @@ export function validateScheduleTrigger(value: unknown): ScheduleTrigger {
   return trigger;
 }
 
+/** Whether the clock ever plans this trigger; `manual` runs only on request. */
+export function isTimedScheduleTrigger(
+  trigger: ScheduleTrigger
+): trigger is Exclude<ScheduleTrigger, { kind: 'manual' }> {
+  return trigger.kind !== 'manual';
+}
+
 /** First slot strictly after `after`, never before this activation. */
 export function nextScheduleSlot(
   trigger: ScheduleTrigger,
   activeFrom: number,
   after: number
 ): number | undefined {
+  if (trigger.kind === 'manual') return undefined;
   const lower = Math.max(activeFrom, after + 1);
   if (trigger.kind === 'once') {
     const at = Date.parse(trigger.at);
@@ -67,6 +75,7 @@ export function latestScheduleSlot(
   now: number
 ): number | undefined {
   let latest: number | undefined;
+  if (trigger.kind === 'manual') return undefined;
   if (trigger.kind === 'once') latest = Date.parse(trigger.at);
   else if (trigger.kind === 'interval') {
     const anchor = Date.parse(trigger.anchorAt);

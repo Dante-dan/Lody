@@ -40,6 +40,7 @@ const ready = (overrides: Partial<ScheduleSaveContext> = {}): ScheduleSaveContex
   machine,
   project: null,
   machineLocalProjectIds: new Set(),
+  destination: { kind: 'new_session' },
   ...overrides,
 });
 
@@ -98,5 +99,45 @@ describe('what stops a schedule from being saved', () => {
     expect(collectScheduleSaveBlockers(ready({ workspaceReady: false }), t)).toContain(
       en['schedules.workspaceNotReady']
     );
+  });
+});
+
+describe('sending runs into a chat', () => {
+  it('requires a chat to be chosen for the existing-chat destination', () => {
+    expect(
+      collectScheduleSaveBlockers(
+        ready({ destination: { kind: 'existing_session', sessionId: '' } }),
+        t
+      )
+    ).toContain(en['schedules.destination.requireChat']);
+    expect(
+      collectScheduleSaveBlockers(
+        ready({ destination: { kind: 'existing_session', sessionId: 's1' } }),
+        t
+      )
+    ).toEqual([]);
+  });
+
+  it('locks the Agent and machine to the chat once one exists', () => {
+    const own = ready({
+      destination: { kind: 'own_session', epoch: 0 },
+      destinationSession: { agentConfigId: 'writer', machineId: 'machine' },
+    });
+    expect(collectScheduleSaveBlockers(own, t)).toContain(
+      en['schedules.destination.agentMismatch']
+    );
+    expect(
+      collectScheduleSaveBlockers(
+        ready({
+          destination: { kind: 'own_session', epoch: 0 },
+          destinationSession: { agentConfigId: 'agent', machineId: 'laptop' },
+        }),
+        t
+      )
+    ).toContain(en['schedules.destination.machineMismatch']);
+    // Before the first run there is no chat yet, so nothing is locked.
+    expect(
+      collectScheduleSaveBlockers(ready({ destination: { kind: 'own_session', epoch: 0 } }), t)
+    ).toEqual([]);
   });
 });

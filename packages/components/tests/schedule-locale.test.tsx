@@ -12,7 +12,6 @@ import {
   formatInstant,
   formatTimeOfDay,
   formatUpcoming,
-  monthNames,
   weekdayNames,
 } from '../src/components/schedules/schedule-format';
 import type { ScheduleRegistryRow, ScheduleRuntimeRow } from '@lody/shared';
@@ -34,6 +33,7 @@ const row: ScheduleRegistryRow = {
   createdAt: 0,
   updatedAt: 0,
   trigger: { kind: 'cron', expression: '0 9 * * MON-FRI', timeZone: 'Asia/Shanghai' },
+  destination: { kind: 'new_session' },
   elevatedPermissions: false,
   agentConfigId: 'agent',
   definitionFingerprint: '0'.repeat(64),
@@ -53,9 +53,11 @@ describe('Chinese is a product language, not an Intl locale', () => {
   let instance: typeof i18next;
   beforeAll(async () => {
     instance = i18next.createInstance();
-    await instance
-      .use(initReactI18next)
-      .init({ lng: 'zh_CN', resources: { zh_CN: { translation: zh }, en: { translation: en } } });
+    await instance.use(initReactI18next).init({
+      lng: 'zh_CN',
+      resources: { zh_CN: { translation: zh }, en: { translation: en } },
+      interpolation: { escapeValue: false },
+    });
   });
   beforeEach(() => {
     container = document.createElement('div');
@@ -72,11 +74,18 @@ describe('Chinese is a product language, not an Intl locale', () => {
   it('formats every schedule surface under zh_CN without throwing', () => {
     for (const language of ['zh_CN', 'zh-CN', 'en', '', undefined]) {
       expect(() => weekdayNames(language, 'short')).not.toThrow();
-      expect(() => monthNames(language, 'short')).not.toThrow();
       expect(() => formatTimeOfDay(9, 0, language)).not.toThrow();
       expect(() => formatInstant(NOW, 'Asia/Shanghai', language)).not.toThrow();
       expect(() => formatUpcoming(NOW + 86_400_000, 'Asia/Shanghai', NOW, language)).not.toThrow();
       expect(() => describeTrigger(row.trigger, instance.t, language)).not.toThrow();
+      expect(() =>
+        describeTrigger(
+          { kind: 'cron', expression: '0 9 1,15 * *', timeZone: 'UTC' },
+          instance.t,
+          language
+        )
+      ).not.toThrow();
+      expect(() => describeTrigger({ kind: 'manual' }, instance.t, language)).not.toThrow();
     }
   });
 
@@ -144,23 +153,42 @@ describe('Chinese is a product language, not an Intl locale', () => {
     expect(monday!.getAttribute('aria-label')).toBeTruthy();
   });
 
-  it('renders the custom field pickers in Chinese', () => {
+  it('renders the monthly day grid and a manual task in Chinese', () => {
     render(
       <ScheduleForm
         now={NOW}
         saving={false}
         onSave={() => {}}
         initial={{
-          title: '构建巡检',
-          prompt: '检查构建。',
-          trigger: { kind: 'cron', expression: '*/20 9-17 * * 1-5', timeZone: 'Asia/Shanghai' },
+          title: '月度提醒',
+          prompt: '起草提醒。',
+          trigger: { kind: 'cron', expression: '0 9 1,15 * *', timeZone: 'Asia/Shanghai' },
           misfire: 'skip',
           overlap: 'skip',
         }}
       />
     );
-    expect(container.textContent).toContain(zh['schedules.cron.minute']);
-    expect(container.textContent).toContain(zh['schedules.cron.weekday']);
+    expect(container.textContent).toContain(zh['schedules.repeat.onDays']);
+    expect(container.querySelectorAll('[aria-pressed="true"]')).toHaveLength(2);
+    // A fresh root: `initial` seeds uncontrolled editor state.
+    act(() => root.unmount());
+    container.replaceChildren();
+    root = createRoot(container);
+    render(
+      <ScheduleForm
+        now={NOW}
+        saving={false}
+        onSave={() => {}}
+        initial={{
+          title: '部署清单',
+          prompt: '走一遍。',
+          trigger: { kind: 'manual' },
+          misfire: 'skip',
+          overlap: 'skip',
+        }}
+      />
+    );
+    expect(container.textContent).toContain(zh['schedules.trigger.manualHelp']);
   });
   it('keeps Chinese custom pickers usable when a field is emptied and refilled', () => {
     render(

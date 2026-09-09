@@ -14,6 +14,7 @@ export const ScheduleDraftSchema = ScheduleDefinitionSchema.pick({
   overlapPolicy: true,
   agent: true,
   project: true,
+  destination: true,
   retryPolicy: true,
 })
   .extend({ prompt: z.string().min(1).max(32768) })

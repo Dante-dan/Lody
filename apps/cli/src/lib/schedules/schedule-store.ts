@@ -160,7 +160,7 @@ export class ScheduleStore<Prepared = unknown> {
                 this.put({ ...prior, state: 'skipped', errorCode: 'SUPERSEDED' });
             }
             this.put({
-              ...scheduleRunIds(runKey),
+              ...scheduleRunIds(runKey, { scheduleId: d.scheduleId, destination: d.destination }),
               runKey,
               workspaceId,
               scheduleId: d.scheduleId,
@@ -215,7 +215,7 @@ export class ScheduleStore<Prepared = unknown> {
         const existing = this.get(runKey);
         if (existing) return existing;
         const run: ScheduleRun<Prepared> = {
-          ...scheduleRunIds(runKey),
+          ...scheduleRunIds(runKey, { scheduleId: d.scheduleId, destination: d.destination }),
           runKey,
           workspaceId,
           scheduleId: d.scheduleId,

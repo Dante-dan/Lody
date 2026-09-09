@@ -8,6 +8,7 @@ import {
   type MachineLegacyMetaFields,
   type MachineMeta,
   type ProjectRef,
+  type ScheduleDestination,
   type TaskAgentRef,
 } from '@lody/shared';
 
@@ -23,6 +24,12 @@ export type ScheduleSaveContext = {
   project: ProjectRef | null;
   /** Local projects available on the agent's machine. */
   machineLocalProjectIds: ReadonlySet<string>;
+  destination: ScheduleDestination;
+  /**
+   * The chat runs will be appended to, once it exists: a picked chat, or an
+   * owned chat after its first run. Its Agent and machine are then fixed.
+   */
+  destinationSession?: { agentConfigId: string; machineId: string } | null;
 };
 
 /**
@@ -76,5 +83,18 @@ export function collectScheduleSaveBlockers(context: ScheduleSaveContext, t: TFu
     !context.machineLocalProjectIds.has(context.project.localProjectId)
   )
     blockers.push(t('schedules.projectMachine', 'Choose a Project on the selected machine.'));
+  if (context.destination.kind === 'existing_session' && !context.destination.sessionId)
+    blockers.push(t('schedules.destination.requireChat', 'Choose a chat to send runs into.'));
+  // A shared chat already has an Agent on a machine; the CLI refuses to append
+  // a turn driven by any other. Say so here rather than at dispatch time.
+  const session = context.destinationSession;
+  if (session && agentConfig && agentConfig.id !== session.agentConfigId)
+    blockers.push(
+      t('schedules.destination.agentMismatch', 'Use the Agent this chat already runs with.')
+    );
+  if (session && agentConfig && agentConfig.machineId !== session.machineId)
+    blockers.push(
+      t('schedules.destination.machineMismatch', 'The chat lives on a different machine.')
+    );
   return blockers;
 }
