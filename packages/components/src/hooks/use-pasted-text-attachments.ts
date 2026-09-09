@@ -1,3 +1,4 @@
+import type { AttachmentProgress } from '@/components/chat/submission/pending-attachment-submission';
 import { useCallback } from 'react';
 import { useAtomValue } from 'jotai';
 import { useTranslation } from 'react-i18next';
@@ -30,7 +31,8 @@ export function usePastedTextAttachments(
     async (
       drafts: readonly PastedTextDraft[],
       sessionId: SessionId,
-      existingBlocks: readonly SessionInputBlock[] = []
+      existingBlocks: readonly SessionInputBlock[] = [],
+      options?: { signal?: AbortSignal; onProgress?: (progress: AttachmentProgress) => void }
     ): Promise<SessionInputBlock[]> => {
       if (
         drafts.length + existingBlocks.filter((block) => block.type === 'file').length >
@@ -43,8 +45,14 @@ export function usePastedTextAttachments(
           )
         );
       const blocks: SessionInputBlock[] = [];
-      for (const draft of drafts) {
+      for (const [index, draft] of drafts.entries()) {
+        options?.signal?.throwIfAborted();
         const file = new File([draft.text], getPastedTextFileName(draft), { type: 'text/plain' });
+        const report = (
+          progress: import('@/lib/session-file-upload').SessionFileTransferProgress
+        ) =>
+          options?.onProgress?.({ ...progress, fileName: file.name, index, count: drafts.length });
+        report({ phase: 'preparing', percent: 0, loadedBytes: 0, totalBytes: file.size });
         if (!workspaceId || !machineId || validateSessionFile(file)) {
           throw new Error(
             t(
@@ -62,11 +70,21 @@ export function usePastedTextAttachments(
           });
           if (!result?.ok || !result.files[0])
             throw new Error(t('sessions.fileUploadFailed', 'File upload failed'));
+          options?.signal?.throwIfAborted();
+          report({
+            phase: 'verifying',
+            percent: 100,
+            loadedBytes: file.size,
+            totalBytes: file.size,
+          });
           blocks.push(result.files[0]);
         } else {
           if (!cloudSync || !token)
             throw new Error(t('sessions.fileUploadMissingAuth', 'Please sign in to upload files'));
-          const sha256 = await computeSha256Hex(file);
+          const sha256 = await computeSha256Hex(file, {
+            signal: options?.signal,
+            onProgress: report,
+          });
           const uploaded = await uploadSessionFile({
             workspaceId,
             sessionId,
@@ -74,6 +92,8 @@ export function usePastedTextAttachments(
             file,
             sha256,
             textPreview: true,
+            signal: options?.signal,
+            onProgress: report,
           });
           blocks.push(uploaded);
         }

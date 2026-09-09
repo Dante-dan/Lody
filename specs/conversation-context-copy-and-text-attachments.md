@@ -44,6 +44,33 @@ available only with cloud-sync capability. Transfer failure preserves the draft
 and prevents submission. Attachments count toward the existing per-message file
 limit. Submitted history files are immutable through the draft editor.
 
+## Sending feedback
+
+Sending a new conversation with text-file drafts navigates immediately to its
+reserved session route. Until the files have uploaded and passed verification,
+that route renders a client-local pending message with its text, current file,
+transfer phase and byte progress, explicitly labeled as not sent. Existing
+conversation composers show the same pending feedback above the input.
+
+The pending route does not create an empty durable session, append a user turn,
+or dispatch an Agent request. Upload completion is followed by the existing atomic
+session-and-first-turn acceptance. The UI distinguishes uploading, verification,
+and submitting; upload completion alone is never presented as message delivery.
+
+Upload failure retains the draft and offers Retry upload or Return to edit.
+Retry never retries session acceptance; an acceptance failure requires returning
+to edit. Returning to edit during an upload aborts the cloud transfer and prevents
+late results from submitting a message. Local IPC transfers cannot be interrupted,
+but their late results are discarded. Route changes do not own the new-session
+upload lifetime. The selected account, workspace and submitted input remain frozen;
+a changed account or active workspace prevents acceptance.
+
+The landing keeps one pending upload submission per user because its prompt draft
+is user-scoped. Returning to the landing exposes a link to the pending route. This
+state is in memory only, like the existing attachment drafts; it does not survive
+reload or app restart and does not imply cross-device upload progress. Edit/resend
+retains its existing editor submission feedback.
+
 The receiving CLI materializes ordinary file blocks beneath the execution
 workspace's `.lody/attachments/` and supplies ACP `resource_link` blocks with
 `file://` URIs. It does not inline the text. Agents may subsequently read the file;

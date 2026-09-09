@@ -25,8 +25,13 @@ The composer retains pasted-text identity and editing, but emits a small file-na
 reference instead of expanding full content into the prompt. The shared
 `use-pasted-text-attachments` hook transfers the edited bytes at send for landing,
 session, and edit/resend. Existing attachment transport owns CLI download and ACP
-Resource Link delivery. Landing uses the existing submission lifetime hook to lock
-before upload and retire stale submissions. Edit/resend reuses ChatComposer.
+Resource Link delivery. Landing initially locks through the composer lifetime, then hands text-file uploads
+to a client-local pending submission before navigating to the reserved session route.
+That task owns progress and upload-only retry across route mounts. Session creation
+still atomically accepts the first turn after upload; the pending page is never a
+shared history entry. Cancellation ignores late results, and account/workspace
+changes prevent acceptance. Existing-session uploads retain their mounted composer
+lifetime and show the same not-sent status. Edit/resend reuses ChatComposer.
 
 A single 5000-character threshold avoids an intermediate visual state whose text
 expands at send. Higher 30000/60000 thresholds and a separate 1024-character folding
@@ -34,6 +39,14 @@ tier were considered; manual conversion in both directions retains control
 without per-model token estimates. No new wire fields or backend are introduced.
 
 ## Verification and limits
+
+The pending upload tests exercise the real status surface through progress,
+unmount/remount, failure/retry, cancellation and late completion. Byte progress
+comes from the existing upload transport; hashing and verification have separate
+labels. Local IPC reports preparation/completion rather than invented byte progress.
+An upload-success result only releases acceptance once; acceptance failure does not
+offer upload retry. Pending state and unsent drafts are still memory-only.
+
 
 Synthetic tests cover inclusive copy range, unsupported-fork menus, exact edited
 file bytes, local/cloud routing and failures, and mention offsets. Existing

@@ -68,7 +68,9 @@ project.sharedWithTeam`. The selected Private segment opens `ProjectShareDialog`
 - Submit immediately hides and disables the visible landing draft but preserves
   its controlled text, attachment resources, and reserved session id until
   `startSession` accepts. Failure must reveal the unchanged draft; only acceptance
-  may clear resources or reset the reserved id. The accepted history entry is
+  may clear resources or reset the reserved id. Text-file uploads navigate first to
+  a client-local pending route; its task owns progress and upload retry across
+  unmounts (see `submission/AGENTS.md`). The accepted history entry is
   direct-authored into the renderer's own session store.
 - Draft ACP preparation uses that same reserved id. It carries no prompt, env, or
   secret-shaped ACP option values; it may include the current sanitized

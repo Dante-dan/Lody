@@ -1,3 +1,7 @@
+import {
+  beginPendingAttachmentSubmission,
+  usePendingAttachmentSubmissions,
+} from './submission/pending-attachment-submission';
 import { useComposerSubmission } from './submission/use-composer-submission';
 import { usePastedTextAttachments } from '@/hooks/use-pasted-text-attachments';
 import {
@@ -85,7 +89,7 @@ import { lodyPresenceNowMsAtom, lodyPresenceStatesAtom } from '@/atoms/presence'
 import { buildAgentPrompt } from '@/lib';
 import { getAppCurrentPathWithSearch } from '@/lib/app-location';
 import { isImeComposingKeyboardEvent } from '@/lib/ime';
-import { useNavigate } from '@tanstack/react-router';
+import { useNavigate, useRouter } from '@tanstack/react-router';
 import { activeWorkspaceRuntimeAtom, authTokenAtom, runtimeAtom } from '@/atoms/runtime';
 
 import { toast } from 'sonner';
@@ -571,6 +575,7 @@ function WorkspaceChatLanding({
 }: ChatLandingProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const router = useRouter();
   const { openSettings } = useOpenSettings();
   const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
   const workspaceRuntime = useAtomValue(runtimeAtom);
@@ -1044,10 +1049,15 @@ function WorkspaceChatLanding({
   const [selectedMachineId, setSelectedMachineId] = useState<MachineId | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<AgentSelection | null>(null);
   const promptTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const { submissionPending: submitting, beginSubmission } = useComposerSubmission(
+  const { submissionPending: localSubmitting, beginSubmission } = useComposerSubmission(
     chatLandingDraftKey,
     promptTextareaRef
   );
+  const pendingAttachmentSubmissions = usePendingAttachmentSubmissions();
+  const activeAttachmentSubmission = pendingAttachmentSubmissions.find(
+    (item) => item.ownerId === userId
+  );
+  const submitting = localSubmitting || !!activeAttachmentSubmission;
   const mcpSelection = useSessionMcpSelection(undefined, { disabled: submitting });
   // The project selector always uses the machine-aware picker so multi-machine
   // workspaces can choose the target explicitly. Standalone Electron entry
@@ -1343,7 +1353,7 @@ function WorkspaceChatLanding({
   const appliedResetKeyAtom = chatLandingAppliedResetKeyAtomFamily(chatLandingDraftKey);
 
   useEffect(() => {
-    if (!resetDraftKey) {
+    if (activeAttachmentSubmission || !resetDraftKey) {
       return;
     }
 
@@ -1360,6 +1370,7 @@ function WorkspaceChatLanding({
     clearPendingFiles();
     resetDraftSessionId();
   }, [
+    activeAttachmentSubmission,
     appliedResetKeyAtom,
     chatLandingStateKey,
     clearPendingFiles,
@@ -3018,28 +3029,51 @@ function WorkspaceChatLanding({
       configOptionValues,
       configOptionSelectors,
     });
+    if (contextType === 'local' && !selectedLocalProject) {
+      captureSessionInputBlocked('missing_project');
+      setComposerError(t('chat.validation.missingProject', 'Please select a project'));
+      return;
+    }
+    if (contextType === 'local' && selectedLocalProject?.machineId !== scopedMachineId) {
+      captureSessionInputBlocked('missing_project');
+      setComposerError(t('chat.validation.missingProject', 'Please select a project'));
+      return;
+    }
+
     const sessionIdForStart = draftSessionId ?? ensureDraftSessionId();
     const submission = beginSubmission({ dismissKeyboard: usesMobileKeyboardAction });
     if (!submission) return;
+    let pendingUpload: ReturnType<typeof beginPendingAttachmentSubmission> | undefined;
+    let acceptedSession = false;
     try {
       setComposerStatus(null);
-      inputBlocks.push(
-        ...(await uploadPastedTextAttachments(pastedTextDrafts, sessionIdForStart, inputBlocks))
-      );
-      if (!submission.isCurrent()) return;
+      if (pastedTextDrafts.length > 0) {
+        pendingUpload = beginPendingAttachmentSubmission(
+          {
+            sessionId: sessionIdForStart,
+            ownerId: userId,
+            workspaceSlug,
+            returnHref: router.state.location.href,
+            onReturnToEdit: () => { if (mobileNewChatOpen) setMobileNewChatOpen(true); },
+            text: expandedPrompt.text,
+          },
+          (signal, onProgress) =>
+            uploadPastedTextAttachments(pastedTextDrafts, sessionIdForStart, inputBlocks, {
+              signal,
+              onProgress,
+            })
+        );
+        if (mobileNewChatOpen) setMobileNewChatOpen(false);
+        void navigate(
+          getSessionCreationNavigation(workspaceSlug, sessionIdForStart, usesMobileKeyboardAction)
+        ).catch(() => {
+          pendingUpload?.cancel();
+        });
+        inputBlocks.push(...(await pendingUpload.uploaded));
+        if (!pendingUpload.isActive()) return;
+      } else if (!submission.isCurrent()) return;
       let project: ProjectRef | undefined;
       let repoFullNameForMentions: string | undefined;
-
-      if (contextType === 'local' && !selectedLocalProject) {
-        captureSessionInputBlocked('missing_project');
-        setComposerError(t('chat.validation.missingProject', 'Please select a project'));
-        return;
-      }
-      if (contextType === 'local' && selectedLocalProject?.machineId !== scopedMachineId) {
-        captureSessionInputBlocked('missing_project');
-        setComposerError(t('chat.validation.missingProject', 'Please select a project'));
-        return;
-      }
 
       if (contextType === 'local' && selectedLocalProject) {
         const githubRepoFullName = resolveSelectedLocalProjectGitHubRepo(activeLocalGitState);
@@ -3096,6 +3130,9 @@ function WorkspaceChatLanding({
       if (!pendingHistoryEntry) {
         throw new Error('Initial session history missing effective items');
       }
+      if (pendingUpload && (draftStore.get(userAtom)?.id !== userId || draftStore.get(activeWorkspaceRuntimeAtom) !== runtime)) {
+        throw new Error('The active account or workspace changed before submission');
+      }
       startFailureReason = 'session_create_failed';
       const { sessionId, historyEntry } = await startSession(
         {
@@ -3132,6 +3169,8 @@ function WorkspaceChatLanding({
       if (!historyEntry || typeof historyEntry !== 'object' || !('id' in historyEntry)) {
         throw new Error(`Initial session history missing entry id (sessionId=${sessionId})`);
       }
+      acceptedSession = true;
+      pendingUpload?.complete();
       persistAgentSessionDefaults(selectedAgent.agentId, {
         modeId: modeOptions.length > 0 ? selectedModeId : null,
         modelId: modelOptions.length > 0 ? selectedModelId : null,
@@ -3288,10 +3327,13 @@ function WorkspaceChatLanding({
         promptTextareaRef.current?.blur();
         setMobileNewChatOpen(false);
       }
-      await navigate(
-        getSessionCreationNavigation(workspaceSlug, sessionId, usesMobileKeyboardAction)
-      );
+      if (!pendingUpload)
+        await navigate(
+          getSessionCreationNavigation(workspaceSlug, sessionId, usesMobileKeyboardAction)
+        );
     } catch (error) {
+      if (pendingUpload && !pendingUpload.isActive() && !acceptedSession) return;
+      if (!acceptedSession) pendingUpload?.fail();
       capturePostHogEvent(postHog, 'session/start_failed', {
         user_id: userId ?? null,
         workspace_id: workspaceId ?? null,
@@ -4366,14 +4408,35 @@ function WorkspaceChatLanding({
             selectedMachineProjectStatus === 'no-projects-on-selected-machine'
           )
         );
-  const visibleComposerStatus = getChatLandingVisibleComposerStatus({
-    contextType,
-    composerStatus,
-    localGitStateError,
-    selectedMachineProjectStatus: selectedMachineProjectStatusMessage
-      ? { message: selectedMachineProjectStatusMessage, tone: 'warning' }
-      : null,
-  });
+  const visibleComposerStatus = activeAttachmentSubmission
+    ? {
+        tone: 'info' as const,
+        message: (
+          <button
+            type="button"
+            className="underline"
+            onClick={() => {
+              void navigate(
+                getSessionCreationNavigation(
+                  activeAttachmentSubmission.workspaceSlug,
+                  activeAttachmentSubmission.sessionId,
+                  usesMobileKeyboardAction
+                )
+              );
+            }}
+          >
+            {t('composer.viewPendingUpload', 'Message not sent yet. View upload progress')}
+          </button>
+        ),
+      }
+    : getChatLandingVisibleComposerStatus({
+        contextType,
+        composerStatus,
+        localGitStateError,
+        selectedMachineProjectStatus: selectedMachineProjectStatusMessage
+          ? { message: selectedMachineProjectStatusMessage, tone: 'warning' }
+          : null,
+      });
 
   // ── Title ──
   // Rotate the landing heading once per (UTC) day: stable within a day, no

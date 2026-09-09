@@ -1,3 +1,5 @@
+import { AttachmentSubmissionStatus } from '../chat/submission/attachment-submission-status';
+import type { AttachmentProgress } from '../chat/submission/pending-attachment-submission';
 import { usePastedTextAttachments } from '@/hooks/use-pasted-text-attachments';
 import {
   useState,
@@ -579,6 +581,14 @@ export const SessionChatInputArea = memo(
     });
     const authToken = useAtomValue(authTokenAtom);
     const uploadPastedTextAttachments = usePastedTextAttachments(workspaceId, session.machineId);
+    const [attachmentSubmission, setAttachmentSubmission] = useState<{
+      sessionId: string;
+      text: string;
+      progress?: AttachmentProgress;
+      phase: 'uploading' | 'submitting' | 'upload-failed' | 'submit-failed';
+    } | null>(null);
+    if (attachmentSubmission && attachmentSubmission.sessionId !== session.id)
+      setAttachmentSubmission(null);
     const currentUser = useAtomValue(userAtom);
     const postHog = usePostHog();
     const isArchived = session.isArchived === true;
@@ -1891,12 +1901,37 @@ export const SessionChatInputArea = memo(
       };
       const submission = beginSubmission({ dismissKeyboard: usesMobileKeyboardAction });
       if (!submission) return;
+      const submittedAgentRole = agentRoleTurnSelectionRef.current;
+      let filesReady = false;
       try {
+        setAttachmentSubmission(
+          pastedTextDrafts.length > 0
+            ? { sessionId: session.id, text: userInput, phase: 'uploading' }
+            : null
+        );
         inputBlocks.push(
-          ...(await uploadPastedTextAttachments(pastedTextDrafts, session.id, inputBlocks))
+          ...(await uploadPastedTextAttachments(pastedTextDrafts, session.id, inputBlocks, {
+            onProgress: (progress) => {
+              if (submission.isCurrent())
+                setAttachmentSubmission({
+                  sessionId: session.id,
+                  text: userInput,
+                  phase: 'uploading',
+                  progress,
+                });
+            },
+          }))
         );
         if (!submission.isCurrent()) return;
-        const accepted = await onSendMessage(inputBlocks, agentRoleTurnSelectionRef.current);
+        filesReady = true;
+        setAttachmentSubmission((previous) =>
+          previous ? { ...previous, phase: 'submitting' } : null
+        );
+        const accepted = await onSendMessage(inputBlocks, submittedAgentRole);
+        if (submission.isCurrent())
+          setAttachmentSubmission((previous) =>
+            accepted ? null : previous ? { ...previous, phase: 'submit-failed' } : null
+          );
         if (accepted) {
           if (submission.isCurrent()) {
             clearInput();
@@ -1921,8 +1956,12 @@ export const SessionChatInputArea = memo(
           }
         }
       } catch (error) {
-        if (submission.isCurrent())
+        if (submission.isCurrent()) {
+          setAttachmentSubmission((previous) =>
+            previous ? { ...previous, phase: filesReady ? 'submit-failed' : 'upload-failed' } : null
+          );
           toast.error(error instanceof Error ? error.message : fileUploadFailedLabel);
+        }
       } finally {
         submission.finish();
       }
@@ -2558,6 +2597,22 @@ export const SessionChatInputArea = memo(
               className="hidden"
               onChange={handleAttachmentInputChange}
             />
+          ) : null}
+          {attachmentSubmission?.sessionId === session.id ? (
+            <div className="mb-3">
+              <AttachmentSubmissionStatus
+                {...attachmentSubmission}
+                onRetry={() => {
+                  void sendMessage();
+                }}
+                onEdit={
+                  attachmentSubmission.phase === 'upload-failed' ||
+                  attachmentSubmission.phase === 'submit-failed'
+                    ? () => setAttachmentSubmission(null)
+                    : undefined
+                }
+              />
+            </div>
           ) : null}
           {composerNode}
         </ConversationColumn>

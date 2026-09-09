@@ -21,7 +21,8 @@ reasoning behind those rules.
   state and rendering for references attached to outgoing messages.
 - `context-switch.tsx`, `machine-pairing-dialog.tsx`, `web-chat-landing-screen.tsx`
   — landing chrome and host-specific entry points.
-- [`submission/`](submission/AGENTS.md) — the composer submission lifecycle
+- [`submission/`](submission/AGENTS.md) — the composer submission lifecycle and
+  pending text-file upload status before first-turn acceptance
   (its own scope, with its own rules).
 - Landing attachment uploads live in two sibling hooks under `src/hooks/`:
   `use-chat-landing-image-draft.ts` (images) and `use-chat-landing-file-draft.ts`
