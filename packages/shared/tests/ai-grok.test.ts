@@ -43,7 +43,6 @@ describe('builtin Grok shared contract', () => {
     expect(capabilities?.configOptions[0]?.type).toBe('boolean');
     expect(capabilities?.configOptions[1]?.options.map((option) => option.value)).toEqual([
       'ask',
-      'auto',
       'always-approve',
     ]);
     expect(capabilities?.configOptions[2]?.currentValue).toBe('grok-4.6');
