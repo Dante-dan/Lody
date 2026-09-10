@@ -1,3 +1,6 @@
+import { isElectronRenderer } from '@/lib/electron';
+import { openSessionOnModifiedClick } from '@/lib/desktop-window';
+import { SessionWindowMenuItem } from './session-window-menu-item';
 import { cn } from '@/lib/utils';
 import {
   closestCenter,
@@ -841,6 +844,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
             );
             const handleAnchorClick = useAnchor
               ? (event: ReactMouseEvent<HTMLAnchorElement>) => {
+                  if (openSessionOnModifiedClick(event, session.sessionId)) return;
                   if (
                     event.metaKey ||
                     event.ctrlKey ||
@@ -922,8 +926,9 @@ const SessionGroupSection = memo(function SessionGroupSection({
                 onClick={
                   useAnchor
                     ? undefined
-                    : () => {
+                    : (event) => {
                         if (!isSelectable) return;
+                        if (openSessionOnModifiedClick(event, session.sessionId)) return;
                         onSelectSession?.(session.sessionId);
                       }
                 }
@@ -1040,57 +1045,6 @@ const SessionGroupSection = memo(function SessionGroupSection({
               <ContextMenu key={session.sessionId}>
                 <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
                 <ContextMenuContent className="min-w-[180px]">
-                  <SessionRowOpenedByMenuItems
-                    opener={openedByOpener}
-                    separateToggle={hasStandardMenuActions}
-                    goToOpener={
-                      canGoToOpener && openerSessionId
-                        ? () => {
-                            if (onNavigateSessionTab && openerRootSessionId) {
-                              onNavigateSessionTab(openerRootSessionId, openerSessionId);
-                              return;
-                            }
-                            onSelectSession?.(openerSessionId);
-                          }
-                        : undefined
-                    }
-                    goToOpenerLabel={contextMenuLabels.goToOpenerSession}
-                  />
-                  {onOpenPullRequest && prUrl ? (
-                    <>
-                      <ContextMenuItem
-                        onSelect={() => {
-                          onOpenPullRequest({
-                            sessionId: session.sessionId,
-                            repoFullName: group.repoFullName,
-                            prUrl,
-                            prNumber,
-                          });
-                        }}
-                      >
-                        <GitPullRequest />
-                        {contextMenuLabels.openPr}
-                      </ContextMenuItem>
-                      {onRenameSession ||
-                      onTogglePinSession ||
-                      onArchiveSession ||
-                      canMarkUnread ||
-                      onCopySessionUrl ||
-                      session.branchName ? (
-                        <ContextMenuSeparator />
-                      ) : null}
-                    </>
-                  ) : null}
-                  {onRenameSession ? (
-                    <ContextMenuItem
-                      onSelect={() => {
-                        beginRename(session.sessionId, session.title);
-                      }}
-                    >
-                      <Pencil />
-                      {contextMenuLabels.rename}
-                    </ContextMenuItem>
-                  ) : null}
                   {onTogglePinSession ? (
                     <ContextMenuItem
                       onSelect={() => {
@@ -1111,18 +1065,18 @@ const SessionGroupSection = memo(function SessionGroupSection({
                       {contextMenuLabels.markUnread}
                     </ContextMenuItem>
                   ) : null}
-                  {onArchiveSession ? (
+                  {onRenameSession ? (
                     <ContextMenuItem
                       onSelect={() => {
-                        onArchiveSession(session.sessionId);
+                        beginRename(session.sessionId, session.title);
                       }}
                     >
-                      <Archive />
-                      {contextMenuLabels.archive}
+                      <Pencil />
+                      {contextMenuLabels.rename}
                     </ContextMenuItem>
                   ) : null}
-                  {(onRenameSession || onTogglePinSession || onArchiveSession || canMarkUnread) &&
-                  (onCopySessionUrl || session.branchName) ? (
+                  {(onTogglePinSession || canMarkUnread || onRenameSession) &&
+                  (onCopySessionUrl || session.branchName || shareMenuState) ? (
                     <ContextMenuSeparator />
                   ) : null}
                   {onCopySessionUrl ? (
@@ -1133,6 +1087,16 @@ const SessionGroupSection = memo(function SessionGroupSection({
                     >
                       <Link2 />
                       {contextMenuLabels.copyUrl}
+                    </ContextMenuItem>
+                  ) : null}
+                  {session.branchName ? (
+                    <ContextMenuItem
+                      onSelect={() => {
+                        void navigator.clipboard.writeText(session.branchName).catch(() => {});
+                      }}
+                    >
+                      <GitBranch />
+                      {contextMenuLabels.copyBranch}
                     </ContextMenuItem>
                   ) : null}
                   {shareMenuState ? (
@@ -1158,14 +1122,70 @@ const SessionGroupSection = memo(function SessionGroupSection({
                             : contextMenuLabels.loadingSharing}
                     </ContextMenuItem>
                   ) : null}
-                  {session.branchName ? (
+                  {(onTogglePinSession ||
+                    canMarkUnread ||
+                    onRenameSession ||
+                    onCopySessionUrl ||
+                    session.branchName ||
+                    shareMenuState) &&
+                  ((onOpenPullRequest && prUrl) ||
+                    (canGoToOpener && openerSessionId) ||
+                    openedByOpener ||
+                    isElectronRenderer()) ? (
+                    <ContextMenuSeparator />
+                  ) : null}
+                  {onOpenPullRequest && prUrl ? (
                     <ContextMenuItem
                       onSelect={() => {
-                        void navigator.clipboard.writeText(session.branchName).catch(() => {});
+                        onOpenPullRequest({
+                          sessionId: session.sessionId,
+                          repoFullName: group.repoFullName,
+                          prUrl,
+                          prNumber,
+                        });
                       }}
                     >
-                      <GitBranch />
-                      {contextMenuLabels.copyBranch}
+                      <GitPullRequest />
+                      {contextMenuLabels.openPr}
+                    </ContextMenuItem>
+                  ) : null}
+                  <SessionRowOpenedByMenuItems
+                    opener={openedByOpener}
+                    goToOpener={
+                      canGoToOpener && openerSessionId
+                        ? () => {
+                            if (onNavigateSessionTab && openerRootSessionId) {
+                              onNavigateSessionTab(openerRootSessionId, openerSessionId);
+                              return;
+                            }
+                            onSelectSession?.(openerSessionId);
+                          }
+                        : undefined
+                    }
+                    goToOpenerLabel={contextMenuLabels.goToOpenerSession}
+                  />
+                  <SessionWindowMenuItem sessionId={session.sessionId} />
+                  {(onTogglePinSession ||
+                    canMarkUnread ||
+                    onRenameSession ||
+                    onCopySessionUrl ||
+                    session.branchName ||
+                    shareMenuState ||
+                    (onOpenPullRequest && prUrl) ||
+                    (canGoToOpener && openerSessionId) ||
+                    openedByOpener ||
+                    isElectronRenderer()) &&
+                  onArchiveSession ? (
+                    <ContextMenuSeparator />
+                  ) : null}
+                  {onArchiveSession ? (
+                    <ContextMenuItem
+                      onSelect={() => {
+                        onArchiveSession(session.sessionId);
+                      }}
+                    >
+                      <Archive />
+                      {contextMenuLabels.archive}
                     </ContextMenuItem>
                   ) : null}
                 </ContextMenuContent>

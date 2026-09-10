@@ -1,4 +1,7 @@
 {
+  "workspace.openInNewWindow": "在新窗口中打开",
+  "workspace.openInNewWindowHint": "{{key}} + 点击可在新窗口打开",
+  "session.openInNewWindow": "在新窗口中打开对话",
   "agents.acpCapabilities.refreshError": "刷新失败",
   "agents.acpCapabilities.refreshModelsAndModes": "刷新模型和模式",
   "agents.acpCapabilities.refreshSuccess": "能力已刷新：{{modelCount}} 个模型，{{modeCount}} 个模式",
@@ -2585,7 +2588,7 @@
   "settings.autoArchive.title": "自动归档 session",
   "settings.cache.clearCache.button": "清空缓存",
   "settings.cache.clearCache.confirmButton": "清空缓存",
-  "settings.cache.clearCache.confirmDescription": "将删除 Lody 在所有 workspace 的本地缓存（离线副本、已同步数据的缓存、图片缓存）并重新加载应用。你的账号和已同步数据不受影响，会重新下载，也不会退出登录。",
+  "settings.cache.clearCache.confirmDescription": "将删除 Lody 在所有 workspace 的本地缓存（离线副本、已同步数据的缓存、图片缓存）并重新加载应用。你的账号和已同步数据不受影响，会重新下载，也不会退出登录。 其他桌面窗口将关闭，请先保存未发送的草稿。",
   "settings.cache.clearCache.confirmTitle": "清空本地缓存？",
   "settings.cache.clearCache.description": "删除本地缓存数据并重新加载。可修复部分加载或同步问题。已同步数据会重新下载，且不会退出登录。",
   "settings.cache.clearCache.label": "清空本地缓存",

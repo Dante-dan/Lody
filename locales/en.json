@@ -1,4 +1,7 @@
 {
+  "workspace.openInNewWindow": "Open in new window",
+  "workspace.openInNewWindowHint": "{{key}} + click to open in a new window",
+  "session.openInNewWindow": "Open conversation in new window",
   "agents.acpCapabilities.refreshError": "Refresh failed",
   "agents.acpCapabilities.refreshModelsAndModes": "Refresh models and modes",
   "agents.acpCapabilities.refreshSuccess": "Capabilities refreshed: {{modelCount}} models, {{modeCount}} modes",
@@ -2585,7 +2588,7 @@
   "settings.autoArchive.title": "Auto-archive sessions",
   "settings.cache.clearCache.button": "Clear cache",
   "settings.cache.clearCache.confirmButton": "Clear cache",
-  "settings.cache.clearCache.confirmDescription": "This deletes Lody's local cache for all workspaces (offline copies, synced-data caches, and image caches) and reloads the app. Your account and synced data are safe and will re-download. You stay signed in.",
+  "settings.cache.clearCache.confirmDescription": "This deletes Lody's local cache for all workspaces (offline copies, synced-data caches, and image caches) and reloads the app. Your account and synced data are safe and will re-download. You stay signed in. Other desktop windows will close; save any unsent drafts first.",
   "settings.cache.clearCache.confirmTitle": "Clear local cache?",
   "settings.cache.clearCache.description": "Delete locally cached data and reload. Fixes some loading or sync issues. Synced data re-downloads and you stay signed in.",
   "settings.cache.clearCache.label": "Clear local cache",
