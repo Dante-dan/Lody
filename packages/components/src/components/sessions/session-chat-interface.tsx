@@ -166,7 +166,8 @@ import SessionChatStream, {
 import { MessageSendStatusContext } from '../ai-gui/message-send-status-context';
 import { format, formatDistanceToNow } from 'date-fns';
 import type { Locale } from 'date-fns';
-import { enUS, zhCN } from 'date-fns/locale';
+import { enUS } from 'date-fns/locale/en-US';
+import { zhCN } from 'date-fns/locale/zh-CN';
 import { getAppShareUrl } from '@/lib/app-location';
 import { resolveSessionOpenInIdePathTarget } from '@/lib/session-open-in-ide-path';
 import {
@@ -324,9 +325,10 @@ function getErrorMessage(err: unknown): string {
 }
 
 /**
- * Copy-as-Markdown never trims message text, so it can trim tool output, thinking,
- * or nothing at all — and it can still land over budget. Silent truncation reads as
- * "I copied everything", so the toast always names what happened.
+ * Copy-as-Markdown never trims message text and never drops thinking, so it can
+ * still trim tool output, cap thinking, or nothing at all — and it can land over
+ * budget. Silent truncation reads as "I copied everything", so the toast always
+ * names what happened.
  */
 function describeCopiedConversation(
   stats: ConversationMarkdownStats,
@@ -344,7 +346,7 @@ function describeCopiedConversation(
   if (stats.toolCallsCollapsed) {
     trimmed.push(t('sessions.copyConversationHistoryTrimToolCalls', 'tool call details'));
   }
-  if (stats.thinkingOmitted) {
+  if (stats.thinkingTruncated) {
     trimmed.push(t('sessions.copyConversationHistoryTrimThinking', 'thinking'));
   }
   if (stats.terminalOutputOmitted || stats.terminalOutputTruncated) {
@@ -3331,6 +3333,23 @@ export const SessionChatInterface = memo(
       };
     }, [activeSearchResult, isSearchOpen]);
 
+    // Pasting a transcript elsewhere loses the session it came from, so the export
+    // header carries the repo and branch. Names only reach turn headings when the
+    // conversation has more than one human in it; the builder makes that call.
+    const conversationCopySource = useMemo(() => {
+      const repo = (resolveProjectGitHubRepo(session.project) ?? session.repoFullName)?.trim();
+      const branch = session.branchName?.trim();
+      return [repo, branch].filter(Boolean).join(' \u00b7 ') || undefined;
+    }, [session.branchName, session.project, session.repoFullName]);
+
+    const conversationCopyParticipants = useMemo(() => {
+      const names: Record<string, string> = {};
+      for (const member of workspaceMembers) {
+        names[member.userId] = member.name;
+      }
+      return names;
+    }, [workspaceMembers]);
+
     const handleCopyConversationHistory = useCallback(
       async (throughMessageId?: string) => {
         if (!sessionDoc?.history?.length) {
@@ -3346,22 +3365,29 @@ export const SessionChatInterface = memo(
 
         try {
           const history = conversationCopyRange(sessionDoc.history, throughMessageId);
+          const last = history.at(-1);
           const { markdown, stats } = buildConversationMarkdown({
             history: history as Parameters<typeof buildConversationMarkdown>[0]['history'],
             title: session.title ?? undefined,
+            source: conversationCopySource,
+            participants: conversationCopyParticipants,
+            // Header, not a trailing line: whoever reads this next has to know the
+            // last turn is cut short before reading it. See the builder's option.
+            incompleteFinalResponse:
+              last?.role === 'assistant' && !last.finished
+                ? t(
+                    'sessions.copyContextIncomplete',
+                    'The last response was still generating when copied.'
+                  )
+                : undefined,
           });
-          const last = history.at(-1);
-          const suffix =
-            last?.role === 'assistant' && !last.finished
-              ? `\n_${t('sessions.copyContextIncomplete', 'The last response was still generating when copied.')}_\n`
-              : '';
-          await navigator.clipboard.writeText(markdown + suffix);
+          await navigator.clipboard.writeText(markdown);
           captureSessionEvent('session/history_copy_succeeded', {
             history_count: sessionDoc.history.length,
             prompt_length: stats.chars,
             estimated_tokens: stats.estimatedTokens,
             over_budget: stats.overBudget,
-            thinking_omitted: stats.thinkingOmitted,
+            thinking_truncated: stats.thinkingTruncated,
             terminal_omitted: stats.terminalOutputOmitted,
             tool_calls_collapsed: stats.toolCallsCollapsed,
             tool_results_truncated: stats.toolResultsTruncated,
@@ -3380,7 +3406,14 @@ export const SessionChatInterface = memo(
           );
         }
       },
-      [captureSessionEvent, session.title, sessionDoc?.history, t]
+      [
+        captureSessionEvent,
+        conversationCopyParticipants,
+        conversationCopySource,
+        session.title,
+        sessionDoc?.history,
+        t,
+      ]
     );
 
     // Inactive tabs and collapsed side chats stay mounted for fast switching, so
