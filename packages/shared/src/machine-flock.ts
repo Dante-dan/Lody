@@ -1,4 +1,3 @@
-import type { RateLimit } from 'acp-extension-core';
 import {
   getAcpCapabilityCacheKey,
   hasBuiltinRuntimeOverrideValues,
@@ -28,6 +27,7 @@ import {
 import type {
   AgentConfigMeta,
   MachineLegacyMetaFields,
+  MachineRateLimit,
   NeedToDeleteSessionQueueItem,
   SessionLaunchConfig,
   SessionMeta,
@@ -531,7 +531,7 @@ export type MachineFlockRow =
     }
   | { key: MachineFlockAgentConfigIndexKey; value: AgentConfigListSummary }
   | { key: MachineFlockAcpCapabilityKey; value: AcpCapabilityCacheEntry }
-  | { key: MachineFlockRateLimitKey; value: RateLimit }
+  | { key: MachineFlockRateLimitKey; value: MachineRateLimit }
   | { key: MachineFlockBuiltinAgentOptOutKey; value: BuiltinAgentOptOut }
   | { key: MachineFlockSessionLaunchConfigKey; value: SessionLaunchConfig };
 
@@ -812,8 +812,10 @@ export function applyProviderSetupCancellationToFlock(
   return true;
 }
 
-export function getMachineFlockRateLimits(rows: MachineFlockRowMap): Record<string, RateLimit> {
-  const rateLimits: Record<string, RateLimit> = {};
+export function getMachineFlockRateLimits(
+  rows: MachineFlockRowMap
+): Record<string, MachineRateLimit> {
+  const rateLimits: Record<string, MachineRateLimit> = {};
   for (const row of Object.values(rows)) {
     if (!isMachineFlockRateLimitRow(row)) {
       continue;
@@ -1152,7 +1154,7 @@ export function parseMachineFlockRow(
     case 'acpCapability':
       return isAcpCapabilityCacheEntry(value) ? { key: parsedKey.key, value } : undefined;
     case 'rateLimit':
-      return isRecord(value) ? { key: parsedKey.key, value: value as RateLimit } : undefined;
+      return isRecord(value) ? { key: parsedKey.key, value: value as MachineRateLimit } : undefined;
     case 'builtinAgentOptOut': {
       const optOut = normalizeBuiltinAgentOptOut(value);
       return optOut ? { key: parsedKey.key, value: optOut } : undefined;

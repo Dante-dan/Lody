@@ -4,6 +4,7 @@ import {
   type CustomAcpLaunchSpec,
 } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
+import type { RateLimit, RateLimitsSnapshot } from 'acp-extension-core';
 import { shutdownLocalAcpAgent, startLocalAcpAgent } from '@/agent/acp-runner';
 import { scrubInheritedClaudeAuthEnv, shouldScrubClaudeAuthEnv } from '@/agent/claude-env-conflict';
 import type { ManagedRuntimeProgressCallback } from '@/agent/managed-agent-runtime';
@@ -24,11 +25,12 @@ export type FetchAcpCapabilitiesOptions = {
 
 export type FetchedAcpCapabilities = AcpCapabilitiesResult & {
   capabilitySourceVersion?: string;
+  rateLimits?: RateLimitsSnapshot;
 };
 
 /**
  * Spawns a temporary ACP agent to discover the capabilities returned by session/new.
- * The agent is killed as soon as the NewSessionResponse has been normalized.
+ * Also queries advertised subscription quota before shutting the temporary agent down.
  */
 export async function fetchAcpCapabilities(
   cliType: AgentConfigCliType,
@@ -70,6 +72,7 @@ export async function fetchAcpCapabilities(
     waitForTerminalExit: async () => ({ exitCode: null, signal: null }),
     killTerminal: async () => {},
   };
+  const notifiedLimits = new Map<string, RateLimit>();
   const { agentProcess, client, acpSessionId, sessionResponse, capabilitySourceVersion } =
     await startLocalAcpAgent({
       cliType,
@@ -84,10 +87,37 @@ export async function fetchAcpCapabilities(
       terminalManager: noopTerminalManager,
       terminalEnabled: false,
       onUpdateMessage: () => {},
+      onRateLimitUpdate: (limits) => notifiedLimits.set(limits.limitId, limits),
       onRequestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
     });
 
   try {
+    let rateLimits: RateLimitsSnapshot | undefined;
+    if (client.supportsRateLimitsQuery()) {
+      // Quota is optional: a slow provider must not hold up capability discovery.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let abort: (() => void) | undefined;
+      try {
+        rateLimits = await Promise.race([
+          client.getRateLimits({ sessionId: acpSessionId }),
+          new Promise<never>((_, reject) => {
+            abort = () => reject(new Error('Quota refresh cancelled'));
+            timer = setTimeout(() => reject(new Error('Quota refresh timed out')), 5_000);
+            timer.unref?.();
+            options.signal?.addEventListener('abort', abort, { once: true });
+            if (options.signal?.aborted) abort();
+          }),
+        ]);
+      } catch {
+        logger.debug('[acp-capabilities] Subscription quota is unavailable');
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (abort) options.signal?.removeEventListener('abort', abort);
+      }
+    } else if (notifiedLimits.size > 0) {
+      rateLimits = { rateLimits: [...notifiedLimits.values()] };
+    }
+    options.signal?.throwIfAborted();
     return {
       ...normalizeAcpSessionCapabilities(sessionResponse, {
         sessionFork: client.supportsSessionFork?.() === true,
@@ -95,6 +125,7 @@ export async function fetchAcpCapabilities(
         agent: { cliType, agentType },
       }),
       capabilitySourceVersion,
+      rateLimits,
     };
   } finally {
     await shutdownLocalAcpAgent({

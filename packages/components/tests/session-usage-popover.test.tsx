@@ -93,6 +93,47 @@ describe('SessionUsagePopover', () => {
     expect(popover?.textContent).toContain('29% used');
   });
 
+  it('keeps the cached percentage visible while labeling stale quota', async () => {
+    await renderUsage({
+      showRateLimitWithoutContext: true,
+      rateLimits: {
+        [getRateLimitEntryKey('codex', 'codex')]: {
+          ...rateLimits[getRateLimitEntryKey('codex', 'codex')]!,
+          quotaRefresh: { status: 'stale', observedAt: 1_780_000_000_000 },
+        },
+      },
+    });
+
+    const trigger = container.querySelector('button');
+    expect(trigger?.textContent).toBe('29%');
+    expect(trigger?.getAttribute('aria-label')).toBe('Open usage details, 29% used, stale');
+
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    const popover = document.body.querySelector('[aria-label="Usage"]');
+    expect(popover?.textContent).toContain('29% used');
+    expect(popover?.textContent).toContain('Stale');
+    expect(popover?.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe(
+      '29'
+    );
+  });
+
+  it('shows an unavailable quota trigger when an eligible provider has no snapshot', async () => {
+    await renderUsage({ showRateLimitWithoutContext: true, rateLimits: {} });
+
+    const trigger = container.querySelector('button');
+    expect(trigger?.textContent).toBe('—');
+    expect(trigger?.getAttribute('aria-label')).toBe('Open usage details, usage unavailable');
+
+    await act(async () => {
+      trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(document.body.querySelector('[aria-label="Usage"]')?.textContent).toContain(
+      'The provider did not report usage for this plan'
+    );
+  });
+
   it('keeps rate-limit-only usage hidden unless explicitly enabled', async () => {
     await renderUsage({ rateLimits });
 

@@ -283,6 +283,7 @@ export type StartLocalAcpAgentOptions = {
   /** Set to false to disable terminal capability advertisement. Defaults to true. */
   terminalEnabled?: boolean;
   onUpdateMessage(message: AcpSessionNotification): void;
+  onRateLimitUpdate?(limits: RateLimit): void;
   onRequestPermission(
     requestId: string,
     request: RequestPermissionRequest
@@ -561,6 +562,7 @@ export const startLocalAcpAgent = async (options: StartLocalAcpAgentOptions) => 
         launcher,
         terminalEnabled: options.terminalEnabled,
         onUpdateMessage: options.onUpdateMessage,
+        onRateLimitUpdate: options.onRateLimitUpdate,
         onRequestPermission: options.onRequestPermission,
         startupTimeouts,
         startupAbort: signalAbort

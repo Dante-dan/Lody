@@ -529,12 +529,17 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   let latestLocalOriginPresenceStates: LodyPresenceStateMap = {};
   let latestCloudPresenceStates: LodyPresenceStateMap = {};
   let latestPresenceStates: LodyPresenceStateMap = {};
+  // Assigned after the startup refresh scheduler is initialized below. A first
+  // presence snapshot may arrive during runtime construction, before that
+  // scheduler exists; the meta-sync path still schedules the initial pass.
+  let notifyStartupAcpAvailabilityChanged: () => void = () => {};
   const publishMergedPresence = (): void => {
     latestPresenceStates = mergePresenceSnapshots(
       latestLocalOriginPresenceStates,
       latestCloudPresenceStates
     );
     deps.onPresenceSnapshot?.(latestPresenceStates);
+    notifyStartupAcpAvailabilityChanged();
   };
   const presenceTransport = new WorkspacePresenceTransport({
     workspaceId,
@@ -2424,6 +2429,9 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
 
   let workspaceMetaFirstSynced = false;
   let startupAcpCapabilitiesRefreshCompleted = false;
+  let startupAcpCapabilitiesOnlineMachineKey: string | null = null;
+  let startupAcpCapabilitiesAvailabilityGeneration = 0;
+  const startupAcpCapabilitiesRefreshedConfigs = new Set<string>();
   let startupAcpCapabilitiesRefreshAbortController: AbortController | null = null;
   let cancelDelayedStartupAcpCapabilitiesRefresh: (() => void) | null = null;
   const startStartupAcpCapabilitiesRefresh = (): void => {
@@ -2437,6 +2445,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       return;
     }
     const abortController = new AbortController();
+    const availabilityGeneration = startupAcpCapabilitiesAvailabilityGeneration;
     startupAcpCapabilitiesRefreshAbortController = abortController;
 
     void runStartupAcpCapabilitiesRefresh(
@@ -2470,6 +2479,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
             getMachineFlockAgentConfigs(
               readMachineFlockRowsFromFlock(handle.flock, { families: ['agentConfig'] })
             )
+          ).filter(
+            (config) => !startupAcpCapabilitiesRefreshedConfigs.has(`${machineId}:${config.id}`)
           );
         },
         refreshAgentConfig: async (machineId, config, signal = abortController.signal) => {
@@ -2496,6 +2507,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
               ? { configId: response.configId, value: response.capability }
               : undefined,
           });
+          startupAcpCapabilitiesRefreshedConfigs.add(`${machineId}:${config.id}`);
         },
         onError: (error, context) => {
           console.warn('createWorkspaceRuntime: startup ACP capability refresh failed', {
@@ -2511,12 +2523,18 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       }
     )
       .then(() => {
-        if (!abortController.signal.aborted) {
+        if (
+          !abortController.signal.aborted &&
+          availabilityGeneration === startupAcpCapabilitiesAvailabilityGeneration
+        ) {
           startupAcpCapabilitiesRefreshCompleted = true;
         }
       })
       .catch((error: unknown) => {
-        if (!abortController.signal.aborted) {
+        if (
+          !abortController.signal.aborted &&
+          availabilityGeneration === startupAcpCapabilitiesAvailabilityGeneration
+        ) {
           startupAcpCapabilitiesRefreshCompleted = true;
         }
         console.warn('createWorkspaceRuntime: startup ACP capability refresh aborted', {
@@ -2529,7 +2547,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
           startupAcpCapabilitiesRefreshAbortController = null;
         }
         if (
-          abortController.signal.aborted &&
+          (abortController.signal.aborted ||
+            availabilityGeneration !== startupAcpCapabilitiesAvailabilityGeneration) &&
           !disposePromise &&
           presenceTransport.getSyncState() === 'synced'
         ) {
@@ -2557,11 +2576,30 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       { cooldownMs: ACP_CAPABILITIES_STARTUP_NAVIGATION_COOLDOWN_MS }
     );
   };
+  notifyStartupAcpAvailabilityChanged = () => {
+    if (!workspaceMetaFirstSynced || disposePromise) return;
+    const nextKey = [...collectOnlineMachineIdsFromPresence(latestPresenceStates, getServerNow())]
+      .sort()
+      .join(',');
+    if (nextKey === startupAcpCapabilitiesOnlineMachineKey) return;
+    startupAcpCapabilitiesOnlineMachineKey = nextKey;
+    startupAcpCapabilitiesAvailabilityGeneration += 1;
+    // This is event-driven, not polling: a newly online machine gets one
+    // startup pass, while already refreshed config ids remain filtered out.
+    startupAcpCapabilitiesRefreshCompleted = false;
+    scheduleStartupAcpCapabilitiesRefresh();
+  };
   const unsubscribeStartupAcpCapabilitiesPresence = presenceTransport.subscribeSyncState(
     (state) => {
       if (state === 'synced') {
         scheduleStartupAcpCapabilitiesRefresh();
       } else {
+        // A machine can become available only after this transport recovers.
+        // The per-config set prevents already refreshed providers from probing
+        // again, while a previously unavailable provider gets a new pass.
+        startupAcpCapabilitiesRefreshCompleted = false;
+        startupAcpCapabilitiesOnlineMachineKey = null;
+        startupAcpCapabilitiesAvailabilityGeneration += 1;
         startupAcpCapabilitiesRefreshAbortController?.abort();
         cancelDelayedStartupAcpCapabilitiesRefresh?.();
         cancelDelayedStartupAcpCapabilitiesRefresh = null;

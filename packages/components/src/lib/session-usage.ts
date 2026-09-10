@@ -1,5 +1,6 @@
 import {
   CODEX_SPARK_LIMIT_ID,
+  getServerNow,
   normalizePersistedRateLimit,
   parseRateLimitEntryKey,
   resolveAgentBrandId,
@@ -38,6 +39,7 @@ export type AgentRateLimitWindow = {
   remainingPercent: number;
   windowDurationSeconds: number | null;
   resetsAtEpochSeconds: number | null;
+  stale: boolean;
 };
 
 const clampPercentage = (value: number): number => clamp(value, [0, 100]);
@@ -52,7 +54,16 @@ export function getRateLimitRemainingPercent(value: number | null | undefined): 
   return usedPercent == null ? null : clampPercentage(100 - usedPercent);
 }
 
-export function getAgentRateLimitWindows(limits: MachineRateLimitUsage): AgentRateLimitWindow[] {
+export function getAgentRateLimitWindows(
+  limits: MachineRateLimitUsage,
+  nowEpochSeconds = Math.floor(getServerNow() / 1_000)
+): AgentRateLimitWindow[] {
+  const stale =
+    limits.quotaRefresh?.status === 'stale' ||
+    limits.windows.some(
+      (window) =>
+        window.resetsAtEpochSeconds !== null && window.resetsAtEpochSeconds <= nowEpochSeconds
+    );
   return limits.windows.flatMap((window) => {
     const usedPercent = normalizeRateLimitUsedPercent(window.usedPercent);
     if (usedPercent === null) return [];
@@ -66,6 +77,7 @@ export function getAgentRateLimitWindows(limits: MachineRateLimitUsage): AgentRa
             ? window.windowDurationSeconds
             : null,
         resetsAtEpochSeconds: window.resetsAtEpochSeconds,
+        stale,
       },
     ];
   });

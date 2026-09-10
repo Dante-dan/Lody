@@ -49,7 +49,6 @@ export function MachineQuotaCompact({ raceLimits, filterCliType }: MachineQuotaC
             : [];
         })
         .filter((entry) => !filterCliType || entry.parsed.cliType === filterCliType)
-        .filter((entry) => entry.windows.length > 0)
         .sort((a, b) => {
           if (a.parsed.cliType !== b.parsed.cliType) {
             return a.parsed.cliType.localeCompare(b.parsed.cliType);
@@ -104,34 +103,43 @@ export function MachineQuotaCompact({ raceLimits, filterCliType }: MachineQuotaC
           </Badge>
         ) : null;
 
-        const windowMeters = (
-          <div
-            className={cn(
-              'grid gap-x-4 gap-y-1',
-              windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
-            )}
-          >
-            {windows.map((window, index) => {
-              const shortLabel = formatRateLimitWindowShortLabel(window.windowDurationSeconds);
-              const fullLabel =
-                window.windowDurationSeconds === FIVE_HOUR_WINDOW_SECONDS
-                  ? t('machines.rateLimits.fiveHour')
-                  : window.windowDurationSeconds === SEVEN_DAY_WINDOW_SECONDS
-                    ? t('machines.rateLimits.sevenDay')
-                    : shortLabel;
-              return (
-                <UsageQuotaWindow
-                  key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
-                  shortLabel={formatAgentRateLimitWindowLabel(window, shortLabel, t)}
-                  fullLabel={formatAgentRateLimitWindowLabel(window, fullLabel, t)}
-                  percent={window.usedPercent}
-                  resetText={formatResetDistance(window.resetsAtEpochSeconds)}
-                  disabled={false}
-                />
-              );
-            })}
-          </div>
-        );
+        const windowMeters =
+          windows.length > 0 ? (
+            <div
+              className={cn(
+                'grid gap-x-4 gap-y-1',
+                windows.length === 1 ? 'grid-cols-1' : 'grid-cols-2'
+              )}
+            >
+              {windows.map((window, index) => {
+                const shortLabel = formatRateLimitWindowShortLabel(window.windowDurationSeconds);
+                const fullLabel =
+                  window.windowDurationSeconds === FIVE_HOUR_WINDOW_SECONDS
+                    ? t('machines.rateLimits.fiveHour')
+                    : window.windowDurationSeconds === SEVEN_DAY_WINDOW_SECONDS
+                      ? t('machines.rateLimits.sevenDay')
+                      : shortLabel;
+                return (
+                  <UsageQuotaWindow
+                    key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
+                    shortLabel={formatAgentRateLimitWindowLabel(window, shortLabel, t)}
+                    fullLabel={formatAgentRateLimitWindowLabel(window, fullLabel, t)}
+                    percent={window.usedPercent}
+                    resetText={
+                      window.stale
+                        ? t('machines.rateLimits.stale', 'Stale')
+                        : formatResetDistance(window.resetsAtEpochSeconds)
+                    }
+                    disabled={false}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-[11px] text-muted-foreground">
+              {t('machines.rateLimits.usageUnavailable', 'Usage unavailable')}
+            </div>
+          );
 
         // Per-provider (filtered): the parent provider row already supplies the
         // card chrome, so render a flat, compact block — no extra border/bg.

@@ -69,10 +69,14 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
     : [];
   const hasRateLimit = rateLimitWindows.length > 0;
   const wallet = rateLimit?.limits.wallet ?? null;
-  const hasRateLimitDetails = rateLimit !== null;
+  const hasRateLimitDetails = rateLimit !== null || showRateLimitWithoutContext;
+  const quotaUnavailable = showRateLimitWithoutContext && !hasRateLimit;
+  const triggerQuotaUnavailable = quotaUnavailable && context === null;
   const triggerValue =
     context?.usedPercentage ??
     (showRateLimitWithoutContext ? rateLimitWindows[0]?.usedPercent : undefined);
+  const triggerQuotaIsStale =
+    context === null && showRateLimitWithoutContext && rateLimitWindows[0]?.stale === true;
   const resolvedModelLabel =
     modelLabel?.trim() ||
     rateLimit?.limits.limitName?.trim() ||
@@ -108,14 +112,20 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
     [t]
   );
 
-  if (!isContextCompacting && triggerValue === undefined) return null;
+  if (!isContextCompacting && triggerValue === undefined && !triggerQuotaUnavailable) return null;
 
   const roundedTriggerValue = Math.round(triggerValue ?? 0);
   const triggerLabel = isContextCompacting
     ? t('sessions.usage.compactingContext', 'Compacting context')
-    : t('sessions.usage.openWithUsed', 'Open usage details, {{percent}}% used', {
-        percent: roundedTriggerValue,
-      });
+    : triggerQuotaUnavailable
+      ? t('sessions.usage.openUnavailable', 'Open usage details, usage unavailable')
+      : triggerQuotaIsStale
+        ? t('sessions.usage.openWithStaleUsed', 'Open usage details, {{percent}}% used, stale', {
+            percent: roundedTriggerValue,
+          })
+        : t('sessions.usage.openWithUsed', 'Open usage details, {{percent}}% used', {
+            percent: roundedTriggerValue,
+          });
 
   return (
     <>
@@ -139,8 +149,12 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
               </>
             ) : (
               <>
-                <UsageRing value={triggerValue ?? 0} />
-                <span className="font-mono text-[11px] tabular-nums">{roundedTriggerValue}%</span>
+                {triggerQuotaUnavailable ? null : <UsageRing value={triggerValue ?? 0} />}
+                <span className="font-mono text-[11px] tabular-nums">
+                  {triggerQuotaUnavailable
+                    ? t('machines.rateLimits.notAvailable', '—')
+                    : `${roundedTriggerValue}%`}
+                </span>
               </>
             )}
           </Button>
@@ -192,7 +206,11 @@ export const SessionUsagePopover = memo(function SessionUsagePopover({
                       t
                     )}
                     value={window.usedPercent}
-                    detail={formatReset(window.resetsAtEpochSeconds)}
+                    detail={
+                      window.stale
+                        ? t('machines.rateLimits.stale', 'Stale')
+                        : formatReset(window.resetsAtEpochSeconds)
+                    }
                   />
                 ))
               ) : (

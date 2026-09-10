@@ -184,6 +184,10 @@ to render understood fields from an older daemon's parsed entry while scheduling
 probe; likewise, an older client may use the understood portion of a newer entry. Runtime
 override entries still apply only when their source-version suffix matches the selected override.
 
+The temporary refresh probe also queries advertised subscription quota before cleanup.
+[Subscription quota refresh](../../../../specs/subscription-quota-refresh.md) describes
+its optional deadline, shared machine snapshot and stale-data semantics.
+
 ### Session titles
 
 Builtin Claude owns session title generation through ACP `session_info_update`. Builtin Codex

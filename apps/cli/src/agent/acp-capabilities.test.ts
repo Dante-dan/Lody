@@ -36,6 +36,7 @@ function createSuccessfulStartupResult(sessionResponse?: Record<string, unknown>
     agentProcess: {} as never,
     client: {
       supportsAcknowledgedSteer: () => false,
+      supportsRateLimitsQuery: () => false,
     } as never,
     acpSessionId: 'acp-session-1' as never,
     sessionResponse: sessionResponse ?? {
@@ -66,6 +67,23 @@ function mockStartupWithSessionResponse(sessionResponse: Record<string, unknown>
     createSuccessfulStartupResult(sessionResponse)
   );
 }
+
+const quotaSnapshot = () => ({
+  rateLimits: [
+    {
+      limitId: 'codex',
+      scope: { providerId: 'codex' },
+      windows: [
+        {
+          usedPercent: 25,
+          windowDurationSeconds: 3600,
+          resetsAtEpochSeconds: 1_800_000_000,
+        },
+      ],
+    },
+  ],
+  fetchedAtEpochSeconds: 1_799_996_400,
+});
 
 describe('fetchAcpCapabilities', () => {
   beforeEach(() => {
@@ -133,12 +151,109 @@ describe('fetchAcpCapabilities', () => {
     const startupResult = createSuccessfulStartupResult();
     startupResult.client = {
       supportsAcknowledgedSteer: () => true,
+      supportsRateLimitsQuery: () => false,
     } as never;
     mocks.startLocalAcpAgent.mockResolvedValue(startupResult);
 
     const result = await fetchAcpCapabilities('registry', 'steering-agent', createSilentLogger());
 
     expect(result.acknowledgedSteer).toBe(true);
+  });
+
+  it('returns quota queried from an advertised provider capability', async () => {
+    const snapshot = quotaSnapshot();
+    const startupResult = createSuccessfulStartupResult();
+    const getRateLimits = vi.fn(async () => snapshot);
+    startupResult.client = {
+      supportsAcknowledgedSteer: () => false,
+      supportsRateLimitsQuery: () => true,
+      getRateLimits,
+    } as never;
+    mocks.startLocalAcpAgent.mockResolvedValue(startupResult);
+
+    const result = await fetchAcpCapabilities('builtin', 'codex', createSilentLogger());
+
+    expect(getRateLimits).toHaveBeenCalledWith({ sessionId: 'acp-session-1' });
+    expect(result.rateLimits).toEqual(snapshot);
+  });
+
+  it('uses quota update notifications when a provider does not advertise a query', async () => {
+    mocks.startLocalAcpAgent.mockImplementation(async (options) => {
+      options.onRateLimitUpdate?.(quotaSnapshot().rateLimits[0]!);
+      return createSuccessfulStartupResult();
+    });
+
+    const result = await fetchAcpCapabilities('builtin', 'codex', createSilentLogger());
+
+    expect(result.rateLimits).toEqual({ rateLimits: quotaSnapshot().rateLimits });
+  });
+
+  it('keeps capabilities available when the optional quota query fails', async () => {
+    const startupResult = createSuccessfulStartupResult();
+    startupResult.client = {
+      supportsAcknowledgedSteer: () => false,
+      supportsRateLimitsQuery: () => true,
+      getRateLimits: vi.fn(async () => {
+        throw new Error('quota unavailable');
+      }),
+    } as never;
+    mocks.startLocalAcpAgent.mockResolvedValue(startupResult);
+
+    const result = await fetchAcpCapabilities('builtin', 'codex', createSilentLogger());
+
+    expect(result.models.map((model) => model.modelId)).toEqual(['claude-sonnet']);
+    expect(result.rateLimits).toBeUndefined();
+    expect(mocks.shutdownLocalAcpAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues capability discovery when the quota query times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const startupResult = createSuccessfulStartupResult();
+      startupResult.client = {
+        supportsAcknowledgedSteer: () => false,
+        supportsRateLimitsQuery: () => true,
+        getRateLimits: vi.fn(() => new Promise(() => {})),
+      } as never;
+      mocks.startLocalAcpAgent.mockResolvedValue(startupResult);
+
+      const result = fetchAcpCapabilities('builtin', 'codex', createSilentLogger());
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(result).resolves.toMatchObject({ rateLimits: undefined });
+      expect(mocks.shutdownLocalAcpAgent).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects on abort after shutting down a pending quota query', async () => {
+    const controller = new AbortController();
+    const startupResult = createSuccessfulStartupResult();
+    const getRateLimits = vi.fn(() => new Promise(() => {}));
+    startupResult.client = {
+      supportsAcknowledgedSteer: () => false,
+      supportsRateLimitsQuery: () => true,
+      getRateLimits,
+    } as never;
+    mocks.startLocalAcpAgent.mockResolvedValue(startupResult);
+
+    const result = fetchAcpCapabilities(
+      'builtin',
+      'codex',
+      createSilentLogger(),
+      undefined,
+      undefined,
+      undefined,
+      {
+        signal: controller.signal,
+      }
+    );
+    await vi.waitFor(() => expect(getRateLimits).toHaveBeenCalledTimes(1));
+    controller.abort();
+
+    await expect(result).rejects.toMatchObject({ name: 'AbortError' });
+    expect(mocks.shutdownLocalAcpAgent).toHaveBeenCalledTimes(1);
   });
 
   it('uses commands from NewSessionResponse and ignores command update notifications', async () => {

@@ -3,7 +3,13 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentConfigId, AgentConfigMeta, MachineId, MachineViewMeta } from '@lody/shared';
+import {
+  getRateLimitEntryKey,
+  type AgentConfigId,
+  type AgentConfigMeta,
+  type MachineId,
+  type MachineViewMeta,
+} from '@lody/shared';
 
 import { ProviderRow } from '../src/components/settings/provider-row';
 import { initI18n } from '../src/i18n';
@@ -46,10 +52,10 @@ describe('ProviderRow reauthentication', () => {
     vi.restoreAllMocks();
   });
 
-  const renderConfig = async (config: AgentConfigMeta) => {
+  const renderConfig = async (config: AgentConfigMeta, machineValue = machine) => {
     await act(async () => {
       root.render(
-        <ProviderRow config={config} machine={machine} onEdit={vi.fn()} onRefresh={vi.fn()} />
+        <ProviderRow config={config} machine={machineValue} onEdit={vi.fn()} onRefresh={vi.fn()} />
       );
     });
   };
@@ -86,5 +92,33 @@ describe('ProviderRow reauthentication', () => {
     });
 
     expect(onEdit).toHaveBeenCalledWith(config);
+  });
+
+  it('shows unavailable when a supported subscription provider has no quota snapshot', async () => {
+    await renderConfig(makeConfig({ cliType: 'builtin', agentType: 'codex' }));
+
+    expect(container.textContent).toContain('Usage unavailable');
+  });
+
+  it('keeps the cached remaining percentage visible while labeling it stale', async () => {
+    await renderConfig(makeConfig({ cliType: 'builtin', agentType: 'codex' }), {
+      ...machine,
+      raceLimits: {
+        [getRateLimitEntryKey('codex', 'codex')]: {
+          limitId: 'codex',
+          scope: { providerId: 'codex' },
+          quotaRefresh: { status: 'stale', observedAt: 1_780_000_000_000 },
+          windows: [
+            {
+              usedPercent: 29,
+              windowDurationSeconds: 604_800,
+              resetsAtEpochSeconds: null,
+            },
+          ],
+        },
+      },
+    });
+
+    expect(container.textContent).toContain('71% · Stale');
   });
 });

@@ -36,6 +36,11 @@ import type { MachineProtocolCapabilities } from './machine-protocol-capabilitie
 export * from 'loro-mirror';
 import type { RateLimit } from 'acp-extension-core';
 
+/** Machine-owned cache metadata, separate from the provider's ACP quota contract. */
+export type MachineRateLimit = RateLimit & {
+  quotaRefresh?: { status: 'fresh' | 'stale'; observedAt: number };
+};
+
 export const RATE_LIMIT_ENTRY_KEY_SEPARATOR = '::';
 
 /**
@@ -1184,7 +1189,7 @@ export type MachineLegacyMetaFields = {
  */
 export type MachineViewMeta = MachineMeta &
   Omit<MachineLegacyMetaFields, 'raceLimits'> & {
-    raceLimits: Record<string, RateLimit>;
+    raceLimits: Record<string, MachineRateLimit>;
   };
 
 export const getMachineHostType = (meta: Pick<MachineMeta, 'hostType'>): MachineHostType =>

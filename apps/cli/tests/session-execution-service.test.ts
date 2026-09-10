@@ -184,6 +184,8 @@ const createBaseDeps = (
     ...overrides,
   };
 
+  deps.workspaceDocument.refreshRateLimits ??= vi.fn(async () => {});
+
   const repo = (deps.workspaceDocument as unknown as { repo?: Record<string, unknown> }).repo;
   if (repo && !('openFlockDoc' in repo)) {
     repo.openFlockDoc = vi.fn(async () => ({
@@ -214,6 +216,54 @@ const createBaseDeps = (
 };
 
 describe('SessionExecutionService', () => {
+  it('persists one shared quota snapshot for concurrent startup and manual refreshes', async () => {
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const quota = {
+      limitId: 'codex',
+      scope: { providerId: 'codex' },
+      windows: [
+        { usedPercent: 42, windowDurationSeconds: 18000, resetsAtEpochSeconds: 1900000000 },
+      ],
+    };
+    const snapshots: unknown[] = [];
+    const deps = createBaseDeps({
+      fetchAcpCapabilities: vi.fn(async () => {
+        await ready;
+        return {
+          modes: [],
+          models: [],
+          capabilitySourceVersion: 'test-codex',
+          rateLimits: { rateLimits: [quota] },
+        };
+      }),
+    });
+    deps.workspaceDocument.getAgentConfigForMachineLaunch = async () =>
+      createLaunchConfig({
+        cliType: 'builtin',
+        env: {},
+        runtimeOverrides: { codexPath: '/test/codex' },
+      });
+    deps.workspaceDocument.refreshRateLimits = async (_machine, _provider, limits) => {
+      snapshots.push(limits);
+    };
+    const service = new SessionExecutionService(deps);
+    const request = {
+      type: 'machine/acp-capabilities-refresh' as const,
+      machineId: 'machine-1' as MachineId,
+      workspaceId: 'workspace-1' as WorkspaceId,
+      configId: 'config-1' as AgentConfigId,
+    };
+    const first = service.refreshMachineAcpCapabilities(request);
+    const second = service.refreshMachineAcpCapabilities(request);
+    release();
+    const responses = await Promise.all([first, second]);
+    expect(responses.map((response) => response.success)).toEqual([true, true]);
+    expect(snapshots).toEqual([[quota]]);
+  });
+
   it('advances one session owner through consecutive prompt handoffs', async () => {
     const steerPrompt = vi.fn(() => ({
       completion: new Promise(() => {}),

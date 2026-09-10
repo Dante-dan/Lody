@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MachineId, SessionId, WorkspaceId } from '@lody/shared';
+import type {
+  LodyPresenceInstanceId,
+  LodyPresenceStateMap,
+  MachineId,
+  SessionId,
+  WorkspaceId,
+} from '@lody/shared';
 
 const mocks = vi.hoisted(() => {
   const setTransportAdapter = vi.fn(async () => {});
@@ -65,6 +71,7 @@ const mocks = vi.hoisted(() => {
     presenceShouldRestartOnExternalWake,
     presenceSyncListeners,
     presenceSyncState: 'idle',
+    presenceSnapshot: undefined as ((states: LodyPresenceStateMap) => void) | undefined,
     startupAcpCapabilitiesRefresh,
     startupCapabilityCooldowns,
     streamClient,
@@ -131,6 +138,10 @@ const publishPresenceSyncState = (state: string): void => {
   for (const listener of mocks.presenceSyncListeners) {
     listener(state);
   }
+};
+
+const publishPresenceSnapshot = (states: LodyPresenceStateMap): void => {
+  mocks.presenceSnapshot?.(states);
 };
 
 const expectNoPresenceStopAfterStart = () => {
@@ -231,6 +242,9 @@ vi.mock('../src/providers/startup-network-idle', async (importOriginal) => {
 
 vi.mock('../src/providers/workspace-presence-transport', () => ({
   WorkspacePresenceTransport: class WorkspacePresenceTransport {
+    constructor(options: { onSnapshot: (states: LodyPresenceStateMap) => void }) {
+      mocks.presenceSnapshot = options.onSnapshot;
+    }
     start = mocks.presenceStart;
     stop = mocks.presenceStop;
     getSyncState = vi.fn(() => mocks.presenceSyncState);
@@ -348,6 +362,7 @@ describe('createWorkspaceRuntime meta recovery lifecycle', () => {
     mocks.presenceShouldRestartOnExternalWake.mockReturnValue(false);
     mocks.presenceSyncListeners.clear();
     mocks.presenceSyncState = 'idle';
+    mocks.presenceSnapshot = undefined;
     mocks.startupAcpCapabilitiesRefresh.mockClear();
     mocks.startupCapabilityCooldowns.length = 0;
 
@@ -565,6 +580,31 @@ describe('createWorkspaceRuntime meta recovery lifecycle', () => {
     await runtime.dispose();
   });
 
+  it('runs another startup pass after presence reconnects, so initially unavailable providers can refresh', async () => {
+    mocks.joinMetaRoom.mockResolvedValueOnce(createMetaSub(Promise.resolve()));
+
+    const runtime = await createWorkspaceRuntime({
+      workspaceSlug: 'workspace',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      apiBaseUrl: 'https://api.example.test',
+      token: 'auth-token',
+    });
+
+    await flushPromises();
+    publishPresenceSyncState('synced');
+    mocks.startupCapabilityCooldowns[0]?.run();
+    await flushPromises();
+    expect(mocks.startupAcpCapabilitiesRefresh).toHaveBeenCalledTimes(1);
+
+    publishPresenceSyncState('disconnected');
+    publishPresenceSyncState('synced');
+    mocks.startupCapabilityCooldowns[1]?.run();
+    await flushPromises();
+    expect(mocks.startupAcpCapabilitiesRefresh).toHaveBeenCalledTimes(2);
+
+    await runtime.dispose();
+  });
+
   it('retries the startup capability pass after an in-flight presence disconnect', async () => {
     mocks.joinMetaRoom.mockResolvedValueOnce(createMetaSub(Promise.resolve()));
     let markFirstStarted!: () => void;
@@ -601,6 +641,62 @@ describe('createWorkspaceRuntime meta recovery lifecycle', () => {
     // initially blocked by the old in-flight controller; its finalizer must
     // schedule the replacement pass.
     publishPresenceSyncState('synced');
+    await flushPromises();
+
+    expect(mocks.startupCapabilityCooldowns).toHaveLength(2);
+    mocks.startupCapabilityCooldowns[1]?.run();
+    await flushPromises();
+    expect(mocks.startupAcpCapabilitiesRefresh).toHaveBeenCalledTimes(2);
+
+    await runtime.dispose();
+  });
+
+  it('runs another startup pass when machine availability changes during an active pass', async () => {
+    mocks.joinMetaRoom.mockResolvedValueOnce(createMetaSub(Promise.resolve()));
+    let releaseFirst!: () => void;
+    const firstCanFinish = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    mocks.startupAcpCapabilitiesRefresh.mockImplementationOnce(async () => {
+      await firstCanFinish;
+    });
+
+    const runtime = await createWorkspaceRuntime({
+      workspaceSlug: 'workspace',
+      workspaceId: 'workspace-1' as WorkspaceId,
+      apiBaseUrl: 'https://api.example.test',
+      token: 'auth-token',
+    });
+
+    await flushPromises();
+    publishPresenceSyncState('synced');
+    publishPresenceSnapshot({
+      first: {
+        kind: 'machine',
+        machineId: 'machine-1' as MachineId,
+        instanceId: 'instance-1' as LodyPresenceInstanceId,
+        updatedAt: Date.now(),
+      },
+    });
+    mocks.startupCapabilityCooldowns[0]?.run();
+    await flushPromises();
+    expect(mocks.startupAcpCapabilitiesRefresh).toHaveBeenCalledTimes(1);
+
+    publishPresenceSnapshot({
+      first: {
+        kind: 'machine',
+        machineId: 'machine-1' as MachineId,
+        instanceId: 'instance-1' as LodyPresenceInstanceId,
+        updatedAt: Date.now(),
+      },
+      second: {
+        kind: 'machine',
+        machineId: 'machine-2' as MachineId,
+        instanceId: 'instance-2' as LodyPresenceInstanceId,
+        updatedAt: Date.now(),
+      },
+    });
+    releaseFirst();
     await flushPromises();
 
     expect(mocks.startupCapabilityCooldowns).toHaveLength(2);

@@ -8,7 +8,6 @@ import {
   type AgentConfigMeta,
   type MachineAcpBinaryProgressMessage,
   type MachineViewMeta,
-  parseRateLimitEntryKey,
 } from '@lody/shared';
 import { toast } from 'sonner';
 import { Badge } from '@/ui/badge';
@@ -61,22 +60,18 @@ export function ProviderRow({
   const { t } = useTranslation();
   const { cliType, agentType } = config;
   const envCount = Object.keys(config.env || {}).length;
-  const showRateLimits =
-    canShowSubscriptionRateLimits({ cliType, agentType, config }) &&
-    !!machine?.raceLimits &&
-    Object.keys(machine.raceLimits).some(
-      (key) => parseRateLimitEntryKey(key).cliType === agentType
-    );
+  const showSubscriptionQuota = canShowSubscriptionRateLimits({ cliType, agentType, config });
 
   // Compact usage meters shown inline after the provider name.
   const rateLimitWindows = useMemo(() => {
-    if (!showRateLimits || !machine?.raceLimits) return [];
+    if (!showSubscriptionQuota || !machine?.raceLimits) return [];
     for (const entry of getAgentRateLimitEntries(machine.raceLimits, agentType)) {
       const windows = getAgentRateLimitWindows(entry.limits);
       if (windows.length > 0) return windows;
     }
     return [];
-  }, [showRateLimits, machine?.raceLimits, agentType]);
+  }, [showSubscriptionQuota, machine?.raceLimits, agentType]);
+  const quotaUnavailable = showSubscriptionQuota && rateLimitWindows.length === 0;
 
   // Codex-only: the third-party reset forecast for OpenAI's own usage limits.
   const showResetForecast = canShowCodexResetForecast({ cliType, agentType, config });
@@ -194,10 +189,14 @@ export function ProviderRow({
                     t
                   )}
                   remainingPercent={window.remainingPercent}
+                  stale={window.stale}
                 />
               ))}
             </div>
           )}
+          {quotaUnavailable ? (
+            <span>{t('machines.rateLimits.usageUnavailable', 'Usage unavailable')}</span>
+          ) : null}
           {envCount > 0 && (
             <span>{t('settings.agent.provider.envCount', { count: envCount })}</span>
           )}
@@ -249,6 +248,7 @@ export function ProviderRow({
               key={`${window.windowDurationSeconds ?? 'unknown'}-${index}`}
               label={formatRateLimitWindowShortLabel(window.windowDurationSeconds)}
               remainingPercent={window.remainingPercent}
+              stale={window.stale}
             />
           ))}
         </div>
@@ -292,16 +292,20 @@ export function ProviderRow({
 function RateLimitMeter({
   label,
   remainingPercent,
+  stale,
 }: {
   label: string;
   remainingPercent: number | null;
+  stale: boolean;
 }) {
+  const { t } = useTranslation();
   const pct = remainingPercent == null ? 0 : Math.min(100, Math.max(0, remainingPercent));
   const percentText = remainingPercent == null ? '—' : `${Math.round(remainingPercent)}%`;
+  const staleText = stale ? t('machines.rateLimits.stale', 'Stale') : null;
   return (
     <span
       className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground"
-      title={`${label}: ${percentText}`}
+      title={`${label}: ${percentText}${staleText ? ` · ${staleText}` : ''}`}
     >
       <span className="font-medium">{label}</span>
       <span className="relative h-1 w-10 overflow-hidden rounded-full bg-foreground/10">
@@ -310,7 +314,10 @@ function RateLimitMeter({
           style={{ width: `${pct}%` }}
         />
       </span>
-      <span className="font-mono tabular-nums">{percentText}</span>
+      <span className="font-mono tabular-nums">
+        {percentText}
+        {staleText ? ` · ${staleText}` : ''}
+      </span>
     </span>
   );
 }

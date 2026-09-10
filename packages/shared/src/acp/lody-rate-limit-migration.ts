@@ -1,4 +1,5 @@
 import type { RateLimit, RateLimitWindow } from 'acp-extension-core';
+import type { MachineRateLimit } from '../schema';
 
 type LegacyRateLimitWindow = {
   usedPercent?: unknown;
@@ -82,7 +83,7 @@ export function normalizePersistedRateLimit(
   provider: string,
   keyLimitId: string | null,
   value: unknown
-): RateLimit | null {
+): MachineRateLimit | null {
   if (!isRecord(value)) return null;
   const currentWindows = value.windows;
   if (
@@ -99,7 +100,7 @@ export function normalizePersistedRateLimit(
         (typeof window.resetsAtEpochSeconds === 'number' || window.resetsAtEpochSeconds === null)
     )
   ) {
-    return value as RateLimit;
+    return value as MachineRateLimit;
   }
 
   const legacy = value as LegacyRateLimit;

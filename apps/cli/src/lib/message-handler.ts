@@ -272,7 +272,7 @@ import {
   type ImageGenerationBeginEvent,
   type ImageGenerationEndEvent,
 } from 'src/agent/agent-client';
-import type { RateLimit, SessionUsageUpdate } from 'acp-extension-core';
+import type { RateLimit, RateLimitsSnapshot, SessionUsageUpdate } from 'acp-extension-core';
 import { getWorktreeManager } from '@/session/worktree/worktree-manager';
 import {
   isManagedWorktreeBranchName,
@@ -8427,6 +8427,7 @@ export class MessageHandler {
     acknowledgedSteer: boolean;
     modelReasoningEfforts?: Record<string, string[]>;
     capabilitySourceVersion?: string;
+    rateLimits?: RateLimitsSnapshot;
   }> {
     return fetchAcpCapabilities(
       cliType,

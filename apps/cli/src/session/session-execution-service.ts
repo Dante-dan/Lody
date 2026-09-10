@@ -58,6 +58,7 @@ import {
   serializeCustomAcpLaunchSpec,
 } from '@lody/shared';
 import type { ContentBlock } from '@agentclientprotocol/sdk';
+import type { RateLimitsSnapshot } from 'acp-extension-core';
 import type { ModelInfo } from '@lody/shared';
 import { Cause, Data, Effect, Exit, Fiber, type Scope } from 'effect';
 import {
@@ -565,6 +566,7 @@ export type SessionExecutionServiceDeps = {
     acknowledgedSteer: boolean;
     modelReasoningEfforts?: Record<string, string[]>;
     capabilitySourceVersion?: string;
+    rateLimits?: RateLimitsSnapshot;
   }>;
   /** Evict idle sessions if system memory is under pressure */
   evictForMemoryPressure: (excludeSessionId?: SessionId) => Promise<MemoryPressureEvictionResult>;
@@ -5358,6 +5360,11 @@ export class SessionExecutionService {
     message: ResolvedMachineAcpCapabilitiesRefreshRequest,
     options: AcpBinaryProgressOptions = {}
   ): Promise<MachineAcpCapabilitiesRefreshResponse> {
+    const observedAt = Date.now();
+    const provider =
+      message.cliType === 'builtin'
+        ? getManagedBuiltinRuntimeByAgentType(message.agentType)?.agentType
+        : undefined;
     try {
       options.signal?.throwIfAborted();
       await this.emitBuiltinRuntimeStatusForRefresh(message, options.onAcpBinaryProgress);
@@ -5371,6 +5378,7 @@ export class SessionExecutionService {
         acknowledgedSteer,
         modelReasoningEfforts,
         capabilitySourceVersion,
+        rateLimits,
       } = await this.deps.fetchAcpCapabilities(
         message.cliType,
         message.agentType,
@@ -5389,6 +5397,15 @@ export class SessionExecutionService {
       );
 
       options.signal?.throwIfAborted();
+      if (provider) {
+        await this.deps.workspaceDocument.refreshRateLimits(
+          this.deps.machineId,
+          provider,
+          rateLimits?.rateLimits,
+          observedAt,
+          options.signal
+        );
+      }
       const capability = await this.deps.workspaceDocument.updateAcpCapabilities(
         this.deps.machineId,
         message.configId,
@@ -5431,6 +5448,11 @@ export class SessionExecutionService {
         availableCommands,
       };
     } catch (error) {
+      if (provider && !options.signal?.aborted) {
+        await this.deps.workspaceDocument
+          .refreshRateLimits(this.deps.machineId, provider, undefined, observedAt, options.signal)
+          .catch(() => undefined);
+      }
       const errorMessage = formatErrorMessage(error);
       this.deps.logger.debug(
         `[acp-capabilities] Refresh failed (cliType=${message.cliType} agentType=${message.agentType}): ${errorMessage}`

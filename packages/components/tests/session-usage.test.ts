@@ -29,6 +29,7 @@ const usage = (overrides: Partial<MachineRateLimits[string]> = {}): MachineRateL
   ],
   ...overrides,
 });
+const NOW_EPOCH_SECONDS = 1_780_000_000;
 
 describe('session usage', () => {
   it('derives remaining context tokens and clamps over-capacity usage', () => {
@@ -63,7 +64,8 @@ describe('session usage', () => {
             resetsAtEpochSeconds: 1784505071,
           },
         ],
-      })
+      }),
+      NOW_EPOCH_SECONDS
     );
 
     expect(windows).toEqual([
@@ -72,13 +74,14 @@ describe('session usage', () => {
         remainingPercent: 71,
         windowDurationSeconds: 604_800,
         resetsAtEpochSeconds: 1784505071,
+        stale: false,
       },
     ]);
     expect(formatRateLimitWindowShortLabel(windows[0]!.windowDurationSeconds)).toBe('7d');
   });
 
   it('reads canonical fixed windows without provider-specific interpretation', () => {
-    expect(getAgentRateLimitWindows(usage())).toMatchObject([
+    expect(getAgentRateLimitWindows(usage(), NOW_EPOCH_SECONDS)).toMatchObject([
       { usedPercent: 25, windowDurationSeconds: 18_000 },
       { usedPercent: 40, windowDurationSeconds: 604_800 },
     ]);
@@ -87,10 +90,13 @@ describe('session usage', () => {
   it('preserves scoped windows even when their values match the shared quota', () => {
     const weekly = { usedPercent: 0, windowDurationSeconds: 604_800, resetsAtEpochSeconds: null };
     expect(
-      getAgentRateLimitWindows(usage({ windows: [weekly, { ...weekly, label: ' Fable ' }] }))
+      getAgentRateLimitWindows(
+        usage({ windows: [weekly, { ...weekly, label: ' Fable ' }] }),
+        NOW_EPOCH_SECONDS
+      )
     ).toEqual([
-      { ...weekly, remainingPercent: 100 },
-      { ...weekly, remainingPercent: 100, label: 'Fable' },
+      { ...weekly, remainingPercent: 100, stale: false },
+      { ...weekly, remainingPercent: 100, label: 'Fable', stale: false },
     ]);
   });
 
@@ -106,7 +112,8 @@ describe('session usage', () => {
               resetsAtEpochSeconds: 1784505071,
             },
           ],
-        })
+        }),
+        NOW_EPOCH_SECONDS
       )
     ).toEqual([
       {
@@ -114,6 +121,7 @@ describe('session usage', () => {
         remainingPercent: 99.5,
         windowDurationSeconds: 604_800,
         resetsAtEpochSeconds: 1784505071,
+        stale: false,
       },
     ]);
   });
@@ -129,7 +137,8 @@ describe('session usage', () => {
               resetsAtEpochSeconds: 1784505071,
             },
           ],
-        })
+        }),
+        NOW_EPOCH_SECONDS
       )
     ).toEqual([
       {
@@ -137,7 +146,48 @@ describe('session usage', () => {
         remainingPercent: 71,
         windowDurationSeconds: 604_800,
         resetsAtEpochSeconds: 1784505071,
+        stale: false,
       },
+    ]);
+  });
+
+  it('keeps cached percentages while marking provider-stale and elapsed windows stale', () => {
+    const providerStale = getAgentRateLimitWindows(
+      usage({
+        quotaRefresh: { status: 'stale', observedAt: 1_779_999_000 },
+        windows: [
+          {
+            usedPercent: 29,
+            windowDurationSeconds: 604_800,
+            resetsAtEpochSeconds: NOW_EPOCH_SECONDS + 60,
+          },
+        ],
+      }),
+      NOW_EPOCH_SECONDS
+    )[0];
+    const elapsed = getAgentRateLimitWindows(
+      usage({
+        quotaRefresh: { status: 'fresh', observedAt: 1_779_999_000 },
+        windows: [
+          {
+            usedPercent: 29,
+            windowDurationSeconds: 604_800,
+            resetsAtEpochSeconds: NOW_EPOCH_SECONDS,
+          },
+          {
+            usedPercent: 12,
+            windowDurationSeconds: 18_000,
+            resetsAtEpochSeconds: NOW_EPOCH_SECONDS + 60,
+          },
+        ],
+      }),
+      NOW_EPOCH_SECONDS
+    );
+
+    expect(providerStale).toMatchObject({ usedPercent: 29, remainingPercent: 71, stale: true });
+    expect(elapsed).toMatchObject([
+      { usedPercent: 29, remainingPercent: 71, stale: true },
+      { usedPercent: 12, remainingPercent: 88, stale: true },
     ]);
   });
 

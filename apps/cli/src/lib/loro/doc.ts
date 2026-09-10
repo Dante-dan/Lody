@@ -44,6 +44,10 @@ import {
   getServerNow,
   isLoroRepoDocDeleted,
   getMachineFlockAcpCapabilities,
+  getMachineFlockRateLimits,
+  type MachineRateLimit,
+  normalizePersistedRateLimit,
+  parseRateLimitEntryKey,
   getMachineFlockProviderSetupCancellations,
   getMachineFlockProviderSetups,
   getMachineFlockDocId,
@@ -1507,6 +1511,20 @@ export class LoroDocumentManager {
       await this.machine.init();
     }
     await this.machine.updateRateLimits(cliType, limits);
+  }
+
+  async refreshRateLimits(
+    machineId: MachineId,
+    cliType: CliType,
+    limits: RateLimit[] | undefined,
+    observedAt: number,
+    signal?: AbortSignal
+  ): Promise<void> {
+    if (!this.machine) {
+      this.machine = this.createMachineDocument(machineId);
+      await this.machine.init();
+    }
+    await this.machine.refreshRateLimits(cliType, limits, observedAt, signal);
   }
 
   async updateAcpCapabilities(
@@ -3078,13 +3096,72 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
   }
 
   async updateRateLimits(cliType: CliType, limits: RateLimit): Promise<void> {
+    await this.writeRateLimits(cliType, [limits], Date.now(), false);
+  }
+
+  async refreshRateLimits(
+    cliType: CliType,
+    limits: RateLimit[] | undefined,
+    observedAt: number,
+    signal?: AbortSignal
+  ): Promise<void> {
+    await this.writeRateLimits(cliType, limits ?? [], observedAt, true, signal);
+  }
+
+  private async writeRateLimits(
+    cliType: CliType,
+    limits: RateLimit[],
+    observedAt: number,
+    replaceSnapshot: boolean,
+    signal?: AbortSignal
+  ): Promise<void> {
     return this.enqueueRateLimitsUpdate(async () => {
-      const limitId = ((limits as { limitId?: string }).limitId ?? cliType).trim() || cliType;
+      signal?.throwIfAborted();
       const handle = await this.openMachineFlockDoc();
-      const changed = writeMachineFlockRowToFlock(handle.flock, {
-        key: machineFlockKeys.rateLimit(cliType, limitId),
-        value: limits,
-      });
+      signal?.throwIfAborted();
+      const existing = getMachineFlockRateLimits(
+        readMachineFlockRowsFromFlock(handle.flock, { prefixes: [['rateLimit', cliType]] })
+      );
+      const existingByLimitId = new Map<string, MachineRateLimit>();
+      for (const [entryKey, value] of Object.entries(existing)) {
+        const normalized = normalizePersistedRateLimit(
+          cliType,
+          parseRateLimitEntryKey(entryKey).limitId,
+          value
+        );
+        if (normalized) existingByLimitId.set(normalized.limitId, normalized);
+      }
+      const updates = new Map<string, MachineRateLimit>();
+      if (replaceSnapshot) {
+        for (const value of existingByLimitId.values()) {
+          updates.set(value.limitId, {
+            ...value,
+            quotaRefresh: { status: 'stale', observedAt },
+          });
+        }
+      }
+      for (const value of limits) {
+        // The configured provider owns this partition; never write a foreign quota.
+        if (value.scope.providerId !== cliType) continue;
+        updates.set(value.limitId, {
+          ...value,
+          quotaRefresh: { status: 'fresh', observedAt },
+        });
+      }
+      let changed = false;
+      for (const [limitId, value] of updates) {
+        const previous = existingByLimitId.get(limitId);
+        // A probe started before a live update must not overwrite its newer data.
+        const previousObservedAt = previous?.quotaRefresh?.observedAt ?? -Infinity;
+        if (replaceSnapshot ? previousObservedAt >= observedAt : previousObservedAt > observedAt) {
+          continue;
+        }
+        changed =
+          writeMachineFlockRowToFlock(handle.flock, {
+            key: machineFlockKeys.rateLimit(cliType, limitId),
+            value,
+          }) || changed;
+      }
       if (changed) {
         await this.repo.flush();
         if (this.markMachineFlockDirty) {
