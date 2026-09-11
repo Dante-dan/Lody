@@ -109,6 +109,8 @@ void test('macOS packaging explains configured LAN access without declaring Bonj
   const config = await loadElectronBuilderConfig()
   const extendInfo = config.mac?.extendInfo
 
+  assert.equal(config.appId, 'dev.loro.lody.oss')
+  assert.equal(config.productName, 'Lody OSS')
   assert.equal(
     extendInfo?.NSLocalNetworkUsageDescription,
     'Lody connects to local network services that you configure.'
