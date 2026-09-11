@@ -2550,7 +2550,9 @@ describe('SessionExecutionService', () => {
         // Per-model reasoning efforts: absent for this agent, which publishes no
         // legacy `model[effort]` combination list.
         undefined,
-        true
+        true,
+        // Goal actions: the fixture client advertises no goal extension.
+        undefined
       )
     );
   });
@@ -6659,6 +6661,8 @@ describe('SessionExecutionService', () => {
       'registry:deepseek:unknown',
       capability.modelReasoningEfforts,
       true,
+      // Goal actions: this runtime advertises no goal extension.
+      undefined,
       { signal: expect.any(AbortSignal) }
     );
     expect(result).toEqual(
@@ -7013,5 +7017,314 @@ describe('SessionExecutionService', () => {
     const second = await service.refreshMachineAcpCapabilities(request);
     expect(second).toEqual(expect.objectContaining({ success: true }));
     expect(fetchAcpCapabilities).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('SessionExecutionService goal control', () => {
+  const goalSessionId = 'session-goal' as SessionId;
+
+  const createGoalService = ({
+    transport = 'request',
+  }: {
+    transport?: 'request' | 'promptMeta' | 'slashCommand' | null;
+  } = {}) => {
+    const submitted = createDeferred<void>();
+    const completion = createDeferred<void>();
+    const failures: string[] = [];
+    const failed = createDeferred<void>();
+    const delivered: Array<unknown> = [];
+    let goalStatus = 'active';
+    const controlGoal = async (action: string) => {
+      goalStatus = action;
+    };
+    const agentClient = {
+      resolveGoalActionTransport: () => transport,
+      controlGoal,
+      isCreated: () => true,
+      prompt: async (_id: unknown, _blocks: unknown, options: unknown) => {
+        delivered.push(options);
+        submitted.resolve();
+        await completion.promise;
+      },
+      cancel: async () => {
+        completion.resolve();
+      },
+    };
+    const session = {
+      agentClient,
+      acpSessionId: 'acp-goal',
+      getWorkdir: () => '/tmp',
+      getHostWorkdir: () => '/tmp',
+      getParentSessionId: () => undefined,
+      exec: async () => '',
+      updateGitIdentity: () => {},
+      applyExecutionPlaneLimits: async () => {},
+    };
+    const sessionDoc = {
+      getMetaState: async () => ({
+        id: goalSessionId,
+        cliType: 'builtin',
+        agentType: 'codex',
+        acpSessionId: 'acp-goal',
+      }),
+      getHistory: async () => [],
+      setStatus: async () => {},
+      setLastMessageAt: async () => {},
+      updateHistory: async () => {},
+    };
+    const deps = createBaseDeps({
+      sessionManager: {
+        getSession: () => session,
+        getPendingSession: () => null,
+      } as unknown as SessionManager,
+      workspaceDocument: {
+        repo: { upsertDocMeta: async () => {}, getDocMeta: async () => undefined },
+        getOrCreateSessionDoc: async () => sessionDoc,
+        getOrOpenSessionCode: async () => null,
+      } as unknown as LoroDocumentManager,
+      recordChatFailure: async (_doc, reason, message) => {
+        failures.push(message ?? reason);
+        failed.resolve();
+      },
+    });
+    const service = new SessionExecutionService(deps);
+    return {
+      service,
+      deps,
+      agentClient,
+      sessionDoc,
+      submitted,
+      completion,
+      delivered,
+      failures,
+      failed,
+      goalStatus: () => goalStatus,
+    };
+  };
+
+  const goalArgs = {
+    sessionId: goalSessionId,
+    userId: 'owner-user',
+    userName: 'Owner',
+    userEmail: 'owner@example.com',
+  } as const;
+
+  it('pauses out-of-band without opening a turn', async () => {
+    const { service, goalStatus } = createGoalService({ transport: 'request' });
+
+    const response = await service.controlSessionGoal({ ...goalArgs, action: 'pause' });
+
+    expect(response).toMatchObject({ accepted: true, disposition: 'applied', action: 'pause' });
+    expect(goalStatus()).toBe('pause');
+    // The goal's own prompt owns the session's only turn slot; a pause that
+    // needed a free slot could never reach the goal it is stopping.
+    expect(service.getExecutionSnapshot(goalSessionId).hasActiveTurn).toBe(false);
+  });
+
+  it('refuses an action the agent never advertised', async () => {
+    const { service } = createGoalService({ transport: null });
+
+    const response = await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+
+    expect(response).toMatchObject({ accepted: false, disposition: 'unsupported' });
+    expect(service.getExecutionSnapshot(goalSessionId).hasActiveTurn).toBe(false);
+  });
+
+  it('starts a Lody-owned turn for an action that resumes work', async () => {
+    const { service, submitted, completion, delivered, failures } = createGoalService({
+      transport: 'promptMeta',
+    });
+
+    const response = await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+
+    expect(response).toMatchObject({ accepted: true, disposition: 'queued' });
+    await submitted.promise;
+    expect(delivered).toEqual([expect.objectContaining({ goalControl: { action: 'resume' } })]);
+    expect(failures).toEqual([]);
+    expect(service.getExecutionSnapshot(goalSessionId).hasActiveTurn).toBe(true);
+    const released = service.waitForTurnRelease(goalSessionId, 'turn-1');
+    completion.resolve();
+    await released;
+    expect(service.getExecutionSnapshot(goalSessionId).hasActiveTurn).toBe(false);
+  });
+
+  it('retains an accepted goal across more than three competing turns', async () => {
+    const { service, submitted, completion, delivered } = createGoalService({
+      transport: 'promptMeta',
+    });
+    const internals = service as unknown as {
+      currentTurnBySession: Map<SessionId, string>;
+      clearCurrentTurn: (sessionId: SessionId, turnId: string) => void;
+    };
+    let waiting = createDeferred<void>();
+    const originalWait = service.waitForTurnRelease.bind(service);
+    vi.spyOn(service, 'waitForTurnRelease').mockImplementation((sessionId, turnId) => {
+      const result = originalWait(sessionId, turnId);
+      waiting.resolve();
+      return result;
+    });
+    internals.currentTurnBySession.set(goalSessionId, 'busy-0');
+    expect(await service.controlSessionGoal({ ...goalArgs, action: 'resume' })).toMatchObject({
+      accepted: true,
+      disposition: 'queued',
+    });
+    for (let index = 0; index < 4; index += 1) {
+      await waiting.promise;
+      waiting = createDeferred<void>();
+      internals.clearCurrentTurn(goalSessionId, `busy-${index}`);
+      internals.currentTurnBySession.set(goalSessionId, `busy-${index + 1}`);
+    }
+    await waiting.promise;
+    expect(delivered).toEqual([]);
+    internals.clearCurrentTurn(goalSessionId, 'busy-4');
+    await submitted.promise;
+    expect(delivered).toEqual([expect.objectContaining({ goalControl: { action: 'resume' } })]);
+    const released = originalWait(goalSessionId, 'turn-1');
+    completion.resolve();
+    await released;
+  });
+
+  it.each(['pause', 'clear'] as const)(
+    'a newer %s supersedes resume while metadata is loading',
+    async (action) => {
+      const { service, agentClient, sessionDoc, delivered, goalStatus } = createGoalService({
+        transport: 'promptMeta',
+      });
+      const metadataRead = createDeferred<void>();
+      const metadataReady = createDeferred<void>();
+      const originalMeta = sessionDoc.getMetaState;
+      sessionDoc.getMetaState = async () => {
+        metadataRead.resolve();
+        await metadataReady.promise;
+        return originalMeta();
+      };
+      const internals = service as unknown as {
+        startGoalTurn: (request: unknown) => Promise<boolean>;
+      };
+      const originalStart = internals.startGoalTurn.bind(service);
+      const settled = createDeferred<void>();
+      vi.spyOn(internals, 'startGoalTurn').mockImplementation(async (request) => {
+        try {
+          return await originalStart(request);
+        } finally {
+          settled.resolve();
+        }
+      });
+      await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+      await metadataRead.promise;
+      agentClient.resolveGoalActionTransport = () => 'request';
+      await service.controlSessionGoal({ ...goalArgs, action });
+      metadataReady.resolve();
+      await settled.promise;
+      expect(goalStatus()).toBe(action);
+      expect(delivered).toEqual([]);
+      expect(service.getExecutionSnapshot(goalSessionId).hasActiveTurn).toBe(false);
+    }
+  );
+
+  it.each([false, true])(
+    'only a matching Stop invalidates queued goal work (stale=%s)',
+    async (stale) => {
+      const { service, delivered, submitted, completion } = createGoalService({
+        transport: 'promptMeta',
+      });
+      const internals = service as unknown as {
+        currentTurnBySession: Map<SessionId, string>;
+        pendingGoalTurnBySession: Map<SessionId, unknown>;
+        clearCurrentTurn: (sessionId: SessionId, turnId: string) => void;
+      };
+      internals.currentTurnBySession.set(goalSessionId, 'draining');
+      await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+      await service.cancelSession({
+        type: 'session/cancel',
+        sessionId: goalSessionId,
+        machineId: 'machine-1' as MachineId,
+        workspaceId: 'workspace-1' as WorkspaceId,
+        turnId: stale ? 'older' : 'draining',
+      });
+      expect(internals.pendingGoalTurnBySession.has(goalSessionId)).toBe(stale);
+      internals.clearCurrentTurn(goalSessionId, 'draining');
+      if (stale) {
+        await submitted.promise;
+        expect(delivered).toEqual([expect.objectContaining({ goalControl: { action: 'resume' } })]);
+        const released = service.waitForTurnRelease(goalSessionId, 'turn-1');
+        completion.resolve();
+        await released;
+      } else {
+        expect(delivered).toEqual([]);
+        expect(service.getExecutionSnapshot(goalSessionId).hasActiveTurn).toBe(false);
+      }
+    }
+  );
+
+  it('fences a superseded resume after turn ownership but before provider submission', async () => {
+    const { service, deps, agentClient, delivered, goalStatus, submitted, completion } =
+      createGoalService({
+        transport: 'promptMeta',
+      });
+    const preparing = createDeferred<void>();
+    const ready = createDeferred<void>();
+    deps.applyAcpModeAndModel = async (_session, config) => {
+      expect(config.modelId).toBeUndefined();
+      expect(config.modeId).toBeUndefined();
+      preparing.resolve();
+      await ready.promise;
+    };
+    await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+    await preparing.promise;
+    expect(service.getExecutionSnapshot(goalSessionId).hasActiveTurn).toBe(true);
+    agentClient.resolveGoalActionTransport = () => 'request';
+    await service.controlSessionGoal({ ...goalArgs, action: 'pause' });
+    const released = service.waitForTurnRelease(goalSessionId, 'turn-1');
+    const outcome = Promise.race([
+      submitted.promise.then(() => 'submitted'),
+      released.then(() => 'released'),
+    ]);
+    ready.resolve();
+    const first = await outcome;
+    completion.resolve();
+    await released;
+    expect(first).toBe('released');
+    expect(goalStatus()).toBe('pause');
+    expect(delivered).toEqual([]);
+    expect(service.getExecutionSnapshot(goalSessionId).hasActiveTurn).toBe(false);
+  });
+
+  it('records a visible failure when an accepted action cannot load its configuration', async () => {
+    const { service, sessionDoc, failed, failures, delivered } = createGoalService({
+      transport: 'promptMeta',
+    });
+    sessionDoc.getMetaState = async () => {
+      throw new Error('Synthetic metadata failure');
+    };
+    expect(await service.controlSessionGoal({ ...goalArgs, action: 'resume' })).toMatchObject({
+      accepted: true,
+      disposition: 'queued',
+    });
+    await failed.promise;
+    expect(failures).toEqual(['Goal resume failed: Synthetic metadata failure']);
+    expect(delivered).toEqual([]);
+    expect(service.getExecutionSnapshot(goalSessionId).hasActiveTurn).toBe(false);
+  });
+
+  it('keeps only the newest queued action so a stale pause cannot undo a resume', async () => {
+    const { service, submitted, completion, delivered } = createGoalService({
+      transport: 'promptMeta',
+    });
+    const internals = service as unknown as {
+      currentTurnBySession: Map<SessionId, string>;
+      clearCurrentTurn: (sessionId: SessionId, turnId?: string) => void;
+    };
+    internals.currentTurnBySession.set(goalSessionId, 'draining-turn');
+
+    await service.controlSessionGoal({ ...goalArgs, action: 'pause' });
+    await service.controlSessionGoal({ ...goalArgs, action: 'resume' });
+
+    internals.clearCurrentTurn(goalSessionId, 'draining-turn');
+    await submitted.promise;
+    expect(delivered).toEqual([expect.objectContaining({ goalControl: { action: 'resume' } })]);
+    const released = service.waitForTurnRelease(goalSessionId, 'turn-1');
+    completion.resolve();
+    await released;
   });
 });

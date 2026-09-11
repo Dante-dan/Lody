@@ -211,9 +211,8 @@ import {
   shouldDisableSessionInfoBarGitHubActionForHydration,
 } from './session-info-action-state';
 import {
-  canPauseGoalThroughPromptBridge,
-  getPromptBridgeGoalCommands,
-  GOAL_PROMPT_DISPATCH_OPTIONS,
+  getSessionGoalCommands,
+  GOAL_COMMAND_PENDING_TIMEOUT_MS,
   isSessionPromptBusy,
 } from './session-goal-control';
 import { resolveSessionMessageSubmitRoute } from './session-message-submit-route';
@@ -2381,6 +2380,7 @@ export const SessionChatInterface = memo(
       markSessionRead,
       requestSessionCancel,
       requestSessionDispatch,
+      requestSessionGoal,
       requestSessionSteer,
       touchSessionActivity,
       transferSessionOwner,
@@ -2705,11 +2705,14 @@ export const SessionChatInterface = memo(
       [legacySession.latestGoal, session.dismissedGoalThreadId, sessionHistory]
     );
     const isGoalActive = isSessionGoalActive(latestGoal);
-    // The existing prompt bridge is Codex-specific. Other providers may publish
-    // neutral goal snapshots, but their advertised `_session/goal` extension is
-    // not yet routed through Lody's session control plane, so keep them read-only.
-    const goalCommands = getPromptBridgeGoalCommands(session.agentType);
-    const canPauseGoal = canPauseGoalThroughPromptBridge(session.agentType);
+    // Goal control is an ACP extension, so the runtime's advertised actions
+    // decide which buttons exist. A runtime with no goal extension stays
+    // read-only rather than being guessed at from the agent's name.
+    const goalCapability = session.agentConfigId
+      ? sessionMachine?.acpCapabilities?.[getAcpCapabilityCacheKey(session.agentConfigId)]
+      : undefined;
+    const goalCommands = useMemo(() => getSessionGoalCommands(goalCapability), [goalCapability]);
+    const canPauseGoal = goalCommands.includes('pause');
 
     useEffect(() => {
       if (!pendingGoalCommand) {
@@ -2740,6 +2743,19 @@ export const SessionChatInterface = memo(
         setPendingGoalCommand(null);
       }
     }, [latestGoal, pendingGoalCommand]);
+
+    useEffect(() => {
+      if (!pendingGoalCommand) {
+        return undefined;
+      }
+      // The agent's own goal snapshot is the completion signal, and a queued
+      // action waits for a running turn to drain. Stop waiting eventually so a
+      // command that never lands cannot leave every goal button disabled.
+      const timer = setTimeout(() => {
+        setPendingGoalCommand((current) => (current === pendingGoalCommand ? null : current));
+      }, GOAL_COMMAND_PENDING_TIMEOUT_MS);
+      return () => clearTimeout(timer);
+    }, [pendingGoalCommand]);
 
     const isSessionActive = liveSessionStatus != null;
     // CLI-reported presence is the fact source for "working now". The only
@@ -4184,20 +4200,24 @@ export const SessionChatInterface = memo(
           return false;
         }
 
-        directDispatchInFlightRef.current = false;
-        setInputActionState('ready');
         if (options?.showPending !== false) {
           setPendingGoalCommand({ threadId: goal.threadId, command });
         }
 
         try {
-          const accepted = await dispatchPrompt(`/goal ${command}`, GOAL_PROMPT_DISPATCH_OPTIONS);
-          if (!accepted) {
-            throw new Error('Goal command was not accepted for dispatch');
+          const response = await requestSessionGoal(session.id, command, {
+            userId: currentUser?.id ?? session.userId,
+            machineId: session.machineId,
+          });
+          if (!response?.accepted) {
+            throw new Error(
+              response?.error ?? `Goal command was ${response?.disposition ?? 'not delivered'}`
+            );
           }
           captureSessionEvent('session/goal_command_dispatched', {
             command,
             goal_thread_id: goal.threadId,
+            disposition: response.disposition,
           });
           return true;
         } catch (error) {
@@ -4218,7 +4238,17 @@ export const SessionChatInterface = memo(
           return false;
         }
       },
-      [captureSessionEvent, dispatchPrompt, goalCommands, latestGoal, t]
+      [
+        captureSessionEvent,
+        currentUser?.id,
+        goalCommands,
+        latestGoal,
+        requestSessionGoal,
+        session.id,
+        session.machineId,
+        session.userId,
+        t,
+      ]
     );
 
     const handleGoalCardCommand = useCallback(
@@ -5061,6 +5091,8 @@ export const SessionChatInterface = memo(
         return;
       }
 
+      // Cancel first so Stop stays immediate; the pause that follows is an
+      // out-of-band control request and no longer waits for a free prompt slot.
       if (goalToPause) {
         await handleGoalCommand('pause', goalToPause, { showPending: false });
       }

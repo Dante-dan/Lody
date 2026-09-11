@@ -7,6 +7,7 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { ToolCallContent as AcpToolCallContent, SessionMode } from '@agentclientprotocol/sdk';
 import type { PermissionOutcome } from './message';
+import type { SessionGoalAction } from './goal';
 import { createPlanModeConfigOption } from 'acp-extension-core';
 import type { AgentConfigId, AgentRoleId, McpServerId, SessionId } from './ids';
 import type { MessageTextSpan } from './message-text-spans';
@@ -343,7 +344,7 @@ export type AcpCommandSummary = {
 // Codex-only carry a bogus ladder for every agent that spells other variants
 // with the same brackets — a Claude probe stored `{ opus: ['1m'] }` — and the
 // per-model effort picker would rebuild that model's ladder from it.
-export const ACP_CAPABILITY_CACHE_VERSION = 7;
+export const ACP_CAPABILITY_CACHE_VERSION = 8;
 
 export type AcpCapabilityAuthority = 'unavailable' | 'provisional' | 'authoritative';
 
@@ -377,6 +378,12 @@ export type AcpCapabilityCacheEntry = {
   sessionFork?: boolean;
   /** True only when the runtime advertised Lody's acknowledged steering extension. */
   acknowledgedSteer?: boolean;
+  /**
+   * Goal actions the runtime advertised, on any transport. Absent means the
+   * runtime has no goal extension, which is what keeps the goal controls hidden
+   * instead of guessing from the agent's name.
+   */
+  goalActions?: SessionGoalAction[];
   /** True when this Lody machine supports durable asynchronous forks into a new worktree. */
   sessionForkWorktree?: boolean;
   fetchedAt: number;
