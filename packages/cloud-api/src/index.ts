@@ -281,6 +281,69 @@ type SeatInvitePreview =
     };
 
 export type CloudApi = {
+  promptShortcuts: {
+    stageDocument: Mutation<
+      {
+        workspaceId: string;
+        ownerUserId: string;
+        shortcutId: string;
+        bodyDocId: string;
+        visibility: 'private' | 'workspace';
+      },
+      { bodyDocId: string; status: 'staged' | 'active' }
+    >;
+    activateDocument: Mutation<
+      {
+        workspaceId: string;
+        bodyDocId: string;
+        previousBodyDocId: string | null;
+        previousRevision: string | null;
+        revision: string;
+        slug: string;
+        indexBytes: number;
+      },
+      null
+    >;
+    settleDocument: Mutation<
+      {
+        workspaceId: string;
+        shortcutId: string;
+        bodyDocId: string;
+        visibility: 'private' | 'workspace';
+      },
+      'active' | 'cancelled'
+    >;
+    revokeShortcut: Mutation<
+      {
+        workspaceId: string;
+        shortcutId: string;
+        bodyDocId: string;
+        visibility: 'private' | 'workspace';
+      },
+      null
+    >;
+    listAccessibleDocuments: Query<
+      { workspaceId: string },
+      Array<{
+        shortcutId: string;
+        bodyDocId: string;
+        ownerUserId: string;
+        visibility: 'private' | 'workspace';
+        revision: string | null;
+        deleted?: boolean;
+      }>
+    >;
+    getStreamToken: Action<
+      {
+        workspaceId: string;
+        target:
+          | { kind: 'index'; ownerUserId: string; visibility: 'private' | 'workspace' }
+          | { kind: 'body'; bodyDocId: string };
+        write: boolean;
+      },
+      { token: string; expiresIn: number; gatewayBaseUrl: string; streamId: string }
+    >;
+  };
   sessionSharing: {
     requestVerification: Mutation<
       { workspaceId: string; sessionIds: string[] },
