@@ -8,6 +8,10 @@
     "./src/visual-annotation-inspector-global.ts"
   ],
   "exports": {
+    "./session-sharing": {
+      "types": "./src/session-sharing.ts",
+      "import": "./src/session-sharing.ts"
+    },
     ".": {
       "types": "./src/index.ts",
       "import": "./src/index.ts"
