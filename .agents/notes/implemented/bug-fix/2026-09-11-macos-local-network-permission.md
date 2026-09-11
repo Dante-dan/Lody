@@ -2,7 +2,7 @@
 
 Status: implemented
 Translation: current
-PR: not created
+PR: https://github.com/LodyAI/Lody/pull/594
 
 [中文](2026-09-11-macos-local-network-permission.zh.md)
 
