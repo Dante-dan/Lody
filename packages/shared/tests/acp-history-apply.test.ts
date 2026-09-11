@@ -178,6 +178,47 @@ describe('acp history apply', () => {
     }
   );
 
+  it.each(['task_started', 'task_updated'] as const)(
+    'allows an explicit Lody %s event to reopen a settled task',
+    (event) => {
+      const settled = applyNotificationOnHistory(
+        [],
+        [
+          taskUpdate('tool_call', 'in_progress', {
+            kind: 'subagent',
+            event: 'task_started',
+            actor: 'Explore',
+            description: 'Trace persistence',
+          }),
+          taskUpdate('tool_call_update', 'completed', {
+            kind: 'subagent',
+            event: 'task_notification',
+            summary: 'done',
+          }),
+        ]
+      );
+      const resumed = applyNotificationOnHistory(settled, [
+        taskUpdate(event === 'task_started' ? 'tool_call' : 'tool_call_update', 'in_progress', {
+          kind: 'subagent',
+          event,
+          actor: 'placeholder',
+          description: 'activity label',
+          lastToolName: 'Read',
+        }),
+      ]);
+      const task = resumed[0]?.items?.find((item) => item.type === 'subagent_task');
+
+      expect(task).toMatchObject({
+        taskId: 't1',
+        status: 'in_progress',
+        event,
+        actor: 'Explore',
+        description: 'Trace persistence',
+        lastToolName: 'Read',
+      });
+    }
+  );
+
   it('allows an explicit Codex resumeAgent update to reopen a settled task', () => {
     const settled = applyNotificationOnHistory(
       [],

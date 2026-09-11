@@ -28,6 +28,9 @@ merge or a successor, and current `main` still exhibited the original gap.
 - Admit a nonterminal tool update only when `parseLodyTaskMeta` accepts its
   `_meta.lody.task` payload. This reuses the same schema as materialization and
   does not broaden generic tool history.
+- Carry the validated lifecycle `event` in provider-neutral metadata so the
+  history merger can distinguish ordinary late progress from explicit Lody
+  starts and updates. The shared Claude/Kimi converter emits the source subtype.
 - Merge task snapshots by `taskId`. The first known actor and description remain
   the durable identity and purpose; current activity continues to update
   `lastToolName`, usage, summary, and terminal fields.
@@ -45,9 +48,10 @@ user-facing workflow or persistence model.
 ## Verification
 
 Focused shared tests cover stable identity/purpose, sticky background state, late
-progress, and explicit resume. CLI history tests cover schema-valid Lody progress,
-usage/tool state, invalid/generic filtering, single-item upsert, and terminal
-settlement.
+progress, explicit Lody start/update resumes, and Codex resume. Converter tests
+pin lifecycle event emission for both Claude and Kimi. CLI history tests cover
+schema-valid Lody progress, usage/tool state, invalid/generic filtering,
+single-item upsert, and terminal settlement.
 
 The implementation was derived from and explicitly credits #446; no code from
 that closed branch is merged directly.

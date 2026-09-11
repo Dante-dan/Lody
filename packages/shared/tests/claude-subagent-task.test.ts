@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   LODY_CLAUDE_TASK_LIFECYCLE_RAW_INPUT_KEY,
   mergeSubagentTaskPayload,
+  parseLodyTaskMeta,
   parseSubagentTaskWire,
 } from '../src/acp/claude-subagent-task';
 import type { SubagentTaskPayload } from '../src/ai';
@@ -47,6 +48,40 @@ describe('parseSubagentTaskWire', () => {
       parseSubagentTaskWire(wire({ event: 'task_started', status: 'in_progress' }))
     ).toBeNull();
     expect(parseSubagentTaskWire(wire({ taskId: 't', status: 'weird' }))).toBeNull();
+  });
+});
+
+describe('parseLodyTaskMeta', () => {
+  it('carries a validated lifecycle event into the task payload', () => {
+    expect(
+      parseLodyTaskMeta({
+        lody: {
+          task: {
+            version: 1,
+            taskId: 'task-meta',
+            kind: 'subagent',
+            status: 'in_progress',
+            event: 'task_updated',
+          },
+        },
+      })
+    ).toMatchObject({ taskId: 'task-meta', status: 'in_progress', event: 'task_updated' });
+  });
+
+  it('rejects an unknown lifecycle event', () => {
+    expect(
+      parseLodyTaskMeta({
+        lody: {
+          task: {
+            version: 1,
+            taskId: 'task-meta',
+            kind: 'subagent',
+            status: 'in_progress',
+            event: 'resume-ish',
+          },
+        },
+      })
+    ).toBeNull();
   });
 });
 
