@@ -18,6 +18,7 @@ import {
   type SessionMeta,
   type WorkspaceId,
 } from '@lody/shared';
+import type { CloudPort } from '@lody/platform';
 import { deriveRepoIdFromLocalProjectPath } from '@lody/shared/node/worktree-paths';
 import { MessageHandler } from '../src/lib/message-handler';
 import type { LoroDocumentManager } from '../src/lib/loro/doc';
@@ -39,9 +40,10 @@ const createSilentLogger = (): Logger => ({
 });
 
 type MessageHandlerInternals = {
+  processArchiveRequests: () => Promise<void>;
   archiveSessionResources: (
     sessionId: SessionId,
-    options?: { preserveWorktree?: boolean }
+    options?: { preserveWorktree?: boolean; machineFlockRows?: Record<string, MachineFlockScanRow> }
   ) => Promise<void>;
   deleteLocalProjectResources: (
     localProjectId: LocalProjectId,
@@ -66,6 +68,7 @@ type MessageHandlerInternals = {
   previewService: {
     closeSessionPreviewForCleanup: (sessionId: SessionId, reason: string) => Promise<void>;
   };
+  machineFlockCommandWatcher: { isReady: boolean };
 };
 
 function createHarness(options?: {
@@ -75,8 +78,11 @@ function createHarness(options?: {
   machineFlockRows?: MachineFlockScanRow[];
   sessionMetas?: SessionMeta[];
   activeSessionIds?: SessionId[];
+  archiveSessionIds?: SessionId[];
   includeLegacySessionDeleteRequest?: boolean;
   localProjectRootPaths?: Record<LocalProjectId, string>;
+  machineFlockOpenError?: Error;
+  cloudPort?: CloudPort;
 }) {
   const sessionId = options?.sessionId ?? ('session-1' as SessionId);
   const childSessionIds = options?.childSessionIds ?? [];
@@ -128,7 +134,9 @@ function createHarness(options?: {
       if (roomId === machineRoomId) {
         return {
           meta: {
-            needToArchiveSessions: {},
+            needToArchiveSessions: Object.fromEntries(
+              (options?.archiveSessionIds ?? []).map((id) => [id, true])
+            ),
             needToDeleteSessions:
               options?.includeLegacySessionDeleteRequest === false ? {} : { [sessionId]: true },
             localProjects: Object.fromEntries(
@@ -149,15 +157,20 @@ function createHarness(options?: {
           : []
       ),
     })),
-    openFlockDoc: vi.fn(async () => ({
-      flock: {
-        scan: () => machineFlockRows,
-        set: flockSet,
-        delete: flockDelete,
-        commit: flockCommit,
-      },
-      syncOnce: vi.fn(async () => {}),
-    })),
+    openFlockDoc: vi.fn(async () => {
+      if (options?.machineFlockOpenError) {
+        throw options.machineFlockOpenError;
+      }
+      return {
+        flock: {
+          scan: () => machineFlockRows,
+          set: flockSet,
+          delete: flockDelete,
+          commit: flockCommit,
+        },
+        syncOnce: vi.fn(async () => {}),
+      };
+    }),
     upsertDocMeta: vi.fn(async (roomId: string, patch: Partial<SessionMeta>) => {
       events.push(`meta:${roomId}:${patch.isArchived === true ? 'archived' : 'other'}`);
       const current = sessionMetas.get(roomId);
@@ -199,7 +212,7 @@ function createHarness(options?: {
       machineName: 'machine',
       cliVersion: '0.0.0',
       closeSessionTerminals,
-      cloudPort: createTestCloudPort(),
+      cloudPort: options?.cloudPort ?? createTestCloudPort(),
     }
   );
   const internal = handler as unknown as MessageHandlerInternals;
@@ -224,6 +237,63 @@ function createHarness(options?: {
 }
 
 describe('MessageHandler terminal cleanup', () => {
+  it('cleans a local worktree when its project metadata exists only in the machine Flock', async () => {
+    const localProjectId = 'local-project-archive' as LocalProjectId;
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lody-archive-project-'));
+    const originalDataDir = process.env.LODY_DATA_DIR;
+    const originalLocksDir = process.env.LODY_LOCKS_DIR;
+    process.env.LODY_DATA_DIR = path.join(testDir, 'data');
+    process.env.LODY_LOCKS_DIR = path.join(testDir, 'locks');
+    const rootPath = createLocalRepo(testDir);
+    const sessionId = 'session-archive-worktree' as SessionId;
+    const sessionMeta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      userId: 'user-1',
+      cliType: 'codex',
+      agentType: 'codex',
+      status: SessionStatusFactory.idle(),
+      project: { kind: 'local', localProjectId },
+      isWorktree: true,
+    } as SessionMeta;
+    const machineFlockRows = [
+      {
+        key: machineFlockKeys.localProject(localProjectId),
+        value: {
+          id: localProjectId,
+          name: 'Project',
+          rootPath,
+          createdAtMs: 1,
+        },
+      },
+    ];
+    try {
+      const manager = getWorktreeManager({
+        repoId: deriveRepoIdFromLocalProjectPath(rootPath),
+        source: { kind: 'local-shared', originalRootPath: rootPath },
+        logger: createSilentLogger(),
+      });
+      const worktree = await manager.createWorktree(sessionId);
+      const { handler, sessionManager } = createHarness({
+        sessionId,
+        sessionMetas: [sessionMeta],
+        machineFlockRows,
+      });
+
+      await handler.archiveSessionResources(sessionId);
+
+      expect(fs.existsSync(worktree.hostPath)).toBe(false);
+      expect(sessionManager.archiveSession).toHaveBeenCalledWith(sessionId);
+    } finally {
+      if (originalDataDir === undefined) delete process.env.LODY_DATA_DIR;
+      else process.env.LODY_DATA_DIR = originalDataDir;
+      if (originalLocksDir === undefined) delete process.env.LODY_LOCKS_DIR;
+      else process.env.LODY_LOCKS_DIR = originalLocksDir;
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
   it('closes session terminals when archiving resources even without an active session', async () => {
     const { handler, sessionId, closeSessionTerminals, sessionManager } = createHarness();
 
@@ -231,6 +301,101 @@ describe('MessageHandler terminal cleanup', () => {
 
     expect(closeSessionTerminals).toHaveBeenCalledWith(sessionId);
     expect(sessionManager.terminateSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps a cloud archive request queued until the Machine Flock watcher is authoritative', async () => {
+    const localProjectId = 'local-project-archive-authority' as LocalProjectId;
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lody-archive-authority-'));
+    const originalDataDir = process.env.LODY_DATA_DIR;
+    const originalLocksDir = process.env.LODY_LOCKS_DIR;
+    process.env.LODY_DATA_DIR = path.join(testDir, 'data');
+    process.env.LODY_LOCKS_DIR = path.join(testDir, 'locks');
+    const rootPath = createLocalRepo(testDir);
+    const sessionId = 'session-archive-awaiting-authority' as SessionId;
+    const sessionMeta = {
+      id: sessionId,
+      machineId: 'machine-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      userId: 'user-1',
+      cliType: 'codex',
+      agentType: 'codex',
+      status: SessionStatusFactory.idle(),
+      project: { kind: 'local', localProjectId },
+      isWorktree: true,
+    } as SessionMeta;
+    const machineFlockRows = [
+      {
+        key: machineFlockKeys.localProject(localProjectId),
+        value: { id: localProjectId, name: 'Project', rootPath, createdAtMs: 1 },
+      },
+    ];
+    const cloudPort = { ...createTestCloudPort(), kind: 'cloud' } as CloudPort;
+    try {
+      const manager = getWorktreeManager({
+        repoId: deriveRepoIdFromLocalProjectPath(rootPath),
+        source: { kind: 'local-shared', originalRootPath: rootPath },
+        logger: createSilentLogger(),
+      });
+      const worktree = await manager.createWorktree(sessionId);
+      const { handler, repo, sessionManager } = createHarness({
+        sessionId,
+        sessionMetas: [sessionMeta],
+        archiveSessionIds: [sessionId],
+        includeLegacySessionDeleteRequest: false,
+        machineFlockRows,
+        cloudPort,
+      });
+      handler.machineFlockCommandWatcher = { isReady: false };
+
+      await handler.processArchiveRequests();
+
+      expect(fs.existsSync(worktree.hostPath)).toBe(true);
+      expect(sessionManager.archiveSession).not.toHaveBeenCalled();
+      expect(repo.upsertDocMeta).not.toHaveBeenCalledWith(
+        getSessionRoomId(sessionId),
+        expect.objectContaining({ isArchived: true })
+      );
+      expect(repo.upsertDocMeta).not.toHaveBeenCalledWith(
+        getMachineRoomId('machine-1'),
+        expect.objectContaining({ needToArchiveSessions: {} })
+      );
+
+      handler.machineFlockCommandWatcher.isReady = true;
+      await handler.processArchiveRequests();
+
+      expect(fs.existsSync(worktree.hostPath)).toBe(false);
+      expect(sessionManager.archiveSession).toHaveBeenCalledWith(sessionId);
+      expect(repo.upsertDocMeta).toHaveBeenCalledWith(
+        getSessionRoomId(sessionId),
+        expect.objectContaining({ isArchived: true })
+      );
+      expect(repo.upsertDocMeta).toHaveBeenCalledWith(
+        getMachineRoomId('machine-1'),
+        expect.objectContaining({ needToArchiveSessions: {} })
+      );
+    } finally {
+      if (originalDataDir === undefined) delete process.env.LODY_DATA_DIR;
+      else process.env.LODY_DATA_DIR = originalDataDir;
+      if (originalLocksDir === undefined) delete process.env.LODY_LOCKS_DIR;
+      else process.env.LODY_LOCKS_DIR = originalLocksDir;
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps archive requests queued when the Machine Flock read fails', async () => {
+    const sessionId = 'session-archive-flock-read-failure' as SessionId;
+    const { handler, sessionManager, repo } = createHarness({
+      sessionId,
+      archiveSessionIds: [sessionId],
+      machineFlockOpenError: new Error('temporary Machine Flock failure'),
+    });
+
+    await expect(handler.processArchiveRequests()).resolves.toBeUndefined();
+    expect(sessionManager.archiveSession).not.toHaveBeenCalled();
+    expect(repo.upsertDocMeta).not.toHaveBeenCalledWith(
+      getSessionRoomId(sessionId),
+      expect.objectContaining({ isArchived: true })
+    );
   });
 
   it('closes parent and active child terminals before permanent deletion cleanup', async () => {

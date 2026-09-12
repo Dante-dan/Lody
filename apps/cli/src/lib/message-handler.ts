@@ -3837,7 +3837,12 @@ export class MessageHandler {
       this.getMachineFlockDocIdForMachine()
     );
     return readMachineFlockRowsFromFlock(handle.flock, {
-      families: ['archiveSessionCommand', 'deleteSessionCommand', 'deleteLocalProjectCommand'],
+      families: [
+        'archiveSessionCommand',
+        'deleteSessionCommand',
+        'deleteLocalProjectCommand',
+        'localProject',
+      ],
     });
   }
 
@@ -3855,11 +3860,16 @@ export class MessageHandler {
     }
   }
 
-  private async readMachineCommandSnapshot(): Promise<MachineCommandSnapshot> {
+  private async readMachineCommandSnapshot(options?: {
+    strictFlock?: boolean;
+  }): Promise<MachineCommandSnapshot> {
     const machineRoomId = getMachineRoomId(this.machineId);
+    const flockRows = options?.strictFlock
+      ? this.readMachineFlockCommandRows()
+      : this.tryReadMachineFlockCommandRows();
     const [machineMetaDoc, machineFlockRows] = await Promise.all([
       this.workspaceDocument.repo.getDocMeta(machineRoomId),
-      this.tryReadMachineFlockCommandRows(),
+      flockRows,
     ]);
     return buildMachineCommandSnapshot(
       machineMetaDoc?.meta as MachineLegacyMetaFields | undefined,
@@ -3942,7 +3952,23 @@ export class MessageHandler {
   }
 
   private async processArchiveRequests(): Promise<void> {
-    const snapshot = await this.readMachineCommandSnapshot();
+    // Archive cleanup may need a local-project root that exists only in Machine
+    // Flock. In cloud mode, wait until its command watcher has completed the
+    // initial remote sync; a successful read before then can still be stale.
+    if (this.cloudPort.kind !== 'local' && !this.machineFlockCommandWatcher.isReady) {
+      this.logger.debug('[archive] Waiting for authoritative Machine Flock before processing');
+      return;
+    }
+
+    let snapshot: MachineCommandSnapshot;
+    try {
+      snapshot = await this.readMachineCommandSnapshot({ strictFlock: true });
+    } catch (error) {
+      this.logger.error(
+        `[archive] Failed to read Machine Flock; keeping archive request queued: ${formatErrorMessage(error)}`
+      );
+      return;
+    }
     const sessionIds = snapshot.archiveSessionIds;
     if (sessionIds.length === 0) {
       this.logger.debug('[archive] No pending archive requests');
@@ -3965,7 +3991,9 @@ export class MessageHandler {
       this.archiveInFlight.add(sessionId);
       try {
         this.logger.debug(`[archive] Start archiving session ${sessionId}`);
-        await this.archiveSessionResources(sessionId);
+        await this.archiveSessionResources(sessionId, {
+          machineFlockRows: snapshot.machineFlockRows,
+        });
         await this.removeArchiveRequest(sessionId);
         this.logger.debug(`[archive] Finished archiving session ${sessionId}`);
       } catch (error) {
@@ -3980,7 +4008,10 @@ export class MessageHandler {
 
   private async archiveSessionResources(
     sessionId: SessionId,
-    options?: { preserveWorktree?: boolean }
+    options?: {
+      preserveWorktree?: boolean;
+      machineFlockRows?: MachineFlockRowMap;
+    }
   ): Promise<void> {
     this.logger.debug(`[${sessionId}] Archiving session resources`);
 
@@ -4013,6 +4044,8 @@ export class MessageHandler {
       const cleanupTarget = this.resolveWorktreeCleanupTarget({
         sessionMeta,
         machineMeta: archiveMachineMeta,
+        machineFlockRows:
+          options?.machineFlockRows ?? (await this.tryReadMachineFlockCommandRows()),
       });
       if (cleanupTarget) {
         const worktreeManager = getWorktreeManager(this.buildWorktreeManagerConfig(cleanupTarget));
