@@ -97,7 +97,9 @@ upstream turn's response: the Codex adapter drains session notifications before 
 so the turn's response routinely wins that race and would otherwise mask the refusal. A
 closed connection, a dead agent process, or an internal error may have left the prompt
 inside the live turn, and the caller re-sends an undelivered steer — so widening the
-"not delivered" classification sends the user's message twice.
+"not delivered" classification sends the user's message twice. Stop may cancel the local
+application waiter, but the submitted request remains in `pendingPrompts` until its delivery
+verdict settles or termination closes the connection.
 
 ### DeepSeek Harness is not a managed runtime
 
@@ -220,7 +222,7 @@ deriving one from prompt text publishes prompt text, and "rotate the password be
 is an ordinary request. Two filters were tried and both failed for the same reason — a secret
 has no reliable shape, since `hunter2` is a password and an ordinary word. Stripping
 credential-shaped tokens left everything that did not look like one; failing closed on
-credential *syntax* still let plain prose through, so it fails open on every miss and cannot
+credential _syntax_ still let plain prose through, so it fails open on every miss and cannot
 be a security boundary. Naming refs after user text needs a source provably isolated from the
 prompt, and no such source exists at session-ready: the ACP title has not arrived yet, and the
 isolated generator's own fallback is the raw prompt.

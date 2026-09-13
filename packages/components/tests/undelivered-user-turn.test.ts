@@ -3,6 +3,7 @@ import type { SessionInputBlock } from '@lody/shared';
 
 import {
   buildResendInputBlocks,
+  isUncertainSteerUserTurnEntry,
   isUndeliveredUserTurnEntry,
 } from '../src/lib/undelivered-user-turn';
 
@@ -90,5 +91,32 @@ describe('buildResendInputBlocks', () => {
       [{ type: 'text', text: 'just a prompt' }]
     );
     expect(buildResendInputBlocks({ items: [], inputConfig: undefined })).toEqual([]);
+  });
+});
+
+describe('isUncertainSteerUserTurnEntry', () => {
+  it('matches only the explicit stopped-steer delivery marker', () => {
+    expect(
+      isUncertainSteerUserTurnEntry({
+        ...userTurn({ status: 'failed' }),
+        inputConfig: {
+          prompt: 'guide',
+          _lodyDeliveryKind: 'steer',
+          _lodySteerOutcome: 'delivery_unknown',
+        },
+      })
+    ).toBe(true);
+    expect(
+      isUncertainSteerUserTurnEntry({
+        ...userTurn({ status: 'failed' }),
+        inputConfig: { prompt: 'ordinary failure' },
+      })
+    ).toBe(false);
+    expect(
+      isUncertainSteerUserTurnEntry({
+        ...userTurn(),
+        inputConfig: { prompt: 'guide', _lodySteerOutcome: 'delivery_unknown' },
+      })
+    ).toBe(false);
   });
 });

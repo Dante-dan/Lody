@@ -14,6 +14,8 @@ File-by-file ownership and coverage pointers: [README.md](README.md).
   activity is one row; expanded details are sibling rows, never a nested output
   scroller or fixed-height process panel. Keep streaming keys stable and map
   history indexes to virtual rows.
+- A failed steer with delivery-unknown provenance offers retry only as a NEW turn; never revive
+  or redispatch the original history row.
 - Keep Virtua `shift={false}`.
 - `buildChatStreamItems()` must drop empty assistant entries and de-duplicate
   history ids.
