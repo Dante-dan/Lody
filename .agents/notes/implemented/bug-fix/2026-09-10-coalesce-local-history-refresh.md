@@ -1,8 +1,10 @@
 # Coalesce overlapping local history refreshes
 
 Status: implemented
-Translation: pending
+Translation: current
 PR: [#563](https://github.com/LodyAI/Lody/pull/563)
+
+[中文](2026-09-10-coalesce-local-history-refresh.zh.md)
 
 ## Abstract
 
@@ -32,8 +34,9 @@ cross-process concurrency limit recorded there.
 
 ## Evidence and limits
 
-Deterministic service tests use deferred promises to show that equivalent imports execute once and
-return the same result, different targets execute in order, and fresh requests run after both
-failure and successful completion. CLI typechecking and the focused service suite validate the
-process-local contract. The tests do not reproduce renderer remount timing or exercise filesystem
-and provider I/O.
+Deterministic service tests use deferred promises to show that equivalent imports from separate
+service consumers execute once and return the same result, coalesced failures reach every caller,
+different targets execute in order, and fresh requests run after both failure and successful
+completion. CLI typechecking and the focused service suite validate the process-local contract. The
+tests model separate renderer consumers at the shared service boundary; they do not reproduce an
+installed renderer's remount timing or exercise filesystem and provider I/O.

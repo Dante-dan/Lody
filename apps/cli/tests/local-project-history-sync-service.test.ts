@@ -149,20 +149,30 @@ describe('local project history request coordination', () => {
   });
 
   it('coalesces overlapping imports for the same session set', async () => {
-    const service = historySyncService();
+    const firstService = historySyncService();
+    const secondService = historySyncService();
     const gate = deferred<LocalProjectHistoryImportResult>();
     const starts: string[][] = [];
     (
-      service as unknown as {
-        importLocalProjectSessionsInner: typeof service.importLocalProjectSessions;
+      firstService as unknown as {
+        importLocalProjectSessionsInner: typeof firstService.importLocalProjectSessions;
       }
     ).importLocalProjectSessionsInner = async (args) => {
       starts.push(args.acpSessionIds);
       return gate.promise;
     };
+    (
+      secondService as unknown as {
+        importLocalProjectSessionsInner: typeof secondService.importLocalProjectSessions;
+      }
+    ).importLocalProjectSessionsInner = async () => {
+      throw new Error('equivalent request started twice');
+    };
 
-    const first = service.importLocalProjectSessions(importArgs(['acp-2', 'acp-1']));
-    const second = service.importLocalProjectSessions(importArgs(['acp-1', 'acp-2', 'acp-1']));
+    const first = firstService.importLocalProjectSessions(importArgs(['acp-2', 'acp-1']));
+    const second = secondService.importLocalProjectSessions(
+      importArgs(['acp-1', 'acp-2', 'acp-1'])
+    );
     await Promise.resolve();
 
     expect(starts).toEqual([['acp-2', 'acp-1']]);
@@ -171,6 +181,37 @@ describe('local project history request coordination', () => {
     const [firstResult, secondResult] = await Promise.all([first, second]);
     expect(firstResult).toBe(expected);
     expect(secondResult).toBe(expected);
+  });
+
+  it('propagates a coalesced failure to every consumer', async () => {
+    const firstService = historySyncService();
+    const secondService = historySyncService();
+    const gate = deferred<LocalProjectHistoryCatalogResult>();
+    (
+      firstService as unknown as {
+        syncLocalProjectInner: typeof firstService.syncLocalProject;
+      }
+    ).syncLocalProjectInner = async () => gate.promise;
+    (
+      secondService as unknown as {
+        syncLocalProjectInner: typeof secondService.syncLocalProject;
+      }
+    ).syncLocalProjectInner = async () => {
+      throw new Error('equivalent request started twice');
+    };
+
+    const args = { localProjectId, rootPath: '/tmp/project-1' };
+    const first = firstService.syncLocalProject(args);
+    const second = secondService.syncLocalProject(args);
+    const resultsPromise = Promise.allSettled([first, second]);
+    const expected = new Error('catalog unavailable');
+    gate.reject(expected);
+
+    const results = await resultsPromise;
+    expect(results).toEqual([
+      { status: 'rejected', reason: expected },
+      { status: 'rejected', reason: expected },
+    ]);
   });
 
   it('serializes different requests for the same local project', async () => {
