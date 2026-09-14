@@ -19,15 +19,15 @@ Translation: current
 
 - `AgentClient` 暴露已提交 steer 的 delivery promise，并把 request-method steer 纳入 `pendingPrompts`。因此中止应用等待可以释放 session queue，同时不丢弃 provider verdict。
 - Stop 等待 steer mutation queue 释放，再沿用现有 prompt drain/termination 路径。明确的 `AgentSteerNotDeliveredError` 会把 exact row 恢复为 `pending` 并更新 `messageQueueUpdatedAt`，但绝不写入由 producer 持有的 `latestUserMsgId`。
-- 已接受或传输结果未知、但缺少应用 commit 时，把 exact row 终结为 `failed`，并记录 `_lodySteerOutcome: delivery_unknown`。UI 会显示该结果，并允许明确地作为新轮次重发，同时提示 provider 可能已收到原请求。
+- 已接受或传输结果未知、但缺少应用 commit 时，先把精确 id 写入有界的持久 metadata fence，再把可见行终结为 `failed` 并记录 `_lodySteerOutcome: delivery_unknown`。该 fence 阻止 daemon 重启或迟到 history 副本再次派发旧 steer；UI 只允许作为新轮次重发，并提示 provider 可能已收到原请求。
 - Finalization 会隔离迟到结果，避免其转移 ownership、把已停止的 source 标为 handled，或复活旧行。
 
 ## 备选方案与取舍
 
-自动重排所有已停止 steer 更简单，但在投递结果含糊时可能造成重复工作。把成功的 request response 当作已应用，则会混淆 provider 接受与 acknowledged-steer 契约中的 successor-turn application commit。单独增加持久 steer 状态体系对这个 bug 并非必要，反而会扩大迁移和同步风险。
+自动重排所有已停止 steer 更简单，但在投递结果含糊时可能造成重复工作。把成功的 request response 当作已应用，则会混淆 provider 接受与 acknowledged-steer 契约中的 successor-turn application commit。在现有 session metadata 中保存有界的精确 id 列表，既能提供重启 fence，也无需引入独立状态体系或可变重放队列。
 
 可见重试仍由用户决定。Lody 无法证明结果含糊的 provider 是否已执行副作用，因此对话框会解释风险，而不会声称 exactly-once execution。
 
 ## 验证
 
-确定性 CLI 测试让 steer request 在 Stop 和 termination 期间保持 unresolved，再提交更新的普通轮次，验证 cleanup 能释放、旧行会变为明确的 delivery-unknown，且更新轮次保留 dispatch ownership。现有拒绝和 late-acknowledgement 用例继续覆盖。Component 测试验证 marker 识别和新轮次重发边界。
+确定性 CLI 测试让 steer request 在 Stop 和 termination 期间保持 unresolved，并覆盖其 history 行尚未同步的情况，验证 cleanup 能释放、持久 fence 独立于 history 生效，且更新轮次保留 dispatch ownership。Dispatch 测试验证 fence 只抑制匹配的 RPC/history activation；Component 测试验证 marker 识别和新轮次重发边界。

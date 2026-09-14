@@ -26,12 +26,14 @@ export const isUncertainSteerUserTurnEntry = (
         inputConfig?: SessionHistoryInput['inputConfig'];
       })
     | null
-    | undefined
+    | undefined,
+  deliveryUnknownSteerUserMsgIds: readonly string[] = []
 ): boolean =>
   entry?.role === 'user' &&
-  entry.status === 'failed' &&
-  (entry.inputConfig as Record<string, unknown> | undefined)?._lodySteerOutcome ===
-    'delivery_unknown';
+  (deliveryUnknownSteerUserMsgIds.includes(entry.id) ||
+    (entry.status === 'failed' &&
+      (entry.inputConfig as Record<string, unknown> | undefined)?._lodySteerOutcome ===
+        'delivery_unknown'));
 
 /**
  * True when the missing-history marker names this exact entry and the entry is

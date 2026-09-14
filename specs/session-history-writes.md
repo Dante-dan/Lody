@@ -65,9 +65,10 @@ That tolerance must not authorize creating new malformed items locally.
 - If Stop wins while a submitted steer awaits application, release the local waiter but keep
   the raw request in ACP cleanup. A proven refusal restores that exact row to `pending` and
   wakes ordinary dispatch without rewriting `latestUserMsgId`; a late B must not overtake a
-  newer C. Accepted or transport-unknown delivery becomes terminal `failed` with explicit
-  steer/delivery-unknown provenance and may only be retried as a NEW turn. Late results must
-  not transfer ownership, change the source invocation, or revive finalized history.
+  newer C. Accepted or transport-unknown delivery records a bounded exact-id fence in session
+  metadata and becomes terminal `failed` with explicit steer/delivery-unknown provenance; it
+  may only be retried as a NEW turn. The fence survives restart and a late history replica.
+  Late results must not transfer ownership, change the source invocation, or revive finalized history.
 - Accepted steer provenance survives both writing and read normalization. Editing and
   resending must not reinterpret a steer as an independently replayable user turn.
 - External imports retain their source hashes and derived ids. A separate versioned

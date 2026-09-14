@@ -19,15 +19,15 @@ This change does not add a new persisted state machine or resend an ambiguous re
 
 - `AgentClient` exposes the submitted steer's delivery promise and keeps request-method steering in `pendingPrompts`. Aborting the application wait therefore unblocks the session queue without discarding the provider verdict.
 - Stop waits for the steer mutation queue to release, then uses the existing prompt drain/termination path. A definite `AgentSteerNotDeliveredError` restores the exact row to `pending` and bumps `messageQueueUpdatedAt`; it never writes producer-owned `latestUserMsgId`.
-- Accepted or transport-unknown delivery without an application commit terminalizes the exact row as `failed` with `_lodySteerOutcome: delivery_unknown`. The UI labels this outcome and offers an explicit resend as a new turn, warning that the provider may already have received the original.
+- Accepted or transport-unknown delivery without an application commit records the exact id in a bounded durable metadata fence, then terminalizes a visible row as `failed` with `_lodySteerOutcome: delivery_unknown`. The fence prevents restart or a late history replica from dispatching the old steer; the UI offers an explicit resend as a new turn and warns that the provider may already have received the original.
 - Finalization fences late results, so they cannot transfer ownership, mark the stopped source handled, or revive the old row.
 
 ## Alternatives and trade-offs
 
-Automatically requeueing every stopped steer would be simpler but could duplicate work after ambiguous delivery. Treating a successful request response as applied would conflate provider acceptance with the successor-turn application commit described by the acknowledged-steer contract. A separate durable steer state store was unnecessary for this bug and would broaden migration and synchronization risk.
+Automatically requeueing every stopped steer would be simpler but could duplicate work after ambiguous delivery. Treating a successful request response as applied would conflate provider acceptance with the successor-turn application commit described by the acknowledged-steer contract. A bounded exact-id list in existing session metadata supplies the restart fence without introducing a separate state store or mutable replay queue.
 
 The visible retry remains user-directed. Lody cannot prove whether an ambiguous provider performed side effects, so the dialog describes that risk instead of claiming exactly-once execution.
 
 ## Verification
 
-Deterministic CLI tests hold a steer request unresolved across Stop and termination, submit a newer ordinary turn, and verify that cleanup releases, the old row becomes explicitly delivery-unknown, and the newer turn retains dispatch ownership. Existing refusal and late-acknowledgement cases remain covered. Component tests verify marker detection and the new-turn resend boundary.
+Deterministic CLI tests hold a steer request unresolved across Stop and termination, including a case where its history row has not synced, and verify that cleanup releases, the durable fence survives independently of history, and the newer turn retains dispatch ownership. Dispatch tests verify that the fence suppresses only matching RPC/history activation; component tests verify marker detection and the new-turn resend boundary.

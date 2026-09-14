@@ -2876,7 +2876,10 @@ const UserMessageRowView = ({
     sessionMeta?.lastMissingHistoryUserMsgId,
     message
   );
-  const isUncertainSteer = isUncertainSteerUserTurnEntry(message);
+  const isUncertainSteer = isUncertainSteerUserTurnEntry(
+    message,
+    sessionMeta?.deliveryUnknownSteerUserMsgIds
+  );
   const pinCtx = useSessionPin();
   const showSendingSpinner =
     useIsMessageSendingVisible(message.id) && !isDelivered && !isUndelivered && !isUncertainSteer;

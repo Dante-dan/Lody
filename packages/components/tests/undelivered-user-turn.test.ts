@@ -119,4 +119,9 @@ describe('isUncertainSteerUserTurnEntry', () => {
       })
     ).toBe(false);
   });
+
+  it('uses the durable exact-id fence when history arrived after daemon cleanup', () => {
+    expect(isUncertainSteerUserTurnEntry(userTurn(), ['turn-1'])).toBe(true);
+    expect(isUncertainSteerUserTurnEntry(userTurn(), ['turn-other'])).toBe(false);
+  });
 });

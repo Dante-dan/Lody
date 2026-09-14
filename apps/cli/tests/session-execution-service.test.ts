@@ -5356,13 +5356,17 @@ describe('SessionExecutionService', () => {
     'native-terminal',
     'late-steer-ack',
     'unresolved-steer',
+    'unresolved-steer-missing-history',
     'terminated',
     'termination-failed',
     'cancel-unacknowledged',
   ] as const;
   it.each(cancelCompletions)('retains cancelled ownership (%s)', async (completion) => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    const nativeCompletion = completion === 'native-terminal' || completion === 'late-steer-ack';
+    const lateSteerAck = completion === 'late-steer-ack';
+    const unresolvedSteer =
+      completion === 'unresolved-steer' || completion === 'unresolved-steer-missing-history';
+    const nativeCompletion = completion === 'native-terminal' || lateSteerAck;
     let meta: Record<string, unknown> = {};
     let history: Array<Record<string, unknown>> = [
       {
@@ -5456,15 +5460,15 @@ describe('SessionExecutionService', () => {
       promptSignal = options?.signal;
       return sendPrompt(id, blocks, options);
     });
-    if (completion === 'late-steer-ack' || completion === 'unresolved-steer') {
+    if (lateSteerAck || unresolvedSteer) {
       vi.spyOn(agentClient, 'getAcknowledgedSteerCapability').mockReturnValue({
         provider: 'codex',
         appliedNotificationMethod: 'codex/steerApplied',
         upstreamTurn: 'same',
         configPolicy: 'active',
-        ...(completion === 'unresolved-steer' ? { requestMethod: '_session/steering' } : {}),
+        ...(unresolvedSteer ? { requestMethod: '_session/steering' } : {}),
       });
-      if (completion === 'late-steer-ack') {
+      if (lateSteerAck) {
         vi.spyOn(agentClient, 'steerPrompt').mockImplementation((_id, blocks) => {
           deliveredSteers.push(blocks);
           steerSubmitted.resolve();
@@ -5472,6 +5476,22 @@ describe('SessionExecutionService', () => {
             applied: steerApplied.promise,
             completion: nativeTerminal.promise,
             delivery: Promise.resolve(),
+          };
+        });
+      } else if (unresolvedSteer) {
+        vi.spyOn(agentClient, 'steerPrompt').mockImplementation((_id, blocks, options) => {
+          deliveredSteers.push(blocks);
+          steerSubmitted.resolve();
+          return {
+            applied: new Promise((_, reject) => {
+              options?.signal?.addEventListener(
+                'abort',
+                () => reject(options.signal?.reason ?? new Error('Steer stopped')),
+                { once: true }
+              );
+            }),
+            completion: nativeTerminal.promise,
+            delivery: rawSteerRequest.promise,
           };
         });
       }
@@ -5489,7 +5509,7 @@ describe('SessionExecutionService', () => {
         terminationRequested = true;
         await termination.promise;
         if (completion === 'termination-failed') throw new Error('Synthetic termination failure');
-        if (completion === 'unresolved-steer') {
+        if (unresolvedSteer) {
           rawSteerRequest.reject(new Error('Synthetic ACP connection closed'));
         }
         nativeTerminal.reject(new Error('Synthetic ACP connection closed'));
@@ -5568,13 +5588,15 @@ describe('SessionExecutionService', () => {
     try {
       await promptStarted.promise;
       const sourceInvocation = service.getActiveInvocationContext(message.sessionId);
-      if (completion === 'late-steer-ack') {
-        history.push({
-          id: 'steer-user-turn',
-          role: 'user',
-          status: 'pending_apply',
-          inputConfig: { prompt: 'change direction' },
-        });
+      if (lateSteerAck || unresolvedSteer) {
+        if (completion !== 'unresolved-steer-missing-history') {
+          history.push({
+            id: 'steer-user-turn',
+            role: 'user',
+            status: 'pending_apply',
+            inputConfig: { prompt: 'change direction' },
+          });
+        }
         steering = service.steerSession({
           sessionId: message.sessionId,
           expectedTurnId: 'assistant-prompt-cancel',
@@ -5598,7 +5620,7 @@ describe('SessionExecutionService', () => {
       if (completion !== 'cancel-unacknowledged') cancelAck.resolve();
       await vi.advanceTimersByTimeAsync(0);
       if (steering) {
-        if (completion === 'late-steer-ack') {
+        if (lateSteerAck) {
           steerApplied.resolve({ release: () => steerReleased.resolve() });
           await expect(steering).resolves.toMatchObject({
             applied: false,
@@ -5616,9 +5638,17 @@ describe('SessionExecutionService', () => {
         expect(service.getActiveUserTurnId(message.sessionId)).toBe(message.userTurnId);
         expect(meta.processingUserMsgId).toBe(message.userTurnId);
         expect(meta.latestUserMsgId).not.toBe('steer-user-turn');
-        expect(history.find((entry) => entry.id === 'steer-user-turn')).toMatchObject(
-          completion === 'late-steer-ack' ? { status: 'canceled' } : { status: 'pending_apply' }
-        );
+        if (completion === 'late-steer-ack') {
+          expect(history.find((entry) => entry.id === 'steer-user-turn')).toMatchObject({
+            status: 'canceled',
+          });
+        } else if (completion === 'unresolved-steer-missing-history') {
+          expect(history.find((entry) => entry.id === 'steer-user-turn')).toBeUndefined();
+        } else {
+          expect(history.find((entry) => entry.id === 'steer-user-turn')).toMatchObject({
+            status: 'pending_apply',
+          });
+        }
       }
       expect(agentClient.pendingPromptCompletion).not.toBeNull();
       expect(service.getExecutionSnapshot(message.sessionId)).toMatchObject({
@@ -5729,19 +5759,25 @@ describe('SessionExecutionService', () => {
       status: 'handled',
     });
     if (steering) {
-      if (completion === 'late-steer-ack') {
+      if (lateSteerAck) {
         expect(deliveredSteers).toEqual([[{ type: 'text', text: 'change direction' }]]);
         expect(history.find((entry) => entry.id === 'steer-user-turn')).toMatchObject({
           status: 'canceled',
         });
       } else {
-        expect(history.find((entry) => entry.id === 'steer-user-turn')).toMatchObject({
-          status: 'failed',
-          inputConfig: expect.objectContaining({
-            _lodyDeliveryKind: 'steer',
-            _lodySteerOutcome: 'delivery_unknown',
-          }),
-        });
+        const steerEntry = history.find((entry) => entry.id === 'steer-user-turn');
+        if (completion === 'unresolved-steer-missing-history') {
+          expect(steerEntry).toBeUndefined();
+        } else {
+          expect(steerEntry).toMatchObject({
+            status: 'failed',
+            inputConfig: expect.objectContaining({
+              _lodyDeliveryKind: 'steer',
+              _lodySteerOutcome: 'delivery_unknown',
+            }),
+          });
+        }
+        expect(meta.deliveryUnknownSteerUserMsgIds).toEqual(['steer-user-turn']);
       }
     }
     expect(meta).toMatchObject({

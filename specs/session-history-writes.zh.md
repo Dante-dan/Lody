@@ -45,9 +45,10 @@ Translation: current
   将尚未结束的压缩标记为 failed。打开 Session 不触发历史修复 RPC，也不改写旧结果。
 - 已提交的 steer 等待应用时，若 Stop 先发生，则释放本地 waiter，但 raw request 仍由 ACP
   cleanup 持有。明确拒绝时才把该行恢复为 `pending`，并唤醒普通 dispatch，但不得重写
-  `latestUserMsgId`，避免后到的 B 覆盖更新的 C。已接受或传输结果未知时，将该行终结为
-  `failed` 并记录 steer/delivery-unknown 来源；只能作为新轮次重试。迟到结果不得转移
-  ownership、改变 source invocation 或复活已终结历史。
+  `latestUserMsgId`，避免后到的 B 覆盖更新的 C。已接受或传输结果未知时，在 session
+  metadata 中记录有界的精确 id fence，并将可见行终结为 `failed`、记录
+  steer/delivery-unknown 来源；只能作为新轮次重试。该 fence 跨 daemon 重启和迟到 history
+  副本生效。迟到结果不得转移 ownership、改变 source invocation 或复活已终结历史。
 - 已接受的 steer 标记在写入和读取归一化后都必须保留；编辑重发不能把 steer
   当作可独立重放的普通用户轮次。
 

@@ -1754,9 +1754,19 @@ export class SessionExecutionService {
    * a producer-owned dispatch pointer backwards.
    */
   private async markStoppedSteerDeliveryUnknown(
+    sessionId: SessionId,
     sessionDoc: SessionDocument,
     userTurnId: string
   ): Promise<void> {
+    const meta = await this.getSessionMeta(sessionId);
+    const previous = (meta?.deliveryUnknownSteerUserMsgIds ?? []).filter(
+      (id): id is string => typeof id === 'string' && id.length > 0 && id !== userTurnId
+    );
+    await this.upsertSessionMeta(sessionId, {
+      deliveryUnknownSteerUserMsgIds: [...previous, userTurnId].slice(
+        -SessionExecutionService.TERMINAL_TURN_RECORD_LIMIT
+      ),
+    });
     await sessionDoc.updateHistory((history) =>
       history.map((entry) => {
         if (entry.id !== userTurnId || entry.role !== 'user' || entry.status !== 'pending_apply') {
@@ -2269,7 +2279,11 @@ export class SessionExecutionService {
             options.sessionId,
             'Failed to persist unknown stopped steer delivery',
             self.tryPromise(() =>
-              self.markStoppedSteerDeliveryUnknown(options.sessionDoc, stoppedSteer.userTurnId)
+              self.markStoppedSteerDeliveryUnknown(
+                options.sessionId,
+                options.sessionDoc,
+                stoppedSteer.userTurnId
+              )
             )
           );
         }
