@@ -1767,23 +1767,13 @@ export class SessionExecutionService {
         -SessionExecutionService.TERMINAL_TURN_RECORD_LIMIT
       ),
     });
-    await sessionDoc.updateHistory((history) =>
-      history.map((entry) => {
-        if (entry.id !== userTurnId || entry.role !== 'user' || entry.status !== 'pending_apply') {
-          return entry;
-        }
-        return {
-          ...entry,
-          status: 'failed' as const,
-          read: true,
-          inputConfig: {
-            ...entry.inputConfig,
-            _lodyDeliveryKind: 'steer',
-            _lodySteerOutcome: 'delivery_unknown',
-          },
-        };
-      })
-    );
+    await sessionDoc.sessionData.commands.applyHistoryAction({
+      kind: 'user-status',
+      turnId: userTurnId,
+      status: 'failed',
+      onlyPendingApply: true,
+      deliveryUnknownSteer: true,
+    });
   }
 
   async dispatchPreparedSessionTurn(options: PreparedSessionDispatchOptions): Promise<void> {
