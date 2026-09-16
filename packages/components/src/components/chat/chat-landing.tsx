@@ -11,7 +11,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useAtom, useAtomValue, useSetAtom, useStore } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import {
   buildPendingUserHistoryEntry,
   buildSessionPreparationRunConfig,
@@ -178,14 +178,18 @@ import {
 import { toIntlLocale } from '@/lib/intl-locale';
 import {
   arePastedTextDraftsEqual,
+  getPastedTextByteSize,
   getPastedTextCharacterCount,
   getPastedTextDraftsAfterInsertion,
   insertPastedTextDraft,
+  isPastedTextTooLarge,
+  MAX_PASTED_TEXT_BYTE_SIZE,
   normalizePastedTextDraft,
   sanitizePastedTextDrafts,
   shouldCapturePastedTextDraft,
   type PastedTextDraft,
 } from '@/lib/pasted-text-draft';
+import { formatFileSize } from '@/lib/session-file-presentation';
 import { wrapPastedTextChipLabel } from '@/components/mentions/mention-chips';
 
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -202,10 +206,7 @@ import {
   arePersistedMentionRangesEqual,
   toPersistedMentionRanges,
 } from '@/components/mentions/mention-persistence';
-import {
-  buildChatLandingDraftKey,
-  chatLandingAppliedResetKeyAtomFamily,
-} from '@/atoms/chat-landing-draft';
+import { buildChatLandingDraftKey } from '@/atoms/chat-landing-draft';
 import { useChatLandingImageDraft } from '@/hooks/use-chat-landing-image-draft';
 import { useChatLandingFileDraft } from '@/hooks/use-chat-landing-file-draft';
 import { useChatLandingDraftSession } from '@/hooks/use-chat-landing-draft-session';
@@ -387,8 +388,6 @@ interface ChatLandingProps {
    * chat route only; mobile keeps its base-context model.
    */
   onSelectionUrlSync?: (search: ChatLandingSearch) => void;
-  resetDraftKey?: string;
-  resetDraftOnKeyChange?: boolean;
 }
 
 const getGitHubOwnerHandle = (fullName: string): string => {
@@ -564,8 +563,6 @@ function WorkspaceChatLanding({
   preSelectedProject,
   preSelectedRepo,
   onSelectionUrlSync,
-  resetDraftKey,
-  resetDraftOnKeyChange = true,
 }: ChatLandingProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
@@ -1325,38 +1322,6 @@ function WorkspaceChatLanding({
     sessionId: draftSessionId,
     ensureSessionId: ensureDraftSessionId,
   });
-  const draftStore = useStore();
-  const appliedResetKeyAtom = chatLandingAppliedResetKeyAtomFamily(chatLandingDraftKey);
-
-  useEffect(() => {
-    if (!resetDraftKey) {
-      return;
-    }
-
-    const scopedResetKey = `${chatLandingDraftKey}:${resetDraftKey}`;
-    if (draftStore.get(appliedResetKeyAtom) === scopedResetKey) {
-      return;
-    }
-    draftStore.set(appliedResetKeyAtom, scopedResetKey);
-    if (resetDraftOnKeyChange) {
-      setSessionState({ prompt: '', pastedTextDrafts: [] });
-    }
-    setComposerStatus(null);
-    clearPendingImages();
-    clearPendingFiles();
-    resetDraftSessionId();
-  }, [
-    appliedResetKeyAtom,
-    chatLandingDraftKey,
-    clearPendingFiles,
-    clearPendingImages,
-    draftStore,
-    resetDraftSessionId,
-    resetDraftKey,
-    resetDraftOnKeyChange,
-    setSessionState,
-  ]);
-
   const insertLargePastedTextAtSelection = useCallback(
     (text: string) => {
       const normalizedText = normalizePastedTextDraft(text).trim();
@@ -2798,6 +2763,25 @@ function WorkspaceChatLanding({
     (event: ClipboardEvent<HTMLTextAreaElement>) => {
       const text = event.clipboardData.getData('text/plain');
 
+      // Refuse the whole paste rather than silently truncating it: a blob this
+      // large is a log dump, and a half-pasted log is worse than none.
+      if (text && isPastedTextTooLarge(text)) {
+        event.preventDefault();
+        toast.error(
+          t('composer.pastedTextTooLarge', 'Pasted text is too large ({{size}}).', {
+            size: formatFileSize(getPastedTextByteSize(text)),
+          }),
+          {
+            description: t(
+              'composer.pastedTextTooLargeDescription',
+              'The limit is {{limit}}. Attach it as a file instead.',
+              { limit: formatFileSize(MAX_PASTED_TEXT_BYTE_SIZE) }
+            ),
+          }
+        );
+        return;
+      }
+
       if (text && shouldCapturePastedTextDraft(text)) {
         event.preventDefault();
         if (insertLargePastedTextAtSelection(text)) {
@@ -2824,7 +2808,7 @@ function WorkspaceChatLanding({
 
       handleImagePromptPaste(event);
     },
-    [addFileAttachments, addFiles, handleImagePromptPaste, insertLargePastedTextAtSelection]
+    [addFileAttachments, addFiles, handleImagePromptPaste, insertLargePastedTextAtSelection, t]
   );
   const handleImageDrop = useCallback(
     (files: File[]) => {

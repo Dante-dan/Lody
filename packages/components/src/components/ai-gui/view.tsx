@@ -129,6 +129,7 @@ import { Spinner } from '@/ui/spinner';
 import { MarkdownRenderer } from './markdown-renderer';
 import { CarbonInProgress } from '@/components/icons/carbon-in-progress';
 import { getGoalStatusPresentation } from '@/lib/session-goal-status';
+import { detectToolCallJsonText } from '@/lib/tool-call-json-text';
 import { FileIcon } from '@/components/icons/file-icons';
 import { AnthropicIcon } from '@/components/icons/anthropic-icon';
 import { OpenAIIcon } from '@/components/icons/openai-icon';
@@ -169,7 +170,10 @@ import {
 import { TerminalComponent } from './terminal-component';
 import { prepareTerminalOutputBlocksPreview } from './terminal-preview';
 import { type DurationUnitLabels, formatDurationCompact } from '@/lib/format-duration';
-import { resolveSessionHistoryDurationMs } from '@/lib/session-history-duration';
+import {
+  resolveLiveSessionHistoryDurationMs,
+  resolveSessionHistoryDurationMs,
+} from '@/lib/session-history-duration';
 import { cn } from '@/lib/utils';
 import { ConversationColumn } from '@/components/shared/conversation-column';
 import type { TurnIndexRow } from '@/lib/conversation-view';
@@ -239,6 +243,7 @@ import {
 } from './conversation-font-size-classes';
 import { useSessionPin } from '@/components/sessions/session-pin-context';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { useStableNow } from '@/hooks/use-stable-now';
 import {
   SEARCH_HIGHLIGHT_CONTAINER_ACTIVE_CLASS_NAME,
   SEARCH_HIGHLIGHT_CONTAINER_MATCHED_CLASS_NAME,
@@ -370,7 +375,13 @@ type AssistantVirtualContent =
       isThinking: boolean;
     }
   | { kind: 'subagent_tasks' }
-  | { kind: 'footer'; showDuration: boolean };
+  | {
+      kind: 'footer';
+      showDuration: boolean;
+      /** The turn is the conversation's last one and has not ended: its
+       *  duration slot counts up instead of standing empty. */
+      isLive: boolean;
+    };
 
 type AssistantChatVirtualRow = {
   type: 'assistant';
@@ -501,7 +512,11 @@ export interface SessionChatStreamViewProps {
   suppressStickyAutoScrollRef?: React.RefObject<boolean>;
 }
 
-const SessionChatActionContext = createContext<{
+/* Exported so the turn footer can be driven through its real gate in tests: an
+   UNFINISHED turn renders its action bar only when a copy-context handler
+   exists, which is exactly the state whose leading duration slot this file
+   fills. */
+export const SessionChatActionContext = createContext<{
   sendMessage?: (message: ClientToServer) => void;
   openHtmlFile?: (file: SessionFilePayload) => boolean;
   copyContext?: (messageId: string) => void;
@@ -1194,7 +1209,11 @@ export const buildChatVirtualRows = ({
         key: `assistant:${message.id}:footer`,
         messageIndex,
         item,
-        content: { kind: 'footer', showDuration: showDurationInFooter },
+        content: {
+          kind: 'footer',
+          showDuration: showDurationInFooter,
+          isLive: isLastAssistantMessage && message.finished !== true,
+        },
         isLastRowForMessage: false,
       });
     }
@@ -1423,17 +1442,26 @@ export const SessionChatStreamView = forwardRef<
       return undefined;
     }, [scrollRowToTop, virtualRows]);
 
+    // Whether this render reaches the virtualized branch below. A session whose
+    // document is still being acquired renders the empty sentinel and returns
+    // before `Virtualizer` mounts, yet every hook above that return has already
+    // run — including the one that reads the stored row measurements.
+    const hasVirtualizedRows = virtualRows.length > 0;
+
     const {
       scrollRef: scrollContainerRef,
       scrollElement: scrollViewportElement,
       isSticky,
       scrollToBottom,
       initialScrollRestored,
+      initialVirtualizerCache,
+      persistVirtualizerCache,
       handleScroll,
     } = useStickyScroll({
       sessionId,
       initialContentReady: initialWindowReady,
       vlistRef,
+      hasVirtualizedRows,
       // `leadingContent` is a real first Virtua row, so it counts here — sticky
       // scroll otherwise targets an index short of the true bottom.
       itemCount: virtualRows.length + leadingRowCount + (shouldShowAgentActivity ? 1 : 0),
@@ -1578,6 +1606,8 @@ export const SessionChatStreamView = forwardRef<
     );
 
     const handleStreamScrollEnd = useCallback(() => {
+      // Scrolling measured more rows; keep them for the next open.
+      persistVirtualizerCache();
       const pending = pendingOutlineJumpRef.current;
       if (!pending) return;
       if (
@@ -1595,7 +1625,7 @@ export const SessionChatStreamView = forwardRef<
         attempts: pending.attempts + 1,
       };
       scrollRowToTop(pending.rowIndex);
-    }, [outlineJumpDrift, scrollRowToTop]);
+    }, [outlineJumpDrift, persistVirtualizerCache, scrollRowToTop]);
 
     // Any real input abandons the correction: a reader who starts scrolling
     // must never be yanked back by a jump they have already moved on from.
@@ -1826,6 +1856,10 @@ export const SessionChatStreamView = forwardRef<
               <Virtualizer
                 ref={vlistRef}
                 item={ConversationVirtualRow}
+                // Row heights measured the last time this session was open, so
+                // the first layout is the real one instead of an estimate that
+                // has to be corrected before the conversation can be shown.
+                cache={initialVirtualizerCache}
                 shift={false}
                 onScroll={handleStreamScroll}
                 onScrollEnd={handleStreamScrollEnd}
@@ -2860,6 +2894,10 @@ const UserMessageRowView = ({
   const rpcDeliveredTurns = useAtomValue(rpcDeliveredTurnsAtom);
   const rpcDelivered = rpcDeliveredTurns.has(getRpcDeliveredTurnKey(sessionId, message.id));
   const isPendingApply = message.status === 'pending_apply' && !rpcDelivered;
+  const isDeliveryUnknown = message.status === 'delivery_unknown';
+  const recoveryLabel = isDeliveryUnknown
+    ? t('sessions.messageStatus.deliveryUnknown', 'Application unknown')
+    : t('sessions.messageStatus.notDelivered', 'Not delivered');
   const isDelivered = !isPendingApply && (isSessionHistoryDelivered(message) || rpcDelivered);
   // Missing-history recovery negatively acknowledged this exact turn
   // (`SessionMeta.lastMissingHistoryUserMsgId`): the entry is visible but kept
@@ -2874,7 +2912,7 @@ const UserMessageRowView = ({
   );
   const pinCtx = useSessionPin();
   const showSendingSpinner =
-    useIsMessageSendingVisible(message.id) && !isDelivered && !isUndelivered;
+    useIsMessageSendingVisible(message.id) && !isDelivered && !isUndelivered && !isDeliveryUnknown;
 
   const hasTextContent = hasTextContentFromMessageItems(message.items);
   const [didCopy, setDidCopy] = useState(false);
@@ -2968,21 +3006,24 @@ const UserMessageRowView = ({
             </span>
           ) : null}
           {timestampLabel ? <span className="tabular-nums">{timestampLabel}</span> : null}
-          {isUndelivered ? (
+          {isUndelivered || isDeliveryUnknown ? (
             onResendUndelivered ? (
               <button
                 type="button"
                 className="inline-flex items-center gap-1 rounded-sm text-destructive underline-offset-2 transition-colors hover:text-destructive/80 hover:underline"
-                aria-label={t('sessions.resendUndelivered.action', 'Resend message')}
                 onClick={() => setResendDialogOpen(true)}
+                aria-label={recoveryLabel}
               >
                 <AlertCircle className="h-3.5 w-3.5" strokeWidth={2} />
-                {!isMobile ? t('sessions.messageStatus.notDelivered', 'Not delivered') : null}
+                {!isMobile ? recoveryLabel : null}
               </button>
             ) : (
-              <span className="inline-flex items-center gap-1 text-destructive">
+              <span
+                className="inline-flex items-center gap-1 text-destructive"
+                title={recoveryLabel}
+              >
                 <AlertCircle className="h-3.5 w-3.5" strokeWidth={2} />
-                {!isMobile ? t('sessions.messageStatus.notDelivered', 'Not delivered') : null}
+                {!isMobile ? recoveryLabel : null}
               </span>
             )
           ) : isPendingApply ? (
@@ -3160,6 +3201,7 @@ const UserMessageRowView = ({
       </div>
       {onResendUndelivered ? (
         <ResendUndeliveredDialog
+          deliveryUnknown={isDeliveryUnknown}
           open={resendDialogOpen}
           onOpenChange={setResendDialogOpen}
           isResending={isResending}
@@ -3243,11 +3285,13 @@ const ResendUndeliveredDialog = ({
   onOpenChange,
   isResending,
   onConfirm,
+  deliveryUnknown = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   isResending: boolean;
   onConfirm: () => void;
+  deliveryUnknown?: boolean;
 }) => {
   const { t } = useTranslation();
   return (
@@ -3255,13 +3299,20 @@ const ResendUndeliveredDialog = ({
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {t('sessions.resendUndelivered.title', 'Message not delivered')}
+            {deliveryUnknown
+              ? t('sessions.messageStatus.deliveryUnknown', 'Application unknown')
+              : t('sessions.resendUndelivered.title', 'Message not delivered')}
           </AlertDialogTitle>
           <AlertDialogDescription>
-            {t(
-              'sessions.resendUndelivered.description',
-              'This message never reached the agent, so it did not run. Resend the same content as a new message?'
-            )}
+            {deliveryUnknown
+              ? t(
+                  'sessions.resendUndelivered.unknownDescription',
+                  'The agent may already have applied this guidance. Sending it as a new message could repeat work. Send again?'
+                )
+              : t(
+                  'sessions.resendUndelivered.description',
+                  'This message never reached the agent, so it did not run. Resend the same content as a new message?'
+                )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -3731,6 +3782,55 @@ const AssistantThoughtVirtualRow = memo(function AssistantThoughtVirtualRow({
  */
 export const MOBILE_TURN_ACTION_LEADING_INSET_PX = 48;
 
+/**
+ * The live counterpart of the mobile footer's "Worked for {duration}" label.
+ *
+ * While the turn runs, that leading slot used to stand empty — the slot is
+ * reserved unconditionally (it is what pushes the copy button clear of the
+ * back-swipe strip), so an in-flight turn showed two icons floating beside a
+ * blank gutter. It now counts up from the turn's own `timestamp`, which is the
+ * same anchor the finished label resolves from, so for a turn with no permission
+ * wait the number stops at the end rather than jumping.
+ *
+ * KNOWN GAP: a turn that DID wait on permission steps down at finalization by
+ * the length of that wait. The CLI accumulates the wait in its transient store
+ * and writes `permissionWaitMs` onto the entry only through `finish-assistant`,
+ * so while the turn is live the field is absent here and the live number
+ * includes the user's own thinking time. Closing it needs the live wait state
+ * published from the machine; see the note linked from `README.md`.
+ *
+ * Its own leaf component so that the tick re-renders this span alone: the
+ * shared `useStableNow` ticker is subscribed here, never by the footer (which
+ * every visible turn mounts) or by a finished turn (which has nothing to tick).
+ */
+/** Sample period for the live label; see the comment at its `useStableNow` call. */
+const LIVE_TURN_DURATION_SAMPLE_MS = 300;
+
+const LiveTurnDurationLabel = ({
+  message,
+}: {
+  message: Pick<SessionHistoryParsed, 'timestamp' | 'permissionWaitMs'>;
+}) => {
+  const { t } = useTranslation();
+  /* Sampled faster than it is displayed. The shared ticker's phase is set by
+     whoever mounts first, not by this turn's start, so a 1s sample lands up to
+     a full second away from the instant the elapsed span crosses a whole second
+     — the digit would change at a visibly arbitrary moment and read as stale.
+     Sampling at 300ms bounds that error to 300ms; the rendered string still
+     changes once a second, so the extra samples cost a leaf re-render each and
+     no DOM write. */
+  const now = useStableNow(LIVE_TURN_DURATION_SAMPLE_MS);
+  const durationMs = resolveLiveSessionHistoryDurationMs(message, now.getTime());
+  if (durationMs === null) return null;
+  const duration = formatDurationCompact(durationMs, {
+    hour: t('time.unitShort.hour', 'h'),
+    minute: t('time.unitShort.minute', 'm'),
+    second: t('time.unitShort.second', 's'),
+  });
+  if (!duration) return null;
+  return <>{t('sessions.workedFor', { duration, defaultValue: 'Worked for {{duration}}' })}</>;
+};
+
 const AssistantForkButton = ({
   turnId,
   className,
@@ -3788,6 +3888,7 @@ export const AssistantTurnFooter = ({
   assistantActions,
   onFileDiffClick,
   showDuration,
+  isLive = false,
   isTurnHovered,
   onFork,
   forkWorktreeAvailability = 'hidden',
@@ -3800,6 +3901,8 @@ export const AssistantTurnFooter = ({
   assistantActions?: AssistantMessageAction[];
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   showDuration: boolean;
+  /** This turn is the live one: its duration slot counts up. */
+  isLive?: boolean;
   isTurnHovered: boolean;
   onFork?: (turnId: string, destination?: SessionForkDestination) => void;
   forkWorktreeAvailability?: SessionForkWorktreeAvailability;
@@ -3907,7 +4010,13 @@ export const AssistantTurnFooter = ({
               className="shrink-0 tabular-nums"
               style={{ minWidth: MOBILE_TURN_ACTION_LEADING_INSET_PX }}
             >
-              {showFinishedMetadata ? mobileDurationLabel : ''}
+              {showFinishedMetadata ? (
+                mobileDurationLabel
+              ) : isLive ? (
+                <LiveTurnDurationLabel message={message} />
+              ) : (
+                ''
+              )}
             </span>
           ) : null}
           {/* Icon buttons are 28px boxes around 14px glyphs, so their own 7px of
@@ -4086,13 +4195,21 @@ const areAssistantVirtualContentsEqual = (
         a.isThinking === b.isThinking
       );
     case 'footer':
-      return b.kind === 'footer' && a.showDuration === b.showDuration;
+      /* `isLive` must be compared: when a newer turn displaces an abandoned
+         unfinished one, the displaced turn's rebuilt row is identical except
+         for this flag, and skipping the re-render would leave its counter
+         running next to the new turn's — exactly the one-row bound the flag
+         exists to enforce. */
+      return b.kind === 'footer' && a.showDuration === b.showDuration && a.isLive === b.isLive;
     default:
       return false;
   }
 };
 
-const areAssistantChatVirtualRowsEqual = (
+/* Exported for `tests/chat-virtual-rows-identity.test.ts`: the memo's equality is
+   the thing under test, and driving it through real rebuilt rows is a stronger
+   check than restating the comparison over hand-built content. */
+export const areAssistantChatVirtualRowsEqual = (
   a: AssistantChatVirtualRow,
   b: AssistantChatVirtualRow
 ): boolean =>
@@ -4232,6 +4349,7 @@ const AssistantChatItem = memo(function AssistantChatItem({
             assistantActions={assistantActions}
             onFileDiffClick={onFileDiffClick}
             showDuration={content.showDuration}
+            isLive={content.isLive}
             isTurnHovered={isTurnHovered}
             onFork={onFork}
             forkWorktreeAvailability={forkWorktreeAvailability}
@@ -4420,17 +4538,18 @@ const UserChatBubble = ({
     if (group.kind === 'images') {
       const hasSingleImage = group.images.length === 1;
       return (
-        <div key={group.key} className="flex w-full justify-end px-2 pt-1">
+        <div key={group.key} className={cn(IMAGE_ATTACHMENT_ROW_CLASS, 'justify-end px-2 pt-1')}>
           {hasSingleImage ? (
             <UserImageBlock entry={group.images[0]!.entry} variant="full" />
           ) : (
-            <div className="grid max-w-[32rem] grid-cols-2 gap-2">
-              {group.images.map(({ entry }, index) => (
-                <div key={`image-${entry.imageId}-${index}`} className="shrink-0">
-                  <UserImageBlock entry={entry} variant="thumbnail" thumbnailSize="large" />
-                </div>
-              ))}
-            </div>
+            group.images.map(({ entry }, index) => (
+              <UserImageBlock
+                key={`image-${entry.imageId}-${index}`}
+                entry={entry}
+                variant="thumbnail"
+                thumbnailSize="large"
+              />
+            ))
           )}
         </div>
       );
@@ -4628,6 +4747,16 @@ const IMAGE_INLINE_PREVIEW_MAX_WIDTH = 768;
 
 export type ImageBubbleAlign = 'start' | 'end';
 type ImageThumbnailSize = 'compact' | 'large';
+
+/**
+ * A group of image attachments is ONE wrapping row, never a fixed column count.
+ * The thumbnails are fixed squares, so a `grid-cols-2` parked thirteen of them
+ * in a two-wide tower that used a quarter of the conversation column and scrolled
+ * for screens; wrapping lays them along the width the column actually has and
+ * keeps the turn readable. The row fills its parent and the tiles hug the side
+ * the speaker is on, so a short group still reads as that speaker's attachment.
+ */
+const IMAGE_ATTACHMENT_ROW_CLASS = 'flex w-full flex-wrap gap-2';
 
 /**
  * Hook to manage blob URLs for image gallery entries.
@@ -4867,7 +4996,10 @@ const WorkspaceUserImageBlock = ({
            card, proposed plan, permission record). An 8px frame beside them
            read as a different family of object. */
         'overflow-hidden rounded-xl border border-border/70 bg-muted/20',
-        isThumbnail ? thumbnailFrameClass : 'inline-flex max-w-full flex-col'
+        /* `shrink-0`: a thumbnail is a fixed square inside the wrapping
+           attachment row (`IMAGE_ATTACHMENT_ROW_CLASS`). Without it the last
+           tile of an over-long line squeezes instead of wrapping. */
+        isThumbnail ? `${thumbnailFrameClass} shrink-0` : 'inline-flex max-w-full flex-col'
       )}
     >
       {isThumbnailLoading && (
@@ -4955,7 +5087,6 @@ export const ImageGroupBubble = ({
      and no top pad (the row gap belongs to `cardSiblingGap`). The user's own
      attachments keep hugging the right edge exactly as they did. */
   const rowClass = align === 'end' ? 'justify-end px-2 pt-1' : 'justify-start';
-  const gridMaxWidthClass = thumbnailSize === 'large' ? 'max-w-[32rem]' : 'max-w-[26rem]';
   const entries = useMemo(
     () =>
       content.images.map((image, imageIndex) =>
@@ -5008,18 +5139,16 @@ export const ImageGroupBubble = ({
 
   return (
     <>
-      <div ref={previewPortalAnchorRef} className={cn('flex w-full', rowClass)}>
-        <div className={cn('grid grid-cols-2 gap-2', gridMaxWidthClass)}>
-          {entries.map((entry, index) => (
-            <UserImageBlock
-              key={`${entry.imageId}-${index}`}
-              entry={entry}
-              onPreviewRequest={handlePreviewRequest}
-              variant="thumbnail"
-              thumbnailSize={thumbnailSize}
-            />
-          ))}
-        </div>
+      <div ref={previewPortalAnchorRef} className={cn(IMAGE_ATTACHMENT_ROW_CLASS, rowClass)}>
+        {entries.map((entry, index) => (
+          <UserImageBlock
+            key={`${entry.imageId}-${index}`}
+            entry={entry}
+            onPreviewRequest={handlePreviewRequest}
+            variant="thumbnail"
+            thumbnailSize={thumbnailSize}
+          />
+        ))}
       </div>
       {!sessionImagePreview ? (
         <ImagePreviewDialog
@@ -6426,10 +6555,24 @@ const StandardToolContentBlock = ({
 }) => {
   const readonly = useContext(SessionReadonlyContext);
   switch (content.type) {
-    case 'text':
+    case 'text': {
+      // Raw tool input arrives as serialized JSON text; keep it out of the
+      // Markdown pipeline so single-`$` math cannot eat fragments like `$(...)`.
+      const jsonText = detectToolCallJsonText(content.text);
+      if (jsonText !== null) {
+        return (
+          <pre
+            className={cn(CONVERSATION_PANEL_BODY_CLASS, 'max-h-60 overflow-auto')}
+            style={conversationMonoFontSizeStyle(fontSize)}
+          >
+            {jsonText}
+          </pre>
+        );
+      }
       return (
         <MarkdownBlock text={content.text} size={fontSize} onFilePathClick={onFilePathClick} />
       );
+    }
     case 'image': {
       const src =
         content.uri && !readonly

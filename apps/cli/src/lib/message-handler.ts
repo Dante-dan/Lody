@@ -39,7 +39,7 @@ import {
   type BuiltinRuntimeOverrides,
   type CustomAcpLaunchSpec,
   type TitleGenerationConfig,
-  isManagedBuiltinAgentType,
+  isBuiltinAgentType,
   sanitizeLodyInternalInstructions,
   acpOwnsSessionTitleGeneration,
   SessionCreateResponse,
@@ -1063,14 +1063,14 @@ export class MessageHandler {
 
   private async handleUsageUpdate(
     sessionId: SessionId,
-    acpSessionId: ACPSessionId,
+    acpSessionId: string,
     update: SessionUsageUpdate
   ): Promise<void> {
     try {
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       const meta = await sessionDoc.getMetaState();
       if (!meta) return;
-      if (meta.cliType !== 'builtin' || !isManagedBuiltinAgentType(meta.agentType)) {
+      if (meta.cliType !== 'builtin' || !isBuiltinAgentType(meta.agentType)) {
         return;
       }
       const cliType = meta.agentType;
@@ -1601,18 +1601,21 @@ export class MessageHandler {
     context: {
       sessionDoc: SessionDocument;
       basedOnUserTurnId?: string;
+      signal?: AbortSignal;
     }
   ): Promise<void> {
     const { runtimeConfigPatch, warningSelections } = await applyAcpSessionRunConfig({
       session,
       config,
       logger: this.logger,
+      signal: context.signal,
     });
 
     if (runtimeConfigPatch && context.basedOnUserTurnId) {
       const basedOnUserTurnId = context.basedOnUserTurnId;
       const persistRuntimeConfig = async (): Promise<void> => {
         await this.awaitTurnHistoryGate(session.sessionId);
+        if (context.signal?.aborted) return;
         context.sessionDoc.applyAcpRuntimeConfigPatch(basedOnUserTurnId, runtimeConfigPatch);
       };
       void persistRuntimeConfig().catch((error) => {
@@ -3249,14 +3252,17 @@ export class MessageHandler {
           });
         },
         cancelSession: async ({ sessionId, turnId, subagentTaskId }) => {
-          const result = await this.executionService.cancelSession({
-            type: 'session/cancel',
-            machineId: this.machineId,
-            workspaceId: this.workspaceId,
-            sessionId,
-            turnId,
-            subagentTaskId,
-          });
+          const result = await this.executionService.cancelSession(
+            {
+              type: 'session/cancel',
+              machineId: this.machineId,
+              workspaceId: this.workspaceId,
+              sessionId,
+              turnId,
+              subagentTaskId,
+            },
+            { pendingInput: 'promote', prePromptSession: 'discard' }
+          );
           return {
             type: 'session/cancel_response' as const,
             sessionId,
@@ -3574,8 +3580,8 @@ export class MessageHandler {
       );
     });
 
-    this.sessionManager.on('onUsageUpdate', ({ sessionId, acpSessionId, usage }) => {
-      const promise = this.handleUsageUpdate(sessionId, acpSessionId, usage);
+    this.sessionManager.on('onUsageUpdate', ({ sessionId, acpSessionId, usage, accountingId }) => {
+      const promise = this.handleUsageUpdate(sessionId, accountingId ?? acpSessionId, usage);
       const usageState = this.store.get(sessionId);
       usageState.pendingUsageHandlers.add(promise);
       void promise.finally(() => {
@@ -6242,14 +6248,17 @@ export class MessageHandler {
             };
       }
       case 'session/cancel': {
-        const result = await this.executionService.cancelSession({
-          type: 'session/cancel',
-          machineId: request.machineId as MachineId,
-          workspaceId: request.workspaceId as WorkspaceId,
-          sessionId: request.params.sessionId,
-          turnId: request.params.turnId,
-          subagentTaskId: request.params.subagentTaskId,
-        });
+        const result = await this.executionService.cancelSession(
+          {
+            type: 'session/cancel',
+            machineId: request.machineId as MachineId,
+            workspaceId: request.workspaceId as WorkspaceId,
+            sessionId: request.params.sessionId,
+            turnId: request.params.turnId,
+            subagentTaskId: request.params.subagentTaskId,
+          },
+          { pendingInput: 'promote', prePromptSession: 'discard' }
+        );
         return {
           type: 'session/cancel_response' as const,
           sessionId: request.params.sessionId,
@@ -7611,13 +7620,16 @@ export class MessageHandler {
   async cancelActiveTurnsForRemoteRevocation(): Promise<void> {
     const activeTurns = this.executionService.getActiveTurnIds();
     for (const { sessionId, turnId } of activeTurns) {
-      await this.executionService.cancelSession({
-        type: 'session/cancel',
-        machineId: this.machineId,
-        workspaceId: this.workspaceId,
-        sessionId,
-        turnId,
-      });
+      await this.executionService.cancelSession(
+        {
+          type: 'session/cancel',
+          machineId: this.machineId,
+          workspaceId: this.workspaceId,
+          sessionId,
+          turnId,
+        },
+        { pendingInput: 'preserve', prePromptSession: 'discard' }
+      );
     }
   }
 
@@ -7675,7 +7687,10 @@ export class MessageHandler {
     dispatchContext: MessageDispatchContext = this.createRuntimeDispatchContext()
   ): Promise<void> {
     const { sessionId } = message;
-    const result = await this.executionService.cancelSession(message);
+    const result = await this.executionService.cancelSession(message, {
+      pendingInput: 'promote',
+      prePromptSession: 'discard',
+    });
     dispatchContext.send({
       type: 'session/cancel_response',
       sessionId,

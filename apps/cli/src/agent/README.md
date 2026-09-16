@@ -10,6 +10,12 @@ context/acp-agent-edit-evidence.md. Adapter source repositories and builtin prov
 [apps/cli/AGENTS.md](../../AGENTS.md). Where updates go after they arrive:
 context/message-flow.md "Upstream".
 
+| Boundary           | Owner                                        | Responsibility                                                               |
+| ------------------ | -------------------------------------------- | ---------------------------------------------------------------------------- |
+| ACP connection     | [AgentClient](agent-client.ts)               | Negotiates capabilities, tracks raw requests, and classifies steer evidence. |
+| Process startup    | [Runner](acp-runner.ts)                      | Spawns agents under the shared startup gate.                                 |
+| Runtime resolution | [Managed runtimes](managed-agent-runtime.ts) | Resolves pinned distributions and verifies their artifacts.                  |
+
 ## Files
 
 - `agent-client.ts` — the ACP connection: initialize/session lifecycle, client
@@ -92,19 +98,28 @@ critical path of every session establishment while the agent process sits idle.
 
 ### Steer delivery classification
 
-The applied-waiter must wait for the steer request's own answer before giving up on the
-upstream turn's response: the Codex adapter drains session notifications before refusing,
-so the turn's response routinely wins that race and would otherwise mask the refusal. A
-closed connection, a dead agent process, or an internal error may have left the prompt
-inside the live turn, and the caller re-sends an undelivered steer — so widening the
-"not delivered" classification sends the user's message twice.
+AgentClient converts adapter evidence into `applied`, `not-applied`, or `unknown`. The
+applied-waiter must wait for the steer request's own answer before giving up on the upstream
+turn's response: Codex may finish the interrupted turn before returning its definitive
+`failed` response. A closed connection, a dead agent process, or an internal error stays
+`unknown`, because the prompt may already be inside the live turn. Session execution consumes
+this outcome without interpreting provider errors or interruption state itself.
+
+`pendingPromptCompletion` aggregates raw prompt requests and request-transport steer
+submissions, even after a caller stops waiting locally. The session owner drains these before
+reuse or confirms termination of the old execution. A prompt response alone cannot release
+an unresolved steer submission. Application leases are released even if history projection
+fails; ending a local waiter never manufactures a provider refusal.
 
 ### DeepSeek Harness is not a managed runtime
 
-`deepseek-harness-runtime.ts` publishes Lody's versioned ACP composition beside (without
-replacing) user Harness config and launches the pinned explicit package closure through
-`dsh-acp-demo`. The all-in-one `@deepseek-ai/dsh` product CLI is deliberately not used
-because this ACP host excludes product UI and telemetry packages. CLI production and dev
+`deepseek-harness-runtime.ts` publishes Lody's content-addressed ACP profile beside (without
+replacing) user Harness config and launches the pinned package closure through
+`dsh --profile`. The generated profile composes `@deepseek-ai/dsh-base` with a Lody overlay
+that disables the product telemetry, request-inventory, and LLM-title rows, so the host keeps
+the upstream base composition without inheriting the web product surface. Never compose the
+product app bundles, and install every launcher package as an exact `name@version` (the Cordis
+ecosystem rides its own releases). CLI production and dev
 builds copy the extension's pinned official presets beside `deepseek-acp.js`; the generated
 roster also discovers `$DSH_HOME/.agent-presets`. The host mounts Harness's file settings
 provider for `$DSH_HOME/settings.yaml` (default `~/.dsh/settings.yaml`); refresh provider
@@ -220,7 +235,7 @@ deriving one from prompt text publishes prompt text, and "rotate the password be
 is an ordinary request. Two filters were tried and both failed for the same reason — a secret
 has no reliable shape, since `hunter2` is a password and an ordinary word. Stripping
 credential-shaped tokens left everything that did not look like one; failing closed on
-credential *syntax* still let plain prose through, so it fails open on every miss and cannot
+credential _syntax_ still let plain prose through, so it fails open on every miss and cannot
 be a security boundary. Naming refs after user text needs a source provably isolated from the
 prompt, and no such source exists at session-ready: the ACP title has not arrived yet, and the
 isolated generator's own fallback is the raw prompt.

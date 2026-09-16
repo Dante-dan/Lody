@@ -52,6 +52,10 @@ native-dependency, and OSS-composition rules stay in `apps/electron/AGENTS.md`.
   PostHog reporting. De-duplicate the same error across React and window events.
   Renderer-mounted notification must come from a committed layout-effect sentinel,
   never a timer or microtask guess.
+- A CLI-armed reset (`lody app reset-cache`) is consumed once, before any window
+  loads. `hard` is applied natively here because the renderer may not boot; `cache`
+  is handed to the renderer exactly once, because only it can spare the Shortcut
+  outbox and individual localStorage keys. Spec: `specs/desktop-local-reset.md`.
 - Theme changes must also update the native window color in `window-theme.ts`.
   OS appearance changes while `themeSource` is `system` must retint chrome and
   notify the renderer (`app.nativeTheme`). On macOS also subscribe
@@ -96,7 +100,8 @@ native-dependency, and OSS-composition rules stay in `apps/electron/AGENTS.md`.
   menu, clipboard, and save dialog here because the renderer holds the only copy
   of the image (a `blob:` URL main cannot download). Bytes cross once, after the
   menu selection. Naming/filter logic stays in `image-export-core.ts` so it runs
-  under `node --test` without the `electron` runtime.
+  under `node --test` without the `electron` runtime. `context-menu.ts` draws every
+  other right-click and yields to it on images.
 
 ## Local file resources
 

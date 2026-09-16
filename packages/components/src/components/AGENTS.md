@@ -69,6 +69,7 @@ Ownership and explanations: [README.md](README.md).
   composer text crosses the promotion via the input draft cache, not a component ref.
   After global metadata readiness, `archiveSession` falls back to the rendered meta
   cache when an individual repo read lags; close failures must surface to the user.
+- Desktop handoff: confirm the account, keep PKCE query on switch, render the `lody://` link.
 - Desktop changelogs open in-app as sanitized Markdown with raw HTML off. Only
   missing notes fall back to the website, via `getChangelogUrl` and
   `openExternalUrl`, never a hardcoded link.
@@ -79,23 +80,38 @@ Ownership and explanations: [README.md](README.md).
   including the iPad native shell. The bottom inset belongs to the adjacent surface
   (the composer uses `env(safe-area-inset-bottom)`); mobile insets per surface.
 
+## Conversation access
+
+- `session-sharing.tsx` owns ONE desktop header control for both access axes.
+  Team visibility picks the shape — private keeps the menu explaining its
+  inherited machine/project scope before either sharing action, anything else is
+  a plain button — and a published link picks the label in both shapes, being
+  the wider disclosure. Never add a second badge beside it; the private scope
+  stays the menu's first block.
+- `useSessionShareStatus` is the only cloud read a header makes while the share
+  editor is CLOSED: the management row, never a source document. `unknown` reads
+  as not-yet-shared, so the label upgrades in place instead of flashing in.
+- The page owns that editor: header control and `…` menu open the same
+  `SessionShareDialog`, keyed by session id so a switching tab cannot retarget it.
+
 ## Local projects
 
+- Project rows follow visibility, not machine ownership: a teammate's shared project
+  navigates and offers New chat; only removal is owner-only.
 - Adding a folder is a workspace action, not a this-machine action: the picker chooses
-  the machine, so every entry point says "Add folder" rather than "Add a local project".
-  Settings > Projects therefore pills EVERY machine the user may add to, including ones
-  with no project yet, and its add action passes that machine as `initialMachineId`.
-  Whoever needs the addable set reads `useAddLocalProjectMachines` — the ownership rule
-  (`canAddProjects`) has one home and must not be re-derived per surface. Onboarding is
-  the deliberate exception: it drives the desktop native picker and really is
-  this-machine only.
+  the machine, so every entry point says "Add folder", not "Add a local project".
+  Settings > Projects pills EVERY machine the user may add to, even ones with no project
+  yet, and passes it as `initialMachineId`. The addable set comes from
+  `useAddLocalProjectMachines`; the ownership rule (`canAddProjects`) has one home and
+  must not be re-derived per surface. Onboarding is the deliberate exception: its
+  desktop native picker really is this-machine only.
 - A pending local-project removal is a visible lifecycle state, not an absent project:
-  keep the project and its existing Sessions discoverable while the owning machine is
-  offline or retrying, but exclude it from new-Session selectors. Once the catalog row
-  is gone, archived Sessions remain readable and deletable; Restore stays unavailable
-  until the same local project is added again.
+  keep the project and its Sessions discoverable while the owning machine is offline or
+  retrying, but exclude it from new-Session selectors. Once the catalog row is gone,
+  archived Sessions stay readable and deletable; Restore waits until the same local
+  project is added again.
 - Local-project removal may optionally clean Lody-created Session worktrees, but the
-  option defaults off and is available only after the owning machine preflights every
-  worktree. Always state that the original project directory is never deleted; list
-  dirty worktrees and keep them by default. A completed cleanup result is not pending
-  removal and must be acknowledged visibly even when some worktrees were kept or failed.
+  option defaults off and appears only after the owning machine preflights every
+  worktree. Always state the original project directory is never deleted; list dirty
+  worktrees and keep them by default. A completed cleanup is not pending removal and
+  must be visibly acknowledged even when worktrees were kept or failed.
