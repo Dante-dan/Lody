@@ -812,6 +812,8 @@ export type LocalProjectFileReadResult = {
 export type LocalProjectDirectoryEntry = {
   name: string;
   type: 'file' | 'directory';
+  mtimeMs?: number;
+  size?: number;
 };
 
 export type LocalProjectDirectoryListResult = {
