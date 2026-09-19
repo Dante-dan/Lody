@@ -979,6 +979,12 @@ export type LocalProjectControlRequest =
       localProjectId: LocalProjectId;
       relativePath: string;
       limit?: number;
+      sort?: {
+        by: 'name' | 'mtime' | 'size';
+        order?: 'asc' | 'desc';
+        directoriesFirst?: boolean;
+      };
+      include?: 'stat'[];
       requestedByUserId?: string;
     }
   | {
