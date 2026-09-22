@@ -711,7 +711,11 @@ async function listDirectoryAtRootPath(
     });
   }
 
-  const sort = options?.sort ?? { by: 'name' as const, order: 'asc' as const, directoriesFirst: true };
+  const sort = options?.sort ?? {
+    by: 'name' as const,
+    order: 'asc' as const,
+    directoriesFirst: true,
+  };
   const direction = sort.order === 'desc' ? -1 : 1;
   entries.sort((left, right) => {
     if ((sort.directoriesFirst ?? true) && left.type !== right.type) {
@@ -723,7 +727,9 @@ async function listDirectoryAtRootPath(
         : sort.by === 'size'
           ? (left.size ?? 0) - (right.size ?? 0)
           : left.name.localeCompare(right.name, undefined, { numeric: true });
-    return comparison * direction || left.name.localeCompare(right.name, undefined, { numeric: true });
+    return (
+      comparison * direction || left.name.localeCompare(right.name, undefined, { numeric: true })
+    );
   });
 
   const selected = entries.slice(0, limit);
