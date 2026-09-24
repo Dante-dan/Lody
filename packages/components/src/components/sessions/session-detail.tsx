@@ -25,9 +25,9 @@ import {
   Trash2,
   Users,
 } from 'lucide-react';
-import { Spinner } from '@/ui/spinner';
+import { Spinner } from '@lody/ui/spinner';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/ui/button';
+import { Button } from '@lody/ui/button';
 import { useRouter } from '@tanstack/react-router';
 import { useComposerNavigationFocus } from '../chat/submission/use-composer-navigation-focus';
 import { usePostHog } from '@posthog/react';
@@ -165,7 +165,7 @@ import type {
 import { SessionShareMobileMenu } from '@/components/sharing/session-share-mobile-menu';
 import { MobileFileViewerDrawer } from '@/components/mobile/mobile-file-viewer-drawer';
 import { GlassIconButton } from '@/components/mobile/glass-icon-button';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 
 import { SessionConversationDiffPanel } from './session-conversation-diff-panel';
 import { SessionFileContentView, type SessionFileSaveViewState } from './session-file-content-view';
@@ -194,17 +194,12 @@ import {
 import { isSessionMarkdownPath } from '@/lib/session-file-language';
 import { SessionNotFound } from './session-not-found';
 import { SessionSyncingIndicator } from './session-syncing-indicator';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/ui/sheet';
+// Aliased while the vaul drawer below still holds the bare name; the two
+// merge when the mobile drawers migrate onto this primitive.
+import { Drawer as UiDrawer } from '@lody/ui/drawer';
 import { Drawer, DrawerContent, DrawerTitle } from '@/ui/drawer';
 import { VaulDrawerBody } from '@/components/mobile/vaul-drawer-edge-back-zone';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/ui/dialog';
+import { Dialog } from '@/ui/dialog';
 import {
   isArchivedLocalProjectRestoreUnavailableError,
   SessionCreateBillingError,
@@ -720,12 +715,13 @@ const TerminalDockToggleButton = memo(function TerminalDockToggleButton() {
     <Button
       type="button"
       variant="ghost"
-      size="icon"
+      size="small"
+      icon
       disabled={!canCreate}
       onClick={() => store.get(terminalControllerAtom)?.toggleOpen()}
       aria-label={label}
       title={label}
-      className={cn('h-7 w-7 shrink-0 text-muted-foreground', isOpen && 'text-foreground')}
+      className={cn('shrink-0', isOpen && '')}
     >
       <PanelBottom className="h-4 w-4" />
     </Button>
@@ -5046,7 +5042,7 @@ const SessionDetail = ({
           <p className="text-sm text-muted-foreground">
             {t('sessions.tabWaitingForSync', 'Waiting for this conversation to sync…')}
           </p>
-          <Button variant="ghost" size="sm" onClick={() => handleSessionTabSelect(sessionId)}>
+          <Button variant="ghost" size="small" onClick={() => handleSessionTabSelect(sessionId)}>
             {t('sessions.tabBackToMain', 'Back to main conversation')}
           </Button>
         </>
@@ -5055,11 +5051,11 @@ const SessionDetail = ({
   ) : null;
 
   const deleteConfirmDialog = (
-    <Dialog open={deleteConfirmOpen} onOpenChange={(open) => setDeleteConfirmOpen(open)}>
-      <DialogContent className={cn(isMobile ? '' : 'max-w-sm')}>
-        <DialogHeader>
-          <DialogTitle>{t('archive.deleteConfirm.title', 'Delete permanently?')}</DialogTitle>
-          <DialogDescription>
+    <Dialog.Root open={deleteConfirmOpen} onOpenChange={(open) => setDeleteConfirmOpen(open)}>
+      <Dialog.Content className={cn(isMobile ? '' : 'max-w-sm')}>
+        <Dialog.Header>
+          <Dialog.Title>{t('archive.deleteConfirm.title', 'Delete permanently?')}</Dialog.Title>
+          <Dialog.Description>
             {activeSession?.repoFullName
               ? t(
                   'archive.deleteConfirm.description.codeSession',
@@ -5069,10 +5065,10 @@ const SessionDetail = ({
                   'archive.deleteConfirm.description.chatSession',
                   'This will permanently delete the chat session.'
                 )}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setDeleteConfirmOpen(false)}>
+          </Dialog.Description>
+        </Dialog.Header>
+        <Dialog.Footer>
+          <Button variant="secondary" onClick={() => setDeleteConfirmOpen(false)}>
             {t('common.cancel', 'Cancel')}
           </Button>
           <Button
@@ -5083,34 +5079,31 @@ const SessionDetail = ({
           >
             {t('archive.delete', 'Delete permanently')}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 
   const archiveConfirmDialog = (
-    <Dialog open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
-      <DialogContent
+    <Dialog.Root open={archiveConfirmOpen} onOpenChange={setArchiveConfirmOpen}>
+      <Dialog.Content
         className={cn(isMobile ? '' : 'max-w-sm')}
         // Focus the confirm button on open so Enter archives; Esc still cancels (Radix
         // default close-on-escape). Rejected onKeyDown-on-content: it double-fires when a
         // button already has focus.
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          archiveConfirmButtonRef.current?.focus();
-        }}
+        initialFocus={() => archiveConfirmButtonRef.current}
       >
-        <DialogHeader>
-          <DialogTitle>{t('sessions.archiveConfirm.title', 'Archive chat?')}</DialogTitle>
-          <DialogDescription>
+        <Dialog.Header>
+          <Dialog.Title>{t('sessions.archiveConfirm.title', 'Archive chat?')}</Dialog.Title>
+          <Dialog.Description>
             {t(
               'sessions.archiveConfirm.description',
               'This chat will move to the archive. You can restore it later.'
             )}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setArchiveConfirmOpen(false)}>
+          </Dialog.Description>
+        </Dialog.Header>
+        <Dialog.Footer>
+          <Button variant="secondary" onClick={() => setArchiveConfirmOpen(false)}>
             {t('common.cancel', 'Cancel')}
           </Button>
           <Button
@@ -5122,9 +5115,9 @@ const SessionDetail = ({
           >
             {t('sessions.archiveConfirm.confirm', 'Archive')}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 
   const worktreeForkObservers = Object.entries(pendingForks)
@@ -5157,24 +5150,24 @@ const SessionDetail = ({
   };
 
   const dirtyForkDialog = (
-    <Dialog
+    <Dialog.Root
       open={dirtyForkConfirmation !== null}
       onOpenChange={(open) => {
         if (!open) cancelDirtyFork();
       }}
     >
-      <DialogContent className={cn(isMobile ? '' : 'max-w-md')}>
-        <DialogHeader>
-          <DialogTitle>{t('sessions.forkDirty.title', 'Uncommitted changes found')}</DialogTitle>
-          <DialogDescription>
+      <Dialog.Content className={cn(isMobile ? '' : 'max-w-md')}>
+        <Dialog.Header>
+          <Dialog.Title>{t('sessions.forkDirty.title', 'Uncommitted changes found')}</Dialog.Title>
+          <Dialog.Description>
             {t(
               'sessions.forkDirty.description',
               'The new worktree starts from the latest committed HEAD. Uncommitted and untracked files will not be copied.'
             )}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={cancelDirtyFork}>
+          </Dialog.Description>
+        </Dialog.Header>
+        <Dialog.Footer>
+          <Button variant="secondary" onClick={cancelDirtyFork}>
             {t('common.cancel', 'Cancel')}
           </Button>
           <Button
@@ -5190,9 +5183,9 @@ const SessionDetail = ({
           >
             {t('sessions.forkDirty.confirm', 'Continue from committed HEAD')}
           </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
   );
 
   const fileQuickOpenDialog = (
@@ -5738,16 +5731,17 @@ const SessionDetail = ({
         </div>
 
         {/* Mobile diff sheet */}
-        <Sheet
+        <UiDrawer.Root
+          side="bottom"
           open={mobileDiffState !== null}
           onOpenChange={(open) => !open && handleCloseMobileDiff()}
         >
-          <SheetContent side="bottom" className="h-[85vh] flex flex-col p-0">
-            <SheetHeader className="shrink-0 border-b border-border px-4 py-3">
-              <SheetTitle className="text-sm font-medium">
+          <UiDrawer.Content side="bottom" className="h-[85vh] flex flex-col p-0">
+            <UiDrawer.Header className="shrink-0 border-b border-border px-4 py-3">
+              <UiDrawer.Title className="text-sm font-medium">
                 {t('sessions.diffTab', 'Changes')}
-              </SheetTitle>
-            </SheetHeader>
+              </UiDrawer.Title>
+            </UiDrawer.Header>
             <div className="flex-1 min-h-0 overflow-hidden">
               {mobileDiffState && (
                 <SessionConversationDiffPanel
@@ -5792,8 +5786,8 @@ const SessionDetail = ({
                 />
               )}
             </div>
-          </SheetContent>
-        </Sheet>
+          </UiDrawer.Content>
+        </UiDrawer.Root>
         {viewerTabs
           .filter((tab): tab is Extract<ViewerTab, { type: 'file' }> => tab.type === 'file')
           .map((tab) => {
@@ -5867,7 +5861,7 @@ const SessionDetail = ({
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon"
+                    icon
                     className={getSessionDetailTouchIconButtonClassName('-ml-1')}
                     /* Same order as the edge swipe: pop a directory level
                        first, close the drawer only at the root. */
@@ -5940,7 +5934,7 @@ const SessionDetail = ({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon"
+                      icon
                       className={getSessionDetailTouchIconButtonClassName('-ml-1')}
                       onClick={handleClosePrTab}
                       aria-label={t('common.back', 'Back')}
@@ -6005,7 +5999,7 @@ const SessionDetail = ({
                     <Button
                       type="button"
                       variant="ghost"
-                      size="icon"
+                      icon
                       className={getSessionDetailTouchIconButtonClassName('-ml-1')}
                       onClick={handleCloseBrowserTab}
                       aria-label={t('common.back', 'Back')}
@@ -6149,14 +6143,15 @@ const SessionDetail = ({
     <Button
       type="button"
       variant="ghost"
-      size="icon"
+      size="small"
+      icon
       onClick={handleToggleSidebar}
       aria-label={
         isSidebarVisible
           ? t('sessions.sidebar.hide', 'Hide sidebar')
           : t('sessions.sidebar.show', 'Show sidebar')
       }
-      className={cn('h-7 w-7 shrink-0 text-muted-foreground', !isSidebarVisible && 'mr-[9px]')}
+      className={cn('shrink-0', !isSidebarVisible && 'mr-[9px]')}
     >
       <PanelRight className="h-4 w-4" />
     </Button>
@@ -6166,10 +6161,11 @@ const SessionDetail = ({
     <Button
       type="button"
       variant="ghost"
-      size="icon"
+      size="small"
+      icon
       onClick={() => showNavigationSidebar()}
       aria-label={t('sessions.leftSidebar.show', 'Show navigation sidebar')}
-      className="h-7 w-7 shrink-0 text-muted-foreground"
+      className="shrink-0"
     >
       <PanelLeft className="h-4 w-4" />
     </Button>
