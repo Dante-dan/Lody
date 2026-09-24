@@ -18,6 +18,11 @@ strings on i18n rather than the registry's inline English.
   a hashed `?url` asset cannot satisfy it and a host that forgets the plugin gets an
   empty picker. Keep the locale list in the plugin and `lib/emojibase-assets.ts` in
   step; each locale is ~750 KB.
+- `data.json` is emitted with every other bundled locale's `label` and `tags` folded
+  into `tags` (build-time merge keyed on `hexcode`), because frimousse searches only
+  the loaded locale. Do not revert to a verbatim copy — that is what lets one query
+  match in either product language. `label` and `messages.json` stay per-locale so
+  display names and category headers keep the UI language.
 - Anchor the URL on the Vite BASE, never on `document.baseURI` alone. The router uses
   browser history over http, so the document URL is a deep route and resolving against
   it asks for `…/settings/emojibase`, which the dev server answers with the SPA
@@ -82,6 +87,13 @@ strings on i18n rather than the registry's inline English.
   every non-loading state; that shipped as a permanently rotating "No machines
   available" and "Files unavailable" icon.
   Evidence: [spinner note](../../../../.agents/notes/implemented/bug-fix/2026-09-13-spinner-off-svg-retina-composite.md).
+
+## Working grid
+
+- Session working/unread marks go through `working-status-mark.tsx`, mounted across the
+  change. Animate only `transform`/`opacity` via Web Animations on the shared clock
+  (`working-grid-reading.ts`); never rAF, timers or React state. The sidebar root keeps
+  `data-working-grid-region`. [Note](../../../../.agents/notes/implemented/feature/2026-09-24-sidebar-working-grid.md).
 
 ## Scroll area
 
