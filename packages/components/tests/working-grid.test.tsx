@@ -384,10 +384,16 @@ describe('WorkingGridCollapse', () => {
     expect(container.querySelector('[data-session-unread-dot]')).not.toBeNull();
   });
 
-  it('still plays when presence clears before the unread write lands', () => {
-    // Presence is applied at once; the doc-meta unread bump a task later.
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    try {
+  describe('hand-over hold', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('still plays when presence clears before the unread write lands', () => {
+      // Presence is applied at once; the doc-meta unread bump a task later.
       const rest = <span data-rest-icon="" />;
       render(<SidebarRowEndSlot isWorking restIcon={rest} />);
       render(<SidebarRowEndSlot isWorking={false} restIcon={rest} />);
@@ -407,14 +413,9 @@ describe('WorkingGridCollapse', () => {
       });
       expect(container.querySelector('[data-session-row-indicator]')).toBeNull();
       expect(container.querySelector('[data-rest-icon]')).not.toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    });
 
-  it('lets the held grid go when no unread write arrives', () => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
-    try {
+    it('lets the held grid go when no unread write arrives', () => {
       render(<SidebarRowEndSlot isWorking />);
       render(<SidebarRowEndSlot isWorking={false} />);
       act(() => {
@@ -425,9 +426,7 @@ describe('WorkingGridCollapse', () => {
         vi.advanceTimersByTime(1);
       });
       expect(container.querySelector('[data-session-row-indicator]')).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+    });
   });
 
   it('does not play for a session that was never working', () => {

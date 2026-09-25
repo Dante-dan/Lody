@@ -90,5 +90,5 @@ export function useWorkingHandOver(working: boolean, unread: boolean): boolean {
     const timer = setTimeout(() => setHolding(false), WORKING_HAND_OVER_MS);
     return () => clearTimeout(timer);
   }, [holding]);
-  return working || (holding && !unread);
+  return working || holding;
 }

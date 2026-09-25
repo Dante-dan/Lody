@@ -132,8 +132,8 @@ applies patches a task later (`setTimeout(0)` in `atoms/doc-meta.ts`) while
 presence applies at once. So presence usually cleared first: the indicator
 emptied, the dot appeared later, and the transition never played in the app
 although Storybook (both flags flipped in one render) showed it. Fixed
-2026-09-25: `SidebarRowEndSlot`, which outlives the mark, runs
-`useWorkingHandOver`, which keeps the grid up to 1.5s after `working` clears; an
+2026-09-25: `SidebarRowEndSlot` (which outlives the mark) and the related-session
+chip run `useWorkingHandOver`, which keeps the grid up to 1.5s after `working` clears; an
 unread write inside that window gets the transition, otherwise the hold lapses
 (the user was reading the session). A row that remounts, or was never
 working, shows the dot directly. Reduced motion shows the dot at once. Known seam: the
