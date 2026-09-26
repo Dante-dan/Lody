@@ -19,9 +19,11 @@ the reasoning behind those rules.
 - `conversation-outline-rail.tsx` renders one tick per round (a user turn plus its
   work) and a hover preview; `conversation-outline-arrival-intent.ts` decides when
   a pointer heading for a tick counts as arrival.
-- `markdown-renderer.tsx` wraps Streamdown; `markdown-code-block.tsx` owns fenced
-  blocks, wrap, and Markdown-fence preview; `markdown-diff-block.tsx` is the
-  inline diff. Diagrams are split three ways: `use-mermaid-diagram-canvas.tsx`
+- `markdown-renderer.tsx` renders finished text with react-markdown and a
+  streaming turn with `@lobehub/streamdown`; `markdown-code-block.tsx` owns fenced
+  blocks, wrap, and Markdown-fence preview (`markdown-code-highlight.ts` the Shiki
+  tokens); `markdown-diff-block.tsx` is the inline diff; `markdown-mermaid-block.tsx`
+  renders a closed Mermaid fence. Diagrams are split three ways: `use-mermaid-diagram-canvas.tsx`
   owns activation and the gestures that follow it, `mermaid-inline-canvas.ts` the
   pure zoom/pan geometry, and `mermaid-diagram-viewer.tsx` the full-screen
   surface. Invariants live in
@@ -83,13 +85,15 @@ footer actions, and task-summary expansion.
   tail of the list may be clamped and would otherwise never reach tolerance.
 - **`pendingOutlineJumpRef` instead of render state.** Clicking the already-active
   round may produce no commit, so a render-based flag never clears.
-- **Word-level Streamdown `animated`.** It emits a span per word; the compositor
-  cost is unbounded on a long turn.
+- **Static rendering once a turn finishes.** The stream engine fades only the
+  in-flight tail, but it still parses per block and ships lookbehind regex
+  literals that Safari < 16.4 cannot parse; finished text never needs either
+  ([note](../../../../../.agents/notes/implemented/feature/2026-09-26-lobehub-streamdown.md)).
 - **The gutter rule.** Virtua rows are absolutely positioned and ignore scroller
   padding, so the rail has to come from `ConversationColumn`.
 - **The Mermaid viewer replacement, and click-to-activate in a message.**
-  Streamdown's own overlay could not be left on touch, and the pan/zoom canvas it
-  wraps every diagram in swallowed page scrolls that merely passed under one. A
+  The earlier bundled overlay could not be left on touch, and the pan/zoom canvas
+  it wrapped every diagram in swallowed page scrolls that merely passed under one. A
   diagram now becomes a canvas only when the reader asks for one, and an
   unmodified wheel is never taken either way:
   [mermaid-diagram-rendering.md](mermaid-diagram-rendering.md).
