@@ -81,7 +81,7 @@ import { Tabs } from '@lody/ui/tabs';
 import { Badge } from '@lody/ui/badge';
 import { Textarea } from '@lody/ui/textarea';
 import { Input } from '@lody/ui/input';
-import { VList } from 'virtua';
+import { VList } from '@lody/virtua';
 
 import { AlertDialog } from '@/ui/dialog';
 import { Tooltip } from '@lody/ui/tooltip';
