@@ -74,3 +74,18 @@ export const productLightPalette = stylex.createTheme(colors, {
   gray5: 'hsl(223 16% 91.6%)',
   gray6: 'hsl(220 23% 97.5%)',
 });
+
+/**
+ * The settings pane's surfaces, re-declared on the pane itself. The pane remaps
+ * `--card` to the popover fill in light mode (`[data-settings-surface]` in
+ * `tailwind/index.css`), but the palettes above are declared on the root, where
+ * `hsl(var(--card))` has already resolved to the root's card: a custom property
+ * is computed where it is declared and inherited as that value. Declared again on
+ * the pane, the tokens resolve against the pane's own `--card`, so the page is the
+ * white the remap intends and the nav keeps its step below it. In dark the remap
+ * does not apply and the values equal the root's.
+ */
+export const productSettingsSurfacePalette = stylex.createTheme(colors, {
+  elevatedBackground: 'hsl(var(--card))',
+  secondaryBackground: 'hsl(var(--card))',
+});
