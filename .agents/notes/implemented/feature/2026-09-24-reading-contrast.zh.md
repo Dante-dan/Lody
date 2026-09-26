@@ -63,9 +63,10 @@ Translation: current
 - 设置导航：`@lody/ui`（#913、#969）把它改建在 `settings/surface.ts` 上，行底色是文字色的淡染。保留本次改动的强度：悬停 6%、
   当前行 10%（#969 选的是 5% / 8%）；键盘聚焦的行显示悬停底色而不是强调色描边，因为对话框打开时会自动聚焦一行。账户行使用
   组件库的头像，不再使用本次改动的 18px 头像。
-- `Mergeable` 改为 success `Badge`（#969）。通过对 badge token 的 `createTheme`（`sidebar-mergeable-badge.stylex.ts`），
+- `Mergeable` 改为 success `Badge`（#969）。通过 `sidebar-mergeable-badge.stylex.ts` 重新导出的 badge token 主题，
   它的文字直接使用 success 色，而不是组件库默认向文字色混合一半的颜色；底色保持本次改动的 16%（组件库在 #976 后是 14%）。
-  边框和半粗体没有对应 token，未保留。
+  边框和半粗体没有对应 token，未保留。[编译边界修复](../bug-fix/2026-09-26-sidebar-badge-theme-resolution.zh.md)
+  调整了主题的所属位置，没有改变这里的视觉决策。
 
 ## 备选方案
 

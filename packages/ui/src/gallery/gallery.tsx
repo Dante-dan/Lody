@@ -12,7 +12,7 @@ import {
 import { Avatar, type AvatarSize } from '../avatar/avatar';
 import { avatar as avatarTokens } from '../avatar/avatar.tokens.stylex';
 import { Badge, type BadgeTone } from '../badge/badge';
-import { badge as badgeTokens } from '../badge/badge.tokens.stylex';
+import { badge as badgeTokens, badgeProminentSuccessTheme } from '../badge/badge.tokens.stylex';
 import { Button, ButtonGroup } from '../button/button';
 import { button } from '../button/button.tokens.stylex';
 import { Card } from '../card/card';
@@ -492,6 +492,7 @@ const styles = stylex.create({
    * surface that has to cap one caps the badge.
    */
   badgeClamp: { maxWidth: '96px' },
+  badgeThemeWrapper: { display: 'contents' },
   /** A row of controls with a line down it: the separator's other orientation. */
   separatorToolbar: { display: 'flex', alignItems: 'center', gap: space[2] },
   skeletonLines: { display: 'flex', flexDirection: 'column', gap: space[2], flexGrow: 1 },
@@ -3099,6 +3100,9 @@ function BadgeToneRow() {
             {tone}
           </Badge>
         ))}
+        <span {...stylex.props(styles.badgeThemeWrapper, badgeProminentSuccessTheme)}>
+          <Badge tone="success">prominent success</Badge>
+        </span>
         <Badge icon={<TickGlyph />}>Verified</Badge>
         <Badge>v1.42.0</Badge>
         <Badge className={stylex.props(styles.badgeClamp).className}>

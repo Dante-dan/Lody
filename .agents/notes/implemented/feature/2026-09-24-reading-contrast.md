@@ -95,10 +95,11 @@ long-form text.
   ring, since the dialog focuses a row when it opens. The account row takes the package's
   avatar rather than this change's 18px one.
 - `Mergeable` is a success `Badge` (#969). Its word is the success colour itself, not the
-  package's half-way mix toward the ink, through a `createTheme` over the badge tokens
-  (`sidebar-mergeable-badge.stylex.ts`), and its tint stays at this change's 16% where the
+  package's half-way mix toward the ink, through the badge-token theme re-exported by
+  `sidebar-mergeable-badge.stylex.ts`, and its tint stays at this change's 16% where the
   package's settled at 14% (#976). The border and semibold weight have no token and were not
-  kept.
+  kept. The theme's [compiler-boundary fix](../bug-fix/2026-09-26-sidebar-badge-theme-resolution.md)
+  changes its owner without changing this visual decision.
 
 ## Alternatives
 
