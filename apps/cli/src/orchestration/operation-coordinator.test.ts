@@ -397,6 +397,38 @@ afterEach(async () => {
 });
 
 describe('LodyOperationCoordinator', () => {
+  it('returns the retained target-write failure when materialization reaches its deadline', async () => {
+    vi.useFakeTimers();
+    let nowMs = TEST_NOW_MS;
+    const harness = await makeHarness({
+      targetInputDurable: false,
+      materializationFailuresBeforeSuccess: 10,
+      deadlineAt: new Date(TEST_NOW_MS + 1_000).toISOString(),
+      now: () => nowMs,
+    });
+
+    harness.coordinator.start();
+    await harness.coordinator.idle();
+    expect(harness.materializeTarget).toHaveBeenCalledTimes(1);
+    nowMs = TEST_NOW_MS + 1_000;
+    await vi.advanceTimersByTimeAsync(1_000);
+    await harness.coordinator.idle();
+
+    const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS + 1_000);
+    try {
+      expect(store.get(harness.requesterSessionId, 'review-round-1').items[0]).toMatchObject({
+        status: 'failed',
+        error: {
+          code: 'TARGET_TIMEOUT',
+          message: expect.stringContaining('target-input-write failure: transient Streams failure'),
+        },
+      });
+    } finally {
+      store.close();
+      harness.coordinator.stop();
+    }
+  });
+
   it('retries transient target materialization on its own bounded timer', async () => {
     vi.useFakeTimers();
     const harness = await makeHarness({
