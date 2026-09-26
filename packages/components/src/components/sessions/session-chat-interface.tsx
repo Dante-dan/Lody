@@ -2103,7 +2103,15 @@ export const SessionChatInterface = memo(
     const liveSessionPresence = useAtomValue(sessionLivePresenceAtomFamily(session.id));
     const liveSessionStatus = liveSessionPresence?.status ?? null;
     const isLocalSession = !!localMachineId && session.machineId === localMachineId;
-    const [pendingRemoteHtmlFileName, setPendingRemoteHtmlFileName] = useState<string | null>(null);
+    // Session-scoped UI state below stores the session it belongs to and is read
+    // only for that session: this instance can outlive a switch (the desktop
+    // toolbar is not keyed), and a late async write must not reach the next one.
+    const [pendingRemoteHtmlFile, setPendingRemoteHtmlFile] = useState<{
+      sessionId: SessionId;
+      fileName: string;
+    } | null>(null);
+    const pendingRemoteHtmlFileName =
+      pendingRemoteHtmlFile?.sessionId === session.id ? pendingRemoteHtmlFile.fileName : null;
     // Set by the confirm action so the dialog's close does not also count as a deny.
     const remotePortAllowedRef = useRef(false);
     const {
@@ -2344,18 +2352,22 @@ export const SessionChatInterface = memo(
     const hasHostedGitHub = usePlatformCapability('githubIntegration');
     const latestPrNumber = getPullRequestNumber(latestPr);
     const latestPrRepoFullName = getPullRequestRepoFullName(latestPr) ?? repoFullName;
-    const prLinkHandler = latestPr
-      ? hasHostedGitHub && onOpenPrTab && latestPrRepoFullName && latestPrNumber
-        ? () =>
-            onOpenPrTab({
-              prNumber: latestPrNumber,
-              repoFullName: latestPrRepoFullName,
-              headCommitSha: getSessionPullRequestLegacyFields(latestPr).headCommitSha,
-            })
-        : () => {
-            void openExternalUrl(latestPr.url);
-          }
-      : undefined;
+    // Stable identity: it is the PrLinkProvider value over the whole
+    // conversation, and a new function per render re-propagated that context
+    // through every row. It reads the latest PR when called.
+    const openLatestPr = useStableCallback(() => {
+      if (!latestPr) return;
+      if (hasHostedGitHub && onOpenPrTab && latestPrRepoFullName && latestPrNumber) {
+        onOpenPrTab({
+          prNumber: latestPrNumber,
+          repoFullName: latestPrRepoFullName,
+          headCommitSha: getSessionPullRequestLegacyFields(latestPr).headCommitSha,
+        });
+        return;
+      }
+      void openExternalUrl(latestPr.url);
+    });
+    const prLinkHandler = latestPr ? openLatestPr : undefined;
     const preferredMergeMethod = usePreferredPrMergeMethod();
     const activePrDetails = useGitHubPrDetails({
       workspaceId,
@@ -2373,11 +2385,16 @@ export const SessionChatInterface = memo(
       markReadyForReview: markActivePrReadyForReview,
       isMarkingReady: isActivePrMarkingReady,
     } = activePrDetails;
-    const [isPrActionPending, setIsPrActionPending] = useState(false);
+    const [prActionPendingSessionId, setPrActionPendingSessionId] = useState<SessionId | null>(
+      null
+    );
+    const isPrActionPending = prActionPendingSessionId === session.id;
     // Shared with the PR-tab "Resolve conflicts" button through
     // `resolveConflictsActionAtomFamily`; both surfaces block re-clicks + show
     // loading off this one flag while the prompt dispatch is in flight.
-    const [isResolvingConflicts, setIsResolvingConflicts] = useState(false);
+    const [resolvingConflictsSessionId, setResolvingConflictsSessionId] =
+      useState<SessionId | null>(null);
+    const isResolvingConflicts = resolvingConflictsSessionId === session.id;
     const repositories = useCloudQuery(
       cloudOperations.github.getWorkspaceRepositories,
       workspaceId ? { workspaceId } : 'skip'
@@ -2443,10 +2460,15 @@ export const SessionChatInterface = memo(
       null
     );
     const { members: workspaceMembers, isMultiMember } = useWorkspaceMembers();
-    const [pendingOwnerUserId, setPendingOwnerUserId] = useState<string | null>(null);
+    const [pendingOwner, setPendingOwner] = useState<{
+      sessionId: SessionId;
+      userId: string;
+    } | null>(null);
+    const pendingOwnerUserId = pendingOwner?.sessionId === session.id ? pendingOwner.userId : null;
     const handleChangeOwner = useCallback(
       async (nextUserId: string) => {
-        setPendingOwnerUserId(nextUserId);
+        const target = { sessionId: session.id, userId: nextUserId };
+        setPendingOwner(target);
         try {
           await transferSessionOwner(session.id, nextUserId);
           const name =
@@ -2456,7 +2478,7 @@ export const SessionChatInterface = memo(
           console.error('Failed to transfer session owner', error);
           toast.error(t('sessions.owner.changeFailed', 'Could not change the session owner'));
         } finally {
-          setPendingOwnerUserId(null);
+          setPendingOwner((current) => (current === target ? null : current));
         }
       },
       [session.id, t, transferSessionOwner, workspaceMembers]
@@ -4446,12 +4468,14 @@ export const SessionChatInterface = memo(
       handlePinMessage(null);
     }, [handlePinMessage]);
 
+    // The pin context wraps the whole conversation; keep its handler stable.
+    const pinMessage = useStableCallback(handlePinMessage);
     const pinContextValue = useMemo<SessionPinContextValue>(
       () => ({
         pinnedHistoryId,
-        onPin: handlePinMessage,
+        onPin: pinMessage,
       }),
-      [pinnedHistoryId, handlePinMessage]
+      [pinnedHistoryId, pinMessage]
     );
 
     // The pinned turn is hydrated on demand through the view; nothing else
@@ -4545,7 +4569,8 @@ export const SessionChatInterface = memo(
 
     const handleResolveConflicts = useCallback(async () => {
       if (isResolvingConflicts || !latestPr?.url) return;
-      setIsResolvingConflicts(true);
+      const targetSessionId = session.id;
+      setResolvingConflictsSessionId(targetSessionId);
       captureSessionEvent('session/quick_action_selected', {
         action_id: 'resolve-conflicts',
         has_existing_pr: true,
@@ -4564,7 +4589,7 @@ export const SessionChatInterface = memo(
           executionTurnConfigOverrides
         );
       } finally {
-        setIsResolvingConflicts(false);
+        setResolvingConflictsSessionId((current) => (current === targetSessionId ? null : current));
       }
     }, [
       captureSessionEvent,
@@ -4574,13 +4599,15 @@ export const SessionChatInterface = memo(
       latestPr,
       latestPrNumber,
       latestPrRepoFullName,
+      session.id,
       t,
       workspaceDirty,
     ]);
 
     const handleFixCiErrors = useCallback(async () => {
       if (isPrActionPending) return;
-      setIsPrActionPending(true);
+      const targetSessionId = session.id;
+      setPrActionPendingSessionId(targetSessionId);
       captureSessionEvent('session/quick_action_selected', {
         action_id: 'fix-ci-errors',
         has_existing_pr: true,
@@ -4613,7 +4640,7 @@ export const SessionChatInterface = memo(
           description: getErrorMessage(error),
         });
       } finally {
-        setIsPrActionPending(false);
+        setPrActionPendingSessionId((current) => (current === targetSessionId ? null : current));
       }
     }, [
       captureSessionEvent,
@@ -4622,6 +4649,7 @@ export const SessionChatInterface = memo(
       isPrActionPending,
       latestPrRepoFullName,
       refreshActivePrCheckRuns,
+      session.id,
       t,
       workspaceDirty,
     ]);
@@ -5562,7 +5590,7 @@ export const SessionChatInterface = memo(
         case 'confirm-reported-port':
           if (!onOpenBrowser) return false;
           remotePortAllowedRef.current = false;
-          setPendingRemoteHtmlFileName(file.fileName);
+          setPendingRemoteHtmlFile({ sessionId: session.id, fileName: file.fileName });
           return true;
         case 'fallback':
           return false;
@@ -6355,7 +6383,7 @@ export const SessionChatInterface = memo(
             </>
           )}
           <RenameSessionDialog
-            target={renameDialogTarget}
+            target={renameDialogTarget?.sessionId === session.id ? renameDialogTarget : null}
             onClose={() => setRenameDialogTarget(null)}
           />
           {publicShareWorkspaceId && publicShareSessionId === session.id && (
@@ -6373,7 +6401,7 @@ export const SessionChatInterface = memo(
                 captureSessionEvent('file_preview/remote_port_confirmed', { decision: 'deny' });
               }
               remotePortAllowedRef.current = false;
-              setPendingRemoteHtmlFileName(null);
+              setPendingRemoteHtmlFile(null);
             }}
           >
             <AlertDialog.Content>
@@ -6397,7 +6425,7 @@ export const SessionChatInterface = memo(
                     captureSessionEvent('file_preview/remote_port_confirmed', {
                       decision: 'allow',
                     });
-                    setPendingRemoteHtmlFileName(null);
+                    setPendingRemoteHtmlFile(null);
                     onOpenBrowser?.();
                   }}
                 >

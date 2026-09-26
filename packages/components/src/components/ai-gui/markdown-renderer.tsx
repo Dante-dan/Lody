@@ -67,7 +67,7 @@ import { MermaidDiagramViewer } from './mermaid-diagram-viewer';
 import { MermaidFullscreenButton, useMermaidDiagramCanvas } from './use-mermaid-diagram-canvas';
 import { SessionReadonlyContext } from './session-readonly-context';
 import type { MarkdownAgentFileLinkMenuItem } from '@/hooks/use-session-file-actions';
-import { ContextMenu } from '@lody/ui/context-menu';
+import { ContextMenu } from '@/ui/armed-overlays';
 
 export { createMarkdownMermaidConfig } from './markdown-mermaid';
 
