@@ -41,9 +41,8 @@ Translation: current
   的**管理**。Agent、共享和目录都在那一页，所以行上的 Agent 图标堆叠、“配置”按钮和目录菜单都去掉了。
   Token：备注，然后是预览 · 来源 · 创建时间 · 最近使用，然后是**撤销**。成员：名称、邮箱，角色是一个
   菜单，菜单里也能移出工作区。邀请：邮箱、角色，状态是一个菜单，可复制链接或撤回邀请。
-- 已绑定账号是一个有标题的分组，每个服务一行，回答“已绑定”或一个**绑定**按钮（打开原有确认框）。
-  移动端保留原来的一排 Logo。
-- 账号页顺序：个人资料（邮箱、用户名、头像）、已绑定账号、我的机器、CLI Token，最后是登录
+- 已绑定账号保持 `main` 的样子：个人资料里的一行，右边是那排服务 Logo。按服务分行的分组试过，被 owner 否掉。
+- 账号页顺序：个人资料（邮箱、用户名、头像、已绑定账号）、我的机器、CLI Token，最后是登录
   （密码，然后退出登录）。
 - 在平铺窗口里，这两页没有带框的分组。标题处执行操作的按钮是文字（“创建 Token”“邀请成员”），不是单独的图标。
 - Token 日期跟随产品语言（`toIntlLocaleOrEn`），而不是系统语言。
@@ -68,8 +67,7 @@ Translation: current
 
 - `Settings/AccountSettings/DesktopPaneAccount` 与 `DesktopPaneWorkspace` 在窗口作用域和材质下渲染两页。
   前（三个组件临时换回 `main`）后截图，中文，两种配色。
-- `tests/account-machines-overview.test.tsx` 覆盖状态行、本机标注和唯一的“管理”按钮；
-  `tests/linked-accounts-list.test.tsx` 覆盖每个服务的答案，以及“绑定”经确认到 `onConnect`。
+- `tests/account-machines-overview.test.tsx` 覆盖状态行、本机标注和唯一的“管理”按钮。
 - 面板底色在 Chromium 里用 `getComputedStyle` 实测两种配色；jsdom 不计算 StyleX 样式，所以没有单元测试覆盖。
 - 未在打包后的 Electron 应用中验证。
 

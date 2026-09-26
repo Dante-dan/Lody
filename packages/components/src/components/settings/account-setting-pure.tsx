@@ -23,7 +23,7 @@ import {
 } from './invite-member-dialog';
 import { AvatarEditor } from './avatar-editor';
 import { ChangePasswordButton } from './change-password-button';
-import { LinkedAccountsSection, type LinkedAccountInfo } from './linked-accounts-list';
+import { LinkedAccountsList, type LinkedAccountInfo } from './linked-accounts-list';
 import { MobileAccountSettings } from '@/components/mobile/mobile-account-settings';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { toIntlLocaleOrEn } from '@/lib/intl-locale';
@@ -544,7 +544,7 @@ export function AccountSettingsPure({
 
   return (
     <div {...stylex.props(settingsSurface.container)}>
-      {/* Profile: who the person is — email, display name, avatar. */}
+      {/* Profile: who the person is — email, display name, avatar, connected accounts. */}
       {surface === 'account' ? (
         <CompactSection title={t('settings.profile.title')}>
           {currentUser?.email ? (
@@ -604,15 +604,16 @@ export function AccountSettingsPure({
               onUpload={(file) => handleUploadAvatar('user', file)}
             />
           </CompactRow>
+          {showLinkedAccounts ? (
+            <CompactRow label={t('settings.profile.bindings.label')}>
+              <LinkedAccountsList
+                accounts={linkedAccounts}
+                loading={isLoadingLinkedAccounts}
+                onConnect={onConnectAccount}
+              />
+            </CompactRow>
+          ) : null}
         </CompactSection>
-      ) : null}
-
-      {surface === 'account' && showLinkedAccounts ? (
-        <LinkedAccountsSection
-          accounts={linkedAccounts}
-          loading={isLoadingLinkedAccounts}
-          onConnect={onConnectAccount}
-        />
       ) : null}
 
       {surface === 'account' ? accountMachinesSlot : null}

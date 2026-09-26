@@ -50,10 +50,9 @@ connected-accounts card) and was closed.
   source · created · last used, then **Revoke**. Members: the name, their email,
   and their role as a menu that also removes them. Invitations: the email, the
   role, and the status as a menu that copies the link or withdraws the invitation.
-- Connected accounts are a titled group with one row per provider, answered
-  "Connected" or by a **Connect** button that opens the existing confirmation.
-  Mobile keeps its row of logos.
-- Account's order: Profile (email, name, avatar), Connected accounts, My machines,
+- Connected accounts stay as on `main`: one Profile row answered by the row of
+  provider logos. A per-provider group was tried and rejected by the owner.
+- Account's order: Profile (email, name, avatar, connected accounts), My machines,
   CLI Token, and Sign-in (password, then Sign out) last.
 - On the flat pane, no group on these pages is boxed. A header action that does
   something is text ("Create Token", "Invite members"), not a bare glyph.
@@ -87,9 +86,7 @@ clicks (menu, then item) instead of one icon.
   both pages in the pane scope and material. Screenshots were taken before (the
   three components swapped back to `main`) and after, in Chinese, in both palettes.
 - `tests/account-machines-overview.test.tsx` covers the status line, the local
-  machine and the single Manage button. `tests/linked-accounts-list.test.tsx`
-  covers the per-provider answers and Connect through the confirmation to
-  `onConnect`.
+  machine and the single Manage button.
 - The pane's fill was measured with `getComputedStyle` in Chromium in both palettes;
   jsdom computes no StyleX styles, so no unit test covers it.
 - Not verified in the packaged Electron app.
