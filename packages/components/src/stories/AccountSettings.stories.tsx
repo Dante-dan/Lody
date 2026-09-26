@@ -341,7 +341,7 @@ export const DesktopPaneAccount: Story = {
       <AccountMachinesOverviewView
         items={paneMachines}
         currentMachineId={studioId}
-        onManageMachine={noop}
+        onManageMachine={() => {}}
       />
     ),
   },
