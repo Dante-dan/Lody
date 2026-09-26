@@ -216,7 +216,12 @@ import {
 import { downloadSessionFile, fetchSessionFilePreview } from '@/lib/session-file-download';
 import { getMachineMetaByIdAtomFamily } from '@/atoms/machines';
 import { isHtmlSessionFile } from '@/lib/session-file-presentation';
-import type { MachineId, MessageTextSpan, SessionFilePayload } from '@lody/shared';
+import type {
+  MachineId,
+  MessageTextSpan,
+  SessionFilePayload,
+  ScheduleProposalMeta,
+} from '@lody/shared';
 import { MessageTextWithChips } from '@/components/mentions/message-text-chips';
 import { isNativeIOSAppShell } from '@/lib/native-platform';
 import { Popover, Tooltip } from '@/ui/armed-overlays';
@@ -225,6 +230,7 @@ import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { SessionPlanBar } from '@/components/sessions/session-plan-bar';
 import { ContainerQueryProvider } from './container-query-provider';
+import { ScheduleProposalNotice } from '@/components/schedules/schedule-proposal-notice';
 import { shouldRenderSystemRowItem } from './message-content-guards';
 import { getChatFailedDiagnosticCopy } from './chat-failed-diagnostic-copy';
 import { extractReadableChatFailedMessage } from './chat-failed-error-report';
@@ -2429,7 +2435,15 @@ const SystemMessageRowView = ({
   return (
     <div className="flex flex-col gap-2">
       {systemItems.map(({ item, itemIndex }) =>
-        item.type === 'system_notice' ? (
+        item.type === 'system_notice' && item.name === 'schedule_proposal' && item.meta ? (
+          <ScheduleProposalNotice
+            key={`schedule-proposal-${itemIndex}`}
+            meta={item.meta as ScheduleProposalMeta}
+            sessionId={sessionId}
+            entryId={message.id}
+            itemIndex={itemIndex}
+          />
+        ) : item.type === 'system_notice' ? (
           <SystemNoticeView
             key={`${item.name}-${itemIndex}`}
             notice={item}

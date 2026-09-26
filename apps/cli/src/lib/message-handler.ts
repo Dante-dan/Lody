@@ -170,6 +170,7 @@ import {
   type LodyOperationItemResult,
   type StoredLodyOperation,
   hasPendingUserTurnActivation,
+  getDeviceTimeZone,
 } from '@lody/shared';
 import { getHostMachineProtocolCapabilities } from '../agent/managed-agent-runtime';
 import { ISession, SessionManager } from '../session/session-manager';
@@ -3571,6 +3572,7 @@ export class MessageHandler {
         rpcVersion: supportsStreamsRpc ? LORO_STREAMS_RPC_VERSION : undefined,
         supportsLocalProjectHistoryRpc: supportsStreamsRpc,
         protocolCapabilities: getHostMachineProtocolCapabilities(),
+        timeZone: getDeviceTimeZone(),
         supportRegistryAgentTypes: this.supportRegistryAgentTypes,
         sessions: [],
       });
@@ -5805,6 +5807,7 @@ export class MessageHandler {
         rpcVersion: supportsStreamsRpc ? LORO_STREAMS_RPC_VERSION : machineMeta?.rpcVersion,
         supportsLocalProjectHistoryRpc: supportsStreamsRpc,
         protocolCapabilities: getHostMachineProtocolCapabilities(),
+        timeZone: getDeviceTimeZone(),
         supportRegistryAgentTypes: this.supportRegistryAgentTypes,
         sessions: machineMeta?.sessions ?? [],
       });
@@ -9661,6 +9664,19 @@ export class MessageHandler {
    */
   getTrackedSessionIds(): SessionId[] {
     return this.store.sessionIds();
+  }
+
+  /** Host-local admission snapshot; durable pending input is checked by its caller. */
+  hasAutomationSessionWork(sessionId: SessionId): boolean {
+    const execution = this.executionService.getExecutionSnapshot(sessionId);
+    return (
+      execution.hasActiveTurn ||
+      execution.hasBlockingPendingCreate ||
+      execution.hasRewriteBarrier ||
+      this.operationCoordinator.hasPendingWorkForRequester(sessionId) ||
+      this.hasSessionActivePresence(sessionId) ||
+      this.sessionDispatchWatcher.hasPendingDispatch(sessionId)
+    );
   }
 
   /**

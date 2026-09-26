@@ -38,6 +38,7 @@ import {
   BookOpen,
   Bug,
   ClipboardList,
+  ListTodo,
   Github,
   SquarePen,
   Link2,
@@ -70,7 +71,7 @@ import type { SidebarOrganizeMode } from '@/atoms/sidebar-state';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useStableNow } from '@/hooks/use-stable-now';
 
-export type LoroSidebarNavKey = 'home' | 'archive';
+export type LoroSidebarNavKey = 'home' | 'archive' | 'schedules';
 
 export type LoroSidebarChatScope = 'my' | 'team';
 export type LoroSidebarOrganizeMode = SidebarOrganizeMode;
@@ -114,6 +115,7 @@ export type LoroSidebarChatItem = {
 
 export type LoroSidebarLabels = {
   home: string;
+  schedules: string;
   docs: string;
   joinCommunity: string;
   feedback: string;
@@ -251,6 +253,8 @@ export interface LoroSidebarProps {
   onLinkRepoClicked?: () => void;
   onHomeClicked?: () => void;
   onArchiveClicked?: () => void;
+  /** Shows the Schedules entry; absent where there is nowhere to go. */
+  onSchedulesClicked?: () => void;
   onSettingsClicked?: () => void;
   onDocsClicked?: () => void;
   onGithubClicked?: () => void;
@@ -286,6 +290,7 @@ const COLLAPSE_DRAG_THRESHOLD = 160;
 
 const defaultLabels: LoroSidebarLabels = {
   home: 'Home',
+  schedules: 'Schedules',
   docs: 'Docs',
   joinCommunity: 'Join community',
   feedback: 'Feedback',
@@ -746,6 +751,7 @@ export const LoroSidebar = memo(function LoroSidebar({
   onLinkRepoClicked,
   onHomeClicked,
   onArchiveClicked,
+  onSchedulesClicked,
   onSettingsClicked,
   onDocsClicked,
   onGithubClicked,
@@ -1262,6 +1268,14 @@ export const LoroSidebar = memo(function LoroSidebar({
             icon={<SquarePen className="h-4 w-4" strokeWidth={1.75} />}
             onClick={onHomeClicked}
           />
+          {onSchedulesClicked ? (
+            <NavButton
+              active={activeNav === 'schedules'}
+              label={mergedLabels.schedules}
+              icon={<ListTodo className="h-4 w-4" />}
+              onClick={onSchedulesClicked}
+            />
+          ) : null}
           <NavButton
             active={false}
             label={t('common.search', 'Search')}

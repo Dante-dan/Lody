@@ -1,3 +1,10 @@
+import { waitForScheduleWriteSync, withScheduleWrite } from './schedule-write-sync';
+import {
+  getScheduleRoomId,
+  scheduleDocSchema,
+  scheduleDocumentFromMirrorState,
+} from '@lody/shared';
+import type { ScheduleDocStore } from '@/atoms/runtime';
 import {
   createLocalWindowBootstrap,
   createSessionSnapshotLoader,
@@ -4057,6 +4064,57 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     unload: (sessionId) => repo.unloadDoc(getPreviewCommentRoomId(sessionId)),
   });
 
+  const scheduleStoreCache = createManagedStoreCache<string, ScheduleDocStore>({
+    releaseDelayMs: STORE_RELEASE_DELAY_MS,
+    unload: (id) => repo.unloadDoc(getScheduleRoomId(id)),
+    create: async (id) => {
+      const roomId = getScheduleRoomId(id);
+      const handle = await repo.openPersistedDoc(roomId);
+      const mirror = new Mirror({
+        doc: handle.doc as LoroDoc,
+        schema: scheduleDocSchema,
+        ignoreUnknownProperties: true,
+      });
+      let room: RepoRoomSubscription | null = null;
+      let disposed = false;
+      const syncAbort = new AbortController();
+      const firstSynced = transportReady.promise.then(async () => {
+        const joined = await waitForRoomToSync(() => handle.joinRoom(), {
+          roomId,
+          initialDelayMs: 0,
+          isCancelled: () => disposed,
+          firstSynced: (sub) => readinessBindingForDocRoom(sub, roomId).firstSyncedWithRemote,
+          onSubscription: (sub) => {
+            room = sub;
+          },
+        });
+        if (disposed) joined?.unsubscribe();
+        else room = joined ?? null;
+      });
+      void firstSynced.catch(() => {});
+      return {
+        roomId,
+        firstSynced,
+        getState: () => scheduleDocumentFromMirrorState(mirror.getState(), id),
+        subscribe: (listener) => mirror.subscribe(listener),
+        waitUntilSynced: async () => {
+          await firstSynced.catch(() => {});
+          if (room && !disposed)
+            await waitForScheduleWriteSync(
+              readinessBindingForDocRoom(room, roomId),
+              syncAbort.signal
+            );
+        },
+        dispose: () => {
+          disposed = true;
+          syncAbort.abort();
+          mirror.dispose();
+          room?.unsubscribe();
+        },
+      };
+    },
+  });
+
   // Dual-author: every client direct-authors its own durable writes and uploads
   // them over its own cloud connection; local targets additionally converge with
   // the CLI over the local plane (specs/local-first-two-plane.md 作者规则).
@@ -4075,6 +4133,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     await Promise.all([
       sessionStoreCache.releaseIdle(),
       previewVisualCommentStoreCache.releaseIdle(),
+      scheduleStoreCache.releaseIdle(),
     ]);
   };
 
@@ -4412,6 +4471,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
 
       await sessionStoreCache.disposeAll();
       await previewVisualCommentStoreCache.disposeAll();
+      await scheduleStoreCache.disposeAll();
       let codeCollabFileIndexCacheDisposeError: unknown = null;
       try {
         await codeCollabFileIndexCache.dispose();
@@ -4579,6 +4639,13 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     releasePreviewVisualCommentStore: previewVisualCommentStoreCache.release,
     acquirePreviewVisualCommentStore: previewVisualCommentStoreCache.acquire,
     releasePreviewVisualCommentStoreRef: previewVisualCommentStoreCache.releaseRef,
+    withScheduleStore: <T>(
+      id: string,
+      fn: (store: ScheduleDocStore) => Promise<T> | T,
+      options?: { create?: boolean }
+    ): Promise<T> => withScheduleWrite(scheduleStoreCache, id, fn, options),
+    acquireScheduleStore: scheduleStoreCache.acquire,
+    releaseScheduleStoreRef: scheduleStoreCache.releaseRef,
     sendControl,
     waitForSessionCreateResponse,
     waitForSessionCancelResponse,

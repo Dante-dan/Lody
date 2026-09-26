@@ -1672,6 +1672,8 @@ export function LoroAppSidebar({ className, overlay = false }: LoroAppSidebarPro
 
   const activeNav = useMemo(() => {
     if (isArchiveRoute(location.pathname, workspaceSlug)) return 'archive';
+    if (workspaceSlug && location.pathname.startsWith(`/${workspaceSlug}/schedules`))
+      return 'schedules';
     if (
       isHomeRoute(location.pathname, workspaceSlug) &&
       !selectedSessionId &&
@@ -3095,6 +3097,7 @@ export function LoroAppSidebar({ className, overlay = false }: LoroAppSidebarPro
 
   const labels: Partial<LoroSidebarLabels> = useMemo(() => {
     return {
+      schedules: t('schedules.title', 'Schedules'),
       home: t('sidebar.home', 'Home'),
       docs: t('sidebar.docs', 'Docs'),
       joinCommunity: t('sidebar.joinCommunity', 'Join community'),
@@ -3553,6 +3556,15 @@ export function LoroAppSidebar({ className, overlay = false }: LoroAppSidebarPro
         onCreateWorkspaceClicked={handleCreateWorkspaceClicked}
         onHomeClicked={handleHomeClicked}
         onArchiveClicked={handleArchiveClicked}
+        onSchedulesClicked={() => {
+          if (workspaceSlug) {
+            closeMobileDrawer();
+            void router.navigate({
+              to: '/$workspaceName/schedules',
+              params: { workspaceName: workspaceSlug },
+            });
+          }
+        }}
         onDocsClicked={handleDocsClicked}
         onGithubClicked={handleGithubClicked}
         onJoinCommunityClicked={handleJoinCommunityClicked}

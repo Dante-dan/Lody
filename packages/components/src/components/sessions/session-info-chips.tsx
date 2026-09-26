@@ -57,6 +57,36 @@ export type InfoBarItemMode = { mode: 'cluster'; onPromote: () => void } | { mod
 
 /* ── Status (offline / removed) ──────────────────────────────────────── */
 
+export function ScheduleSourceChip({
+  title,
+  onOpen,
+  ...itemMode
+}: { title: string; onOpen?: (() => void) | undefined } & InfoBarItemMode) {
+  const { t } = useTranslation();
+  const label = title.trim() || t('schedules.source', 'Scheduled task');
+
+  if (itemMode.mode === 'cluster') {
+    return (
+      <ClusterChip
+        icon={Clock}
+        label={label}
+        textClassName="text-muted-foreground"
+        onPromote={itemMode.onPromote}
+      />
+    );
+  }
+
+  return (
+    <StageChip
+      icon={Clock}
+      label={label}
+      textClassName="text-muted-foreground"
+      summary={label}
+      {...(onOpen ? { detail: { kind: 'action', onAction: onOpen, ariaLabel: label } } : {})}
+    />
+  );
+}
+
 export function StatusChip({
   state,
   ...itemMode
