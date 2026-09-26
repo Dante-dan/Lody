@@ -1165,7 +1165,8 @@ export function ChatComposer({
           >
             <Dialog.Content
               closeButton={false}
-              className="flex h-[85vh] max-h-[85vh] max-w-3xl flex-col gap-0 overflow-hidden p-0"
+              width="48rem"
+              className="flex h-[85vh] max-h-[85vh] flex-col gap-0 overflow-hidden p-0"
             >
               {previewPastedTextDraft ? (
                 <>

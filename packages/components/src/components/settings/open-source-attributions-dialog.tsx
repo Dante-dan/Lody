@@ -44,10 +44,9 @@ const REGION = `color-mix(in oklab, transparent, ${colors.label} 3%)`;
 
 /**
  * The panel's own width: a license list reads as a table of names and notes, so
- * it takes a wider panel than a question does. The panel keeps its own cap
- * against the window.
+ * it takes a wider panel than a question does.
  */
-const PANEL_STYLE = { width: '1024px' } as const;
+const PANEL_WIDTH = '1024px';
 
 const styles = stylex.create({
   summary: {
@@ -275,7 +274,7 @@ export function OpenSourceAttributionsDialog({
           </>
         )}
       </Dialog.Trigger>
-      <Dialog.Content style={PANEL_STYLE}>
+      <Dialog.Content width={PANEL_WIDTH}>
         <Dialog.Header>
           <Dialog.Title>
             {t('settings.about.openSourceAttributions', 'Open Source Licenses')}
