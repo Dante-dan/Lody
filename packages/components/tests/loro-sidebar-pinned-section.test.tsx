@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import React from 'react';
+import React, { act } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
@@ -159,24 +159,58 @@ describe('LoroSidebar pinned section', () => {
     expect(selected).toBe('second');
   });
 
-  it('keeps the desktop collapse toggle hover-revealed in browsers', () => {
-    renderSidebar({ onRequestCollapse: vi.fn() });
+  it.each([false, true])(
+    'keeps the desktop collapse toggle visible, not hover-revealed (Electron=%s)',
+    (isElectron) => {
+      renderSidebar({ isElectron, onRequestCollapse: vi.fn() });
 
-    const button = container?.querySelector('button[aria-label="Toggle Sidebar"]');
-    expect(button).not.toBeNull();
-    expect(button?.className).toContain('opacity-0');
-    expect(button?.className).toContain('pointer-events-none');
-    expect(button?.className).toContain('group-hover/sidebar-header:opacity-100');
+      const button = container?.querySelector('button[aria-label="Toggle Sidebar"]');
+      expect(button).not.toBeNull();
+      expect(button?.className).not.toContain('opacity-0');
+      expect(button?.className).not.toContain('pointer-events-none');
+    }
+  );
+
+  it('keeps Archive and Help behind one More menu in the footer', async () => {
+    const onArchiveClicked = vi.fn();
+    const onDocsClicked = vi.fn();
+    renderSidebar({ onArchiveClicked, onDocsClicked });
+
+    // No standalone Archive or Help buttons: only Settings and More.
+    const footerButton = (name: string) =>
+      Array.from(container?.querySelectorAll('button') ?? []).find(
+        (button) => button.textContent?.trim() === name
+      );
+    expect(footerButton('Archive')).toBeUndefined();
+    expect(footerButton('Help')).toBeUndefined();
+    const more = footerButton('More');
+    expect(more).toBeDefined();
+
+    await act(async () => more?.click());
+    const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    expect(items[0]?.textContent).toBe('Archive');
+    expect(items.some((item) => item.textContent?.includes('Docs'))).toBe(true);
+
+    await act(async () => items[0]?.click());
+    expect(onArchiveClicked).toHaveBeenCalledTimes(1);
   });
 
-  it('shows the desktop collapse toggle by default in Electron', () => {
-    renderSidebar({ isElectron: true, onRequestCollapse: vi.fn() });
+  it('turns the More slot into the Archive exit while Archive is open', () => {
+    const onHomeClicked = vi.fn();
+    renderSidebar({ activeNav: 'archive', onHomeClicked });
 
-    const button = container?.querySelector('button[aria-label="Toggle Sidebar"]');
-    expect(button).not.toBeNull();
-    expect(button?.className).not.toContain('opacity-0');
-    expect(button?.className).not.toContain('pointer-events-none');
-    expect(button?.className).toContain('focus-visible:outline-hidden');
+    const buttons = Array.from(container?.querySelectorAll('button') ?? []);
+    expect(buttons.some((button) => button.textContent?.trim() === 'More')).toBe(false);
+    const exit = buttons.find((button) => button.textContent?.trim() === 'Leave Archive');
+    expect(exit).toBeDefined();
+    expect(exit?.querySelector('svg.lucide-archive')).not.toBeNull();
+    expect(exit?.querySelector('svg.lucide-arrow-left')).not.toBeNull();
+
+    // No history to return to in the test window: leaving goes Home.
+    flushSync(() => {
+      exit?.click();
+    });
+    expect(onHomeClicked).toHaveBeenCalledTimes(1);
   });
 
   it('renders back and forward next to the collapse toggle', () => {
@@ -193,8 +227,9 @@ describe('LoroSidebar pinned section', () => {
     expect(parent?.children[0]).toBe(collapse);
     expect(parent?.children[1]).toBe(back);
     expect(parent?.children[2]).toBe(forward);
-    expect(back?.className).toContain('h-5');
-    expect(forward?.className).toContain('h-5');
+    // Arrows with a shaft, not chevrons.
+    expect(back?.querySelector('svg.lucide-arrow-left')).not.toBeNull();
+    expect(forward?.querySelector('svg.lucide-arrow-right')).not.toBeNull();
   });
 
   it('renders pinned conversations before Workspace groups', () => {

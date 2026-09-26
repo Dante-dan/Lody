@@ -192,6 +192,9 @@ export const settingsSurface = stylex.create({
    * A row of a list a person moves through — the settings nav, the Projects
    * sources and folders: a sidebar row. No edge; the pointer's fill and the
    * current row's fill are washes of ink over whatever the row stands on.
+   * Keyboard focus shows as the pointer's wash, not the shell's accent ring:
+   * the dialog focuses a row when it opens, and from the keyboard that focus
+   * is `:focus-visible`, which framed a row nobody chose.
    * Spread on a `<button>` or a link; it resets what a button brings.
    */
   listRow: {
@@ -209,11 +212,15 @@ export const settingsSurface = stylex.create({
     borderRadius: radius.small,
     cornerShape: corner.shape,
     // Ink washes rather than the palette's hover/selected fills: those are tuned
-    // for the page rung and all but vanish on the nav's darker fill.
+    // for the page rung and all but vanish on the nav's darker fill. 6% / 10%
+    // so the current row reads clearly against the nav.
     backgroundColor: {
       default: 'transparent',
-      ':hover': `color-mix(in oklab, transparent, ${colors.label} 5%)`,
+      ':hover': `color-mix(in oklab, transparent, ${colors.label} 6%)`,
+      ':focus-visible': `color-mix(in oklab, transparent, ${colors.label} 6%)`,
     },
+    boxShadow: { default: null, ':focus-visible': 'none' },
+    outline: { default: null, ':focus-visible': 'none' },
     color: colors.label,
     fontFamily: 'inherit',
     fontSize: '1em',
@@ -228,8 +235,9 @@ export const settingsSurface = stylex.create({
   },
   listRowSelected: {
     backgroundColor: {
-      default: `color-mix(in oklab, transparent, ${colors.label} 8%)`,
-      ':hover': `color-mix(in oklab, transparent, ${colors.label} 8%)`,
+      default: `color-mix(in oklab, transparent, ${colors.label} 10%)`,
+      ':hover': `color-mix(in oklab, transparent, ${colors.label} 10%)`,
+      ':focus-visible': `color-mix(in oklab, transparent, ${colors.label} 10%)`,
     },
   },
   /** A list row's glyph: icons at rest are a hint. */

@@ -243,8 +243,8 @@ const styles = stylex.create({
     lineHeight: text.footnoteLeading,
     fontVariantNumeric: 'tabular-nums',
   },
-  added: { color: 'hsl(var(--code-added))' },
-  removed: { color: 'hsl(var(--code-removed))' },
+  added: { color: 'hsl(var(--github-addition))' },
+  removed: { color: 'hsl(var(--github-deletion))' },
   avatarAnchor: { display: 'inline-flex', flexShrink: 0 },
   /* A row's actions answer the pointer on that row, or a keyboard inside them. */
   actions: {

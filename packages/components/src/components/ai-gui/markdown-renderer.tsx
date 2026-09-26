@@ -63,6 +63,13 @@ import type { ConversationFontSize } from '@/atoms/settings';
 import { MarkdownFencedCodeBlock } from './markdown-code-block';
 import { MarkdownDiffBlock } from './markdown-diff-block';
 import { createMarkdownMermaidConfig, createMarkdownMermaidPlugin } from './markdown-mermaid';
+import {
+  GitHubReferenceChip,
+  isGitHubReferenceLabel,
+  markdownLinkText,
+  parseGitHubReferenceUrl,
+} from './github-reference-link';
+import { MarkdownTable } from './markdown-table';
 import { MermaidDiagramViewer } from './mermaid-diagram-viewer';
 import { MermaidFullscreenButton, useMermaidDiagramCanvas } from './use-mermaid-diagram-canvas';
 import { SessionReadonlyContext } from './session-readonly-context';
@@ -158,7 +165,10 @@ const transformMdastChildren = (tree: unknown, transform: MdastChildTransformer)
 // `[&_h1]:mt-5` arbitrary variants — zeroing margin-top AND margin-bottom on
 // every block. `!` flips on `!important` so per-element margins survive.
 const MARKDOWN_BASE_CLASSNAME =
-  'markdown-renderer max-w-none text-foreground leading-[1.75] ' +
+  // Body text uses the contrast-capped reading color; headings and bold take
+  // the one step above it, so hierarchy reads by brightness (`--foreground-strong`).
+  'markdown-renderer max-w-none text-reading leading-[1.75] ' +
+  '[&_h1]:text-foreground-strong [&_h2]:text-foreground-strong [&_h3]:text-foreground-strong [&_h4]:text-foreground-strong [&_strong]:text-foreground-strong ' +
   '[&_p]:!mt-0 [&_p]:!mb-3 [&_p:has(+ul)]:!mb-2 [&_p:last-child]:!mb-0 [&_p:first-child]:!mt-0 ' +
   '[&_ul]:!my-2 [&_ul]:pl-3 [&_ul]:list-disc ' +
   '[&_ul:not(.contains-task-list)]:pl-0 [&_ul:not(.contains-task-list)]:list-none ' +
@@ -178,7 +188,7 @@ const MARKDOWN_BASE_CLASSNAME =
   // single inline runs — so between-item spacing must come from the <li> box
   // itself, not the inner <p>. `mt-2` on non-first items keeps list edges
   // flush with the `ul`/`ol` margins.
-  '[&_li]:!my-0 [&_li]:!py-0 [&_li:not(:first-child)]:!mt-2 [&_ul>li:not(:first-child)]:!mt-1 [&_ol>li:not(:first-child)]:!mt-1 [&_li>ul]:!my-1 [&_li>ol]:!my-1 ' +
+  '[&_li]:!my-0 [&_li]:!py-0 [&_li:not(:first-child)]:!mt-2 [&_ul>li:not(:first-child)]:!mt-2 [&_ol>li:not(:first-child)]:!mt-2 [&_li>ul]:!my-1 [&_li>ol]:!my-1 ' +
   // Streamdown's default blockquote class adds `italic`; override it so quoted
   // body text stays upright (explicit `*emphasis*` inside still renders italic
   // via the descendant <em>'s own font-style). The `[&_blockquote]` descendant
@@ -216,11 +226,13 @@ const MARKDOWN_BASE_CLASSNAME =
   '[&_[data-streamdown="mermaid"]]:overflow-hidden ' +
   '[&_[data-streamdown="code-block"]]:!my-4 ' +
   '[&_table]:!my-0 [&_table]:w-full [&_table]:border-collapse [&_table]:text-[0.92em] [&_table]:leading-[1.5] ' +
-  '[&_th]:border-b [&_th]:border-border/70 [&_th]:bg-muted/20 [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-semibold [&_th]:text-foreground/80 dark:[&_th]:bg-muted/40 ' +
-  '[&_td]:border-b [&_td]:border-border/45 [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:align-top ' +
-  '[&_tbody_tr:nth-child(even)]:bg-muted/15 [&_tbody_tr:last-child_td]:border-b-0 ' +
-  '[&_:is(th,td):first-child]:w-px [&_:is(th,td):first-child]:whitespace-nowrap ' +
-  '[&_tbody_td:first-child]:font-medium [&_tbody_td:first-child]:text-foreground/75 ' +
+  // Lines are foreground tints (the theme border melts into the canvas). No
+  // column or row is assumed to be a label: cells share one color and weight;
+  // only the header row, which Markdown always has, gets a faint band.
+  '[&_th]:border-b [&_th]:border-foreground/[0.14] [&_th]:bg-foreground/[0.035] [&_th]:px-2.5 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-normal [&_th]:align-top ' +
+  '[&_td]:border-b [&_td]:border-foreground/[0.08] [&_td]:px-2.5 [&_td]:py-1.5 [&_td]:align-top ' +
+  '[&_:is(th,td)+:is(th,td)]:border-l [&_:is(th,td)+:is(th,td)]:border-l-foreground/[0.08] ' +
+  '[&_tbody_tr:last-child_td]:border-b-0 ' +
   '[&_table_code]:!bg-foreground/[0.08] [&_table_code]:!ring-0 dark:[&_table_code]:!bg-foreground/[0.14]';
 
 const MARKDOWN_SIZE_CLASSNAME =
@@ -1126,7 +1138,7 @@ const createMarkdownComponents = ({
       <code
         className={cn(
           className,
-          'rounded-sm bg-foreground/[0.08] px-1 py-px font-mono text-[0.85em] text-foreground ring-0 dark:bg-foreground/[0.14]'
+          'rounded-sm bg-foreground/[0.06] px-1 py-px font-mono text-[0.85em] text-reading ring-0 dark:bg-foreground/[0.07]'
         )}
         {...rest}
       >
@@ -1134,17 +1146,7 @@ const createMarkdownComponents = ({
       </code>
     );
   },
-  table: (props: MarkdownTableProps) => {
-    const { node: _node, ...rest } = props;
-    return (
-      <div
-        data-markdown-table
-        className="scrollbar-pro my-3 overflow-x-auto rounded-lg border border-border/70 bg-background"
-      >
-        <table {...rest} />
-      </div>
-    );
-  },
+  table: (props: MarkdownTableProps) => <MarkdownTable {...props} />,
   a: (props: MarkdownLinkProps) => {
     const { children, href, node: _node, rel, ...rest } = props;
     // Workspace resource links are display-only in a publication, not a second
@@ -1164,6 +1166,25 @@ const createMarkdownComponents = ({
         >
           {children}
         </AgentFileLink>
+      );
+    }
+
+    // A link that only names a GitHub pull request or issue renders as a small
+    // reference label; one with its own wording stays an ordinary link.
+    const githubReference = parseGitHubReferenceUrl(href);
+    if (githubReference && isGitHubReferenceLabel(markdownLinkText(children), githubReference)) {
+      return (
+        <MarkdownExternalLink
+          href={href}
+          rel={rel}
+          {...rest}
+          className={cn(
+            rest.className,
+            'markdown-reference-chip mx-[0.1em] inline-flex max-w-full items-center rounded-md px-[0.4em] align-[-0.12em] text-[0.92em] leading-[1.55] transition-colors'
+          )}
+        >
+          <GitHubReferenceChip reference={githubReference} />
+        </MarkdownExternalLink>
       );
     }
 

@@ -11,6 +11,7 @@
     "./alert-dialog": "./src/dialog/alert-dialog.tsx",
     "./avatar": "./src/avatar/avatar.tsx",
     "./badge": "./src/badge/badge.tsx",
+    "./badge/badge.tokens.stylex": "./src/badge/badge.tokens.stylex.ts",
     "./button": "./src/button/button.tsx",
     "./card": "./src/card/card.tsx",
     "./checkbox": "./src/field/checkbox.tsx",

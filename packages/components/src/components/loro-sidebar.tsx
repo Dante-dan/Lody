@@ -34,17 +34,17 @@ import { ScrollArea } from '@/ui/scroll-area';
 import {
   AppWindow,
   Archive,
+  LayoutGrid,
   BookOpen,
   Bug,
-  CircleHelp,
   ClipboardList,
   Github,
   SquarePen,
   Link2,
   ListFilter,
   MessageSquareMore,
-  ChevronLeft,
-  ChevronRight,
+  ArrowLeft,
+  ArrowRight,
   PanelLeft,
   Plus,
   Search,
@@ -573,7 +573,6 @@ function SidebarHeaderIconButton({
   onClick,
   className,
   disabled = false,
-  compact = false,
   children,
 }: {
   label: string;
@@ -581,7 +580,6 @@ function SidebarHeaderIconButton({
   onClick?: () => void;
   className?: string;
   disabled?: boolean;
-  compact?: boolean;
   children: ReactNode;
 }) {
   const button = (
@@ -592,7 +590,7 @@ function SidebarHeaderIconButton({
       onClick={onClick}
       className={cn(
         'flex shrink-0 items-center justify-center rounded-md outline-hidden',
-        compact ? 'h-5 w-5' : 'h-7 w-7',
+        'h-7 w-7',
         disabled
           ? 'cursor-default text-sidebar-foreground-muted/40'
           : 'text-sidebar-foreground-muted hover:bg-sidebar-hover hover:text-sidebar-hover-foreground focus-visible:ring-1 focus-visible:ring-sidebar-ring/40',
@@ -641,11 +639,14 @@ function NavButton({
         type="button"
         onClick={onClick}
         className={cn(
-          'group flex w-full select-none items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[0.9em] outline-hidden transition',
+          // Same size as the session titles below: a smaller label reads as
+          // undersized next to its 16px icon.
+          'group flex w-full select-none items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm outline-hidden transition',
           'focus-visible:ring-1 focus-visible:ring-sidebar-ring/30',
           active
             ? 'bg-sidebar-selection text-sidebar-selection-foreground'
-            : 'text-sidebar-foreground dark:text-sidebar-foreground/75 hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
+            : // Same brightness as unselected session titles; hover changes the fill only.
+              'text-sidebar-row-foreground hover:bg-sidebar-hover',
           // Keep the label clear of the trailing control instead of letting it
           // truncate under it.
           action && 'pr-8'
@@ -682,8 +683,10 @@ export function getLoroSidebarFooterIconButtonClassName(isMobile: boolean, activ
       ? 'h-12 w-12 rounded-xl [&_svg]:h-5 [&_svg]:w-5'
       : 'h-6 w-6 rounded-md [&_svg]:h-3.5 [&_svg]:w-3.5',
     'transition-colors focus-visible:ring-1 focus-visible:ring-sidebar-ring/40',
+    // A 12% foreground fill: the row selection token is tuned for full-width
+    // rows and nearly vanishes behind a 24px icon.
     active
-      ? 'bg-sidebar-selection text-sidebar-selection-foreground'
+      ? 'bg-foreground/[0.12] text-sidebar-selection-foreground hover:bg-foreground/[0.16]'
       : 'text-sidebar-foreground dark:text-sidebar-foreground-muted hover:bg-sidebar-hover hover:text-sidebar-hover-foreground'
   );
 }
@@ -1172,7 +1175,7 @@ export const LoroSidebar = memo(function LoroSidebar({
       <div className="relative flex h-full flex-col overflow-hidden">
         <div
           className={cn(
-            'group/sidebar-header relative flex items-center justify-between gap-2',
+            'relative flex items-center justify-between gap-2',
             isMobile
               ? 'pl-[calc(12px+var(--safe-area-left))] pr-[calc(12px+var(--safe-area-right))] pt-[calc(12px+var(--safe-area-top))]'
               : cn('h-11 px-1.5', macTrafficLightRowPadClass, windowsCaptionRowPadClass),
@@ -1186,7 +1189,7 @@ export const LoroSidebar = memo(function LoroSidebar({
           ) : (
             <span
               aria-label="Lody"
-              className="select-none px-2 text-[18px] font-semibold leading-none tracking-[-0.03em] text-sidebar-foreground"
+              className="select-none px-2 text-[18px] font-semibold leading-none tracking-[-0.03em] text-reading"
               style={{ fontFamily: 'var(--font-wordmark)' }}
             >
               Lody
@@ -1196,7 +1199,9 @@ export const LoroSidebar = memo(function LoroSidebar({
             <Tooltip.Provider delay={400}>
               <div
                 className={cn(
-                  'ml-auto flex shrink-0 items-center',
+                  // `gap-0.5` between full-size buttons keeps Back and Forward
+                  // apart as two targets instead of one fused control.
+                  'ml-auto flex shrink-0 items-center gap-0.5',
                   windowDrag && WINDOW_DRAG_EXEMPT_CLASS
                 )}
               >
@@ -1205,17 +1210,14 @@ export const LoroSidebar = memo(function LoroSidebar({
                     label={t('commands.sidebar.toggle', 'Toggle Sidebar')}
                     shortcut={collapseShortcut}
                     onClick={() => onRequestCollapse()}
-                    className={
-                      isElectron
-                        ? 'focus-visible:outline-hidden'
-                        : 'opacity-0 pointer-events-none group-hover/sidebar-header:opacity-100 group-hover/sidebar-header:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto transition-opacity duration-100'
-                    }
+                    // Always visible: the collapse control is found where it
+                    // was last seen, not revealed by hovering the header.
+                    className="focus-visible:outline-hidden"
                   >
                     <PanelLeft className="h-4 w-4" />
                   </SidebarHeaderIconButton>
                 ) : null}
                 <SidebarHeaderIconButton
-                  compact
                   disabled={!canGoBack}
                   label={t('commands.nav.back', 'Back')}
                   shortcut={backShortcut}
@@ -1224,10 +1226,9 @@ export const LoroSidebar = memo(function LoroSidebar({
                     if (!commands.execute('nav.back')) window.history.back();
                   }}
                 >
-                  <ChevronLeft className="h-3.5 w-3.5" />
+                  <ArrowLeft className="h-4 w-4" strokeWidth={1.75} />
                 </SidebarHeaderIconButton>
                 <SidebarHeaderIconButton
-                  compact
                   disabled={!canGoForward}
                   label={t('commands.nav.forward', 'Forward')}
                   shortcut={forwardShortcut}
@@ -1236,7 +1237,7 @@ export const LoroSidebar = memo(function LoroSidebar({
                     if (!commands.execute('nav.forward')) window.history.forward();
                   }}
                 >
-                  <ChevronRight className="h-3.5 w-3.5" />
+                  <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
                 </SidebarHeaderIconButton>
               </div>
             </Tooltip.Provider>
@@ -1256,13 +1257,13 @@ export const LoroSidebar = memo(function LoroSidebar({
           <NavButton
             active={activeNav === 'home'}
             label={mergedLabels.home}
-            icon={<SquarePen className="h-4 w-4" />}
+            icon={<SquarePen className="h-4 w-4" strokeWidth={1.75} />}
             onClick={onHomeClicked}
           />
           <NavButton
             active={false}
             label={t('common.search', 'Search')}
-            icon={<Search className="h-4 w-4" />}
+            icon={<Search className="h-4 w-4" strokeWidth={1.75} />}
             onClick={() => setCommandPaletteOpen(true)}
           />
         </div>
@@ -1462,41 +1463,69 @@ export const LoroSidebar = memo(function LoroSidebar({
               <Settings strokeWidth={1.5} />
             </IconButton>
 
-            <Menu.Root>
-              <Menu.Trigger
-                render={
-                  <IconButton label="Help">
-                    <CircleHelp strokeWidth={1.5} />
-                  </IconButton>
-                }
+            {/* Low-frequency places (Archive, Help) share one "More" menu so
+                the footer does not keep an always-visible archive icon. While
+                Archive is open, the same slot becomes its exit: the archive
+                icon, turning into a back arrow on hover, returns to where the
+                user came from (Home when there is no history). */}
+            {activeNav === 'archive' ? (
+              <IconButton
+                label={t('archive.leave', 'Leave Archive')}
+                title={t('archive.leave', 'Leave Archive')}
+                active
+                className="group"
+                onClick={() => {
+                  if (canGoBack && commands.execute('nav.back')) return;
+                  if (canGoBack) {
+                    window.history.back();
+                    return;
+                  }
+                  onHomeClicked?.();
+                }}
               >
-                <IconButton label="Help">
-                  <CircleHelp strokeWidth={1.5} />
-                </IconButton>
-              </Menu.Trigger>
-              <Menu.Content side="top" align="start" className="min-w-[140px]">
-                <Menu.Item onClick={() => onDocsClicked?.()}>
-                  <BookOpen className="h-4 w-4" />
-                  {mergedLabels.docs}
-                </Menu.Item>
-                <Menu.Item onClick={() => onJoinCommunityClicked?.()}>
-                  <Users className="h-4 w-4" />
-                  {mergedLabels.joinCommunity}
-                </Menu.Item>
-                <Menu.Item onClick={() => onFeedbackClicked?.()}>
-                  <MessageSquareMore className="h-4 w-4" />
-                  {mergedLabels.feedback}
-                </Menu.Item>
-                <Menu.Item onClick={() => onBugReportClicked?.()}>
-                  <Bug className="h-4 w-4" />
-                  {mergedLabels.bugReport}
-                </Menu.Item>
-              </Menu.Content>
-            </Menu.Root>
-
-            <IconButton label="Archive" active={activeNav === 'archive'} onClick={onArchiveClicked}>
-              <Archive strokeWidth={1.5} />
-            </IconButton>
+                <Archive
+                  strokeWidth={1.5}
+                  className="group-hover:hidden group-focus-visible:hidden"
+                />
+                <ArrowLeft
+                  strokeWidth={1.5}
+                  className="hidden group-hover:block group-focus-visible:block"
+                />
+              </IconButton>
+            ) : (
+              <Menu.Root>
+                <Menu.Trigger
+                  render={
+                    <IconButton label={t('common.more', 'More')}>
+                      <LayoutGrid strokeWidth={1.5} />
+                    </IconButton>
+                  }
+                />
+                <Menu.Content side="top" align="end" className="min-w-[160px]">
+                  <Menu.Item onClick={() => onArchiveClicked?.()}>
+                    <Archive className="h-4 w-4" />
+                    {t('archive.title', 'Archive')}
+                  </Menu.Item>
+                  <Menu.Separator />
+                  <Menu.Item onClick={() => onDocsClicked?.()}>
+                    <BookOpen className="h-4 w-4" />
+                    {mergedLabels.docs}
+                  </Menu.Item>
+                  <Menu.Item onClick={() => onJoinCommunityClicked?.()}>
+                    <Users className="h-4 w-4" />
+                    {mergedLabels.joinCommunity}
+                  </Menu.Item>
+                  <Menu.Item onClick={() => onFeedbackClicked?.()}>
+                    <MessageSquareMore className="h-4 w-4" />
+                    {mergedLabels.feedback}
+                  </Menu.Item>
+                  <Menu.Item onClick={() => onBugReportClicked?.()}>
+                    <Bug className="h-4 w-4" />
+                    {mergedLabels.bugReport}
+                  </Menu.Item>
+                </Menu.Content>
+              </Menu.Root>
+            )}
           </div>
 
           {isMobile ? (

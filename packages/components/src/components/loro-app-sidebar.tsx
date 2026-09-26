@@ -696,7 +696,7 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
           'hover:bg-sidebar-hover data-[menu-open]:bg-sidebar-hover',
         showSelectedState &&
           'bg-sidebar-selection text-sidebar-selection-foreground hover:bg-sidebar-selection',
-        showSelectedState ? 'text-sidebar-selection-foreground' : 'text-sidebar-foreground'
+        showSelectedState ? 'text-sidebar-selection-foreground' : 'text-sidebar-row-foreground'
       )}
       onClick={(event) => {
         if (openSessionOnModifiedClick(event, session.id)) return;
@@ -749,7 +749,9 @@ const LocalProjectSessionItem = memo(function LocalProjectSessionItem({
             showPr || showWorktreeIcon ? (
               <span className="flex items-center gap-1.5">
                 <SessionRowWorktreeIndicator isWorktree={showWorktreeIcon} />
-                {showPr ? <SessionPrIcon prStatus={prStatus} prCiState={prInfo.ciState} /> : null}
+                {showPr ? (
+                  <SessionPrIcon compact prStatus={prStatus} prCiState={prInfo.ciState} />
+                ) : null}
               </span>
             ) : undefined
           }
@@ -1195,10 +1197,9 @@ export const LocalProjectItem = memo(function LocalProjectItem({
         showSelectedState
           ? 'text-sidebar-selection-foreground'
           : cn(
-              // Project folder names are content rather than section chrome,
-              // but still recede behind the conversation in dark mode.
-              'text-sidebar-foreground dark:text-sidebar-foreground/75',
-              !isMobile && 'hover:text-sidebar-hover-foreground'
+              // Project folder names share the sidebar row color, below the
+              // conversation; hover does not change text color.
+              'text-sidebar-row-foreground'
             )
       )}
       onClick={handleNavigate}
