@@ -48,6 +48,17 @@ Translation: current
 - 在平铺窗口里，这两页没有带框的分组。标题处执行操作的按钮是文字（“创建 Token”“邀请成员”），不是单独的图标。
 - Token 日期跟随产品语言（`toIntlLocaleOrEn`），而不是系统语言。
 
+## 设置面板的白色页面（回归修复）
+
+`surface.canvas` 是 `colors.elevatedBackground`，本意是面板自身的底色：浅色下为白色，因为
+`[data-settings-surface]` 把 `--card` 换成了 `--popover`。自 #961 起，产品调色板在根节点上声明
+`elevatedBackground: hsl(var(--card))`。CSS 自定义属性在声明它的节点上求值，子节点继承的是算好的值，
+所以面板上的替换传不到这个 token。在 `Settings/DesktopSettingsModal` story 里实测，页面是
+`rgb(239,239,241)`（根节点的 card），导航栏约 94.7%：导航栏那一档消失，整个 Dialog 发灰。
+`productSettingsSurfacePalette`（`lody-ui-palette.stylex.ts`）在面板上重新声明 `elevatedBackground`
+和 `secondaryBackground`，让它们按面板自己的 `--card` 求值。页面重新量得 `rgb(255,255,255)`，导航栏
+保留深一档，深色模式不变（替换只在浅色下生效）。
+
 ## 局限与后续
 
 账单、外观、Agent 角色、Agents 和其他 catalog（MCP、分享、快捷指令）仍然给记录加框；之后按同一张表
@@ -59,6 +70,7 @@ Translation: current
   前（三个组件临时换回 `main`）后截图，中文，两种配色。
 - `tests/account-machines-overview.test.tsx` 覆盖状态行、本机标注和唯一的“管理”按钮；
   `tests/linked-accounts-list.test.tsx` 覆盖每个服务的答案，以及“绑定”经确认到 `onConnect`。
+- 面板底色在 Chromium 里用 `getComputedStyle` 实测两种配色；jsdom 不计算 StyleX 样式，所以没有单元测试覆盖。
 - 未在打包后的 Electron 应用中验证。
 
 相关：[设置页的节奏与材质](2026-09-25-settings-rhythm-and-image-peek.zh.md)。

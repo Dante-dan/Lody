@@ -4,6 +4,7 @@ import * as stylex from '@stylexjs/stylex';
 import type { ComponentProps } from 'react';
 import type { AgentConfigMeta, MachineId } from '@lody/shared';
 import { settingsFlat } from '@/components/settings/material.stylex';
+import { productSettingsSurfacePalette } from '@/lib/vscode-theme/lody-ui-palette.stylex';
 import { settingsSurface } from '@/components/settings/surface';
 import {
   AccountMachinesOverviewView,
@@ -307,7 +308,7 @@ function DesktopPane(args: ComponentProps<typeof AccountSettingsPure>) {
     <div
       data-settings-surface=""
       data-testid="settings-pane"
-      {...stylex.props(settingsFlat, settingsSurface.canvas)}
+      {...stylex.props(productSettingsSurfacePalette, settingsFlat, settingsSurface.canvas)}
       style={{ width: 860, minHeight: '100vh', paddingInline: 32, paddingBlock: 24 }}
     >
       <AccountSettingsPure {...args} />

@@ -59,6 +59,21 @@ connected-accounts card) and was closed.
   something is text ("Create Token", "Invite members"), not a bare glyph.
 - Token dates follow the product language (`toIntlLocaleOrEn`), not the host locale.
 
+## The pane's white page (regression fix)
+
+`surface.canvas` is `colors.elevatedBackground`, meant to be the panel's own fill:
+white in light mode, because `[data-settings-surface]` remaps `--card` to
+`--popover`. Since #961 the product palette declares `elevatedBackground:
+hsl(var(--card))` on the root. A custom property is computed where it is
+declared and inherited as that value, so the pane's remap never reached the
+token. Measured in the `Settings/DesktopSettingsModal` story, the page was
+`rgb(239,239,241)` (the root card) next to a nav at about 94.7%: the nav's step
+had vanished and the whole dialog read gray. `productSettingsSurfacePalette`
+(`lody-ui-palette.stylex.ts`) re-declares `elevatedBackground` and
+`secondaryBackground` on the pane, so they resolve against the pane's own
+`--card`. The page measures `rgb(255,255,255)` again, the nav keeps its step, and
+dark mode is unchanged because the remap applies only in light mode.
+
 ## Limits and next steps
 
 Billing, Appearance, Agent Roles, Agents and the other catalogs (MCP, Shares,
@@ -75,6 +90,8 @@ clicks (menu, then item) instead of one icon.
   machine and the single Manage button. `tests/linked-accounts-list.test.tsx`
   covers the per-provider answers and Connect through the confirmation to
   `onConnect`.
+- The pane's fill was measured with `getComputedStyle` in Chromium in both palettes;
+  jsdom computes no StyleX styles, so no unit test covers it.
 - Not verified in the packaged Electron app.
 
 Related: [Settings rhythm and material](2026-09-25-settings-rhythm-and-image-peek.md).
