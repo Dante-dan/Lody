@@ -122,6 +122,10 @@ const alias = [
     ),
   },
   {
+    find: '@/components/mentions/mention-expansion',
+    replacement: path.resolve(dirname, 'components/app-preview-shims/mention-expansion-shim.ts'),
+  },
+  {
     find: '@/hooks/use-online-machines',
     replacement: path.resolve(dirname, 'components/app-preview-shims/use-online-machines-shim.ts'),
   },
