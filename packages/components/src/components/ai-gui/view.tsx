@@ -8,7 +8,6 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   memo,
   type MouseEvent as ReactMouseEvent,
-  type MutableRefObject,
   type ReactNode,
   useCallback,
   useContext,
@@ -19,6 +18,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { InteractionArmedProvider, useInteractionArm } from '@/ui/interaction-arm';
 import {
   MessageSelectionContext,
   MessageSelectionOverlay,
@@ -49,7 +49,7 @@ import { usePostHog } from '@posthog/react';
 import { capturePostHogEvent, getAnalyticsFileKind } from '@/lib/posthog-analytics';
 import { getRpcDeliveredTurnKey, rpcDeliveredTurnsAtom } from '@/atoms/session-dispatch-delivery';
 import { selectAtom } from 'jotai/utils';
-import { Virtualizer, type VirtualizerHandle, type CustomItemComponentProps } from 'virtua';
+import { Virtualizer, type VirtualizerHandle, type CustomItemComponentProps } from '@lody/virtua';
 import {
   type AgentConfigCliType,
   type ChatFailedCode,
@@ -88,6 +88,10 @@ import { getAgentMetaByIdAtomFamily } from '@/atoms/agents';
 import { sessionMetaAtomFamily } from '@/atoms/doc-meta';
 import { authTokenAtom, runtimeAtom } from '@/atoms/runtime';
 import { machineSupportsSubagentCancellation } from '@lody/shared';
+import { scrollDebug } from '@/hooks/scroll-debug-log';
+import { readSessionTurnTokenUsage, type SessionTurnTokenUsage } from '@lody/shared/session-data';
+import { formatCompactNumber } from '@/lib/format-compact-number';
+import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import { useStickyScroll } from '@/hooks/use-sticky-scroll';
 import { buildResendInputBlocks, isUndeliveredUserTurnEntry } from '@/lib/undelivered-user-turn';
 import { ConversationOutlineRail } from './conversation-outline-rail';
@@ -214,8 +218,7 @@ import { isHtmlSessionFile } from '@/lib/session-file-presentation';
 import type { MachineId, MessageTextSpan, SessionFilePayload } from '@lody/shared';
 import { MessageTextWithChips } from '@/components/mentions/message-text-chips';
 import { isNativeIOSAppShell } from '@/lib/native-platform';
-import { Tooltip } from '@lody/ui/tooltip';
-import { Popover } from '@lody/ui/popover';
+import { Popover, Tooltip } from '@/ui/armed-overlays';
 import { UserAvatar } from '../user-avatar';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
@@ -410,6 +413,11 @@ type ChatVirtualRow = AssistantChatVirtualRow | StandardChatVirtualRow | Placeho
 export interface SessionChatStreamHandle {
   scrollToBottom: () => void;
   scrollToIndex: (index: number, smooth?: boolean) => void;
+  /**
+   * Hold the user message `messageId` at the top of the viewport, with room
+   * reserved below it for the reply, as soon as its row is rendered.
+   */
+  anchorMessage: (messageId: string) => void;
 }
 
 export type SessionChatUser =
@@ -459,17 +467,27 @@ const NativeSelectionRowsContext = createContext<{
   leading: number;
   held: ReadonlySet<string>;
 }>({ rows: [], leading: 0, held: new Set() });
+// Keys of the two Virtua rows that are not conversation rows (`keyed` needs one per row).
+const LEADING_ROW_KEY = '\u0000leading';
+const AGENT_ACTIVITY_ROW_KEY = '\u0000agent-activity';
+
 function ConversationVirtualRow({ index, ...props }: CustomItemComponentProps) {
   const { rows, leading, held } = useContext(NativeSelectionRowsContext);
   const row = rows[index - leading];
+  // Row tooltips, popovers and context menus mount on the first hover or focus
+  // (see `ui/interaction-arm.tsx`): they were over a third of a switch's mounts.
+  const { armed, armHandlers } = useInteractionArm();
   return (
     <NativeTextSelectionHoldContext.Provider value={!!row && held.has(row.turnId)}>
-      <div
-        {...props}
-        data-virtual-index={index}
-        data-conversation-row-key={row?.key}
-        data-conversation-turn-id={row?.turnId}
-      />
+      <InteractionArmedProvider value={armed}>
+        <div
+          {...props}
+          {...armHandlers}
+          data-virtual-index={index}
+          data-conversation-row-key={row?.key}
+          data-conversation-turn-id={row?.turnId}
+        />
+      </InteractionArmedProvider>
     </NativeTextSelectionHoldContext.Provider>
   );
 }
@@ -516,8 +534,6 @@ export interface SessionChatStreamViewProps {
   /** The status is live work (not waiting on the user): shimmer it. */
   agentActivityShimmer?: boolean;
   conversationFontSize?: ConversationFontSize;
-  /** Skips one auto-follow caused by the session composer changing height. */
-  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   /** Full-page overlay that keeps the conversation outline independent of composer height. */
   outlineOverlayRoot?: HTMLElement | null;
   /**
@@ -881,6 +897,7 @@ const assistantGroupHasActiveSearch = (
 };
 
 const hasAssistantTurnConfigInfo = (message: SessionHistoryParsed): boolean =>
+  readSessionTurnTokenUsage(message.tokenUsage) !== undefined ||
   Boolean(message.modelInfo?.name) ||
   Boolean(message.inputConfig?.modeId) ||
   Boolean(message.inputConfig?.configOptionValues) ||
@@ -1315,11 +1332,11 @@ export const buildChatVirtualRows = ({
 };
 
 /**
- * Chat virtual scroll using Virtua library.
+ * Chat virtual scroll using the keyed Virtua fork (`@lody/virtua`).
  *
- * IMPORTANT: Do NOT dynamically toggle Virtua's `shift` prop — it causes
- * element overlap bugs (Virtua bug #284). We use shift={false} since chat
- * messages are appended to the end.
+ * Rows are keyed (`keyed`), not `shift`ed: sizes follow row keys, and rows
+ * inserted anywhere above the viewport (placeholder turns hydrating) keep the
+ * row at the viewport start in place.
  *
  * Sticky-to-bottom behavior (ResizeObserver, hysteresis, scroll position
  * caching) is encapsulated in the `useStickyScroll` hook.
@@ -1359,7 +1376,6 @@ export const SessionChatStreamView = forwardRef<
       // Waiting on the user (warning tone) is not work in progress.
       agentActivityShimmer = agentActivityTone !== 'warning',
       conversationFontSize = DEFAULT_CONVERSATION_FONT_SIZE,
-      skipNextViewportResizeAutoScrollRef,
       suppressStickyAutoScrollRef,
       outlineOverlayRoot,
       onVisibleTurnRangeChange,
@@ -1560,12 +1576,28 @@ export const SessionChatStreamView = forwardRef<
     // before `Virtualizer` mounts, yet every hook above that return has already
     // run — including the one that reads the stored row measurements.
     const hasVirtualizedRows = virtualRows.length > 0;
+    const placeholderRowCount = useMemo(
+      () => virtualRows.reduce((count, row) => count + (row.type === 'placeholder' ? 1 : 0), 0),
+      [virtualRows]
+    );
+    // Placeholder turns turning into several body rows is the prime suspect for
+    // repeated open flicker; the scroll debug timeline records each change.
+    useEffect(() => {
+      scrollDebug('rows', {
+        total: virtualRows.length,
+        placeholders: placeholderRowCount,
+        leading: leadingContent != null,
+      });
+    }, [leadingContent, placeholderRowCount, virtualRows.length]);
 
     const {
       scrollRef: scrollContainerRef,
+      spacerRef: bottomSpacerRef,
       scrollElement: scrollViewportElement,
       isSticky,
-      scrollToBottom,
+      scrollToBottom: scrollStreamToBottom,
+      anchorToRow,
+      retargetAnchor,
       initialScrollRestored,
       initialVirtualizerCache,
       persistVirtualizerCache,
@@ -1579,9 +1611,59 @@ export const SessionChatStreamView = forwardRef<
       // scroll otherwise targets an index short of the true bottom.
       itemCount: virtualRows.length + leadingRowCount + (shouldShowAgentActivityRow ? 1 : 0),
       onAtBottomChange,
-      skipNextViewportResizeAutoScrollRef,
       suppressAutoScrollRef: autoScrollSuppressedRef,
     });
+
+    /**
+     * A sent message waiting for its row. The send path learns the turn id
+     * before the conversation view renders it, so the anchor is resolved in
+     * the layout effect of the commit that first contains the row.
+     */
+    const pendingAnchorMessageIdRef = useRef<string | null>(null);
+    /**
+     * The message currently held. The hook holds a Virtua index, so rows
+     * inserted or removed above it (the provenance row, a work group folding,
+     * a placeholder splitting) re-resolve the index from this id.
+     */
+    const anchoredMessageIdRef = useRef<string | null>(null);
+    const findMessageRowIndex = useCallback(
+      (messageId: string) => {
+        const rowIndex = virtualRows.findIndex(
+          (row) =>
+            row.type === 'standard' &&
+            row.item.type === 'message' &&
+            row.item.message.id === messageId
+        );
+        return rowIndex === -1 ? -1 : rowIndex + leadingRowCount;
+      },
+      [leadingRowCount, virtualRows]
+    );
+    const resolvePendingAnchor = useCallback(() => {
+      const messageId = pendingAnchorMessageIdRef.current;
+      if (messageId === null) {
+        const anchored = anchoredMessageIdRef.current;
+        if (anchored !== null) retargetAnchor(findMessageRowIndex(anchored));
+        return;
+      }
+      const index = findMessageRowIndex(messageId);
+      if (index === -1) return;
+      pendingAnchorMessageIdRef.current = null;
+      anchoredMessageIdRef.current = messageId;
+      anchorToRow(index);
+    }, [anchorToRow, findMessageRowIndex, retargetAnchor]);
+    useLayoutEffect(resolvePendingAnchor, [resolvePendingAnchor]);
+    const anchorMessage = useCallback(
+      (messageId: string) => {
+        pendingAnchorMessageIdRef.current = messageId;
+        resolvePendingAnchor();
+      },
+      [resolvePendingAnchor]
+    );
+    const scrollToBottom = useCallback(() => {
+      pendingAnchorMessageIdRef.current = null;
+      anchoredMessageIdRef.current = null;
+      scrollStreamToBottom();
+    }, [scrollStreamToBottom]);
     const selectableRows = useMemo(
       () =>
         virtualRows.map((row) => ({
@@ -1635,13 +1717,17 @@ export const SessionChatStreamView = forwardRef<
           )
         ),
     });
+    // Every row reads this context. `holds` is a fresh Map per render, so key the
+    // held set by its ids: a new set per render re-rendered every row, ~10 times
+    // per session switch.
+    const heldTurnIdsKey = [...nativeTextSelection.holds.keys()].join('\0');
+    const heldTurnIds = useMemo(
+      () => new Set(heldTurnIdsKey === '' ? [] : heldTurnIdsKey.split('\0')),
+      [heldTurnIdsKey]
+    );
     const nativeSelectionRows = useMemo(
-      () => ({
-        rows: selectableRows,
-        leading: leadingRowCount,
-        held: new Set(nativeTextSelection.holds.keys()),
-      }),
-      [selectableRows, leadingRowCount, nativeTextSelection.holds]
+      () => ({ rows: selectableRows, leading: leadingRowCount, held: heldTurnIds }),
+      [selectableRows, leadingRowCount, heldTurnIds]
     );
 
     // ---- Outline rail ------------------------------------------------------
@@ -1855,15 +1941,45 @@ export const SessionChatStreamView = forwardRef<
       reportVisibleTurnRange();
     }, [initialScrollRestored, reportVisibleTurnRange, virtualRows.length]);
 
+    // The top fade's bottom counterpart, above the info bar: shown while
+    // conversation content continues past the bottom edge. The reply room under
+    // an anchored message is blank space, not content, so it does not count.
+    const [hasContentBelow, setHasContentBelow] = useState(false);
+    const syncHasContentBelow = useCallback(() => {
+      const viewport = scrollViewportElement;
+      if (!viewport) return;
+      const replyRoom = viewport.querySelector<HTMLElement>(
+        ':scope > [data-conversation-reply-room]'
+      );
+      const below =
+        viewport.scrollHeight -
+        viewport.scrollTop -
+        viewport.clientHeight -
+        (replyRoom?.offsetHeight ?? 0);
+      setHasContentBelow(below > 1);
+    }, [scrollViewportElement]);
+
     const handleStreamScroll = useCallback(
       (offset: number) => {
         handleScroll(offset);
         setIsScrolledFromTop(offset > 0);
+        syncHasContentBelow();
         syncActiveOutlineIndex();
         reportVisibleTurnRange();
       },
-      [handleScroll, reportVisibleTurnRange, syncActiveOutlineIndex]
+      [handleScroll, reportVisibleTurnRange, syncActiveOutlineIndex, syncHasContentBelow]
     );
+
+    // Content also grows or shrinks without a scroll (a streaming reply under
+    // an anchored message, a resized window); re-measure on those too.
+    useEffect(() => {
+      if (isMobile || !scrollViewportElement) return undefined;
+      const observer = new ResizeObserver(syncHasContentBelow);
+      observer.observe(scrollViewportElement);
+      const content = scrollViewportElement.firstElementChild;
+      if (content) observer.observe(content);
+      return () => observer.disconnect();
+    }, [isMobile, scrollViewportElement, syncHasContentBelow]);
 
     const handleOutlinePreview = useCallback(
       (outlineIndex: number) => {
@@ -1906,9 +2022,10 @@ export const SessionChatStreamView = forwardRef<
       [activeSearchBlockId, items, scrollRowToTop, virtualRows]
     );
 
-    useImperativeHandle(ref, () => ({ scrollToBottom, scrollToIndex }), [
+    useImperativeHandle(ref, () => ({ scrollToBottom, scrollToIndex, anchorMessage }), [
       scrollToBottom,
       scrollToIndex,
+      anchorMessage,
     ]);
 
     const noMessagesLabel = t('sessions.noMessages');
@@ -2042,7 +2159,10 @@ export const SessionChatStreamView = forwardRef<
                   // the first layout is the real one instead of an estimate that
                   // has to be corrected before the conversation can be shown.
                   cache={initialVirtualizerCache}
-                  shift={false}
+                  // Rows are identified by key: sizes follow their rows, and a
+                  // placeholder turn becoming several rows above the reader
+                  // leaves what they are reading in place.
+                  keyed
                   onScroll={handleStreamScroll}
                   onScrollEnd={handleStreamScrollEnd}
                   // Pre-render extra items outside the viewport to reduce blank areas
@@ -2055,7 +2175,9 @@ export const SessionChatStreamView = forwardRef<
                   keepMounted={nativeTextSelection.keepMounted}
                 >
                   {leadingContent == null ? null : (
-                    <div data-conversation-leading-content="">{leadingContent}</div>
+                    <div key={LEADING_ROW_KEY} data-conversation-leading-content="">
+                      {leadingContent}
+                    </div>
                   )}
                   {virtualRows.map((row, rowIndex) => {
                     if (row.type === 'placeholder') {
@@ -2127,7 +2249,11 @@ export const SessionChatStreamView = forwardRef<
                     );
                   })}
                   {shouldShowAgentActivityRow && agentActivityLabel && (
-                    <div className="shrink-0 pt-1" data-agent-activity-row-spacer="">
+                    <div
+                      key={AGENT_ACTIVITY_ROW_KEY}
+                      className="shrink-0 pt-1"
+                      data-agent-activity-row-spacer=""
+                    >
                       <AgentActivityRow
                         label={agentActivityLabel}
                         tone={agentActivityTone}
@@ -2139,12 +2265,24 @@ export const SessionChatStreamView = forwardRef<
                   )}
                 </Virtualizer>
               </NativeSelectionRowsContext.Provider>
+              {/* Reply room below an anchored sent message; useStickyScroll
+                  owns its height. It must follow the Virtualizer: sticky scroll
+                  reads the virtualized content as the viewport's first child. */}
+              <div ref={bottomSpacerRef} aria-hidden data-conversation-reply-room="" />
               <MessageSelectionOverlay />
             </div>
             {/* Top fade into the bg-background canvas above (desktop only),
                 hinting that the conversation continues past the top edge. */}
             {!isMobile && isScrolledFromTop ? (
               <div className="pointer-events-none absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-background to-transparent" />
+            ) : null}
+            {/* Bottom fade into the same canvas over the last 40px above the
+                info bar (desktop only): more conversation below. */}
+            {!isMobile && hasContentBelow ? (
+              <div
+                data-conversation-bottom-fade=""
+                className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-background to-transparent"
+              />
             ) : null}
             {/* Round outline. Its visual layer portals to the full-page overlay
                 when supplied, so composer growth cannot move its centre. It is
@@ -3626,6 +3764,62 @@ const ResendUndeliveredDialog = ({
   );
 };
 
+/** Tokens this turn consumed, in compact product-language units (1.2K / 1.2万). */
+const AssistantTurnTokenUsageRows = ({ usage }: { usage: SessionTurnTokenUsage }) => {
+  const { t, i18n } = useTranslation();
+  const locale = toIntlLocaleOrEn(i18n.resolvedLanguage ?? i18n.language);
+  const exact = new Intl.NumberFormat(locale);
+  const rows = [
+    {
+      key: 'input',
+      label: t('sessions.turnConfig.inputTokens', 'Input'),
+      value: usage.inputTokens,
+      detail: undefined,
+    },
+    {
+      key: 'output',
+      label: t('sessions.turnConfig.outputTokens', 'Output'),
+      // Stored output excludes reasoning; the turn's output is both.
+      value: usage.outputTokens + usage.reasoningOutputTokens,
+      detail:
+        usage.reasoningOutputTokens > 0
+          ? t('sessions.turnConfig.outputDetail', 'Reasoning {{reasoning}}', {
+              reasoning: exact.format(usage.reasoningOutputTokens),
+            })
+          : undefined,
+    },
+    {
+      key: 'cache',
+      label: t('sessions.turnConfig.cacheTokens', 'Cache'),
+      value: usage.cacheReadInputTokens + usage.cacheCreationInputTokens,
+      detail: t('sessions.turnConfig.cacheDetail', 'Read {{read}} · Write {{write}}', {
+        read: exact.format(usage.cacheReadInputTokens),
+        write: exact.format(usage.cacheCreationInputTokens),
+      }),
+    },
+  ];
+  return (
+    <div className="border-t border-border/60 px-3 py-2.5">
+      <div className="mb-1.5 text-[11px] font-medium text-foreground">
+        {t('sessions.turnConfig.tokens', 'Tokens')}
+      </div>
+      <dl className="space-y-1.5">
+        {rows.map((row) => (
+          <div key={row.key} className="flex items-start justify-between gap-3 text-[11px]">
+            <dt className="shrink-0 text-muted-foreground">{row.label}</dt>
+            <dd
+              className="text-right font-medium tabular-nums text-foreground"
+              title={[exact.format(row.value), row.detail].filter(Boolean).join(' · ')}
+            >
+              {formatCompactNumber(row.value, locale)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+};
+
 /** Hover tooltip + click popover for turn model / run-config. */
 const AssistantTurnConfigInfoButton = ({
   message,
@@ -3658,7 +3852,11 @@ const AssistantTurnConfigInfoButton = ({
     [message.modelInfo, message.inputConfig]
   );
   const modelBaseName = message.modelInfo ? formatAssistantModelBaseName(message.modelInfo) : '';
-  if (configRows.length === 0 && !modelBaseName) {
+  const tokenUsage = useMemo(
+    () => readSessionTurnTokenUsage(message.tokenUsage),
+    [message.tokenUsage]
+  );
+  if (configRows.length === 0 && !modelBaseName && !tokenUsage) {
     return null;
   }
   const tooltipPreview = (() => {
@@ -3734,12 +3932,13 @@ const AssistantTurnConfigInfoButton = ({
               </dd>
             </div>
           ))}
-          {configRows.length === 0 ? (
+          {configRows.length === 0 && !tokenUsage ? (
             <p className="text-[11px] text-muted-foreground">
               {t('sessions.turnConfig.empty', 'No configuration recorded for this turn.')}
             </p>
           ) : null}
         </dl>
+        {tokenUsage ? <AssistantTurnTokenUsageRows usage={tokenUsage} /> : null}
       </Popover.Content>
     </Popover.Root>
   );
@@ -3772,6 +3971,15 @@ const ACTIVITY_STEP_BODY_CLASS =
 
 /* The collapsed activity group's label type; the live status row reuses it so
    "Working" reads as the next group label, not a separate widget. */
+/** A one-line process status ("Context compacted"): the group header's box and type. */
+const PROCESS_STATUS_LINE_CLASS = (isMobile: boolean) =>
+  cn(
+    'flex w-full items-center py-0.5 text-muted-foreground',
+    isMobile
+      ? cn('gap-1.5 pr-1', ACTIVITY_PROCESS_TEXT_CLASS)
+      : 'gap-1.5 px-[4px] text-[length:var(--markdown-body-font-size,1em)] leading-[1.75]'
+  );
+
 const ACTIVITY_GROUP_LABEL_CLASS = (isMobile: boolean) =>
   cn(
     'min-w-0',
@@ -4089,8 +4297,17 @@ const CARD_CONTENT_TYPES = new Set<MessageContent['type']>([
   'file',
 ]);
 
+/** Tool calls that render as a one-line process status (no card surface). */
+const isProcessStatusToolCall = (content: MessageContent): boolean =>
+  content.type === 'tool_call' &&
+  (content.activityKind === 'context_compaction' || content.activityKind === 'codex_retry');
+
 const isCardContentBlock = (block: AssistantTurnRenderBlock): boolean =>
-  block.kind === 'content' && CARD_CONTENT_TYPES.has(block.entry.content.type);
+  block.kind === 'content' &&
+  CARD_CONTENT_TYPES.has(block.entry.content.type) &&
+  // "Context compacted" / "Retrying…" sit in the process rhythm, spaced like
+  // the "Ran N commands" headers around them.
+  !isProcessStatusToolCall(block.entry.content);
 
 const isAssistantToolCallActivityEntry = (
   entry: AssistantActivityRenderItem
@@ -6051,7 +6268,7 @@ const UserPlainTextBlock = ({
             // unbreakable token (e.g. a pasted log URL). `break-words`/`overflow-wrap:break-word`
             // wraps visually but does NOT shrink min-content, so it must not be set here —
             // it would win by source order and let the bubble overflow its column on every engine.
-            'min-w-0 max-w-full whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]',
+            'min-w-0 max-w-full whitespace-pre-wrap text-reading [overflow-wrap:anywhere]',
             isLong && !isFullTextVisible ? 'overflow-hidden' : ''
           )}
           style={{
@@ -6558,11 +6775,12 @@ const ToolCallCard = memo(function ToolCallCard({
   inlineOutput?: boolean;
 }) {
   const { t } = useTranslation();
+  const isMobile = useIsMobile();
   if (toolCall.activityKind === 'codex_retry') {
     if (toolCall.status !== 'pending' && toolCall.status !== 'in_progress') return null;
     return (
-      <div className="flex min-h-7 items-center gap-2 py-1 text-sm text-muted-foreground">
-        <Spinner className="h-4 w-4 shrink-0" aria-hidden="true" />
+      <div className={PROCESS_STATUS_LINE_CLASS(isMobile)}>
+        <Spinner className="h-[1em] w-[1em] shrink-0" aria-hidden="true" />
         <span>{t('sessions.activity.retrying', 'Retrying…')}</span>
       </div>
     );
@@ -6570,8 +6788,8 @@ const ToolCallCard = memo(function ToolCallCard({
   if (toolCall.activityKind === 'context_compaction') {
     const isCompacting = toolCall.status === 'pending' || toolCall.status === 'in_progress';
     return (
-      <div className="flex min-h-7 items-center gap-2 py-1 text-sm text-muted-foreground">
-        {isCompacting ? <Spinner className="h-4 w-4" aria-hidden="true" /> : null}
+      <div className={PROCESS_STATUS_LINE_CLASS(isMobile)}>
+        {isCompacting ? <Spinner className="h-[1em] w-[1em] shrink-0" aria-hidden="true" /> : null}
         <span>
           {isCompacting
             ? t('sessions.activity.compactingContext', 'Compacting context')
