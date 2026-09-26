@@ -858,31 +858,31 @@ const SessionGroupRow = memo(function SessionGroupRow({
         />
         {onTogglePinSession ? (
           <ContextMenu.Item
+            icon={session.isPinned ? <PinOff /> : <Pin />}
             onClick={() => {
               onTogglePinSession(session.sessionId, !session.isPinned);
             }}
           >
-            {session.isPinned ? <PinOff /> : <Pin />}
             {session.isPinned ? contextMenuLabels.unpin : contextMenuLabels.pin}
           </ContextMenu.Item>
         ) : null}
         {canMarkUnread ? (
           <ContextMenu.Item
+            icon={<Mail />}
             onClick={() => {
               onMarkSessionUnread?.(session.sessionId);
             }}
           >
-            <Mail />
             {contextMenuLabels.markUnread}
           </ContextMenu.Item>
         ) : null}
         {onRenameSession ? (
           <ContextMenu.Item
+            icon={<Pencil />}
             onClick={() => {
               beginRename(session.sessionId, session.title);
             }}
           >
-            <Pencil />
             {contextMenuLabels.rename}
           </ContextMenu.Item>
         ) : null}
@@ -892,38 +892,40 @@ const SessionGroupRow = memo(function SessionGroupRow({
         ) : null}
         {onCopySessionUrl ? (
           <ContextMenu.Item
+            icon={<Link2 />}
             onClick={() => {
               onCopySessionUrl(session.sessionId);
             }}
           >
-            <Link2 />
             {contextMenuLabels.copyUrl}
           </ContextMenu.Item>
         ) : null}
         {session.branchName ? (
           <ContextMenu.Item
+            icon={<GitBranch />}
             onClick={() => {
               void navigator.clipboard.writeText(session.branchName).catch(() => {});
             }}
           >
-            <GitBranch />
             {contextMenuLabels.copyBranch}
           </ContextMenu.Item>
         ) : null}
         {shareMenuState ? (
           <ContextMenu.Item
             disabled={shareMenuState !== 'share'}
+            icon={
+              shareMenuState === 'share' ? (
+                <Users />
+              ) : shareMenuState === 'loading' ? (
+                <Spinner />
+              ) : (
+                <LockKeyhole />
+              )
+            }
             onClick={() => {
               onShareSessionWithTeam?.(session.sessionId);
             }}
           >
-            {shareMenuState === 'share' ? (
-              <Users />
-            ) : shareMenuState === 'loading' ? (
-              <Spinner />
-            ) : (
-              <LockKeyhole />
-            )}
             {shareMenuState === 'share'
               ? contextMenuLabels.shareWithTeam
               : shareMenuState === 'unregistered'
@@ -947,6 +949,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
         ) : null}
         {onOpenPullRequest && prUrl ? (
           <ContextMenu.Item
+            icon={<GitPullRequest />}
             onClick={() => {
               onOpenPullRequest({
                 sessionId: session.sessionId,
@@ -956,7 +959,6 @@ const SessionGroupRow = memo(function SessionGroupRow({
               });
             }}
           >
-            <GitPullRequest />
             {contextMenuLabels.openPr}
           </ContextMenu.Item>
         ) : null}
@@ -990,11 +992,11 @@ const SessionGroupRow = memo(function SessionGroupRow({
         ) : null}
         {onArchiveSession ? (
           <ContextMenu.Item
+            icon={<Archive />}
             onClick={() => {
               onArchiveSession(session.sessionId);
             }}
           >
-            <Archive />
             {contextMenuLabels.archive}
           </ContextMenu.Item>
         ) : null}
@@ -1173,9 +1175,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
   const headerBaseColorClass = isGroupLabel
     ? SIDEBAR_GROUP_LABEL_COLOR_CLASS
     : 'text-sidebar-row-foreground';
-  const headerTypographyClass = isGroupLabel
-    ? SIDEBAR_GROUP_LABEL_CLASS
-    : 'text-[1em] font-normal';
+  const headerTypographyClass = isGroupLabel ? SIDEBAR_GROUP_LABEL_CLASS : 'text-[1em] font-normal';
 
   return (
     <div
@@ -1258,9 +1258,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
                   'absolute left-0 top-1/2 -translate-y-1/2 h-4 w-4 transition-opacity duration-100',
                   // Mobile: chevron is always shown so the owner avatar must hide
                   // permanently to avoid the two icons overlapping.
-                  canToggle && isMobile
-                    ? 'opacity-0'
-                    : cn(canToggle && 'group-hover:opacity-0')
+                  canToggle && isMobile ? 'opacity-0' : cn(canToggle && 'group-hover:opacity-0')
                 )}
               />
               {canToggle && (
