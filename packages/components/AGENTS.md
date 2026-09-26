@@ -71,9 +71,16 @@ mobile surfaces. Background for the rules below:
   drives `layout` animations; otherwise its context changes on every parent render.
 - Dark-theme brightness ceiling (`vscode-theme-css.ts`): every text foreground token is
   held at the interface ceiling (13:1 on the canvas); only prose (`text-reading`,
-  15.9:1), `text-foreground-strong` (headings, bold), the selected sidebar row and the
+  14.6:1), `text-foreground-strong` (headings, bold), the selected sidebar row and the
   active tab go above it. Unselected sidebar text uses `text-sidebar-row-foreground`. Never hard-code
   white text on theme surfaces. Hover changes a row's fill, never its text color.
+- Sidebar top-level groups (machines, GitHub Worktrees, Chats) all use
+  `SIDEBAR_GROUP_LABEL_CLASS`, with no leading icon; project, repo and conversation rows
+  are 1em. A machine is identified by its Offline pill and hover card
+  (`sidebar-machine-card.tsx`); never show "offline" while its status is unknown.
+- `@lody/ui` colours come from the VS Code theme: `theme-provider.tsx` puts
+  `lib/vscode-theme/lody-ui-palette.stylex.ts` on the root in the resolved mode. Override
+  its tokens there with `createTheme`, never with Tailwind classes on package parts.
 - Components rendered inside conversation rows take `Tooltip`, `Popover` and `ContextMenu`
   from `ui/armed-overlays.tsx`, not `@lody/ui`: inside an unarmed `useInteractionArm`
   boundary they render only the trigger element until the first hover or focus. An
