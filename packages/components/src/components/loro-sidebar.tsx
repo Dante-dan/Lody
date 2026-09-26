@@ -1402,30 +1402,33 @@ export const LoroSidebar = memo(function LoroSidebar({
                       ) : null}
                     </div>
 
-                    <GlassSurface className="p-1">
-                      <ul className="space-y-1">
-                        {section.items.map((item) => (
-                          <li key={item.id}>
-                            <div
-                              className={cn(
-                                'flex items-center gap-2 rounded-lg px-2 py-2 text-[0.9em]',
-                                item.isSelected
-                                  ? 'bg-sidebar-selection text-sidebar-selection-foreground'
-                                  : 'text-sidebar-foreground-muted hover:bg-sidebar-hover hover:text-sidebar-hover-foreground'
-                              )}
-                            >
-                              <span className="h-2 w-2 rounded-full bg-sidebar-border" />
-                              <span className="min-w-0 flex-1 truncate">{item.title}</span>
-                              {item.ageLabel ? (
-                                <span className="shrink-0 text-[0.75em] text-sidebar-foreground-muted">
-                                  {item.ageLabel}
-                                </span>
-                              ) : null}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </GlassSurface>
+                    {/* A project with no sessions yet is its header alone, not an empty tray. */}
+                    {section.items.length > 0 ? (
+                      <GlassSurface className="p-1">
+                        <ul className="space-y-1">
+                          {section.items.map((item) => (
+                            <li key={item.id}>
+                              <div
+                                className={cn(
+                                  'flex items-center gap-2 rounded-lg px-2 py-2 text-[0.9em]',
+                                  item.isSelected
+                                    ? 'bg-sidebar-selection text-sidebar-selection-foreground'
+                                    : 'text-sidebar-foreground-muted hover:bg-sidebar-hover hover:text-sidebar-hover-foreground'
+                                )}
+                              >
+                                <span className="h-2 w-2 rounded-full bg-sidebar-border" />
+                                <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                                {item.ageLabel ? (
+                                  <span className="shrink-0 text-[0.75em] text-sidebar-foreground-muted">
+                                    {item.ageLabel}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </GlassSurface>
+                    ) : null}
                   </div>
                 ))}
 
