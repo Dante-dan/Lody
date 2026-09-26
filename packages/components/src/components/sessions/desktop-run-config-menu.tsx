@@ -688,6 +688,7 @@ export function DesktopRunConfigMenu({
                 type="button"
                 aria-label={runConfigButtonAriaLabel}
                 aria-disabled
+                data-run-config-trigger=""
                 {...stylex.props(surface.trigger, surface.triggerCompact, surface.triggerInert)}
               >
                 {triggerFace}
@@ -699,6 +700,7 @@ export function DesktopRunConfigMenu({
       ) : (
         <Menu.Trigger
           aria-label={runConfigButtonAriaLabel}
+          data-run-config-trigger=""
           className={triggerClassName}
           render={<button type="button" />}
         >
