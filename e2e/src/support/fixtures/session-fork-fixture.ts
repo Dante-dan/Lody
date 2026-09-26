@@ -48,17 +48,23 @@ export class SessionForkFixture {
   readonly eventLogPath: string;
   readonly agentCommandLine: string;
 
-  private constructor(readonly tempRoot: string) {
+  private constructor(
+    readonly tempRoot: string,
+    eventLogPath: string
+  ) {
     this.projectRoot = join(tempRoot, this.projectName);
-    this.eventLogPath = join(tempRoot, 'scripted-acp-events.jsonl');
+    this.eventLogPath = eventLogPath;
     this.agentCommandLine = [process.execPath, ACP_ENTRY, this.eventLogPath]
       .map(quoteCommandArgument)
       .join(' ');
   }
 
-  static async create(): Promise<SessionForkFixture> {
+  static async create(eventLogPath: string): Promise<SessionForkFixture> {
     const tempBase = process.platform === 'win32' ? tmpdir() : '/tmp';
-    const fixture = new SessionForkFixture(mkdtempSync(join(tempBase, 'lody-e2e-work-')));
+    const fixture = new SessionForkFixture(
+      mkdtempSync(join(tempBase, 'lody-e2e-work-')),
+      eventLogPath
+    );
     try {
       mkdirSync(fixture.projectRoot, { recursive: true });
       writeFileSync(
