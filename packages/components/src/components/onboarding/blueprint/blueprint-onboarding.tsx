@@ -49,8 +49,6 @@ export type BlueprintOnboardingProps = {
   agents: BlueprintAgent[];
   projects: BlueprintProject[];
   suggestions: string[];
-  /** Cloud builds can offer GitHub repositories; the local build cannot. */
-  githubAvailable?: boolean;
   initialPhase?: Phase;
   initialAgentId?: string | null;
   initialProjectId?: string | null;
@@ -188,7 +186,6 @@ export function BlueprintOnboarding({
   agents,
   projects,
   suggestions,
-  githubAvailable = false,
   initialPhase = 'opening',
   initialAgentId = null,
   initialProjectId = null,
@@ -219,7 +216,6 @@ export function BlueprintOnboarding({
 
   const agent = agents.find((candidate) => candidate.id === landedAgentId) ?? null;
   const project = projects.find((candidate) => candidate.id === landedProjectId) ?? null;
-  const selectedAgent = agents.find((candidate) => candidate.id === agentId) ?? null;
   // Anything but a failure can be chosen: an agent still arriving keeps
   // arriving after the flow moves on, and the rail says so.
   const usable = (candidate: BlueprintAgent | null): boolean =>
