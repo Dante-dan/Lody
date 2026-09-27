@@ -45,6 +45,7 @@ import {
 } from './services/window-badge-service'
 import { setupApplicationMenu } from './menu'
 import { isRendererReloadShortcut } from './reload-shortcut'
+import { requestRendererReload } from './renderer-recovery'
 import {
   flushElectronMainErrorReporting,
   installElectronMainErrorReporting
@@ -258,11 +259,11 @@ export function startApplication(executionHost?: DesktopExecutionHost): void {
       optimizer.watchWindowShortcuts(window, { zoom: true })
       // electron-toolkit deliberately blocks the production reload shortcut.
       // Restore the normal desktop-app behavior requested by the user while
-      // leaving Cmd/Ctrl+Shift+R and DevTools handling unchanged.
+      // routing both reload shortcuts through the pending-send guard.
       window.webContents.on('before-input-event', (event, input) => {
         if (isRendererReloadShortcut(input, process.platform)) {
           event.preventDefault()
-          window.webContents.reload()
+          void requestRendererReload(window, { ignoreCache: input.shift })
         }
       })
     })

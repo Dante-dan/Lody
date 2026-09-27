@@ -1027,6 +1027,8 @@
   "menu.newSession": "新建会话",
   "menu.openProject": "打开项目",
   "menu.settings": "设置…",
+  "menu.reload": "重新加载",
+  "menu.forceReload": "忽略缓存并重新加载",
   "menu.view": "显示",
   "menu.window": "窗口",
   "mobile.filterDrawer.activeHeading": "已选中的筛选",

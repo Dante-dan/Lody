@@ -107,7 +107,7 @@ public-boundary 检查及文档检查分别通过。已运行 `pnpm format` 并�
 
 第三层正在实现。为关闭“已追加历史但磁盘确认丢失”的窗口，在同一个 HistoryWriter 抽象内先在临时 fork 准备操作，保存原副本名称及原始操作字节，然后才导入当前文档。重启重放相同操作，不重新 append。先 flush 原副本以保留操作依赖；跨窗口恢复先读取原副本，缺失时保留记录并停止，不以新窗口的空历史推断未发送。真实 Loro 测试已覆盖两副本重复重放、缺失依赖与校验失败；运行时、退出、UI 以及完整 IndexedDB 验证仍未接完，不能发布这一层。
 
-Layer 3 validation: full `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes, including 479 component files / 3,670 tests. Queue preparation uses the existing WorkspaceWriter and retains queue format. 原生 queue-steer 保留 queued journal 的身份，但会先将已经投递的 queue 操作提升回已保存的 history 工作；history turn 已持久准备并提交后，才能删除 queue 行或开始 guide 投递。prepared 或 committed 记录只能在披露后显式丢弃；退出登录/清缓存会写入强制清理标记，并在下次启动时实际删除恢复数据库。被恢复记录阻挡的非强制清理会保留请求，但不会阻止 runtime 初始化；一次性 native reset 请求也会在延后前复制为本地启动标记。`pnpm format` and docs check completed; docs report zero errors. No packaged-device acceptance is claimed.
+Layer 3 validation: full `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes, including 479 component files / 3,670 tests. Queue preparation uses the existing WorkspaceWriter and retains queue format. 原生 queue-steer 保留 queued journal 的身份，但会先将已经投递的 queue 操作提升回已保存的 history 工作；删除 queue 行前，完整的 history 意图已经持久保存；guide 投递前才完成 history turn 的准备和提交。删除 queue 行到 history 提交之间崩溃时，从该已保存意图恢复。prepared 或 committed 记录只能在披露后显式丢弃；退出登录/清缓存会写入强制清理标记，并在下次启动时实际删除恢复数据库。被恢复记录阻挡的非强制清理会保留请求，但不会阻止 runtime 初始化；一次性 native reset 请求也会在延后前复制为本地启动标记。`pnpm format` and docs check completed; docs report zero errors. No packaged-device acceptance is claimed.
 
 跨窗口接管时记录实际准备操作的副本；接管输入的窗口不一定拥有原操作基线。确定性 journal 测试覆盖此恢复边界。
 
@@ -116,3 +116,5 @@ Layer 3 validation: full `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes, 
 桌面整合先收尾 renderer，再进入现有 CLI 退出屏障；取消时服务不停止，CLI 停止失败仍保留所有权。恢复对话框使用当前 UI 组件。journal、queue-steer、writer 和会话动作共 91 项测试通过，退出顺序与取消测试通过。
 
 Review 修正：普通消息进入历史后，即使旧历史或队列暂时阻止 RPC 快速投递，也会先持久化唤醒标记再同步。历史分类和执行顺序仍归 CLI 管理，旧的导入 `seen` 行不会再让空闲会话漏掉后续消息。Electron 发送注册属于具体渲染文档，不属于复用的 WebContents；确认进程退出或文档导航完成后结束旧请求，仅超时仍阻止退出，新产品文档需要重新注册。回归测试覆盖真实 Loro 历史、journal 落盘与 CLI 监听判断，以及原生事件到实际重载入口；尚未完成打包应用的崩溃注入验收。
+
+原生退出的批准状态仅属于当前 document：renderer 在 runtime 清理完成后解除 beforeunload 阻止，主进程仅在该 document 确认清理成功后覆盖卸载阻止。导航或崩溃会清除批准状态；清理失败、迟到回复不能批准卸载。检查回复和 beforeunload 使用相同的待发判断，包含恢复错误。普通和忽略缓存的菜单/键盘重载共用此守卫。行为测试覆盖保留记录时的检查、清理和卸载，以及 Stay、清理失败、迟到回复和 document 更换。

@@ -29,6 +29,7 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
     emptySnapshot
   );
   const pending = records.filter((record) => record.stage !== 'delivered');
+  const exitCommitted = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [exitRequest, setExitRequest] = useState<ExitRequest | null>(null);
@@ -91,6 +92,14 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
     []
   );
 
+  const hasPendingWork = useCallback(
+    () =>
+      !!error ||
+      (runtime?.sendResources.getActiveCount() ?? 0) > 0 ||
+      !!journal?.getSnapshot().some((record) => record.stage !== 'delivered'),
+    [error, journal, runtime]
+  );
+
   useBlocker({
     shouldBlockFn: async ({ current, next }) => {
       const currentWorkspace = (current.params as { workspaceName?: string }).workspaceName;
@@ -98,10 +107,7 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
       if (currentWorkspace === nextWorkspace) return false;
       return !(await requestSessionSendExit('workspace'));
     },
-    enableBeforeUnload: () =>
-      !!error ||
-      (runtime?.sendResources.getActiveCount() ?? 0) > 0 ||
-      !!journal?.getSnapshot().some((record) => record.stage !== 'delivered'),
+    enableBeforeUnload: () => !exitCommitted.current && hasPendingWork(),
   });
 
   useEffect(() => {
@@ -110,13 +116,16 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
     const unsubscribe = onIpcEvent('app.sendLifecycle', (request) => {
       void (async () => {
         try {
-          if (request.phase === 'commit') await runtime?.dispose();
+          if (request.phase === 'commit') {
+            await runtime?.dispose();
+            // Durable records remain for recovery, but this document has joined
+            // its work and must not veto the already approved native exit.
+            exitCommitted.current = true;
+          }
           await ipc.app.replySendLifecycle({
             requestId: request.requestId,
             ready: true,
-            pending:
-              (runtime?.sendResources.getActiveCount() ?? 0) > 0 ||
-              !!journal?.getSnapshot().some((record) => record.stage !== 'delivered'),
+            pending: hasPendingWork(),
           });
         } catch (failure) {
           setError(
@@ -138,7 +147,7 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
         console.error('Could not register pending message lifecycle', failure)
       );
     return unsubscribe;
-  }, [journal, runtime, t]);
+  }, [hasPendingWork, runtime, t]);
 
   const retry = async (record: SessionSendRecord) => {
     if (!journal) return;
