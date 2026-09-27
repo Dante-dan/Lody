@@ -2,8 +2,6 @@ import { useRouter } from '@tanstack/react-router';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useTranslation } from 'react-i18next';
 import { currentWorkspaceSlugAtom, settingsDialogOpenAtom, toggleZenLayoutModeAtom } from '@/atoms';
-import { taskQuickAddOpenAtom } from '@/atoms/tasks';
-import { tasksFeatureEnabledAtom } from '@/atoms/settings';
 import { getCommandKeybindings, useCommand } from '@/lib/commands';
 import { getAppCurrentPathWithSearch } from '@/lib/app-location';
 import { isSettingsPath, resolveSettingsCloseTo } from '@/lib/settings-navigation';
@@ -65,45 +63,37 @@ export function AppCommands() {
     run: () => toggleZenLayoutMode(),
   });
 
-  // ⌘, toggles settings: open from anywhere (remembering where we came from so the
-  // close can return there), or — when already on a settings page — close back to it.
-  const openTaskQuickAdd = useSetAtom(taskQuickAddOpenAtom);
-  const tasksEnabled = useAtomValue(tasksFeatureEnabledAtom);
-
-  // Registered only while the Tasks beta is on, so the palette and the keyboard
-  // settings list stay free of commands the user has no feature for.
-  useCommand(
-    {
-      id: 'tasks.quickAdd',
-      title: t('commands.tasks.quickAdd', 'New Task'),
-      category: 'Workspace',
-      keybindings: getCommandKeybindings('tasks.quickAdd'),
-      when: () => Boolean(workspaceSlug),
-      run: () => {
-        openTaskQuickAdd(true);
-      },
-    },
-    tasksEnabled
-  );
-
-  useCommand(
-    {
-      id: 'tasks.open',
-      title: t('commands.tasks.open', 'Open Tasks'),
-      category: 'Workspace',
-      keybindings: getCommandKeybindings('tasks.open'),
-      when: () => Boolean(workspaceSlug),
-      run: () => {
-        if (!workspaceSlug) return;
+  useCommand({
+    id: 'schedules.open',
+    title: t('commands.schedules.open', 'Open Schedules'),
+    category: 'Workspace',
+    keybindings: [],
+    when: () => !!workspaceSlug,
+    run: () => {
+      if (workspaceSlug)
         void router.navigate({
-          to: '/$workspaceName/tasks',
+          to: '/$workspaceName/schedules',
           params: { workspaceName: workspaceSlug },
         });
-      },
     },
-    tasksEnabled
-  );
+  });
+  useCommand({
+    id: 'schedules.new',
+    title: t('commands.schedules.new', 'New Schedule'),
+    category: 'Workspace',
+    keybindings: [],
+    when: () => !!workspaceSlug,
+    run: () => {
+      if (workspaceSlug)
+        void router.navigate({
+          to: '/$workspaceName/schedules/$scheduleId',
+          params: { workspaceName: workspaceSlug, scheduleId: 'new' },
+        });
+    },
+  });
 
+  // ⌘, toggles settings: open from anywhere (remembering where we came from so the
+  // close can return there), or — when already on a settings page — close back to it.
   useCommand({
     id: 'workspace.openSettings',
     title: t('commands.workspace.openSettings', 'Open Settings'),

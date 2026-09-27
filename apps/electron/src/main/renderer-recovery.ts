@@ -24,7 +24,6 @@ export type ReloadTarget =
 type RendererWatchdogState = {
   reloadTarget: ReloadTarget | null
   mountTimer: NodeJS.Timeout | null
-  unresponsiveTimer: NodeJS.Timeout | null
   hasNotifiedMounted: boolean
   inRecovery: boolean
 }
@@ -37,7 +36,6 @@ function getState(window: BrowserWindow): RendererWatchdogState {
     state = {
       reloadTarget: null,
       mountTimer: null,
-      unresponsiveTimer: null,
       hasNotifiedMounted: false,
       inRecovery: false
     }
@@ -80,27 +78,6 @@ export function clearMountWatchdog(window: BrowserWindow): void {
   if (state.mountTimer) {
     clearTimeout(state.mountTimer)
     state.mountTimer = null
-  }
-}
-
-export function startUnresponsiveWatchdog(
-  window: BrowserWindow,
-  options: { timeoutMs: number; onTimeout: () => void }
-): void {
-  const state = getState(window)
-  if (state.unresponsiveTimer) clearTimeout(state.unresponsiveTimer)
-  state.unresponsiveTimer = setTimeout(() => {
-    state.unresponsiveTimer = null
-    if (window.isDestroyed()) return
-    options.onTimeout()
-  }, options.timeoutMs)
-}
-
-export function clearUnresponsiveWatchdog(window: BrowserWindow): void {
-  const state = getState(window)
-  if (state.unresponsiveTimer) {
-    clearTimeout(state.unresponsiveTimer)
-    state.unresponsiveTimer = null
   }
 }
 
@@ -226,7 +203,6 @@ export function disposeWatchdogState(window: BrowserWindow): void {
   const state = watchdogStates.get(window)
   if (!state) return
   if (state.mountTimer) clearTimeout(state.mountTimer)
-  if (state.unresponsiveTimer) clearTimeout(state.unresponsiveTimer)
   watchdogStates.delete(window)
 }
 

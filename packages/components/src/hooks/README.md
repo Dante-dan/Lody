@@ -12,6 +12,29 @@ for creation, initial history, continuation, dispatch, and guide. It has no Reac
 lifetime or second writer. This extraction preserves existing upload/acceptance
 behavior; persistent delivery and deferred attachment transfer are later layers
 of the [attachment draft plan](../../../../specs/session-files.md).
+| Area                   | Entry point                                                                                | Responsibility                                              |
+| ---------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| Session lifecycle      | [`use-session-actions.ts`](use-session-actions.ts)                                         | Bind operation targets and writes to one workspace runtime. |
+| Workspace catalogs     | [`use-agent-role-schema-reconciliation.ts`](use-agent-role-schema-reconciliation.ts)       | Reconcile owned Roles after matching runtime probes.        |
+| Conversation rendering | [`use-sticky-scroll.ts`](use-sticky-scroll.ts), [`use-session-doc.ts`](use-session-doc.ts) | Coordinate viewport ownership and history publication.      |
+
+## Session lifecycle
+
+`use-session-actions.ts` reads archive, restore, and archived-root deletion targets
+through `WorkspaceRuntime.readSessionOperationTargets`. The runtime owns source
+readiness and the Repo snapshot; the hook checks runtime identity before writing
+through its captured writer. UI projection lag cannot change the target set.
+Later-created Sessions fall outside that snapshot, and accepted writes are not
+rolled back after a later failure. Exact deletion and ordinary Tab close bypass
+discovery. The [relation Spec](../../../../specs/session-relations.md) owns cascade
+and failure semantics.
+
+## Default conversation draft
+
+`use-empty-session-draft.ts` materializes the empty conversation URL sentinel only
+after metadata hydration. It reuses an existing local draft or inserts one before
+selecting its URL; replayed effects must not create duplicate drafts. It never owns
+mobile viewer selection or creates a shared Session.
 
 ## Horizontal wheel scrolling
 
@@ -19,8 +42,8 @@ of the [attachment draft plan](../../../../specs/session-files.md).
 mouse wheel into horizontal movement. It uses a non-passive native listener because
 React delegates wheel events passively, and releases native horizontal gestures,
 browser zoom, nested content selected by the caller, and movement at either edge.
-Both the task board and compact tab strips use this behavior so their delta-mode
-normalization and edge handling cannot drift.
+Compact tab strips use this behavior so their delta-mode normalization and edge
+handling cannot drift.
 
 ## Workspace membership refresh
 
@@ -32,11 +55,20 @@ use the plugin's actual action so a Promise-returning mock cannot hide this erro
 
 ## Conversation scrolling (`use-sticky-scroll.ts`)
 
-`virtua` owns mounted rows, measurement, and index navigation. `use-stick-to-bottom`
-only observes content growth; it does not replace Virtua and does not own the
-product-level behaviors (per-session scroll restoration, search and group-expansion
-suppression, mobile keyboard and terminal-dock resizing) that the app adapters add
-around it. That is why the two concerns stay separated and why recovering the
+`virtua` owns mounted rows, measurement, and index navigation. `use-sticky-scroll.ts`
+owns one explicit follow mode: `follow` (stay on the real bottom), `anchored` (a
+just-sent message held at the top while a trailing reply room reserves the space
+below it) and `free` (nothing moves). It replaced `use-stick-to-bottom`, whose
+direction heuristics read a browser clamp — the viewport growing when the composer
+shrinks — as the reader scrolling up and released follow; the old one-shot composer
+skip flag hid the bottom behind a growing composer instead. The
+[follow-mode note](../../../../.agents/notes/implemented/architecture/2026-09-23-conversation-follow-modes.md)
+records the decision. `scroll-debug-log.ts` keeps a geometry-only timeline of open,
+reveal, follow corrections and hydration windows (`window.__lodyScrollLog.dump()`;
+console output with `localStorage['lody:debug-scroll'] = '1'`). The hook does not
+replace Virtua and keeps the product-level behaviors (per-session scroll restoration,
+search and group-expansion suppression, mobile keyboard and terminal-dock resizing).
+That is why the two concerns stay separated and why recovering the
 viewport element by DOM query, `VList` handle, item-count effect, observer retry, or
 timer is banned: only the viewport's own React callback ref fires on the real mount
 and unmount commits, which is what an empty-to-populated conversation depends on.
@@ -54,14 +86,49 @@ or has hidden unmeasured rows. Initial reveal waits for the virtualizer's offset
 measured destination and visible-row geometry to agree. Direct row ResizeObserver
 records and spacer/row geometry commits drive this check without a settle timer.
 Those row records also correct following before the spacer's deferred resize;
-programmatic corrections use the library's scroll setter to preserve user-intent
-tracking. Only mounted rows are observed, and normal window loads never hide a
-previously revealed conversation.
+programmatic corrections record their own scrollTop so the resulting scroll event
+is not read as reader intent. Cached pixel restoration uses that own-write path too,
+reapplying the clamped target as geometry changes until reveal. A one-shot Virtua
+scroll request can expire before late measurements change its anchor, leaving the
+visibility gate waiting forever for an offset nobody will restore. Any navigation —
+reader input that releases follow, a suppressed jump, the end, or a send — retires
+the pending cached target.
+The [late-measurement decision](../../../../.agents/notes/implemented/bug-fix/2026-09-23-initial-scroll-recovery.md)
+records the reproduction and evidence boundary.
+Only mounted rows are observed, and normal window loads never hide a
+previously revealed conversation. `use-conversation-stream-items.ts` keys that
+readiness and the visible hydration range by `factSource ?? view`. Accepted-history
+projection wrappers may change while the underlying conversation stays the same;
+resetting on wrapper identity would hide the chat again and discard an off-tail
+reading window. A new underlying source, even with the same session id, must pass
+initial loading again. Range acquisition still uses the current projection so its
+turn positions and content remain current.
+
+The rendered body set belongs to the reading window, the retained 40-turn tail,
+and native text selection. Other consumers may hydrate the same cache for facts,
+search or outline previews, but those bodies remain placeholders in the stream.
+Keeping the entry tail leased prevents the first narrower viewport report from
+making already displayed rows evictable. Selection publishes retained turn IDs
+before a scroll-driven window change; releasing selection removes that exception.
+A loaded user predecessor still supplies assistant configuration even when its
+own rendered row is a placeholder. See the
+[background hydration decision](../../../../.agents/notes/implemented/bug-fix/2026-09-22-background-hydration-render-window.md).
 
 The composer one-shot ref preserves the reader's position while typing without
 changing keyboard, terminal, or window-resize follow behavior, which is why it is
 consumed for exactly one height resize and is not merged into programmatic-jump
 suppression.
+
+## `useWorkspaceBadge`
+
+`workspaceBadgeAtom` derives an absolute count from complete active-session metadata
+and fresh presence, sharing the sidebar's parent/child activity summary. The elected
+workspace window publishes changes immediately, reasserts the snapshot every 30 seconds,
+and reconciles on focus or visibility restoration. The interval reads the current atom
+and never restarts because the count changed; failed IPC gets another opportunity even
+when the authoritative count stays zero. Main replaces contributions, and removes stale
+ones on renderer crash/reload or window close. See the
+[desktop window contract](../../../../specs/desktop-windows.md).
 
 ## `useStableSession`
 

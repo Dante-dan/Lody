@@ -1,12 +1,4 @@
-import {
-  forwardRef,
-  memo,
-  useCallback,
-  useEffect,
-  useMemo,
-  type MutableRefObject,
-  type ReactNode,
-} from 'react';
+import { forwardRef, memo, useCallback, useEffect, useMemo, type ReactNode } from 'react';
 import type {
   SessionFilePayload,
   SessionHistoryParsed,
@@ -16,7 +8,7 @@ import type {
 } from '@lody/shared';
 import { DEFAULT_CONVERSATION_FONT_SIZE, type ConversationFontSize } from '@/atoms/settings';
 import { cloudOperations } from '@/lib/cloud-api-operations';
-import type { AgentActivityTone } from '@/components/shared';
+import type { AgentActivityTone } from './view';
 import {
   MessageRowView,
   SessionChatStreamView,
@@ -70,6 +62,8 @@ export interface SessionChatStreamProps {
   showScrollToLatest?: boolean;
   agentActivityLabel?: string | null;
   agentActivityTone?: AgentActivityTone;
+  /** The status is live work (not waiting on the user): shimmer it. */
+  agentActivityShimmer?: boolean;
   onFileDiffClick?: (turnId: string, filePath: string) => void;
   onFilePathClick?: (filePath: string) => void;
   /** Routes HTML attachment clicks to a live file or Browser surface. */
@@ -92,8 +86,6 @@ export interface SessionChatStreamProps {
   onNavigateSession?: (target: SessionNavigationTarget) => void;
   onLastCompletedAssistantMessageIdChange?: (messageId: string | null) => void;
   conversationFontSize?: ConversationFontSize;
-  /** Skips one auto-follow caused by the session composer changing height. */
-  skipNextViewportResizeAutoScrollRef?: MutableRefObject<boolean>;
   /** Full-page overlay that keeps the conversation outline independent of composer height. */
   outlineOverlayRoot?: HTMLElement | null;
   suppressStickyAutoScrollRef?: React.RefObject<boolean>;
@@ -158,6 +150,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       showScrollToLatest = true,
       agentActivityLabel = null,
       agentActivityTone = 'primary',
+      agentActivityShimmer,
       onFileDiffClick,
       onFilePathClick,
       onOpenHtmlFile,
@@ -175,7 +168,6 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       capacityRetry,
       onLastCompletedAssistantMessageIdChange,
       conversationFontSize = DEFAULT_CONVERSATION_FONT_SIZE,
-      skipNextViewportResizeAutoScrollRef,
       suppressStickyAutoScrollRef,
       outlineOverlayRoot,
     },
@@ -189,6 +181,7 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
       lastCompletedAssistantMessageId,
       onVisibleTurnRangeChange: handleVisibleTurnRangeChange,
       onOutlinePreviewRound: handleOutlinePreviewRound,
+      onRetainedTurnIdsChange,
     } = useConversationStreamItems(view, sessionId);
     useEffect(() => {
       onLastCompletedAssistantMessageIdChange?.(lastCompletedAssistantMessageId);
@@ -284,10 +277,12 @@ const SessionChatStreamImpl = forwardRef<SessionChatStreamHandle, SessionChatStr
         forkingAssistantMessageId={forkingAssistantMessageId}
         agentActivityLabel={agentActivityLabel}
         agentActivityTone={agentActivityTone}
+        agentActivityShimmer={agentActivityShimmer}
         conversationFontSize={conversationFontSize}
-        skipNextViewportResizeAutoScrollRef={skipNextViewportResizeAutoScrollRef}
         suppressStickyAutoScrollRef={suppressStickyAutoScrollRef}
         outlineOverlayRoot={outlineOverlayRoot}
+        conversationView={view}
+        onRetainedTurnIdsChange={onRetainedTurnIdsChange}
         onVisibleTurnRangeChange={handleVisibleTurnRangeChange}
         onOutlinePreviewRound={handleOutlinePreviewRound}
       />

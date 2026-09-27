@@ -152,6 +152,56 @@
       "estimatedMinutes": 2
     },
     {
+      "id": "LODY-SHORTCUT-002",
+      "state": "active",
+      "priority": "P1",
+      "runtime": "simulator",
+      "title": "New-tab and digit shortcuts drive the conversation tab strip",
+      "owner": "desktop-shortcuts",
+      "feature": "src/features/shortcuts.feature",
+      "fixture": "ui-created-session-and-scripted-acp",
+      "fingerprint": "176e7647a641125f6b04a5d22cee689ea3421f2ae8bbf5fc57f53716899c63b1",
+      "ownerPaths": [
+        "packages/components/src/lib/commands/",
+        "packages/components/src/components/sessions/session-detail.tsx",
+        "packages/components/src/components/sessions/session-tab-bar.tsx"
+      ],
+      "actions": [
+        { "id": "settings.createCustomAcpAgent" },
+        { "id": "session.createFromComposer" },
+        { "id": "session.openDraftTabsWithShortcut", "args": { "count": 2, "binding": "Mod+t" } },
+        { "id": "shortcut.switchSessionTabByDigit", "args": { "positions": [1, 8, 2, "last"] } }
+      ],
+      "checkpoints": [
+        "Mod+t opens each new draft tab in the conversation strip",
+        "Mod+1 activates the parent conversation tab from a draft tab",
+        "a digit beyond the open tab count leaves the active tab unchanged",
+        "Mod+2 activates the second conversation tab by position",
+        "Mod+9 activates the last conversation tab"
+      ],
+      "cleanup": [
+        "draft tabs live only inside the disposable run directory",
+        "owned ACP process exits"
+      ],
+      "coverage": {
+        "renderer": "Session tab strip aria-selected state through real keydown dispatch",
+        "electronIpc": "Real renderer key events through the command registry",
+        "bundledCli": "Real owned runtime for Session creation",
+        "durableState": "UI-created Session plus draft tab order",
+        "externalWire": "Scripted ACP"
+      },
+      "signals": {
+        "criticality": 3,
+        "boundaryRisk": 3,
+        "changeFrequency": 3,
+        "escapedDefect": false
+      },
+      "freshness": 5,
+      "scoutJourneys": ["session"],
+      "blockedReason": null,
+      "estimatedMinutes": 3
+    },
+    {
       "id": "LODY-WORK-001",
       "state": "active",
       "priority": "P0",
@@ -490,11 +540,11 @@
       "state": "active",
       "priority": "P1",
       "runtime": "simulator",
-      "title": "Preserve opened worktree Sessions through opener archive and delete",
+      "title": "Opened Sessions survive opener archive and delete with dangling provenance",
       "owner": "session-lifecycle",
       "feature": "src/features/session-management.feature",
       "fixture": "session-fork-and-seeded-relations",
-      "fingerprint": "bf5df94ba0e024a2ac8e9c34b0bd8879e821e67337be85bc01732979e8e05b87",
+      "fingerprint": "44fb98c9f5d0f5bbd93acb3185c24de4909f562138f0d35eb9a63858e816c1b3",
       "ownerPaths": [
         "packages/components/src/hooks/use-session-actions.ts",
         "packages/components/src/lib/session-navigation.ts",
@@ -511,9 +561,10 @@
         { "id": "session.closeEmptyChildTab" }
       ],
       "checkpoints": [
-        "archive affects only the root and direct child Tab",
-        "permanent delete removes only the root and direct child Tab",
-        "opened Sessions retain documents, provenance, running ACP processes, and worktrees",
+        "archive cascades through containment and opened-by links to the child Tab and both opened Sessions",
+        "each archived opened Session releases its ACP process and worktree directory",
+        "permanent delete removes only the archived root and its direct child Tab",
+        "opened Sessions stay archived with documents and dangling provenance and remain independently deletable",
         "dangling opener provenance is visible and non-navigable",
         "exact child deletion succeeds before metadata hydration completes"
       ],
@@ -525,7 +576,7 @@
         "renderer": "Session archive, Archive delete, child Tabs, and opened-by provenance",
         "electronIpc": "Real window, local repo, terminal, and Session RPC",
         "bundledCli": "Real archive and worktree cleanup command processing",
-        "durableState": "Containment deletion, provenance retention, and worktree survival",
+        "durableState": "Archive cascade teardown, containment-scoped deletion, and provenance retention",
         "externalWire": "Scripted fork-capable ACP"
       },
       "signals": {

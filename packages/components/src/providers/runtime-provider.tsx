@@ -1,10 +1,14 @@
 import { SessionSendRecovery } from '../components/chat/session-send-recovery';
 import { useEffect, useRef, type ReactNode } from 'react';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { LODY_PRESENCE_HEARTBEAT_MS, type MachineId, type WorkspaceId } from '@lody/shared';
 import { authTokenAtom, runtimeAtom } from '@/atoms/runtime';
 import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom, userAtom } from '@/atoms';
-import { clearDocMetaCacheAtom, docMetaSubscriptionAtom } from '@/atoms/doc-meta';
+import {
+  clearDocMetaCacheAtom,
+  docMetaSubscriptionAtom,
+  readReadyDocMetaCache,
+} from '@/atoms/doc-meta';
 import {
   clearLodyPresenceStatesAtom,
   setLodyPresenceNowMsAtom,
@@ -29,7 +33,8 @@ import { createWorkspaceRuntime } from './create-workspace-runtime';
 import { resolveCloudPlatformRuntimePolicy } from './cloud-platform-runtime-policy';
 import type { EagerSyncSurface } from './background-sync-coordinator';
 import { resolveEffectiveWorkspaceId } from './resolve-effective-workspace-id';
-import { useImplicitLocalWorkspace } from './local-platform-provider';
+import { getLocalWorkspaceSlug, useImplicitLocalWorkspace } from './local-platform-provider';
+import { isWarmWindow } from '@/lib/desktop-window';
 import { capturePostHogEvent } from '@/lib/posthog-analytics';
 import { maybeClearLodyCacheOnBoot } from '@/lib/clear-local-cache';
 import { isElectronRenderer } from '@/lib/electron';
@@ -66,7 +71,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const platform = usePlatform();
   // Use workspaceSlug for runtime initialization (available immediately from URL)
   // Use workspaceId for WebSocket connections (requires server response)
-  const workspaceSlug = useAtomValue(currentWorkspaceSlugAtom);
+  const routeWorkspaceSlug = useAtomValue(currentWorkspaceSlugAtom);
   const workspaceId = useAtomValue(currentWorkspaceIdAtom);
   const localProbeResult = useAtomValue(localProbeResultAtom);
   const localProbeAttempted = useAtomValue(localProbeAttemptedAtom);
@@ -76,6 +81,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const previousShutdown = useRef<Promise<void>>(Promise.resolve());
   const runtime = useAtomValue(runtimeAtom);
   const setRuntime = useSetAtom(runtimeAtom);
+  const store = useStore();
   const setControlConnectionState = useSetAtom(lodyControlConnectionStateAtom);
   const setRuntimeInitializing = useSetAtom(runtimeInitializingAtom);
   const setBrowserOnline = useSetAtom(browserOnlineAtom);
@@ -119,6 +125,13 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const accountId = currentUser?.id ?? (isLocalPlatform ? 'local' : null);
   const telemetryEnabled = platform.capabilities.has('telemetry');
   const implicitLocalWorkspace = useImplicitLocalWorkspace();
+  // Start the local Repo and metadata sync while the spare still has no route.
+  // A matching claim keeps these effect keys unchanged and retains the runtime.
+  const workspaceSlug =
+    routeWorkspaceSlug ??
+    (isLocalPlatform && isWarmWindow() && implicitLocalWorkspace
+      ? getLocalWorkspaceSlug(implicitLocalWorkspace)
+      : null);
   const { ready: localAgentRuntimeReady } = resolveCloudPlatformRuntimePolicy({
     electron: isElectronRenderer(),
     localAgentEnabled,
@@ -271,9 +284,13 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
             const snapshot = authorizedMachineIdsRef.current;
             return snapshot?.workspaceId === effectiveWorkspaceId ? snapshot.machineIds : null;
           },
+          readDocMetaCache: (repo) => readReadyDocMetaCache(store, repo),
           ...(telemetryEnabled
             ? {
-                onAnalyticsEvent: (event: { name: string; properties?: Record<string, unknown> }) => {
+                onAnalyticsEvent: (event: {
+                  name: string;
+                  properties?: Record<string, unknown>;
+                }) => {
                   capturePostHogEvent(postHogRef.current, event.name, event.properties);
                 },
               }
@@ -371,6 +388,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     setRuntime,
     setPresenceStates,
     setPresenceSyncState,
+    store,
     telemetryEnabled,
     workspaceSlug,
     effectiveWorkspaceId,

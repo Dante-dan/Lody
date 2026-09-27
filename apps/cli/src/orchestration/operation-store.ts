@@ -62,10 +62,10 @@ const FrozenConfigSchema = z
             modeId: z.string().optional(),
             modelId: z.string().optional(),
             configOptionValues: z.record(z.string(), z.union([z.string(), z.boolean()])).optional(),
-            taskToolsEnabled: z.boolean().optional(),
             inheritSessionDefaults: z.literal(false).optional(),
           })
-          .strict()
+          // Older stored configs may still carry `taskToolsEnabled`; drop it.
+          .strip()
           .nullable()
       )
       .optional(),
@@ -516,6 +516,15 @@ export class LodyOperationStore {
       )
       .all(workspaceId, ownerMachineId);
     return rows.map((row) => this.decodeOperation(row));
+  }
+
+  hasPendingWorkForRequester(workspaceId: WorkspaceId, requesterSessionId: SessionId): boolean {
+    return !!this.db
+      .prepare(
+        `SELECT 1 FROM operations WHERE workspace_id=? AND requester_session_id=? AND state='active'
+      UNION ALL SELECT 1 FROM deliveries WHERE workspace_id=? AND requester_session_id=? AND state='pending' LIMIT 1`
+      )
+      .get(workspaceId, requesterSessionId, workspaceId, requesterSessionId);
   }
 
   // Absence of a settlement is the durable obligation, including for Operations

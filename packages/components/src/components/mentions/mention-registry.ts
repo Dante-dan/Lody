@@ -4,10 +4,12 @@ import { useTranslation } from 'react-i18next';
 import { getAgentRoleEmoji, type AcpCommandSummary } from '@lody/shared';
 import { filterAndRankSlashCommands } from '@/lib/command-slash-search';
 import {
-  buildPathSuggestions,
   getSuggestions,
   type PathSuggestion,
-} from '@/components/mentions/file-at-mention';
+  type FileSuggestionIndex,
+} from './file-search/engine';
+export { buildMentionFileIndex } from './file-search/engine';
+export type { FileSuggestionIndex } from './file-search/engine';
 import {
   getIssuePrSuggestions,
   type ItemSuggestion as IssuePrSuggestion,
@@ -66,9 +68,13 @@ export type MentionCategoryStatus = 'ready' | 'loading' | 'error' | 'disabled';
  * plain fields rather than shipping its own component.
  */
 export type MentionCandidateDetail = {
-  /** Absent on a candidate whose pane carries its own heading — a Role's does. */
+  /**
+   * The pane's heading. The menu falls back to the row's title, so a pane is
+   * never headed by its metadata; a Role's pane carries its own heading.
+   */
   title?: string;
-  badges?: string[];
+  /** Scope, version and the like: quiet facts the pane sets on one line. */
+  meta?: string[];
   description?: string;
   rows?: Array<{ label: string; value: string; mono?: boolean }>;
   /**
@@ -100,10 +106,20 @@ export type MentionCandidate = {
   kind: MentionKind;
   icon: MentionIcon;
   title: string;
+  /**
+   * Quiet words on the title's own line, after it: a file's folder, a
+   * command's description. The row stays one line; they give way first.
+   */
+  hint?: string;
+  /** A second line under the title, such as why a Role cannot be picked. */
   subtitle?: string;
   trailing?: string;
-  /** Render the title in the monospace face (paths, tokens). */
-  mono?: boolean;
+  /**
+   * When the thing was last touched, for a row whose recency is what tells two
+   * of them apart (sessions). The menu renders it as a compact "2h" against a
+   * shared clock, so the registry stays free of `Date.now()`.
+   */
+  activityAt?: number;
   /** Path an extension-aware icon derives its glyph from. */
   iconPath?: string;
   /**
@@ -280,7 +296,9 @@ export function selectMentionMenuView(
     // `limit` is passed down so a source can stop early, and enforced here so
     // the cap holds whether or not it did.
     const candidates = category.getCandidates(search, limit).slice(0, limit);
-    if (candidates.length > 0) groups.push({ category, candidates });
+    if (candidates.length > 0 || category.status === 'loading' || category.status === 'error') {
+      groups.push({ category, candidates });
+    }
   }
 
   return {
@@ -289,6 +307,10 @@ export function selectMentionMenuView(
     categories: categories.filter((category) => matchesCategoryName(category, search)),
     groups,
   };
+}
+
+export function isCommandMenuTrigger(trigger: string): boolean {
+  return trigger === '/' || trigger === '、';
 }
 
 /**
@@ -304,7 +326,7 @@ export function selectMentionMenuViewForTrigger(
   if (trigger === MENTION_TRIGGER) {
     return selectMentionMenuView(categories, search, options);
   }
-  if (trigger === '/') {
+  if (isCommandMenuTrigger(trigger)) {
     const directCategories = categories.filter((category) => category.directTrigger === '/');
     return {
       level: 'aggregate',
@@ -336,45 +358,20 @@ function applyLimit<T>(ranked: T[], limit: number | undefined): T[] {
   return limit === undefined || ranked.length <= limit ? ranked : ranked.slice(0, limit);
 }
 
-export type FileSuggestionIndex = {
-  dirs: PathSuggestion[];
-  files: PathSuggestion[];
-  allSuggestions: PathSuggestion[];
-};
-
 /**
- * Rankable file index for the mention menu. The GitHub/worktree tree only
- * yields files, so directories are synthesised by `buildPathSuggestions`;
- * lazily-listed directories are folded in on top so `@` completion can offer a
- * directory it has not expanded yet.
+ * A path as a row reads it: the name, then the folder it sits in. The name is
+ * what a person scans for; the folder tells two same-named files apart.
  */
-export function buildMentionFileIndex(
-  entry: { paths: string[]; lazyDirectories?: ReadonlyArray<{ path: string }> } | null,
-  buildLazyDirectoryToken: (path: string) => string | null
-): FileSuggestionIndex | null {
-  if (!entry) return null;
-  const base = buildPathSuggestions(entry.paths);
-  const tokens = new Set(base.allTokens);
-  const lazyDirs: PathSuggestion[] = [];
-  for (const lazy of entry.lazyDirectories ?? []) {
-    const token = buildLazyDirectoryToken(lazy.path);
-    if (!token || tokens.has(token)) continue;
-    tokens.add(token);
-    lazyDirs.push({
-      kind: 'dir',
-      path: token.replace(/\/+$/u, ''),
-      token,
-    });
-  }
-  if (lazyDirs.length === 0) return base;
-  const dirs = [...base.dirs, ...lazyDirs].sort((left, right) =>
-    left.token.localeCompare(right.token)
-  );
-  return { dirs, files: base.files, allSuggestions: [...dirs, ...base.files] };
+function splitPathForRow(token: string, isDirectory: boolean): { name: string; folder?: string } {
+  const trimmed = token.replace(/\/+$/, '');
+  const slash = trimmed.lastIndexOf('/');
+  const name = `${trimmed.slice(slash + 1)}${isDirectory ? '/' : ''}`;
+  return slash > 0 ? { name, folder: trimmed.slice(0, slash) } : { name };
 }
 
 export function toFileCandidate(item: PathSuggestion): MentionCandidate {
   const isDirectory = item.kind === 'dir';
+  const { name, folder } = splitPathForRow(item.token, isDirectory);
   return {
     value: item.token,
     label: item.token,
@@ -384,9 +381,9 @@ export function toFileCandidate(item: PathSuggestion): MentionCandidate {
     navigateText: isDirectory ? `${MENTION_TRIGGER}${item.token}` : undefined,
     kind: isDirectory ? 'dir' : 'file',
     icon: isDirectory ? 'dir' : 'file',
-    title: item.token,
+    title: name,
+    hint: folder,
     iconPath: item.path,
-    mono: true,
   };
 }
 
@@ -396,7 +393,7 @@ export function buildFileCandidates(
   limit?: number
 ): MentionCandidate[] {
   if (!index) return [];
-  return applyLimit(getSuggestions(index, term), limit).map(toFileCandidate);
+  return getSuggestions(index, term, limit).map(toFileCandidate);
 }
 
 export function toIssuePrCandidate(item: IssuePrSuggestion): MentionCandidate {
@@ -457,7 +454,7 @@ export function toSkillCandidate(
     title: item.token,
     detail: {
       title: skill.name,
-      badges: [
+      meta: [
         labels.scope[item.scope],
         ...(skill.version ? [`v${skill.version}`] : []),
         ...(skill.isSymlink ? [labels.symlink] : []),
@@ -498,6 +495,7 @@ export function toSessionCandidate(
     kind: 'session',
     icon: 'session',
     title: item.title || labels.untitled,
+    activityAt: item.activityAt > 0 ? item.activityAt : undefined,
   };
 }
 
@@ -542,10 +540,13 @@ export function toAgentRoleCandidate(
     icon: 'agent_role',
     iconEmoji: emoji,
     title: role.name,
+    // Who does the work and where: two Roles named alike on two machines are
+    // told apart here without opening the pane.
+    hint: [item.agentConfig?.name, item.machine?.name].filter(Boolean).join(' · ') || undefined,
     disabled: item.availability.kind !== 'available',
     subtitle: availabilityText,
     detail: {
-      // No `title` and no badges: the pane heads itself with the Role's own
+      // No `title` and no meta: the pane heads itself with the Role's own
       // mark and name, and visibility is deliberately absent — every Role the menu
       // lists is one this user may read, so private-vs-workspace changes
       // nothing about accepting it. It is a Settings concern.
@@ -583,7 +584,7 @@ export function toCommandCandidate(command: AcpCommandSummary): MentionCandidate
     kind: 'command',
     icon: 'command',
     title: `/${command.name}`,
-    subtitle: command.description,
+    hint: command.description,
   };
 }
 
@@ -625,7 +626,7 @@ function sourceCategoryFields(sourceKey: MentionSourceKey, source: SourceState) 
 
 export type MentionCategorySources = {
   file?: SourceState & {
-    index: FileSuggestionIndex | null;
+    getCandidates: MentionCategory['getCandidates'];
     notice?: string;
   };
   issuePr?: SourceState & {
@@ -688,7 +689,7 @@ export function useMentionCategories(sources: MentionCategorySources): MentionCa
         icon: 'file',
         ...sourceCategoryFields('file', file),
         notice: file.notice,
-        getCandidates: (term, limit) => buildFileCandidates(file.index, term, limit),
+        getCandidates: file.getCandidates,
       });
     }
 

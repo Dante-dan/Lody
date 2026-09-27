@@ -38,26 +38,16 @@ Run policy tests.
 
 <!-- context-handoff:begin -->
 
-### Instructions for reviewing agents
-
-- **Review focus:** Check policy transitions.
-- **Decisions to challenge:** Confirm bypass semantics.
-- **Plausible failures / evidence gaps:** API calls use fakes.
-
-### Authoring context
-
-- **User goal / directives:** Simplify PR policy.
-- **Constraints / non-goals:** Never execute fork code.
-- **Risk-bearing decisions:** Repository identity classifies PRs.
-- **Destructive or irreversible behavior:** Expired PRs close.
-- **Deliberately not done or tested:** No live API writes.
-- **Unknowns / confidence:** Policy behavior is deterministic.
-
 ### Original user prompt
 
 \`\`\`text
 Simplify the pull request contribution policy.
 \`\`\`
+
+### Shared conversation
+
+Status: shared
+Link: https://lody.example/s/demo#access=v1.demo
 
 <!-- context-handoff:end -->
 `;
@@ -217,15 +207,11 @@ void describe('pull request validation', () => {
         finding.includes('require a maintainer assignment on the linked Issue')
       )
     );
-    assert.deepEqual(activity.issueReads, [
-      { owner: 'LodyAI', repo: 'Lody', issue_number: 121 },
-    ]);
+    assert.deepEqual(activity.issueReads, [{ owner: 'LodyAI', repo: 'Lody', issue_number: 121 }]);
   });
 
   void it('accepts community PRs over 1000 lines when the author is assigned', async () => {
-    const issues = new Map([
-      [121, { assignees: [{ login: 'contributor' }] }],
-    ]);
+    const issues = new Map([[121, { assignees: [{ login: 'contributor' }] }]]);
     const { github } = createGithub({ issues });
     const result = await reconcilePullRequest({
       github,
@@ -316,6 +302,26 @@ void describe('pull request reconciliation', () => {
     );
     assert.ok(activity.removedLabels.some((input) => input.name === NEEDS_ATTENTION_LABEL));
     assert.ok(activity.removedLabels.every((input) => input.name !== BYPASS_LABEL));
+  });
+
+  void it('routes omitted sharing disclosure through the existing attention policy', async () => {
+    const { activity, github } = createGithub();
+    const body = validBody.replace(
+      /### Shared conversation[\s\S]*?(?=<!-- context-handoff:end -->)/,
+      ''
+    );
+    const result = await reconcilePullRequest({
+      github,
+      owner: 'LodyAI',
+      repo: 'Lody',
+      pullRequest: { ...externalPullRequest, body },
+      defaultBranch: 'main',
+      now: new Date('2026-08-30T00:00:00.000Z'),
+    });
+    assert.equal(result.state, 'invalid');
+    assert.deepEqual(activity.addedLabels.at(-1).labels, [NEEDS_ATTENTION_LABEL]);
+    assert.match(activity.createdComments[0].body, /Shared conversation/);
+    assert.match(activity.createdComments[0].body, /invalid-since="2026-08-30T00:00:00.000Z"/);
   });
 
   void it('puts an invalid external PR into one attention state', async () => {
