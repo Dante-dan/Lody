@@ -94,13 +94,10 @@ for (const leading of ['empty', 'visible']) {
   });
 }
 
-for (const { story, label, colorVariable } of [
-  { story: 'starting-activity', label: 'Starting…', colorVariable: '--primary' },
-  {
-    story: 'permission-activity',
-    label: 'Waiting for permission',
-    colorVariable: '--status-warning',
-  },
+for (const { story, label, working } of [
+  // Live work shimmers; waiting on the user keeps a still, warning-toned label.
+  { story: 'starting-activity', label: 'Starting…', working: true },
+  { story: 'permission-activity', label: 'Waiting for permission', working: false },
 ]) {
   test(`agent activity stays visible across empty history hydration: ${story}`, async ({
     page,
@@ -114,13 +111,13 @@ for (const { story, label, colorVariable } of [
     await expect(activity).toBeVisible();
     await expect(activity).toBeInViewport();
     await expect(page.locator('[data-message-selection-scroll]')).toHaveCount(0);
-    const activityColor = () =>
-      page
-        .locator('.agent-activity-dot')
-        .evaluate((element) =>
-          (element as HTMLElement).style.getPropertyValue('--agent-activity-color')
-        );
-    expect(await activityColor()).toBe(`hsl(var(${colorVariable}, 199 89% 72%))`);
+    const activityPresentation = () =>
+      activity.evaluate((element) => ({
+        shimmer:
+          window.getComputedStyle(element, '::after').animationName === 'agent-shimmer-sweep',
+        warning: element.classList.contains('text-status-warning'),
+      }));
+    expect(await activityPresentation()).toEqual({ shimmer: working, warning: !working });
 
     const toggleActivity = page.getByRole('button', { name: 'Toggle activity', exact: true });
     await toggleActivity.click();
@@ -134,7 +131,7 @@ for (const { story, label, colorVariable } of [
     ).toBeInViewport();
     await expect(activity).toHaveCount(1);
     await expect(activity).toBeInViewport();
-    expect(await activityColor()).toBe(`hsl(var(${colorVariable}, 199 89% 72%))`);
+    expect(await activityPresentation()).toEqual({ shimmer: working, warning: !working });
     await toggleActivity.click();
     await expect(activity).toHaveCount(0);
   });
@@ -199,4 +196,67 @@ test('opening and reopening never reveals an unmeasured tail', async ({ page }) 
       .poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
       .toBeLessThanOrEqual(1);
   }
+});
+
+test('a cached reading position reveals after late virtual row measurements', async ({ page }) => {
+  // Install before importing Virtua: it captures the timer function at load.
+  await page.clock.install({ time: 0 });
+  await page.addInitScript(() => {
+    const NativeResizeObserver = window.ResizeObserver;
+    let paused = true;
+    let held: (() => void)[] = [];
+    Object.assign(window, {
+      heldReadingMeasurements: () => held.length,
+      releaseReadingMeasurements: () => {
+        paused = false;
+        const callbacks = held;
+        held = [];
+        callbacks.forEach((callback) => callback());
+      },
+    });
+    window.ResizeObserver = class extends NativeResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        super((entries, observer) => {
+          const rows = entries.filter(({ target }) => target.hasAttribute('data-virtual-index'));
+          const other = entries.filter(({ target }) => !target.hasAttribute('data-virtual-index'));
+          // Virtua must learn its viewport while destination measurements wait.
+          if (other.length) callback(other, observer);
+          if (rows.length) {
+            if (paused) held.push(() => callback(rows, observer));
+            else callback(rows, observer);
+          }
+        });
+      }
+    };
+  });
+  await page.goto(
+    '/iframe.html?id=sessions-sessionchathydration--cold-cached-offset&viewMode=story'
+  );
+  const open = page.getByRole('button', { name: 'Open conversation', exact: true });
+  await open.waitFor({ state: 'visible' });
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 1000));
+  await open.click();
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (
+          window as typeof window & { heldReadingMeasurements: () => number }
+        ).heldReadingMeasurements()
+      )
+    )
+    .toBeGreaterThan(0);
+  const viewport = page.locator('[data-message-selection-scroll]');
+  await expect(viewport).toHaveCSS('visibility', 'hidden');
+  // Expire Virtua's 150ms scroll request using a fake clock, then deliver the
+  // held measurements. Geometry, not another request or a sleep, must recover.
+  await page.clock.runFor(200);
+  await page.evaluate(() =>
+    (
+      window as typeof window & { releaseReadingMeasurements: () => void }
+    ).releaseReadingMeasurements()
+  );
+  await page.clock.resume();
+  await expect(viewport).toHaveCSS('visibility', 'visible');
+  await expect.poll(() => viewport.evaluate((el) => el.scrollTop)).toBe(1200);
+  await expect(viewport.locator('[data-virtual-index="4"]')).toBeInViewport();
 });

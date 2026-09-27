@@ -6,8 +6,8 @@ over 200 without its prior Issue adds a size-specific finding. Same-repository
 branches do not create an Issue solely for contribution intake.
 
 The Issue is for tracking context; maintainers review the contribution through
-the normal PR process. Context handoff is public and cannot use N/A or redacted
-answers; an invalid body is closed after seven days and must then be resubmitted.
+the normal PR process. Context handoff is public and cannot use placeholders or entirely redacted
+evidence; an invalid body is closed after seven days and must then be resubmitted.
 -->
 
 ## Related issue
@@ -59,36 +59,12 @@ Any supporting artifact must be reachable by reviewers; a local HTML file is not
 
 <!--
 Required for every fork-based pull request. Give maintainers and their reviewing
-agents the minimum public context needed to assess scope, intent, and risk.
-Every field must contain a concise, meaningful summary; N/A and redacted answers
-are not accepted. Never paste private transcripts, secrets, or tool logs.
+agents the minimum public context needed to assess intent and risk. Placeholders and
+entirely redacted evidence are not accepted. Never paste private transcripts, secrets, or
+tool logs; link a published shared conversation instead of copying its text.
 -->
 
 <!-- context-handoff:begin -->
-
-### Instructions for reviewing agents
-
-<!--
-Required and PR-specific. The authoring Agent writes this handoff for the
-organization owners' reviewing Agent. Do not paste a generic review checklist.
-Keep each item to one concise sentence and the whole section under 1,200
-characters. Include only the highest-value files, decisions, risks, and gaps.
--->
-
-- **Review focus:** <!-- Which concrete files or flows deserve attention, and why? -->
-- **Decisions to challenge:** <!-- Which deliberate choices need independent judgment? -->
-- **Plausible failures / evidence gaps:** <!-- What material breakage or uncertainty remains? -->
-
-### Authoring context
-
-<!-- Fill every field with a public summary. Explain briefly when there is no applicable risk or omission. -->
-
-- **User goal / directives:** <!-- Concise paraphrase only; never paste transcripts or tool logs. -->
-- **Constraints / non-goals:** <!-- What must not change or is out of scope. -->
-- **Risk-bearing decisions:** <!-- Decisions affecting data, authority, compatibility, or recovery. -->
-- **Destructive or irreversible behavior:** <!-- Include cleanup, overwrite, migration, rollback, and failure recovery. -->
-- **Deliberately not done or tested:** <!-- Intentional omissions and why they are acceptable. -->
-- **Unknowns / confidence:** <!-- Residual risk and confidence in the change. -->
 
 ### Original user prompt
 
@@ -111,5 +87,31 @@ unrelated transcript turns, tool logs, or attachment bytes.
 ````
 
 </details>
+
+### Shared conversation
+
+<!--
+Required for every fork-based PR. Keep this section and choose exactly one status:
+
+Status: shared
+Link: <public HTTP(S) conversation URL from Lody or another authoring tool>
+
+Status: user-declined
+Reason: <why no link is provided>
+
+Status: unavailable
+Reason: <which authoring tool cannot publish the conversation and why>
+
+Status: not-used
+Reason: <confirm that no Agent was used to author this contribution>
+
+Before opening the PR, an Agent asks its user to publish the authoring conversation.
+Only the user confirms publication; never invent a URL, refusal, or tool limitation.
+A pending or unanswered request is not a refusal; wait for the user's response.
+If the user declines, also append `#### Sharing refusal (verbatim)` under
+`### Original user prompt`, with their exact reply in a separate fenced text block.
+Keep the triggering prompt unchanged. Redact only private spans with explicit
+markers; a placeholder or entirely redacted refusal is not evidence.
+-->
 
 <!-- context-handoff:end -->

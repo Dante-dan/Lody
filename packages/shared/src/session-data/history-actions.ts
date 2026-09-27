@@ -2,8 +2,6 @@ import { markAssistantTurnFinished } from './assistant-finalize';
 import { planOperationProgress, planOperationCompletion } from './operation-progress';
 import type { StoredLodyOperation } from '../session-orchestration';
 import type { OperationProgressStatus } from '../session-orchestration';
-import { planTaskProposal } from './task-proposal';
-import type { TaskProposalMeta } from '../ai';
 import type { RequestPermissionRequest } from '@agentclientprotocol/sdk';
 import {
   mergeToolCallWithPermission,
@@ -11,6 +9,11 @@ import {
 } from './permission-request';
 import type { MessageContent } from '../ai';
 import type { SessionEntry, SessionTurnStatus } from './domain';
+import {
+  addSessionTurnTokenUsage,
+  readSessionTurnTokenUsage,
+  type SessionTurnTokenUsage,
+} from './token-usage';
 
 export type HistoryAction =
   | {
@@ -25,7 +28,6 @@ export type HistoryAction =
       statuses?: readonly (readonly [string, OperationProgressStatus])[];
     }
   | { kind: 'operation-completion'; operation: StoredLodyOperation; turn: SessionEntry }
-  | { kind: 'task-proposal'; turnId: string; meta: TaskProposalMeta; timestamp: string }
   | {
       kind: 'upsert-goal';
       goal: Extract<MessageContent, { type: 'goal' }>;
@@ -50,8 +52,13 @@ export type HistoryAction =
       turnId?: string;
       endedAt: number;
       permissionWaitMs?: number;
-      settleContextCompactionAsFailed?: boolean;
       force?: boolean;
+    }
+  | {
+      kind: 'assistant-token-usage';
+      turnId: string;
+      /** Adds to the stored total, so a reopened or late-reporting turn keeps summing. */
+      add: SessionTurnTokenUsage;
     }
   | { kind: 'upsert-turn'; turn: SessionEntry; beforeTurnId?: string; beforeLastUser?: boolean }
   | { kind: 'remove-turn'; turnId: string }
@@ -63,7 +70,8 @@ export function historyActionTarget(action: HistoryAction): string | undefined {
   return action.kind === 'assistant-items' ||
     action.kind === 'user-status' ||
     action.kind === 'finish-assistant' ||
-    action.kind === 'assistant-file-diff'
+    action.kind === 'assistant-file-diff' ||
+    action.kind === 'assistant-token-usage'
     ? action.turnId
     : undefined;
 }
@@ -75,7 +83,6 @@ export function applyHistoryAction(
 ): {
   turns: SessionEntry[];
   matched: boolean;
-  proposal?: import('./task-proposal').TaskProposalPublishResult;
 } {
   switch (action.kind) {
     case 'assistant-file-diff': {
@@ -101,8 +108,6 @@ export function applyHistoryAction(
       const turns = planOperationCompletion(history, action.operation, action.turn);
       return { turns, matched: turns !== history };
     }
-    case 'task-proposal':
-      return planTaskProposal(history, action.turnId, action.meta, action.timestamp);
     case 'upsert-goal': {
       let replaced = false;
       for (const entry of history)
@@ -201,6 +206,15 @@ export function applyHistoryAction(
         (t) => t.role === 'assistant' && (!action.turnId || t.id === action.turnId)
       );
       return { turns: markAssistantTurnFinished(history, action), matched };
+    }
+    case 'assistant-token-usage': {
+      const entry = history.find((t) => t.role === 'assistant' && t.id === action.turnId);
+      if (!entry) return { turns: history, matched: false };
+      entry.tokenUsage = addSessionTurnTokenUsage(
+        readSessionTurnTokenUsage(entry.tokenUsage),
+        action.add
+      );
+      return { turns: history, matched: true };
     }
     case 'remove-turn':
       return {

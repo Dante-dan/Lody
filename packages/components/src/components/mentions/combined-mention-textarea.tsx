@@ -1,3 +1,4 @@
+import { useMentionFileSearch } from './file-search/use-file-search';
 import { useShortcutMentionSource } from './use-shortcut-mention-source';
 import { shortcutComposerScope } from './shortcut-composer-state';
 import * as React from 'react';
@@ -40,7 +41,8 @@ import {
 } from '@/components/mentions/mention-persistence';
 import { MentionTwoLevelMenu } from '@/components/mentions/mention-two-level-menu';
 import {
-  buildMentionFileIndex,
+  isCommandMenuTrigger,
+  toFileCandidate,
   MENTION_TRIGGER,
   useMentionCategories,
   type MentionCategorySources,
@@ -62,7 +64,7 @@ import {
 import { getAgentRoleEmoji, type AcpCommandSummary } from '@lody/shared';
 import { Mention, MentionInput, MentionLabel, useMentionContext } from '@/ui/mention';
 import type { Mention as MentionRange, MentionChipResolver } from '@/ui/mention/index';
-import { Textarea, type TextareaProps } from '@/ui/textarea';
+import { Textarea, type TextareaProps } from '@lody/ui/textarea';
 import { parseMentionNamespaceSearch } from '@/ui/mention/mention-trigger';
 import { getCommandKeybindings, useCommand } from '@/lib/commands';
 import type { PromptShortcutScope } from '@lody/shared/prompt-shortcuts';
@@ -166,11 +168,6 @@ function TwoLevelMentionMenu({
     enableSessionMentions && active && commandsEnabled
   );
 
-  const fileIndex = React.useMemo(
-    () =>
-      enableFileMentions ? buildMentionFileIndex(fileData.entry, buildLazyDirectoryToken) : null,
-    [enableFileMentions, fileData.entry]
-  );
   const issuePrSuggestions = React.useMemo(
     () =>
       enableIssueMentions && issuePrData.entry ? buildItemSuggestions(issuePrData.entry.items) : [],
@@ -200,9 +197,10 @@ function TwoLevelMentionMenu({
               'Project is very large; local file list was truncated.'
             )
         : undefined,
-      index: fileIndex,
+      // Attach worker results after resolving the registered namespaces.
+      getCandidates: () => [],
     }),
-    [enableFileMentions, fileData, fileIndex, fileSourceKind, t]
+    [enableFileMentions, fileData, fileSourceKind, t]
   );
 
   // `refresh` is async, but `onActivate` is fire-and-forget (`() => void`).
@@ -335,7 +333,7 @@ function TwoLevelMentionMenu({
         session: sessionSource,
         agentRole: templateScope ? { ...agentRoleSource, enabled: true } : agentRoleSource,
         command:
-          context.trigger === '/' && !/^\/\S*$/.test(context.inputValue)
+          isCommandMenuTrigger(context.trigger) && !/^[/、]\S*$/.test(context.inputValue)
             ? undefined
             : commandSource,
         promptShortcut: templateScope ? undefined : promptShortcutSource,
@@ -354,11 +352,45 @@ function TwoLevelMentionMenu({
       ]
     )
   );
+  const namespacedSearch = parseMentionNamespaceSearch(context.filterStore.search);
+  const scopedCategory = namespacedSearch
+    ? baseCategories.find((category) => category.namespace === namespacedSearch.namespace)
+    : undefined;
+  const fileTerm =
+    active && context.trigger === '@' && enableFileMentions
+      ? scopedCategory
+        ? scopedCategory.id === 'file'
+          ? namespacedSearch!.term
+          : null
+        : context.filterStore.search || null
+      : null;
+  const fileSearch = useMentionFileSearch(fileData.entry, fileTerm);
+  const searchedCategories = React.useMemo(
+    () =>
+      baseCategories.map((category) => {
+        if (category.id !== 'file') return category;
+        return {
+          ...category,
+          status:
+            category.status === 'error' || category.status === 'loading'
+              ? category.status
+              : fileSearch.status,
+          message:
+            category.message ??
+            (fileSearch.status === 'error'
+              ? t('mention.file.loadError', 'Failed to load files.')
+              : undefined),
+          getCandidates: (term: string, limit?: number) =>
+            term === fileTerm ? fileSearch.items.slice(0, limit).map(toFileCandidate) : [],
+        };
+      }),
+    [baseCategories, fileSearch.items, fileSearch.status, fileTerm, t]
+  );
   const categories = React.useMemo(
     () =>
       templateScope
         ? shortcutTemplateCategories({
-            categories: baseCategories,
+            categories: searchedCategories,
             scope: templateScope,
             skills: skillItems,
             allowedDirs: allowedSkillDirs,
@@ -381,8 +413,8 @@ function TwoLevelMentionMenu({
                       .join(' + '),
                   }),
           })
-        : baseCategories,
-    [templateScope, baseCategories, skillItems, allowedSkillDirs, t]
+        : searchedCategories,
+    [templateScope, searchedCategories, skillItems, allowedSkillDirs, t]
   );
 
   // Ask the provider to list a directory the user has drilled into but that was
@@ -554,8 +586,14 @@ export type CombinedMentionTextareaHandle = {
   /**
    * Append a session mention. Returns false when nothing was written: an
    * unknown/archived/own session, or one the draft already mentions.
+   *
+   * Paste supplies `at`/`replaceEnd` so the mention lands on the caret (or
+   * replaces the current selection) instead of appending.
    */
-  insertSessionMention: (sessionId: string) => boolean;
+  insertSessionMention: (
+    sessionId: string,
+    options?: { at?: number; replaceEnd?: number }
+  ) => boolean;
   /**
    * Append `@path` mentions in one transaction for paths outside the menu —
    * folders dropped from the OS. Each writes text plus a committed range,
@@ -583,12 +621,12 @@ function MentionActionsBridge({
   React.useImperativeHandle(
     actionsRef,
     () => ({
-      insertSessionMention: (sessionId: string) => {
+      insertSessionMention: (sessionId, options) => {
         // Session mentions being disabled IS an empty list, so the lookup is
         // also the enablement check — there is nothing to mention.
         const item = items.find((candidate) => candidate.sessionId === sessionId);
         if (!item) return false;
-        const insertion = buildSessionMentionInsertion(mentions, item);
+        const insertion = buildSessionMentionInsertion(mentions, item, options);
         if (!insertion) return false;
         onMentionInsert(insertion);
         return true;
@@ -962,16 +1000,17 @@ export const CombinedMentionTextarea = React.forwardRef<
       enableShortcutMentions ||
       hasExternalMentionSupport;
 
-    // `/` trigger is only active when the entire input is a slash command (e.g. "" or "/review")
-    const isSlashOnly = !value || /^\/\S*$/.test(value);
+    // Command triggers require the whole input; shortcuts can also appear inline.
+    const isSlashOnly = !value || /^[/、]\S*$/.test(value);
     const triggers = React.useMemo(() => {
       const nextTriggers: string[] = [];
       // Every mention type is reachable through `@`; skills also retain their
-      // direct `$` entry point, and slash commands retain `/` because they must
+      // direct `$` entry point, and commands accept `/` and `、` because they must
       // own the whole prompt.
       if (enableAtMentions) nextTriggers.push('@');
       if (enableSkillMentions) nextTriggers.push(SKILL_MENTION_TRIGGER);
-      if (enableShortcutMentions || (enableCommandMentions && isSlashOnly)) nextTriggers.push('/');
+      if (enableShortcutMentions || (enableCommandMentions && isSlashOnly))
+        nextTriggers.push('/', '、');
       return nextTriggers;
     }, [
       enableAtMentions,

@@ -19,7 +19,6 @@ import type {
 } from '@lody/shared';
 import {
   getMachineRoomId,
-  collectSessionArchiveTargets,
   getMachineFlockDocId,
   getMachineFlockDeleteLocalProjectIds,
   getMachineFlockLocalProjects,
@@ -42,7 +41,6 @@ import { usePostHog } from '@posthog/react';
 import debug from 'debug';
 import { activeWorkspaceRuntimeAtom, type WorkspaceRuntime } from '@/atoms/runtime';
 import {
-  docMetaCacheReadyAtom,
   setDocMetaByRoomIdAtom,
   sessionMetaCacheAtom,
   sessionMetaCountAtom,
@@ -161,15 +159,6 @@ export function isArchivedLocalProjectRestoreUnavailableError(
   return error instanceof ArchivedLocalProjectRestoreUnavailableError;
 }
 
-function getDirectChildSessions(
-  sessionId: SessionId,
-  sessions: readonly SessionMeta[]
-): SessionMeta[] {
-  return sessions.filter(
-    (session) => session.id !== sessionId && session.parentSessionId === sessionId
-  );
-}
-
 async function assertArchivedLocalProjectCanRestore(
   runtime: WorkspaceRuntime,
   sessionMeta: SessionMeta
@@ -259,6 +248,7 @@ export type SessionActions = {
   /** Delete exactly the supplied Sessions without discovering related Sessions. */
   deleteSessions: (sessionIds: SessionId[]) => Promise<void>;
   archiveSession: (sessionId: SessionId) => Promise<void>;
+  setSessionTabClosed: (sessionId: SessionId, closed: boolean) => Promise<void>;
   restoreSession: (sessionId: SessionId) => Promise<void>;
   deleteArchivedSession: (sessionId: SessionId) => Promise<void>;
   setSessionPinned: (sessionId: SessionId, isPinned: boolean) => Promise<void>;
@@ -729,42 +719,25 @@ export function useSessionActions(): SessionActions {
       if (!runtime) {
         throw new Error('Runtime not ready');
       }
-      if (!store.get(docMetaCacheReadyAtom)) {
-        throw new Error('Session metadata is still loading');
+      const archiveTargets = await runtime.readSessionOperationTargets(sessionId, 'archive');
+      if (store.get(activeWorkspaceRuntimeAtom) !== runtime) {
+        throw new Error('Workspace changed before archiving');
       }
-
-      const sessionRoomId = getSessionRoomId(sessionId);
-      const repoMeta = (await runtime.repo.getDocMeta(sessionRoomId))?.meta as
-        | SessionMeta
-        | undefined;
-      // The repo read is preferred (freshest lifecycle fields), but it can lag
-      // a session the UI already renders. The archive write below is an
-      // idempotent patch, so the rendered meta cache is enough to proceed — a
-      // session the UI can show must also be closable.
-      const sessionMeta =
-        repoMeta ?? (store.get(sessionMetaCacheAtom)[sessionRoomId] as SessionMeta | undefined);
-      if (!sessionMeta) {
-        throw new Error(`Session metadata missing for ${sessionId}`);
-      }
-      log('[session-archive] session meta loaded', {
-        sessionId,
-        machineId: sessionMeta.machineId,
-      });
-
-      const archiveTargets = [
-        { ...sessionMeta, id: sessionId },
-        ...collectSessionArchiveTargets(sessionId, Object.values(store.get(sessionMetaCacheAtom))),
-      ];
       for (const session of archiveTargets) {
-        if (typeof window !== 'undefined') {
-          sendIpc('terminal.closeSession', { sessionId: session.id });
-        }
         // The archived state is the whole request: the owning machine observes
         // it, releases the runtime, and reconciles the worktree directory.
         await runtime.writer.upsertDocMeta(getSessionRoomId(session.id), {
           isArchived: true,
           status: SessionStatusFactory.idle(),
         } as Partial<SessionMeta>);
+        if (typeof window !== 'undefined') {
+          // Cleanup failure cannot undo the accepted archive state.
+          try {
+            sendIpc('terminal.closeSession', { sessionId: session.id });
+          } catch (error) {
+            log('[session-archive] terminal cleanup failed', { sessionId: session.id, error });
+          }
+        }
       }
       log('[session-archive] archived', {
         sessionId,
@@ -781,28 +754,35 @@ export function useSessionActions(): SessionActions {
         throw new Error('Runtime not ready');
       }
 
-      const sessionRoomId = getSessionRoomId(sessionId);
-      const sessionMeta = (await runtime.repo.getDocMeta(sessionRoomId))?.meta as
-        | SessionMeta
-        | undefined;
-      if (!sessionMeta) {
-        throw new Error(`Session metadata missing for ${sessionId}`);
-      }
+      const restoreTargets = await runtime.readSessionOperationTargets(sessionId, 'restore');
+      const [sessionMeta] = restoreTargets;
       await assertArchivedLocalProjectCanRestore(runtime, sessionMeta);
-      const archiveTargets = [
-        { ...sessionMeta, id: sessionMeta.id ?? sessionId },
-        ...getDirectChildSessions(sessionId, Object.values(store.get(sessionMetaCacheAtom))),
-      ];
-
-      for (const session of archiveTargets) {
+      if (store.get(activeWorkspaceRuntimeAtom) !== runtime) {
+        throw new Error('Workspace changed before restoring');
+      }
+      // Restore is a lifecycle change only; every tab keeps its close flag.
+      for (const session of restoreTargets) {
         await runtime.writer.upsertDocMeta(getSessionRoomId(session.id), {
           isArchived: false,
         } as Partial<SessionMeta>);
       }
       log('[session-restore] restored', {
         sessionId,
-        targetSessionIds: archiveTargets.map((session) => session.id),
+        targetSessionIds: restoreTargets.map((session) => session.id),
       });
+    },
+    [runtime, store]
+  );
+
+  const setSessionTabClosed = useCallback(
+    async (sessionId: SessionId, closed: boolean) => {
+      if (!runtime) throw new Error('Runtime not ready');
+      const roomId = getSessionRoomId(sessionId);
+      const entry = await runtime.repo.getDocMeta(roomId);
+      if (isLoroRepoDocDeleted(entry)) throw new Error('Session was deleted');
+      const meta = entry?.meta ?? store.get(sessionMetaCacheAtom)[roomId];
+      if (!meta) throw new Error('Session metadata is still loading');
+      await runtime.writer.upsertDocMeta(roomId, { isTabClosed: closed });
     },
     [runtime, store]
   );
@@ -821,18 +801,10 @@ export function useSessionActions(): SessionActions {
     async (sessionId: SessionId) => {
       log('[session-delete] start', { sessionId });
       if (!runtime) throw new Error('Runtime not ready');
-      if (!store.get(docMetaCacheReadyAtom)) {
-        throw new Error('Session metadata is still loading');
+      const deleteTargets = await runtime.readSessionOperationTargets(sessionId, 'delete');
+      if (store.get(activeWorkspaceRuntimeAtom) !== runtime) {
+        throw new Error('Workspace changed before deleting');
       }
-      const loadedMeta = (await runtime.repo.getDocMeta(getSessionRoomId(sessionId)))?.meta as
-        | SessionMeta
-        | undefined;
-      if (!loadedMeta) throw new Error(`Session metadata missing for ${sessionId}`);
-      const rootMeta = { ...loadedMeta, id: loadedMeta.id ?? sessionId };
-      const deleteTargets = [
-        rootMeta,
-        ...getDirectChildSessions(sessionId, Object.values(store.get(sessionMetaCacheAtom))),
-      ];
 
       for (const session of [...deleteTargets].reverse()) {
         await deleteArchivedSessionMeta(session);
@@ -871,6 +843,7 @@ export function useSessionActions(): SessionActions {
     touchSessionActivity,
     updateSessionStatus,
     updateSessionTitle,
+    setSessionTabClosed,
     transferSessionOwner,
     markSessionRead,
     markSessionUnread,

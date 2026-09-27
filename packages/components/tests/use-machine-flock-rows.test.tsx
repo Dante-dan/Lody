@@ -33,6 +33,13 @@ import {
 } from '../src/hooks/use-machine-flock-rows';
 import { useResolvedMachineMeta } from '../src/hooks/use-resolved-machine-meta';
 
+const postHogEvents = vi.hoisted(() => [] as { name: string; properties: unknown }[]);
+vi.mock('../src/lib/deferred-posthog', () => ({
+  deferredPostHog: {
+    capture: (name: string, properties: unknown) => postHogEvents.push({ name, properties }),
+  },
+}));
+
 let root: Root | null = null;
 let container: HTMLDivElement | null = null;
 
@@ -53,6 +60,26 @@ function deferred(): { promise: Promise<void>; resolve: () => void } {
     resolve = done;
   });
   return { promise, resolve };
+}
+
+/**
+ * Subscription for a Flock double. A real remote catch-up imports into the
+ * Flock, which emits a change batch; tests that make remote rows visible call
+ * `imported()` to do the same.
+ */
+function flockChanges() {
+  const listeners = new Set<(batch: { events: MachineFlockEvent[] }) => void>();
+  return {
+    subscribe: vi.fn((listener: (batch: { events: MachineFlockEvent[] }) => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    }),
+    imported: () => {
+      for (const listener of [...listeners]) listener({ events: [] });
+    },
+  };
 }
 
 function liveRoom(firstSyncedWithRemote = Promise.resolve(), onJoin?: () => void) {
@@ -320,11 +347,12 @@ describe('useMachineFlockRows', () => {
     );
     await flushMicrotasks();
 
-    await resyncMachineFlockRows(runtime, machineId, {
-      requireRemoteSync: true,
-      refreshedCapability: { configId, value: capability },
+    await act(async () => {
+      await resyncMachineFlockRows(runtime, machineId, {
+        requireRemoteSync: true,
+        refreshedCapability: { configId, value: capability },
+      });
     });
-    await flushMicrotasks();
 
     const capabilityRowId = serializeMachineFlockKey(machineFlockKeys.acpCapability(configId));
     expect(updates.at(-1)?.[capabilityRowId]?.value).toEqual(capability);
@@ -443,20 +471,28 @@ describe('useMachineFlockRows', () => {
       remoteVisible ? [{ key: machineFlockKeys.dotlodyPath(), value: dotlodyPath }] : []
     );
     const unsubscribeFlock = vi.fn();
-    let emitFlockBatch: ((batch: { events: MachineFlockEvent[] }) => void) | null = null;
+    const flockListeners = new Set<(batch: { events: MachineFlockEvent[] }) => void>();
+    const emitFlockBatch = (batch: { events: MachineFlockEvent[] }) => {
+      for (const listener of [...flockListeners]) listener(batch);
+    };
     const fakeFlock = {
       scan,
       subscribe: vi.fn((listener: (batch: { events: MachineFlockEvent[] }) => void) => {
-        emitFlockBatch = listener;
-        return unsubscribeFlock;
+        flockListeners.add(listener);
+        return () => {
+          flockListeners.delete(listener);
+          unsubscribeFlock();
+        };
       }),
     };
     const syncOnce = vi.fn(async () => {
       remoteVisible = true;
+      emitFlockBatch({ events: [] });
       return { ok: true, transports: [{ transportId: 'cloud', ok: true, failures: [] }] };
     });
     const { joinRoom, unsubscribe: unsubscribeRoom } = liveRoom(Promise.resolve(), () => {
       remoteVisible = true;
+      emitFlockBatch({ events: [] });
     });
     const openFlockDoc = vi.fn(async () => ({
       flock: fakeFlock,
@@ -502,12 +538,14 @@ describe('useMachineFlockRows', () => {
     expect(openFlockDoc).toHaveBeenCalledWith(`${workspaceId}:mf:${machineId}`);
     expect(syncOnce).not.toHaveBeenCalled();
     expect(joinRoom).toHaveBeenCalledTimes(1);
-    expect(fakeFlock.subscribe).toHaveBeenCalledTimes(1);
+    // One change-stamp tracker for the Flock plus ONE event subscription shared by
+    // both consumers.
+    expect(fakeFlock.subscribe).toHaveBeenCalledTimes(2);
     expect(firstUpdates.at(-1)?.[dotlodyPathRowId]?.value).toBe(dotlodyPath);
     expect(secondUpdates.at(-1)?.[dotlodyPathRowId]?.value).toBe(dotlodyPath);
 
     act(() => {
-      emitFlockBatch?.({
+      emitFlockBatch({
         events: [{ key: machineFlockKeys.dotlodyPath(), value: '/Users/test/.lody-next' }],
       });
     });
@@ -1262,11 +1300,14 @@ describe('useMachineFlockRows', () => {
 
     const firstStore = createStore();
     let firstRemoteVisible = false;
+    const firstChanges = flockChanges();
     const firstSyncOnce = vi.fn(async () => {
       firstRemoteVisible = true;
+      firstChanges.imported();
     });
     const { joinRoom: firstJoinRoom } = liveRoom(Promise.resolve(), () => {
       firstRemoteVisible = true;
+      firstChanges.imported();
     });
     const firstOpenFlockDoc = vi.fn(async () => ({
       flock: {
@@ -1275,7 +1316,7 @@ describe('useMachineFlockRows', () => {
             ? [{ key: machineFlockKeys.dotlodyPath(), value: '/Users/first/.lody' }]
             : []
         ),
-        subscribe: vi.fn(() => vi.fn()),
+        subscribe: firstChanges.subscribe,
       },
       syncOnce: firstSyncOnce,
       joinRoom: firstJoinRoom,
@@ -1311,11 +1352,14 @@ describe('useMachineFlockRows', () => {
 
     const secondStore = createStore();
     let secondRemoteVisible = false;
+    const secondChanges = flockChanges();
     const secondSyncOnce = vi.fn(async () => {
       secondRemoteVisible = true;
+      secondChanges.imported();
     });
     const { joinRoom: secondJoinRoom } = liveRoom(Promise.resolve(), () => {
       secondRemoteVisible = true;
+      secondChanges.imported();
     });
     const secondOpenFlockDoc = vi.fn(async () => ({
       flock: {
@@ -1324,7 +1368,7 @@ describe('useMachineFlockRows', () => {
             ? [{ key: machineFlockKeys.dotlodyPath(), value: '/Users/second/.lody' }]
             : []
         ),
-        subscribe: vi.fn(() => vi.fn()),
+        subscribe: secondChanges.subscribe,
       },
       syncOnce: secondSyncOnce,
       joinRoom: secondJoinRoom,
@@ -1367,19 +1411,22 @@ describe('useMachineFlockRows', () => {
     const dotlodyPath = '/Users/open-failure/.lody';
     const dotlodyPathRowId = serializeMachineFlockKey(machineFlockKeys.dotlodyPath());
     let remoteVisible = false;
+    const changes = flockChanges();
     const syncOnce = vi.fn(async () => {
       remoteVisible = true;
+      changes.imported();
       return { ok: true, transports: [{ transportId: 'cloud', ok: true, failures: [] }] };
     });
     const { joinRoom } = liveRoom(Promise.resolve(), () => {
       remoteVisible = true;
+      changes.imported();
     });
     const openFlockDoc = vi.fn(async () => ({
       flock: {
         scan: vi.fn(() =>
           remoteVisible ? [{ key: machineFlockKeys.dotlodyPath(), value: dotlodyPath }] : []
         ),
-        subscribe: vi.fn(() => vi.fn()),
+        subscribe: changes.subscribe,
       },
       syncOnce,
       joinRoom,
@@ -1425,6 +1472,176 @@ describe('useMachineFlockRows', () => {
     expect(updates.at(-1)?.[dotlodyPathRowId]?.value).toBe(dotlodyPath);
   });
 
+  it('retries a failed remote catchup and reports the failure once until it recovers', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const debug = vi.spyOn(console, 'debug').mockImplementation(() => undefined);
+
+    try {
+      const store = createStore();
+      const workspaceId = 'workspace-machine-flock-remote-retry-test' as WorkspaceId;
+      const workspaceSlug = 'workspace-machine-flock-remote-retry-test';
+      const machineId = 'machine-machine-flock-remote-retry-test';
+      const configId = 'agent-config-remote-retry-test' as AgentConfigId;
+      const configRowId = serializeMachineFlockKey(machineFlockKeys.agentConfig(configId));
+      const sharedConfig: AgentConfigMeta = {
+        id: configId,
+        machineId: machineId as MachineId,
+        name: 'Shared agent',
+        description: undefined,
+        cliType: 'custom',
+        agentType: 'custom-shared-acp',
+        customAcp: { command: 'node', args: ['server.js'] },
+        env: {},
+        prompt: '',
+      };
+      let remoteVisible = false;
+      const changes = flockChanges();
+      const recoveredRoom = liveRoom(Promise.resolve(), () => {
+        remoteVisible = true;
+        changes.imported();
+      });
+      const joinFailure = Object.assign(new Error('stream forbidden'), { status: 403 });
+      const joinRoom = vi
+        .fn()
+        .mockRejectedValueOnce(joinFailure)
+        .mockRejectedValueOnce(joinFailure)
+        .mockImplementation(() => recoveredRoom.joinRoom());
+      const openFlockDoc = vi.fn(async () => ({
+        flock: {
+          scan: vi.fn(() =>
+            remoteVisible
+              ? [{ key: machineFlockKeys.agentConfig(configId), value: sharedConfig }]
+              : []
+          ),
+          subscribe: changes.subscribe,
+        },
+        syncOnce: vi.fn(async () => undefined),
+        joinRoom,
+      }));
+
+      store.set(runtimeAtom, {
+        workspaceId,
+        workspaceSlug,
+        repo: { openFlockDoc },
+      } as unknown as WorkspaceRuntime);
+      store.set(currentWorkspaceIdAtom, workspaceId);
+      store.set(currentWorkspaceSlugAtom, workspaceSlug);
+
+      const updates: MachineFlockRowMap[] = [];
+      render(
+        createElement(
+          Provider,
+          { store },
+          createElement(RowsProbe, {
+            machineId,
+            families: ['agentConfig'],
+            onRows: (rows) => updates.push(rows),
+          })
+        )
+      );
+      await flushMicrotasks();
+      await flushMicrotasks();
+
+      const reportsFor = () =>
+        postHogEvents.filter(
+          (event) =>
+            event.name === 'machine_flock/remote_sync_failed' &&
+            (event.properties as { machine_id?: string }).machine_id === machineId
+        );
+      expect(updates.at(-1)?.[configRowId]).toBeUndefined();
+      expect(reportsFor()).toEqual([
+        {
+          name: 'machine_flock/remote_sync_failed',
+          properties: expect.objectContaining({
+            workspace_id: workspaceId,
+            machine_id: machineId,
+            families: ['agentConfig'],
+            error_type: 'Error',
+            http_status: 403,
+          }),
+        },
+      ]);
+      expect(warn).toHaveBeenCalledTimes(1);
+
+      // Second failure: retried on backoff, but not reported again.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(joinRoom).toHaveBeenCalledTimes(2);
+      expect(updates.at(-1)?.[configRowId]).toBeUndefined();
+      expect(reportsFor()).toHaveLength(1);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(joinRoom).toHaveBeenCalledTimes(3);
+      expect(updates.at(-1)?.[configRowId]?.value).toMatchObject({ name: 'Shared agent' });
+      expect(reportsFor()).toHaveLength(1);
+      expect(debug).toHaveBeenCalledWith(
+        '[machine-flock] remote sync failed; keeping cached rows and retrying',
+        expect.objectContaining({ failureCount: 2, retryDelayMs: 2_000 })
+      );
+    } finally {
+      warn.mockRestore();
+      debug.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops retrying a failed remote catchup once the consumer unmounts', async () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    try {
+      const store = createStore();
+      const workspaceId = 'workspace-machine-flock-retry-unmount-test' as WorkspaceId;
+      const workspaceSlug = 'workspace-machine-flock-retry-unmount-test';
+      const machineId = 'machine-machine-flock-retry-unmount-test';
+      const joinRoom = vi.fn(async () => {
+        throw new Error('join failed');
+      });
+      const openFlockDoc = vi.fn(async () => ({
+        flock: {
+          scan: vi.fn(() => []),
+          subscribe: vi.fn(() => vi.fn()),
+        },
+        syncOnce: vi.fn(async () => undefined),
+        joinRoom,
+      }));
+
+      store.set(runtimeAtom, {
+        workspaceId,
+        workspaceSlug,
+        repo: { openFlockDoc },
+      } as unknown as WorkspaceRuntime);
+      store.set(currentWorkspaceIdAtom, workspaceId);
+      store.set(currentWorkspaceSlugAtom, workspaceSlug);
+
+      render(
+        createElement(
+          Provider,
+          { store },
+          createElement(RowsProbe, { machineId, onRows: () => undefined })
+        )
+      );
+      await flushMicrotasks();
+      await flushMicrotasks();
+      expect(joinRoom).toHaveBeenCalledTimes(1);
+
+      unmountCurrentRoot();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(joinRoom).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('merges remote catchup rows without removing local agent configs', async () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -1453,15 +1670,17 @@ describe('useMachineFlockRows', () => {
       remoteVisible ? [{ key: machineFlockKeys.dotlodyPath(), value: dotlodyPath }] : []
     );
     const syncOnce = vi.fn(async () => undefined);
+    const changes = flockChanges();
     const { joinRoom } = liveRoom(
       syncDeferred.promise.then(() => {
         remoteVisible = true;
+        changes.imported();
       })
     );
     const openFlockDoc = vi.fn(async () => ({
       flock: {
         scan,
-        subscribe: vi.fn(() => vi.fn()),
+        subscribe: changes.subscribe,
       },
       syncOnce,
       joinRoom,
@@ -1644,17 +1863,20 @@ describe('useMachineFlockRows', () => {
     const dotlodyPathRowId = serializeMachineFlockKey(machineFlockKeys.dotlodyPath());
     const scan = vi.fn(() => [{ key: machineFlockKeys.dotlodyPath(), value: dotlodyPath }]);
     const unsubscribeFlock = vi.fn();
-    let versionClock = 1;
-    let emitFlockBatch: ((batch: { events: MachineFlockEvent[] }) => void) | null = null;
+    const flockListeners = new Set<(batch: { events: MachineFlockEvent[] }) => void>();
+    // Every Flock change emits a batch to whoever is subscribed at the time.
+    const emitFlockBatch = (batch: { events: MachineFlockEvent[] }) => {
+      for (const listener of [...flockListeners]) listener(batch);
+    };
     const openFlockDoc = vi.fn(async () => ({
       flock: {
         scan,
-        version: vi.fn(() => ({
-          'test-peer': { physicalTime: versionClock, logicalCounter: 0 },
-        })),
         subscribe: vi.fn((listener: (batch: { events: MachineFlockEvent[] }) => void) => {
-          emitFlockBatch = listener;
-          return unsubscribeFlock;
+          flockListeners.add(listener);
+          return () => {
+            flockListeners.delete(listener);
+            unsubscribeFlock();
+          };
         }),
       },
       syncOnce: vi.fn(),
@@ -1721,9 +1943,8 @@ describe('useMachineFlockRows', () => {
     expect(secondUpdates.at(-1)?.[dotlodyPathRowId]?.value).toBe(dotlodyPath);
 
     // The skipped read must not cost liveness: events still reach every consumer.
-    versionClock = 2;
     act(() => {
-      emitFlockBatch?.({
+      emitFlockBatch({
         events: [{ key: machineFlockKeys.dotlodyPath(), value: '/Users/dedupe/.lody-next' }],
       });
     });
@@ -1753,13 +1974,15 @@ describe('useMachineFlockRows', () => {
     expect(scan).toHaveBeenCalledTimes(1);
     expect(revisitUpdates.at(-1)?.[dotlodyPathRowId]?.value).toBe('/Users/dedupe/.lody-next');
 
-    // If the local Flock changed while no subscription was alive, the version
-    // mismatch forces a fresh scan instead of trusting the warm atom snapshot.
+    // If the local Flock changed while no consumer was subscribed, the change
+    // stamp mismatch forces a fresh scan instead of trusting the warm atom snapshot.
     act(() => {
       root?.render(createElement(Provider, { store }, createElement(Fragment, null)));
     });
     await flushMicrotasks();
-    versionClock = 3;
+    act(() => {
+      emitFlockBatch({ events: [] });
+    });
     act(() => {
       root?.render(
         createElement(

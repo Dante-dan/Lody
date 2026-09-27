@@ -1,4 +1,5 @@
 import { LocalFileResolutionSchema } from './local-file-preview';
+import { MachinePiExtensionsResponseSchema } from './pi-extensions';
 import { z } from 'zod';
 import { SESSION_GOAL_ACTIONS } from './goal';
 import {
@@ -30,11 +31,18 @@ import {
   SessionForkResponseSchema,
   SessionForkSpecSchema,
   SessionIdSchema,
+  AgentConfigIdSchema,
   SessionPreparationCancelSpecSchema,
   SessionPreparationSpecSchema,
   SessionPrepareCancelResponseSchema,
   SessionPrepareResponseSchema,
   SessionPreviewEndpointAcquireResponseSchema,
+  SessionPreviewCreateRequestSchema,
+  SessionPreviewCreateResponseSchema,
+  SessionPreviewRevokeRequestSchema,
+  SessionPreviewRevokeResponseSchema,
+  SessionPreviewStatusRequestSchema,
+  SessionPreviewStatusResponseSchema,
   SessionPreviewEndpointReleaseResponseSchema,
   PreviewTargetSchema,
   SessionSteerResponseSchema,
@@ -218,6 +226,18 @@ export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
       .strict(),
   }).strict(),
   BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('session/preview-create'),
+    params: SessionPreviewCreateRequestSchema.omit({ type: true, machineId: true, workspaceId: true }),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('session/preview-revoke'),
+    params: SessionPreviewRevokeRequestSchema.omit({ type: true, machineId: true, workspaceId: true }),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('session/preview-status'),
+    params: SessionPreviewStatusRequestSchema.omit({ type: true, machineId: true, workspaceId: true }),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
     method: z.literal('session/preview-endpoint-acquire'),
     params: z
       .object({
@@ -241,6 +261,14 @@ export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
     params: z
       .object({
         sessionId: z.string().trim().min(1),
+      })
+      .strict(),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('machine/pi-extensions'),
+    params: z
+      .object({
+        configId: AgentConfigIdSchema.optional(),
       })
       .strict(),
   }).strict(),
@@ -272,8 +300,12 @@ export const LocalMachineRpcResultSchema = z.union([
   SessionPreviewEndpointAcquireResponseSchema,
   SessionPreviewEndpointReleaseResponseSchema,
   SessionSteerResponseSchema,
+  SessionPreviewCreateResponseSchema,
+  SessionPreviewRevokeResponseSchema,
+  SessionPreviewStatusResponseSchema,
   SessionGoalResponseSchema,
   SessionTerminateResponseSchema,
+  MachinePiExtensionsResponseSchema,
 ]);
 export type LocalMachineRpcResult = z.infer<typeof LocalMachineRpcResultSchema>;
 
