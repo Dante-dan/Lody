@@ -1,4 +1,13 @@
 {
+  "settings.agent.codex.authentication": "Authentication",
+  "settings.agent.codex.storage": "Credentials stay on the selected machine. Each provider has its own account.",
+  "settings.agent.codex.customApi": "Custom API",
+  "settings.agent.codex.baseUrl": "Base URL",
+  "settings.agent.codex.keyNext": "Enter the API Key securely during sign-in. To change the destination, add a new provider.",
+  "settings.agent.codex.enterKey": "Enter API Key",
+  "settings.agent.codex.updateKey": "Update API Key",
+  "settings.agent.codex.verifyingKey": "Verifying API Key",
+  "settings.agent.codex.boundChatgptAccount": "This provider is bound to its ChatGPT account. Add a new provider to use another account.",
   "sessions.markdownImage.load": "Load image",
   "sessions.markdownImage.loading": "Loading image…",
   "sessions.markdownImage.failed": "Image could not be loaded",
