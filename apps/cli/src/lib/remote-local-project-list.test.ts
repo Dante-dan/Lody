@@ -179,6 +179,26 @@ describe('remote local project list', () => {
     expect(repo.openFlockDoc).not.toHaveBeenCalled();
   });
 
+  it('reports access denial for a known machine instead of saying it is missing', async () => {
+    const { manager } = createFixtureManager();
+
+    await expect(
+      listRemoteLocalProjects({
+        manager,
+        auth,
+        workspace,
+        machineSelector: targetMachineId,
+        dependencies: {
+          ...fixtureDependencies,
+          verifyAccess: async () => ({ allowed: false, reason: 'machine_not_registered' }),
+        },
+      })
+    ).rejects.toThrow(
+      `Machine access denied for ${targetMachineId}: machine_not_registered. Check daemon logs for machine access registration failures.`
+    );
+    expect(manager.syncFlockDocOrThrow).not.toHaveBeenCalled();
+  });
+
   it('requires a unique machine name while accepting an exact id', () => {
     const duplicate = { ...targetMachine, id: authMachineId };
     expect(selectRemoteProjectMachine([targetMachine, duplicate], targetMachineId)).toBe(
