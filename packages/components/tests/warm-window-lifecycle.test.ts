@@ -2,7 +2,11 @@ import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 
-const nativeState = vi.hoisted(() => ({ windows: new Map<number, unknown>(), nextId: 1, exitResponse: 0 }));
+const nativeState = vi.hoisted(() => ({
+  windows: new Map<number, unknown>(),
+  nextId: 1,
+  exitResponse: 0,
+}));
 // Resolve Electron from its owning app; components does not depend on Electron at runtime.
 vi.mock('../../../apps/electron/node_modules/electron', () => ({
   app: { focus() {} },
@@ -10,7 +14,12 @@ vi.mock('../../../apps/electron/node_modules/electron', () => ({
   BrowserWindow: { fromId: (id: number) => nativeState.windows.get(id) ?? null },
 }));
 
-import { registerRendererSendLifecycle, prepareRendererSendsForExit, resolveRendererSendLifecycle } from '../../../apps/electron/src/main/services/renderer-send-lifecycle';
+import {
+  guardRendererSendClose,
+  registerRendererSendLifecycle,
+  prepareRendererSendsForExit,
+  resolveRendererSendLifecycle,
+} from '../../../apps/electron/src/main/services/renderer-send-lifecycle';
 
 import {
   getMainWindow,
@@ -82,6 +91,26 @@ class NativeWindow extends EventEmitter {
   }
   focus() {
     this.focused = true;
+  }
+  vetoUnload = false;
+  close() {
+    let prevented = false;
+    this.emit('close', {
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    if (prevented) return;
+    if (this.vetoUnload) {
+      let overridden = false;
+      this.webContents.emit('will-prevent-unload', {
+        preventDefault: () => {
+          overridden = true;
+        },
+      });
+      if (!overridden) return;
+    }
+    this.destroy();
   }
   destroy() {
     if (this.destroyed) return;
@@ -407,40 +436,43 @@ describe('macOS prepared targets', () => {
   });
 });
 
-
 describe('send ownership across renderer replacement', () => {
-  it.each(['render-process-gone', 'did-navigate'])('permits recovery after %s, but protects the replacement once registered', async (event) => {
-    vi.useFakeTimers();
-    const window = new NativeWindow();
-    registerProductWindow(window.native, false);
-    setReloadTarget(window.native, { type: 'file', filePath: '/synthetic/index.html' });
-    window.webContents.send = () => {}; // Recovery document has no send listener.
-    registerRendererSendLifecycle(window.native);
-    const waiting = prepareRendererSendsForExit('reload', window.native);
-    window.webContents.emit(event);
-    expect(await waiting).toBe(true);
-    await requestRendererReload(window.native);
-    expect(window.loaded).toEqual({ filePath: '/synthetic/index.html' });
-    expect(await prepareRendererSendsForExit('quit', window.native)).toBe(true);
-    expect(await prepareRendererSendsForExit('close', window.native)).toBe(true);
-    registerRendererSendLifecycle(window.native);
-    const liveButUnresponsive = prepareRendererSendsForExit('quit', window.native);
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(await liveButUnresponsive).toBe(false);
-  });
+  it.each(['render-process-gone', 'did-navigate'])(
+    'permits recovery after %s, but protects the replacement once registered',
+    async (event) => {
+      vi.useFakeTimers();
+      const window = new NativeWindow();
+      registerProductWindow(window.native, false);
+      setReloadTarget(window.native, { type: 'file', filePath: '/synthetic/index.html' });
+      window.webContents.send = () => {}; // Recovery document has no send listener.
+      registerRendererSendLifecycle(window.native);
+      const waiting = prepareRendererSendsForExit('reload', window.native);
+      window.webContents.emit(event);
+      expect(await waiting).toBe(true);
+      await requestRendererReload(window.native);
+      expect(window.loaded).toEqual({ filePath: '/synthetic/index.html' });
+      expect(await prepareRendererSendsForExit('quit', window.native)).toBe(true);
+      expect(await prepareRendererSendsForExit('close', window.native)).toBe(true);
+      registerRendererSendLifecycle(window.native);
+      const liveButUnresponsive = prepareRendererSendsForExit('quit', window.native);
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(await liveButUnresponsive).toBe(false);
+    }
+  );
 });
 
-
-describe('approved document unload', () => {
+describe('send drain preserves independent unload protection', () => {
   const vetoOverridden = (window: NativeWindow) => {
     let overridden = false;
     window.webContents.emit('will-prevent-unload', {
-      preventDefault: () => { overridden = true; },
+      preventDefault: () => {
+        overridden = true;
+      },
     });
     return overridden;
   };
 
-  it('overrides a veto only after approved cleanup and retires approval on navigation', async () => {
+  it('never overrides another module veto, including after approved cleanup or navigation', async () => {
     const window = new NativeWindow();
     registerProductWindow(window.native, false);
     registerRendererSendLifecycle(window.native);
@@ -454,9 +486,9 @@ describe('approved document unload', () => {
     expect(vetoOverridden(window)).toBe(false);
     nativeState.exitResponse = 1;
     expect(await prepareRendererSendsForExit('quit', window.native)).toBe(true);
-    expect(vetoOverridden(window)).toBe(true);
+    expect(vetoOverridden(window)).toBe(false);
     window.webContents.emit('did-navigate-in-page');
-    expect(vetoOverridden(window)).toBe(true);
+    expect(vetoOverridden(window)).toBe(false);
     window.webContents.emit('did-navigate');
     registerRendererSendLifecycle(window.native);
     expect(vetoOverridden(window)).toBe(false);
@@ -470,7 +502,11 @@ describe('approved document unload', () => {
     registerRendererSendLifecycle(window.native);
     window.webContents.send = (_channel, payload) => {
       const { requestId, phase } = payload as { requestId: string; phase: string };
-      resolveRendererSendLifecycle(window.id, { requestId, ready: phase === 'check', pending: true });
+      resolveRendererSendLifecycle(window.id, {
+        requestId,
+        ready: phase === 'check',
+        pending: true,
+      });
     };
     expect(await prepareRendererSendsForExit('reload', window.native)).toBe(false);
     expect(vetoOverridden(window)).toBe(false);
@@ -481,7 +517,48 @@ describe('approved document unload', () => {
     const timedOut = prepareRendererSendsForExit('reload', window.native);
     await vi.advanceTimersByTimeAsync(5000);
     expect(await timedOut).toBe(false);
-    expect(() => resolveRendererSendLifecycle(window.id, { requestId: lateId, ready: true, pending: false })).not.toThrow();
+    expect(() =>
+      resolveRendererSendLifecycle(window.id, { requestId: lateId, ready: true, pending: false })
+    ).not.toThrow();
     expect(vetoOverridden(window)).toBe(false);
   });
+});
+
+it('native close after drain honors a remaining editor veto', async () => {
+  const window = new NativeWindow();
+  registerProductWindow(window.native, false);
+  registerRendererSendLifecycle(window.native);
+  const attempted = Promise.withResolvers<void>();
+  window.webContents.on('will-prevent-unload', () => attempted.resolve());
+  window.webContents.send = (_channel, payload) => {
+    const { requestId } = payload as { requestId: string };
+    resolveRendererSendLifecycle(window.id, { requestId, ready: true, pending: false });
+  };
+  guardRendererSendClose(window.native, () => true);
+  window.vetoUnload = true;
+  window.close();
+  await attempted.promise;
+  expect(window.destroyed).toBe(false);
+});
+
+it('unsaved edits block exit before any renderer is drained', async () => {
+  const windows = [new NativeWindow(), new NativeWindow()];
+  const live = new Set(windows.map((window) => window.id));
+  for (const window of windows) {
+    registerProductWindow(window.native, false);
+    registerRendererSendLifecycle(window.native);
+    window.webContents.send = (_channel, payload) => {
+      const { requestId, phase } = payload as { requestId: string; phase: string };
+      if (phase === 'commit') live.delete(window.id);
+      resolveRendererSendLifecycle(window.id, {
+        requestId,
+        ready: window !== windows[1],
+        pending: false,
+        unsaved: window === windows[1],
+      });
+    };
+  }
+  nativeState.exitResponse = 1;
+  expect(await prepareRendererSendsForExit('quit')).toBe(false);
+  expect([...live]).toEqual(windows.map((window) => window.id));
 });

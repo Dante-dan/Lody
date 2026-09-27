@@ -1,3 +1,4 @@
+import { hasUnsavedRendererChanges } from '@/lib/renderer-unload-guards';
 import { getIpcServices, onIpcEvent } from '@/lib/electron-ipc-client';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useBlocker } from '@tanstack/react-router';
@@ -116,6 +117,17 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
     const unsubscribe = onIpcEvent('app.sendLifecycle', (request) => {
       void (async () => {
         try {
+          // Send approval never authorizes discarding another module's edits.
+          // Recheck at commit in case edits changed while the native dialog was open.
+          if (hasUnsavedRendererChanges()) {
+            await ipc.app.replySendLifecycle({
+              requestId: request.requestId,
+              ready: false,
+              pending: hasPendingWork(),
+              unsaved: true,
+            });
+            return;
+          }
           if (request.phase === 'commit') {
             await runtime?.dispose();
             // Durable records remain for recovery, but this document has joined

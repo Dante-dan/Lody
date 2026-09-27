@@ -186,6 +186,8 @@ Main aggregates unfinished state from all product windows. Close/reload checks a
 
 Updates pass the same guard before invoking installation shutdown, not only through `before-quit`, because update shutdown closes windows in a different order. Exclude newly accepted work during exit confirmation and avoid repeated dialogs for repeated quit events. A nonresponsive renderer timeout is not “no pending messages”; use main's last known state and an explicit forced-exit warning. Persisted interrupted records remain recoverable after restart.
 
+Send cleanup grants no permission to discard unsaved editor changes. Native exit checks editor dirty, saving, conflict and error state before disposing runtimes or stopping the CLI; blocked exits require saving or resolving the edits first. Recheck before commit. Release only the send module's unload veto, and retain native beforeunload on ordinary window close.
+
 ## 9. Local recovery and cleanup
 
 The first version preserves recoverable content without promising transfers after page exit. All platforms store accepted snapshots, source File/Blob data, and stages in local IndexedDB or an equivalent platform store. Electron uses this draft-recovery mechanism too, without depending on future original-path registration. Recovery data is a local copy of unsubmitted content, not a new SessionInputBlock or permanent local-attachment protocol. Recreate object URLs after restart and obtain credentials from the original account/workspace capability for each attempt, never from stored tokens.

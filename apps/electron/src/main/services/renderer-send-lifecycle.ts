@@ -5,9 +5,8 @@ import { dialog, type BrowserWindow } from 'electron'
 import { IPC_PUSH_CHANNELS } from '@lody/shared/electron-ipc'
 import { productWindows } from '../window-state'
 
-type Reply = { ready: boolean; pending: boolean }
+type Reply = { ready: boolean; pending: boolean; unsaved?: boolean }
 const registered = new Set<number>()
-const approvedDocuments = new Set<number>()
 const observed = new WeakSet<BrowserWindow['webContents']>()
 const requests = new Map<
   string,
@@ -22,7 +21,6 @@ export function registerRendererSendLifecycle(window: BrowserWindow): void {
   observed.add(window.webContents)
   const retireDocument = () => {
     registered.delete(id)
-    approvedDocuments.delete(id)
     for (const [requestId, request] of requests) {
       if (request.senderId === id) {
         requests.delete(requestId)
@@ -33,11 +31,6 @@ export function registerRendererSendLifecycle(window: BrowserWindow): void {
   // A crash or committed main-frame navigation ends this document's ownership
   // without destroying WebContents. The recovery page has no send listener.
   // Timeouts never retire a live document; a new product document registers again.
-  window.webContents.on('will-prevent-unload', (event) => {
-    // Electron uses preventDefault here to OVERRIDE the renderer veto. Only
-    // the document that acknowledged completed cleanup may bypass that veto.
-    if (approvedDocuments.has(id)) event.preventDefault()
-  })
   window.webContents.on('render-process-gone', retireDocument)
   window.webContents.on('did-navigate', retireDocument)
   window.webContents.once('destroyed', retireDocument)
@@ -45,11 +38,17 @@ export function registerRendererSendLifecycle(window: BrowserWindow): void {
 
 export function resolveRendererSendLifecycle(senderId: number, input: unknown): void {
   if (!input || typeof input !== 'object') throw new Error('Invalid lifecycle response')
-  const value = input as { requestId?: unknown; ready?: unknown; pending?: unknown }
+  const value = input as {
+    requestId?: unknown
+    ready?: unknown
+    pending?: unknown
+    unsaved?: unknown
+  }
   if (
     typeof value.requestId !== 'string' ||
     typeof value.ready !== 'boolean' ||
-    typeof value.pending !== 'boolean'
+    typeof value.pending !== 'boolean' ||
+    (value.unsaved !== undefined && typeof value.unsaved !== 'boolean')
   )
     throw new Error('Invalid lifecycle response')
   const request = requests.get(value.requestId)
@@ -58,8 +57,7 @@ export function resolveRendererSendLifecycle(senderId: number, input: unknown): 
   if (!request) return
   if (request.senderId !== senderId) throw new Error('Lifecycle response owner mismatch')
   requests.delete(value.requestId)
-  if (request.phase === 'commit' && value.ready) approvedDocuments.add(senderId)
-  request.resolve({ ready: value.ready, pending: value.pending })
+  request.resolve({ ready: value.ready, pending: value.pending, unsaved: value.unsaved })
 }
 
 function requestLifecycle(
@@ -67,7 +65,7 @@ function requestLifecycle(
   phase: 'check' | 'commit',
   reason: 'quit' | 'reload' | 'close'
 ): Promise<Reply> {
-  if (!registered.has(window.webContents.id) || approvedDocuments.has(window.webContents.id))
+  if (!registered.has(window.webContents.id))
     return Promise.resolve({ ready: true, pending: false })
   const requestId = randomUUID()
   return new Promise((resolve) => {
@@ -108,11 +106,13 @@ export async function prepareRendererSendsForExit(
   )
   return runRendererSendExit(windows, {
     check: (window) => requestLifecycle(window, 'check', reason),
-    unavailable: async () => {
+    unavailable: async (unsaved) => {
       await dialog.showMessageBox({
         type: 'warning',
         title: 'Lody',
-        message: t('sessions.pendingSendExitUnavailable'),
+        message: t(
+          unsaved ? 'sessions.unsavedEditorExitBlocked' : 'sessions.pendingSendExitUnavailable'
+        ),
         buttons: [t('sessions.stayWithPendingSends')],
         defaultId: 0,
         cancelId: 0
@@ -140,5 +140,31 @@ export async function prepareRendererSendsForExit(
       return confirmation.response === 1
     },
     drain: (window) => requestLifecycle(window, 'commit', reason)
+  })
+}
+
+/** Re-enter native close once after drain; never skip unrelated beforeunload guards. */
+export function guardRendererSendClose(window: BrowserWindow, shouldGuard: () => boolean): void {
+  let draining = false
+  let closing = false
+  window.on('close', (event) => {
+    if (closing || !shouldGuard()) return
+    event.preventDefault()
+    if (draining) return
+    draining = true
+    void prepareRendererSendsForExit('close', window)
+      .then((allowed) => {
+        if (!allowed || window.isDestroyed()) return
+        closing = true
+        try {
+          window.close()
+        } finally {
+          closing = false
+        }
+      })
+      .catch((error: unknown) => console.error('[Electron] Window close cleanup failed', error))
+      .finally(() => {
+        draining = false
+      })
   })
 }
