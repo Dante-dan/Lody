@@ -88,20 +88,28 @@ function loadTarget(window: BrowserWindow, target: ReloadTarget): Promise<void> 
   return window.loadFile(target.filePath, target.hash ? { hash: target.hash } : undefined)
 }
 
-export function requestRendererReload(window: BrowserWindow): Promise<void> {
+export function requestRendererReload(
+  window: BrowserWindow,
+  options: { ignoreCache?: boolean } = {}
+): Promise<void> {
   if (window.isDestroyed()) return Promise.resolve()
   return prepareRendererSendsForExit('reload', window)
     .then((allowed) => {
-      if (allowed && !window.isDestroyed()) reloadRendererAfterCleanup(window)
+      if (allowed && !window.isDestroyed()) reloadRendererAfterCleanup(window, options.ignoreCache)
     })
     .catch((error: unknown) => console.error('[Electron] Reload cleanup failed', error))
 }
 
-function reloadRendererAfterCleanup(window: BrowserWindow): void {
+function reloadRendererAfterCleanup(window: BrowserWindow, ignoreCache = false): void {
   if (window.isDestroyed()) return
   const state = getState(window)
+  const wasInRecovery = state.inRecovery
   state.hasNotifiedMounted = false
   state.inRecovery = false
+  if (ignoreCache && !wasInRecovery) {
+    window.webContents.reloadIgnoringCache()
+    return
+  }
   const target = state.reloadTarget
   if (target) {
     void loadTarget(window, target).catch((error) => {

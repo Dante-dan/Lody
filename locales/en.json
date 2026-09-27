@@ -1027,6 +1027,8 @@
   "menu.newSession": "New Session",
   "menu.openProject": "Open Project",
   "menu.settings": "Settings…",
+  "menu.reload": "Reload",
+  "menu.forceReload": "Reload ignoring cache",
   "menu.view": "View",
   "menu.window": "Window",
   "mobile.filterDrawer.activeHeading": "Active filters",

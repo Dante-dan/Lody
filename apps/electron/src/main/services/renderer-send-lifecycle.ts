@@ -7,8 +7,12 @@ import { productWindows } from '../window-state'
 
 type Reply = { ready: boolean; pending: boolean }
 const registered = new Set<number>()
+const approvedDocuments = new Set<number>()
 const observed = new WeakSet<BrowserWindow['webContents']>()
-const requests = new Map<string, { senderId: number; resolve: (reply: Reply) => void }>()
+const requests = new Map<
+  string,
+  { senderId: number; phase: 'check' | 'commit'; resolve: (reply: Reply) => void }
+>()
 
 export function registerRendererSendLifecycle(window: BrowserWindow): void {
   const id = window.webContents.id
@@ -18,6 +22,7 @@ export function registerRendererSendLifecycle(window: BrowserWindow): void {
   observed.add(window.webContents)
   const retireDocument = () => {
     registered.delete(id)
+    approvedDocuments.delete(id)
     for (const [requestId, request] of requests) {
       if (request.senderId === id) {
         requests.delete(requestId)
@@ -28,6 +33,11 @@ export function registerRendererSendLifecycle(window: BrowserWindow): void {
   // A crash or committed main-frame navigation ends this document's ownership
   // without destroying WebContents. The recovery page has no send listener.
   // Timeouts never retire a live document; a new product document registers again.
+  window.webContents.on('will-prevent-unload', (event) => {
+    // Electron uses preventDefault here to OVERRIDE the renderer veto. Only
+    // the document that acknowledged completed cleanup may bypass that veto.
+    if (approvedDocuments.has(id)) event.preventDefault()
+  })
   window.webContents.on('render-process-gone', retireDocument)
   window.webContents.on('did-navigate', retireDocument)
   window.webContents.once('destroyed', retireDocument)
@@ -43,9 +53,12 @@ export function resolveRendererSendLifecycle(senderId: number, input: unknown): 
   )
     throw new Error('Invalid lifecycle response')
   const request = requests.get(value.requestId)
-  if (!request || request.senderId !== senderId)
-    throw new Error('Lifecycle response owner mismatch')
+  // Timed-out or retired requests may still reply; they cannot grant approval
+  // or turn an already handled timeout into a permanent renderer error.
+  if (!request) return
+  if (request.senderId !== senderId) throw new Error('Lifecycle response owner mismatch')
   requests.delete(value.requestId)
+  if (request.phase === 'commit' && value.ready) approvedDocuments.add(senderId)
   request.resolve({ ready: value.ready, pending: value.pending })
 }
 
@@ -54,7 +67,7 @@ function requestLifecycle(
   phase: 'check' | 'commit',
   reason: 'quit' | 'reload' | 'close'
 ): Promise<Reply> {
-  if (!registered.has(window.webContents.id))
+  if (!registered.has(window.webContents.id) || approvedDocuments.has(window.webContents.id))
     return Promise.resolve({ ready: true, pending: false })
   const requestId = randomUUID()
   return new Promise((resolve) => {
@@ -69,6 +82,7 @@ function requestLifecycle(
         : undefined
     requests.set(requestId, {
       senderId: window.webContents.id,
+      phase,
       resolve: (reply) => {
         clearTimeout(timer)
         resolve(reply)
