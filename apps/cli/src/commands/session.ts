@@ -85,6 +85,7 @@ import {
   listAliveSessionMetas,
   listAliveRoomIds,
   LocalDaemonAvailabilityError,
+  WorkspaceSyncUnavailableError,
   normalizeCliValue,
   printJson,
   resolveStructuredOutputMode as resolveOutputMode,

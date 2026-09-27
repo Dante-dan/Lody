@@ -51,6 +51,7 @@ const {
   SessionRenameManyToolInputSchema,
   SessionStatusManyToolInputSchema,
   mcpErrorResult,
+  syncBeforeOperationAcceptance,
   assertDifferentMcpSession,
   assertBatchSize,
   resolveSessionRenameItems,
@@ -254,6 +255,24 @@ describe('session MCP input schemas', () => {
         message: WORKSPACE_SYNC_UNAVAILABLE_MESSAGE,
         retryable: true,
       },
+    });
+  });
+
+  it('tells an unaccepted Operation caller to resend the full request', async () => {
+    const manager = {
+      syncMetaOrThrow: vi.fn(async () => {
+        throw new Error('Streams sync failed: network_error');
+      }),
+    } as unknown as Parameters<typeof syncBeforeOperationAcceptance>[0];
+
+    await expect(
+      syncBeforeOperationAcceptance(manager, 'mcp.session_create:operation')
+    ).rejects.toMatchObject({
+      code: 'SYNC_UNAVAILABLE',
+      retryable: true,
+      message: expect.stringContaining(
+        'resend the full request with the same operationId and without resume'
+      ),
     });
   });
 

@@ -3534,6 +3534,7 @@ export const __lodyMcpServerInternals = {
   SessionStatusManyToolInputSchema,
   SessionCancelToolInputSchema,
   mcpErrorResult,
+  syncBeforeOperationAcceptance,
   buildWaitErrorResponse,
   buildMcpCreateOptions,
   bindMcpCreateContext,
