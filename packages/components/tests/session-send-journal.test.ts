@@ -355,7 +355,7 @@ it.each(['seen', undefined] as const)(
     const resources = createSessionSendResources({ acquire: async () => store as never, releaseRef: () => {} });
     let synchronizedMeta: typeof meta | undefined;
     const journal = createWorkspaceSessionSendJournal({
-      accountId: 'account', sourceReplica: 'original',
+      accountId: 'account', sourceReplica: 'original', token: () => null, localMachineId: () => null,
       runtime: {
         workspaceId: 'workspace', sendResources: resources,
         repo: { getDocMeta: async () => ({ meta }), flush: async () => {} },
