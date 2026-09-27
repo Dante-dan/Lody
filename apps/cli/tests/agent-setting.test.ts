@@ -34,6 +34,7 @@ import {
   DEEPSEEK_HARNESS_HOME_ENV,
   DEEPSEEK_HARNESS_VERSION,
 } from '../src/agent/deepseek-harness-runtime';
+import { getGhShimHostBinDir, prependGhShimBinDirToPath } from '../src/lib/gh-shim-script';
 
 function getRegistryAgent(agentType: string) {
   const agent = REGISTRY_ACP_AGENTS.find((candidate) => candidate.id === agentType);
@@ -766,6 +767,58 @@ describe('mergeLoginShellEnv', () => {
     const shell = { PATH: '/usr/bin' };
 
     expect(splitPath(mergeLoginShellEnv(base, shell).PATH)).toEqual(['/usr/bin']);
+  });
+
+  it('keeps the gh shim dir ahead of login-shell and default ACP entries', () => {
+    // The session env prepends the shim, but the login shell and default ACP dirs are
+    // merged in front of it afterwards. /usr/bin/gh would then win and run without
+    // the shim's per-command credential selection.
+    // Sessions use the shim dir of their own workspace broker, not the default one.
+    const statePath = join(tmpdir(), 'broker-workspace-a.json');
+    const shimDir = getGhShimHostBinDir(statePath);
+    const base = { PATH: prependGhShimBinDirToPath('/proj/node_modules/.bin:/usr/bin', statePath) };
+    const shell = { PATH: '/home/u/.local/bin:/usr/local/bin:/usr/bin:/bin' };
+
+    const spawned = withDefaultAcpPathEntries(mergeLoginShellEnv(base, shell));
+
+    expect(splitPath(spawned.PATH)).toEqual([
+      shimDir,
+      join(homedir(), '.local/bin'),
+      join(homedir(), 'bin'),
+      join(homedir(), '.claude/local'),
+      '/home/u/.local/bin',
+      '/usr/local/bin',
+      '/usr/bin',
+      '/bin',
+      '/proj/node_modules/.bin',
+    ]);
+  });
+
+  it("keeps the session's own shim first when the login shell carries another workspace's", () => {
+    // A daemon started from inside a Lody agent inherits that agent's shim dir, and the
+    // login-shell PATH is derived from the daemon's. Pinning the first shim dir found
+    // would route this session's gh/git through the other workspace's broker.
+    const ownShimDir = getGhShimHostBinDir(join(tmpdir(), 'broker-workspace-a.json'));
+    const foreignShimDir = getGhShimHostBinDir(join(tmpdir(), 'broker-workspace-b.json'));
+    const base = { PATH: [ownShimDir, foreignShimDir, '/usr/bin'].join(delimiter) };
+    const shell = { PATH: [foreignShimDir, '/usr/local/bin', '/usr/bin'].join(delimiter) };
+
+    const spawned = withDefaultAcpPathEntries(mergeLoginShellEnv(base, shell));
+
+    expect(splitPath(spawned.PATH)[0]).toBe(ownShimDir);
+  });
+
+  it('does not promote a shim dir the base PATH did not lead with', () => {
+    // Terminal PTYs merge onto the daemon env, which never deliberately leads with a shim.
+    const foreignShimDir = getGhShimHostBinDir(join(tmpdir(), 'broker-workspace-b.json'));
+    const base = { PATH: ['/usr/bin', foreignShimDir].join(delimiter) };
+    const shell = { PATH: ['/usr/local/bin', foreignShimDir, '/usr/bin'].join(delimiter) };
+
+    expect(splitPath(mergeLoginShellEnv(base, shell).PATH)).toEqual([
+      '/usr/local/bin',
+      foreignShimDir,
+      '/usr/bin',
+    ]);
   });
 
   it('lets base win for non-PATH vars but fills in vars only the shell has', () => {
