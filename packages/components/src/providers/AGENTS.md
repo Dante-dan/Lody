@@ -4,11 +4,9 @@
 
 ## Mirrors over synced docs tolerate unknown root keys
 
-Every `new Mirror(...)` over a doc that syncs between clients must pass
-`ignoreUnknownProperties: true`. Peers on a newer schema write root keys this
-build does not declare; without the flag loro-mirror rejects the entire state
-with `Unknown property: <key>`, so the older client can never write to that doc
-again. Contract test: `packages/shared/tests/session-doc-forward-compat.test.ts`.
+Synced-doc Mirrors must set `ignoreUnknownProperties: true`: newer peers' unknown
+root keys otherwise reject the whole state and block writes. Test:
+`packages/shared/tests/session-doc-forward-compat.test.ts`.
 
 Session docs use `createSessionMirror`; only its HistoryWriter writes history.
 Replacement contract: [shared rules](../../../shared/AGENTS.md#session-history).
