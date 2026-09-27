@@ -196,3 +196,7 @@ structurally there and measured in the browser.
 ## Mainline reconciliation (2026-09-27)
 
 Reconciled with main `ef242986`. The mainline composer upload-wait flow is superseded by immediate durable draft admission: the journal owns subsequent transfer. Preserve current routing/queue inversion, scope fencing, duplicate-submit prevention and field-by-field protection of replacement drafts. Updated composer tests assert complete byte snapshots, failed-admission retry, attachment-only submission and blocked states; upload and recovery failures remain covered by preparation/journal suites. Preserve the keyed conversation virtualizer, reply-room scrolling, image peek and current UI primitives. Renderer draining now precedes the existing desktop CLI shutdown barrier; cancellation retains services and CLI shutdown failure retains ownership.
+
+Mainline resource reconciliation preserves target synchronization and workspace disposal ordering. Scoped ownership rules are condensed without changing their guarantees to remain below the AGENTS.md size gate.
+
+Desktop integration runs renderer draining before the existing CLI quit barrier; cancellation retains services, and CLI shutdown failure retains ownership. Recovery dialogs use the current UI primitives. Journal, queue-steer, writer and session-action tests passed (91); quit ordering and cancellation tests passed.
