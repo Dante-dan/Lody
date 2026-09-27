@@ -1376,7 +1376,7 @@ importers:
         specifier: 'catalog:'
         version: 5.2.0(vite@8.2.2(@types/node@24.10.12)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.46.0)(tsx@4.23.13)(yaml@2.8.2))
       fake-indexeddb:
-        specifier: 6.2.5
+        specifier: ^6.2.5
         version: 6.2.5
       jsdom:
         specifier: ^26.1.0
