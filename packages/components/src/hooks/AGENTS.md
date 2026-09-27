@@ -4,32 +4,35 @@ Parent AGENTS apply. Edit `AGENTS.md`, not its `CLAUDE.md` symlink. Background: 
 
 ## Conversation scrolling
 
-- Reveal only after the first window AND its destination rows are measured and
-  positioned by Virtua; a DOM scroll write alone is not readiness. Transient
-  visible-range reports must not redirect the initial lease. Later loads never hide the view. Restore before paint;
-  hydration re-anchors only while following, using DOM extent, not evictable indices.
+- Only viewport/tail/selection render bodies; other reads keep placeholders.
+- Reveal when data and measured destination agree; ignore early range reports.
+  Reapply cached offsets until reveal; navigation supersedes them.
+  Key readiness/window by `factSource ?? view`; new sources reset both.
+  Restore before paint; hydration follows DOM extent only with the follow lock.
 - Correct content measurements in ResizeObserver before paint, even with unchanged
   row counts; no RAF deferral. Correct Virtua spacer-height commits in MutationObserver
   before deferred resize delivery. Observe spacer height and mounted row geometry
   (which may overflow it), never message subtrees/text or scroll pointer styles. Respect the live follow
   lock and explicit jump suppression.
-- Virtua owns rows, measurement and index navigation; `use-sticky-scroll.ts` adapts
-  `use-stick-to-bottom` to its viewport/content. No content-token effects or upward
-  distance thresholds: real upward wheel, touch, selection or scrollbar movement
-  releases streaming follow immediately.
+- Virtua owns rows and measurement; `use-sticky-scroll.ts` owns the follow mode
+  (`follow`/`anchored`/`free`, [note](../../../../.agents/notes/implemented/architecture/2026-09-23-conversation-follow-modes.md)).
+  Only reader input releases it: upward wheel not consumed by a nested scroller,
+  upward keys, upward scroll with pointer/touch held. Only a downward scroll to the
+  real bottom, an explicit jump or a send re-arms. Observers never change the mode.
 - Bind through the viewport's React callback ref on Virtua's public `Virtualizer`;
   detach on unmount, including empty-to-populated transitions. Never recover it from
   a `VList` handle, DOM query, item-count effect, observer retry or timer.
-- Follow-lock truth is `state.isAtBottom`: the returned `isAtBottom` includes tolerance;
-  `escapedFromLock` records escape history and survives explicit re-locking.
-- Handle viewport HEIGHT changes through ResizeObserver; ignore width-only records.
-  No resize-event pumps, guessed transition durations or stop timers. Before a composer
-  inline-height write, set a one-shot ref consumed only by the next viewport height
-  resize, without `scrollToRealBottom`; keep it separate from jump suppression.
-- Group expansion scrolls after Virtua descendants' layout effects; release suppression
-  in the later parent layout effect of that commit. No frame retries/settle timers.
-- Preserve per-session restoration, search/expansion suppression and viewport resizing
-  for keyboards and terminal docks.
+- Handle viewport HEIGHT changes (composer, keyboard, docks) through ResizeObserver,
+  keeping the mode's position; ignore width-only records. Mark own scrollTop
+  writes. No resize pumps, skip flags or guessed timers.
+- A direct send glides (rAF, retargeted per frame; input stops it) to its row and
+  reserves a reply-room `Virtualizer` sibling; outside `anchored` it only shrinks.
+  Queue/guide sends never scroll.
+- Group toggles never scroll; a non-following reader is never pulled to the end.
+  `keyed` Virtua keeps the reader's row when rows change above; add no second writer.
+  No frame retries/settle timers. Keep per-session restore, search/expand suppression.
+- A cached session renders in the frame after its click: no promise tick,
+  effect-only state or deferred setState before reveal.
 
 ## Session, auth, and app shell
 
@@ -106,15 +109,14 @@ Parent AGENTS apply. Edit `AGENTS.md`, not its `CLAUDE.md` symlink. Background: 
   `resolveAppStoreReviewBlockReason`, plus missing bridge, text entry, interaction
   cancel, hidden app) and is deduplicated per user AND per reason for the process
   lifetime. Keep both bounds when adding a gate.
-- `use-lody-live-activity.ts` throttles the summary INPUT; the bridge debounce cannot do
-  that job. EVERY summary input goes through one leading-edge throttle whose trailing
-  deadline is anchored to the last EMIT; one input left outside it restores starvation.
+- `use-lody-live-activity.ts` throttles the summary INPUT (the bridge debounce cannot):
+  EVERY summary input goes through one leading-edge throttle whose trailing deadline
+  is anchored to the last EMIT; one input left outside it restores starvation.
 - Nothing reaching the payload memo may carry a per-render identity: depend on the
-  permission candidate's key and title, not on the object.
+  permission candidate's key and title.
 - Keep the 250ms bridge debounce.
 - Scan a pending permission request from the UNTHROTTLED list and flush the window, so
-  the alert ships promptly with a summary that contains it; `shownPermissionAlertKeysRef`
-  still shows one alert per candidate key.
+  the alert ships promptly with it; `shownPermissionAlertKeysRef` shows one per key.
 - Compute nothing when the feature is off: `iosLiveActivitiesEnabledAtom` and the
   native iOS shell are BOTH required and are not equivalent. Derive the activity id
   separately from that gate so the disable and unmount paths can still end an activity

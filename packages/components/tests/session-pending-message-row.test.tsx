@@ -204,8 +204,8 @@ describe('PendingMessageRow failure presentation', () => {
       'Continue sending',
     ]);
     // Ghost cancel must not carry the filled primary surface.
-    expect(buttons[0]?.className).not.toContain('bg-primary');
-    expect(buttons[1]?.className).toContain('bg-primary');
+    expect(buttons[0]?.getAttribute('data-variant')).toBe('ghost');
+    expect(buttons[1]?.getAttribute('data-variant')).toBe('primary');
 
     await act(async () => {
       buttons[1]?.click();

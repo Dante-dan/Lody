@@ -42,6 +42,7 @@ import {
   getAcpCapabilityCacheKey,
   normalizeSessionPullRequestMeta,
   getServerNow,
+  shouldRenewAcpCapabilityFetchTime,
   isLoroRepoDocDeleted,
   getMachineFlockAcpCapabilities,
   getMachineFlockProviderSetupCancellations,
@@ -87,6 +88,7 @@ import {
   attachAutoMarkLatestUserHistoryAsRead,
   type AutoMarkLatestUserHistoryAsReadHandle,
 } from './history-auto-read';
+import { attachSessionModelSummary, latestSessionModelFromReader } from './session-model-summary';
 
 import {
   LoroConnectionRecoveryController,
@@ -108,6 +110,7 @@ import { createCliSqliteRepoStore } from './sqlite-repo-store';
 import { streamsRoomBinding, type StreamsRoomBinding } from './streams-room-binding';
 import { formatErrorMessage } from '@/utils/format-error';
 import {
+  findSoleMachineAgentConfig,
   listMergedAgentConfigs,
   readMachineBuiltinAgentOptOuts,
   readMergedAgentConfigById,
@@ -1374,6 +1377,20 @@ export class LoroDocumentManager {
     return false;
   }
 
+  async findSoleAgentConfig(
+    cliType: AgentConfigCliType,
+    agentType: string,
+    machineId: MachineId
+  ): Promise<AgentConfigMeta | undefined> {
+    return await findSoleMachineAgentConfig(
+      this.repo,
+      this.workspaceId,
+      machineId,
+      cliType,
+      agentType
+    );
+  }
+
   /** Managed builtin provider types the user removed on this machine, so they must not be auto-registered at startup. */
   async getBuiltinAgentOptOuts(machineId: MachineId): Promise<Set<ManagedBuiltinAgentType>> {
     return await readMachineBuiltinAgentOptOuts(this.repo, this.workspaceId, machineId);
@@ -1524,7 +1541,7 @@ export class LoroDocumentManager {
     modelReasoningEfforts?: Record<string, string[]>,
     acknowledgedSteer = false,
     goalActions?: SessionGoalAction[],
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal; sessionTitle?: boolean } = {}
   ): Promise<AcpCapabilityCacheEntry> {
     options.signal?.throwIfAborted();
     if (!this.machine) {
@@ -1764,6 +1781,7 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
   private detachDocRoomStatusListener: (() => void) | null = null;
   private readonly docRoomStatusListeners = new Set<(status: RepoTransportRoomStatus) => void>();
   private historyAutoReadHandle: AutoMarkLatestUserHistoryAsReadHandle | null = null;
+  private modelSummary: ReturnType<typeof attachSessionModelSummary> | null = null;
   private destroyed = false;
   /**
    * CRDT-neutral read/write seam over the same doc and the Mirror's one shared
@@ -1799,6 +1817,8 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
    * `init()` calls it with the opened handle; tests call it with a fixture doc.
    */
   composeSessionData(doc: LoroDoc, initialState?: SessionDocInitialState): void {
+    this.modelSummary?.dispose();
+    this.modelSummary = null;
     this.historyAutoReadHandle?.dispose();
     this.historyAutoReadHandle = null;
     this.mirror?.dispose();
@@ -1862,6 +1882,44 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
   }
 
   /**
+   * Project the latest assistant model into catalog metadata. Armed with the
+   * other write observers, never with a temporary snapshot open.
+   */
+  attachModelSummary(): void {
+    if (this.modelSummary) return;
+    this.modelSummary = attachSessionModelSummary(
+      {
+        subscribe: (listener) => {
+          const observation = this.sessionData.history.observe(() => listener());
+          return () => observation.unsubscribe();
+        },
+        latestModel: () => latestSessionModelFromReader(this.sessionData.history),
+      },
+      async (lastModel, active) => {
+        const current = await this.repo.getDocMeta(this.roomId);
+        const meta = current?.meta as SessionMeta | undefined;
+        // Hidden fork targets and deleted sessions must never be published by a projection.
+        if (!active() || !current || isLoroRepoDocDeleted(current) || meta?.id !== this.sessionId)
+          return false;
+        if (JSON.stringify(meta.lastModel) !== JSON.stringify(lastModel)) {
+          await this.repo.upsertDocMeta(this.roomId, { lastModel });
+        }
+        return true;
+      },
+      () =>
+        this.logger.warn(
+          `[${this.sessionId}] Failed to publish model summary; retry on next history change`
+        )
+    );
+    if (this.sessionData.history.count() > 0) void this.modelSummary.sync();
+  }
+
+  /** Re-run the projection once a catalog row the publisher previously skipped exists. */
+  async syncModelSummary(): Promise<void> {
+    await this.modelSummary?.flush();
+  }
+
+  /**
    * The domain seam for session history. Callers express business operations
    * (`appendTurn`, `setTurnField`, `respondPermission`, ...) and never see the
    * Loro doc, the Mirror, or a container id.
@@ -1903,6 +1961,7 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
     // auto-read write policy; normal init arms it and marks the initial turn.
     if (!options.skipAutoRead) {
       this.attachAutoRead();
+      this.attachModelSummary();
       await this.markLatestUserHistoryAsSeenIfNeeded();
     }
     this.remoteSyncReady = this.startDocRoomSync();
@@ -1990,6 +2049,7 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
     // Offline composition is a normal open; arm the auto-read policy that
     // composition no longer owns.
     this.attachAutoRead();
+    this.attachModelSummary();
   }
 
   private async startDocRoomSync(): Promise<void> {
@@ -2841,7 +2901,11 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
       return;
     }
 
+    await this.modelSummary?.flush();
     this.destroyed = true;
+
+    this.modelSummary?.dispose();
+    this.modelSummary = null;
 
     this.historyAutoReadHandle?.dispose();
     this.historyAutoReadHandle = null;
@@ -2901,6 +2965,7 @@ const serializeAcpCapabilityWithoutFetchTime = (entry: AcpCapabilityCacheEntry):
     availableCommands: entry.availableCommands,
     sessionFork: entry.sessionFork,
     acknowledgedSteer: entry.acknowledgedSteer,
+    sessionTitle: entry.sessionTitle,
     sessionForkWorktree: entry.sessionForkWorktree,
   });
 
@@ -2987,7 +3052,7 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
     modelReasoningEfforts?: Record<string, string[]>,
     acknowledgedSteer = false,
     goalActions?: SessionGoalAction[],
-    options: { signal?: AbortSignal } = {}
+    options: { signal?: AbortSignal; sessionTitle?: boolean } = {}
   ): Promise<AcpCapabilityCacheEntry> {
     options.signal?.throwIfAborted();
     const normalizedModes = modes.map((mode) => ({
@@ -3013,6 +3078,7 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
       sessionFork,
       acknowledgedSteer,
       goalActions: goalActions?.length ? goalActions : undefined,
+      sessionTitle: options.sessionTitle,
       sessionForkWorktree: sessionFork,
       modelReasoningEfforts:
         modelReasoningEfforts && Object.keys(modelReasoningEfforts).length > 0
@@ -3029,7 +3095,11 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
     if (
       existing &&
       serializeAcpCapabilityWithoutFetchTime(existing) ===
-        serializeAcpCapabilityWithoutFetchTime(entry)
+        serializeAcpCapabilityWithoutFetchTime(entry) &&
+      // Unchanged content is still rewritten once it is old enough: the refresh
+      // cache trusts `fetchedAt`, and an entry never renewed would expire once
+      // and then miss on every later request, re-probing forever.
+      !shouldRenewAcpCapabilityFetchTime(existing, entry.fetchedAt)
     ) {
       return existing;
     }

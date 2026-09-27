@@ -13,16 +13,8 @@ import {
   type SessionSendExitReason,
 } from '@/lib/session-send-exit';
 import { hasPendingSessionSends } from '@/lib/session-send-journal-storage';
-import { Button } from '@/ui/button';
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/ui/alert-dialog';
+import { Button } from '@lody/ui/button';
+import { AlertDialog } from '@lody/ui/alert-dialog';
 
 const EMPTY: readonly SessionSendRecord[] = [];
 const emptySnapshot = () => EMPTY;
@@ -264,8 +256,8 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
                 {record.error ? <p className="text-xs text-destructive">{record.error}</p> : null}
                 <div className="flex gap-2">
                   <Button
-                    size="sm"
-                    variant="outline"
+                    size="small"
+                    variant="secondary"
                     disabled={busy !== null}
                     onClick={() => {
                       void retry(record);
@@ -275,7 +267,7 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
                   </Button>
                   {record.stage === 'saved' ? (
                     <Button
-                      size="sm"
+                      size="small"
                       variant="ghost"
                       disabled={record.cancelRequested}
                       onClick={() => {
@@ -287,7 +279,7 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
                   ) : null}
                   {record.stage === 'prepared' || record.stage === 'committed' ? (
                     <Button
-                      size="sm"
+                      size="small"
                       variant="destructive"
                       disabled={busy !== null}
                       onClick={() => {
@@ -312,32 +304,27 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
           </ol>
         </details>
       ) : null}
-      <AlertDialog
+      <AlertDialog.Root
         open={exitRequest !== null}
         onOpenChange={(open) => {
           if (!open) finishExit(false);
         }}
       >
-        <AlertDialogContent
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            cancelRef.current?.focus();
-          }}
-        >
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t('sessions.pendingSendExitTitle')}</AlertDialogTitle>
-            <AlertDialogDescription>
+        <AlertDialog.Content initialFocus={cancelRef}>
+          <AlertDialog.Header>
+            <AlertDialog.Title>{t('sessions.pendingSendExitTitle')}</AlertDialog.Title>
+            <AlertDialog.Description>
               {t(
                 destructiveExit
                   ? 'sessions.pendingSendDestructiveExit'
                   : 'sessions.pendingSendRetainedExit'
               )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel ref={cancelRef} onClick={() => finishExit(false)}>
+            </AlertDialog.Description>
+          </AlertDialog.Header>
+          <AlertDialog.Footer>
+            <Button ref={cancelRef} onClick={() => finishExit(false)}>
               {t('sessions.stayWithPendingSends')}
-            </AlertDialogCancel>
+            </Button>
             {destructiveExit ? (
               <Button variant="destructive" onClick={() => finishExit(true)}>
                 {t('sessions.discardPendingSendsAndContinue')}
@@ -347,9 +334,9 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
                 {t('sessions.leaveWithPendingSends')}
               </Button>
             )}
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+          </AlertDialog.Footer>
+        </AlertDialog.Content>
+      </AlertDialog.Root>
     </>
   );
 }

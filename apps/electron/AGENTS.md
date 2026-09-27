@@ -1,9 +1,8 @@
 # Electron contributor guidelines
 
 `CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only.
-Root `AGENTS.md` also applies. Main/preload/renderer module boundaries, IPC
-contracts, and window/renderer integration rules live in
-[`src/AGENTS.md`](src/AGENTS.md) and are read whenever `src/**` changes.
+Root rules apply. For `src/**`, read module, IPC and window contracts in
+[`src/AGENTS.md`](src/AGENTS.md).
 
 ## Local OSS composition
 
@@ -36,6 +35,10 @@ contracts, and window/renderer integration rules live in
 
 ## Build toolchain and window identity
 
+- `desktop-bootstrap` must be the first main import: Nightly chooses its data
+  directory before auth stores open. `desktop-channel` changes desktop identity,
+  never the shared CLI namespace, data root, or Host endpoint.
+
 - Electron 39's Chromium supports native top-level await. Keep renderer and module
   worker builds on native TLA; do not add `vite-plugin-top-level-await` or an
   equivalent full-bundle AST compatibility rewrite. Reprocessing Rollup's complete
@@ -48,8 +51,8 @@ contracts, and window/renderer integration rules live in
 
 ## Embedded CLI and native dependencies
 
-- The embedded CLI launches built JavaScript only; there is no source-loader/Jiti
-  fallback. Development and packaged builds must use the same output layout.
+- The embedded CLI runs built JavaScript, never source-loader/Jiti. Development
+  and packaged builds share the output layout.
 - `better-sqlite3`, `@lydell/node-pty`, and `loro-crdt` remain external and must be
   staged under `resources/cli/node_modules` by `scripts/sync-cli-dist.mjs` and
   `scripts/cli-native-deps.mjs`.
@@ -58,6 +61,11 @@ contracts, and window/renderer integration rules live in
 - Every embedded-CLI descendant launched through `process.execPath` must inherit
   `ELECTRON_RUN_AS_NODE` when it exists. On packaged macOS, omitting it launches a
   second GUI app instead of Node.
+- Those descendants load runtime-installed native addons that carry no Team ID, so
+  macOS nested binaries keep `disable-library-validation` in
+  `build/entitlements.mac.inherit.plist`. Removing it makes every such `dlopen` fail
+  and the host reports only `ACP connection closed`. Top-level app entitlements stay
+  strict.
 - Electron Builder ignores nested staged `node_modules`. `eb-after-pack.mjs` must copy
   them into `app.asar.unpacked`, assert the DeepSeek adapter plus all four pinned
   presets, then probe CLI `--help`, node-pty loading, and a real in-memory SQLite
@@ -107,6 +115,15 @@ contracts, and window/renderer integration rules live in
 - `snap` stays in the target list for local builds and needs snapcraft on the machine.
 
 ## Verification
+
+- Claimed warm windows stay hidden until matching content readiness. Main owns the
+  recovery deadline; do not cover a visible window with a blank surface. Restore
+  background throttling after preparation and replenish the spare after show.
+
+- Cloud browser login is owned by main: PKCE attempts, callback exchange and replay
+  handling must not depend on a renderer. Organization failures never roll back
+  authentication. Windows subscribe then read revisioned snapshots. Contract:
+  [desktop browser login](../../specs/desktop-browser-login.md).
 
 - Run the repository checks after source changes. Packaging/native-dependency changes
   also require the Electron packaging probes for every affected target architecture.

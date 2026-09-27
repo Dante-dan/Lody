@@ -1,5 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { AgentRoleFixture } from '../fixtures/agent-role-fixture.js';
+import { openSidebarArchive } from './sidebar-footer.js';
 
 type SessionMetaEvidence = {
   id?: string;
@@ -83,10 +84,9 @@ export class AgentRolePage {
     const roleMenu = this.page.getByRole('menuitem', { name: /^(Role|角色)(?:\s|$)/u });
     await roleMenu.focus();
     await roleMenu.press('ArrowRight');
-    const roleOption = this.page.getByRole('menuitemradio', {
-      name: this.fixture.roleName,
-      exact: true,
-    });
+    const roleOption = this.page
+      .getByRole('menuitemradio')
+      .filter({ has: this.page.getByText(this.fixture.roleName, { exact: true }) });
     await expect(roleOption).toBeEnabled();
     await roleOption.press('Enter');
     await expect(
@@ -214,7 +214,7 @@ export class AgentRolePage {
     await this.page.getByRole('menuitem', { name: /^(Archive session|归档会话)$/u }).click();
     await expect(this.page).toHaveURL(/#\/local\/chat(?:\?.*)?$/u, { timeout: 30_000 });
     await this.fixture.expectAgentExited(resources.agentPid);
-    await this.page.getByRole('button', { name: /^(Archive|归档)$/u, exact: true }).click();
+    await openSidebarArchive(this.page);
     await expect(this.page).toHaveURL(/#\/local\/archive(?:\?.*)?$/u);
     const archivedRow = this.page.locator(`[data-id="archive-session:${resources.sessionId}"]`);
     await expect(archivedRow).toBeVisible({ timeout: 30_000 });

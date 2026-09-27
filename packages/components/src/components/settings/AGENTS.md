@@ -10,6 +10,15 @@ rolls back — is in the root [AGENTS.md](../../../../../AGENTS.md).
 
 ## Layout and components
 
+- Desktop overlay close is `absolute` on the RIGHT pane only (equal `top`/`right`
+  inset); the pane's in-scroll `padding-right` keeps chrome off that column.
+- Settings style in StyleX from `surface.ts`/`compact-layout.tsx`. The desktop pane
+  header names every page; a page hands it actions and a one-line lead through
+  `settings-page-header.tsx`, never its own title. Groups are flat in `settingsFlat`
+  (pane, project window), else cards. Group by meaning, no one-row groups; a helper
+  says what the label cannot. Split master/detail by fill; type: `type.stylex.ts`.
+- Model pages on Preferences: each line a `CompactRow`, one answer (value, Switch,
+  Select/menu, button); records too (name, state line; more in its menu/detail).
 - `share-management-setting.tsx` lists published static copies via the scoped cloud
   query. Ordinary members see their publications; admins see the workspace inventory.
   Draft uploads are not published shares. Reuse `useSessionShareLinkActions` for
@@ -20,11 +29,20 @@ rolls back — is in the root [AGENTS.md](../../../../../AGENTS.md).
   settings overlay. Rationale:
   [share inventory jump](../../../../../.agents/notes/implemented/feature/2026-09-15-share-inventory-session-jump.md).
 
-- A settings row (`compact-layout.tsx`) is one grid: the label column takes the
-  remaining space and the control column hugs its content. Never size either column
-  from a viewport breakpoint — settings render in a panel far narrower than the window,
-  and the panel clips its overflow, so a `md:`-width label column silently hides the
-  control.
+- Desktop Settings > Projects stacks every source (each machine, then GitHub
+  owners) as a `CompactSection` of ruled project rows. Clicking a project opens
+  a nested project window (header, page tabs) — never inline the editor beside the list.
+  Mobile keeps the previous stacked list. Local-project deletion reuses
+  `useRemoveLocalProject` / `RemoveLocalProjectDialog` (nested overlay like MCP);
+  do not add a second confirm. Pending removal stays listed until the owning
+  machine finishes. Do not RPC-probe worktree/skills on offline remotes, and
+  never surface `machine_rpc_unavailable` as an editor error. The GitHub source
+  row must paint from `lody:githubReposCache` on first frame; do not wait on
+  `listWorkspaceReposWithStatus` to decide whether GitHub exists.
+- A settings row (`compact-layout.tsx`) is one grid: the label column takes the rest,
+  the control column hugs its content. Never size a column from a viewport breakpoint:
+  the panel is narrower than the window and clips overflow, so a `md:` label column
+  hides the control.
 - Agent configuration lives in `agent-config-dialog.tsx` plus `env-vars-textarea.tsx`.
   DeepSeek Harness official vs custom endpoint is dialog form state only: persist
   `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` (official always writes
@@ -33,41 +51,34 @@ rolls back — is in the root [AGENTS.md](../../../../../AGENTS.md).
   add a parallel manual catalog field. Additional env cannot override either connection
   key, and changing endpoint or credential invalidates the dialog's prior live
   verification.
-- Keep optional three.js/R3F usage behind the lazy usage-calendar module so lightweight
-  and SSR consumers do not evaluate its renderer graph.
-- Interface and terminal font choices exclude the known symbol families in
-  `lib/local-fonts.ts`; persisted selections use the same filter. Font option names
-  use the default interface font so they remain readable.
-- Conversation font size uses `conversation-font-size-slider.tsx` on desktop and
-  mobile. Keep the native range input keyboard-free on touch devices and the mobile
-  row stacked; clamping a number input on each keystroke breaks multi-digit editing.
-- The Codex reset forecast chip in the provider row must not fetch on mount and must
-  pass `nestedInDialog` for its dialog: [../codex-reset/AGENTS.md](../codex-reset/AGENTS.md).
-- The usage share card is a fixed-format report, not a second `ChatShareCard`: its two
-  aspects are exact pixel sizes, its period is the page's selected range, and its
-  headline is that range's timeline total, so page and image cannot disagree. Derive
-  every number through `usage-share-stats.ts`, which stamps the metric onto the stats
-  it derives — never pass a metric beside them — so the headline, cells, graphic
-  shading and both splits always read one unit. Money is formatted per slot:
-  `formatUsdCompact` for the headline, `formatUsdTight` for cells and legend rows;
-  never let `truncate` decide, because an ellipsis on a number is a wrong number. Tokens and member
-  anonymity are the defaults; cost substitutes for tokens rather than joining them,
-  and member slices carry display name and avatar only — never an email. Both share cards use the one capture pipeline in `lib/share-image-export.ts`
-  and the one theme pinning in `components/share-theme-scope.ts`; do not fork either.
+- Keep three.js/R3F behind the lazy usage-calendar module so lightweight and SSR
+  consumers never evaluate its renderer graph.
+- Usage day details persist bounded snapshots per auth session, workspace, and
+  date. Reuse for one hour; refresh expired selections without blanking cached
+  data. Preserve auth/capability gates; see [contract](../../../../../specs/usage-detail-cache.md).
+- Interface/terminal fonts exclude symbol families in `lib/local-fonts.ts`; option
+  names stay on the default interface font. Font size is five named tiers writing
+  `--ui-font-size`. Font ligatures is a boolean in the Text group, writing
+  `--lody-font-ligatures` for conversation, code, and tool output.
+- The Codex reset forecast chip in the provider row must not fetch on mount:
+  [../codex-reset/AGENTS.md](../codex-reset/AGENTS.md).
+- The usage share card is a fixed-format report, not a second `ChatShareCard`:
+  exact pixel aspects, period = the page range, headline = that range's total.
+  Derive every number through `usage-share-stats.ts` (stamp the metric on the
+  stats; never pass it beside them). Money: `formatUsdCompact` headline,
+  `formatUsdTight` cells — never `truncate`. Tokens/member anonymity are
+  defaults; cost substitutes for tokens; member slices never include email.
+  Both share cards use `lib/share-image-export.ts` and
+  `components/share-theme-scope.ts`; do not fork either.
   `StatsSettingsView` keeps the entry behind the opt-in `shareCard` prop with a lazy
-  dialog, because the public landing reuses that view. Typography and spacing come
-  from the card's own `TEXT`, `PAD_X`, and `RHYTHM` constants — never a fresh
-  `text-[…]` or an off-grid padding. `PAD_X` binds the footer too, so every band
-  shares one left edge. `ASPECT_SIZE` is the whole exported image including the
-  backdrop, so a framed card is 48px shorter — size the layout against the framed
-  case, and keep every band but the headline `shrink-0` so a card that does not fit
-  overflows visibly instead of eating its own padding. The graphic follows the range —
-  hour skyline, day-by-hour grid, or the 53-week calendar, matching the Usage
-  screen — and every kind must fit the one `GRAPHIC_H` box so card height never
-  depends on range. The space beside the
-  headline number is empty by choice: six attempts to fill it (five brand-mark
-  treatments, one range chart) each either repeated a band below or read as
-  decoration. Leave it alone.
+  dialog, because the public landing reuses that view. Type and spacing come
+  from the card's `TEXT`, `PAD_X`, and `RHYTHM` constants, never fresh `text-[…]`
+  or off-grid padding. `PAD_X` binds the footer too, so every band
+  shares one left edge. `ASPECT_SIZE` includes the backdrop; size against the
+  48px-shorter framed case. Keep every band but the headline `shrink-0`.
+  The graphic follows the range
+  (hour skyline, day-by-hour grid, or 53-week calendar, as on the Usage screen);
+  every kind fits the one `GRAPHIC_H` box so card height never depends on range. Leave the space beside the headline empty.
 
 ## Agent Roles
 
@@ -104,3 +115,5 @@ component details.
   name, then calls the cloud mutation through `account-setting.tsx`. Refresh session
   and active organization after success; cache refresh failure must not claim transfer
   failed. Card changes use the billing Portal separately; transfer keeps the current card.
+
+- Nightly downloads live below Download apps in desktop/Web About.

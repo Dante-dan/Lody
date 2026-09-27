@@ -19,9 +19,9 @@ Contract: specs/session-orchestration.md.
   exists; retries and recovery never reread mutable history.
 - Machine and Provider credentials stay execution-host scoped; attribution, authorization,
   GitHub, and Git identity use the frozen identity, never the Session owner.
-- Git identity: owner prefers machine then requester; others never read machine config.
-  Never restart ACP/sandbox for identity, even in preparations.
-  Use `CloudPort`; reject placeholders.
+- Git: owner uses local config, no profile query; others never read it.
+  `CloudPort` profiles: 60s deadline, retry failures, reject placeholders.
+  Identity never restarts ACP/sandbox, even in prep.
 
 ## Dispatch
 
@@ -93,9 +93,9 @@ Contract: specs/session-orchestration.md.
 - Dispatch and claim rescan the current row and reject changed compatibility under canonical
   `buildSessionLaunchConfig` semantics; a published incompatible resource cleans up first.
 - Nested child Sessions are rejected: ownership resolves one parent hop only.
-- Fork commits at `LoroDocumentManager.persistPendingChanges()`; cloud `waitUntilSynced()` is
-  never a success condition. Persist the target placeholder before ACP; a failed final commit
-  terminates the fork and durably deletes the target.
+- Fork commits at `persistPendingChanges()`, never cloud sync. Persist its placeholder
+  before ACP; failed commits terminate and durably delete the target. Post-commit
+  display projections stay outside compensation.
 - Fork an active source turn only on an advertised `_meta.lody.forkAtTurn = { version: 1 }`, pass
   the adapter's `_meta.lody.turnId` through unchanged as `acpTurnId`, and reuse the source Git
   identity only on an exact requester match. New-worktree forks also require native fork support,

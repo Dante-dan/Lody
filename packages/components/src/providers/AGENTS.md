@@ -12,8 +12,6 @@ again. Contract test: `packages/shared/tests/session-doc-forward-compat.test.ts`
 
 Session docs use `createSessionMirror`; only its HistoryWriter writes history.
 Replacement contract: [shared rules](../../../shared/AGENTS.md#session-history).
-Task-proposal decisions locate the current item by proposal id after store acquisition
-and update only decision fields through HistoryWriter; never replace a rendered entry.
 
 ## Streams connection cardinality
 
@@ -25,9 +23,19 @@ and update only decision fields through HistoryWriter; never replace a rendered 
   live Streams connections.
 - Release any one-shot document handle or subscription that is not already owned by the
   workspace runtime.
+- Startup capability discovery is once per agent config per runtime, recorded in the
+  runtime-owned `refreshedConfigKeys` set. A pass aborted by presence leaving `synced` is
+  re-armed, so a pass-level flag is not the gate: reconnecting must never re-probe a config that
+  already answered, because each probe starts and kills a real agent process. Refresh requests
+  default to the machine's cache; only a user action or a setup/authentication workflow sets
+  `force`. Intent: [capability refresh cache](../../../../specs/acp-capability-refresh-cache.md).
 
 ## Workspace switching
 
+- Prompt Shortcuts instances belong to one initialization effect lifetime. Cleanup
+  must retire the published instance immediately, before asynchronous durable close.
+  Returning to the same account/workspace must never reuse a retired instance;
+  render-time fencing also covers platform, cloud capability, and retry generation.
 - The `$workspaceName` route owns the render-time target slug. Workspace-scoped UI must
   require that target, the active runtime, and the runtime-owned doc-meta snapshot to agree
   before reading singleton caches. Shared visibility and sharing hooks enforce this gate by
@@ -35,8 +43,17 @@ and update only decision fields through HistoryWriter; never replace a rendered 
   projection and disables queries, Machine Flock, sharing, and eager-sync inputs. Provider-
   external consumers such as `RuntimeProvider` retain their existing default behavior. Explicit
   `workspaceId` / `enabled` options remain fenced by the route scope and cannot reopen stale work.
+- Each `resolveWorkspaceDataScope` wait names its `blocker`; keep scan failures on the scope.
+  [Stuck report](../../../../.agents/notes/implemented/feature/2026-09-26-workspace-sync-stuck-telemetry.md).
 
 ## Workspace runtime
+
+- A neutral local warm spare may initialize the implicit workspace runtime without
+  publishing route context. A matching claim must retain that runtime or its in-flight
+  initialization. Do not infer a cloud workspace. Only the main-owned macOS local
+  prepared-window lifecycle may mount a speculative Session; it must gate read
+  receipts, workspace ownership, autofocus and external-history refresh until
+  presentation. Raw background prefetch never gains this exception.
 
 - Background Session prefetch must never acquire a UI Session store or create a
   Mirror. Its disposable worker owns raw Doc import/export and a separate,
@@ -53,6 +70,15 @@ and update only decision fields through HistoryWriter; never replace a rendered 
 - `create-workspace-runtime.ts` maintains one Repo view. `WorkspaceTargetRouter` owns
   target ownership and transport selection; do not restore a second writer or a
   proxy-authoring/write-intent mirror.
+- Local-only window bootstrap may exchange same-workspace CRDT snapshots from
+  already owned documents. Merge into the receiving Repo; never treat peer state
+  as authoritative sync or open stores solely to answer bootstrap requests.
+  Check disk before requesting peer exports; Web Locks inventory bounds requests
+  to live runtimes, and negative replies must release missing-document waits.
+  Seed cold documents before Repo subscribes, persisting the merged snapshot before
+  adoption; storage-loaded versions must be durable before cursor advancement. Never
+  replace a live document. Import before constructing the history reader to avoid
+  replaying bulk-import events through an initialized projection.
 - Repo storage, durable Streams cursors, and eager-sync high-water state must use the
   same per-renderer cache namespace. A checkpoint must never be shared by independently
   persisted Repo views.
@@ -72,9 +98,8 @@ and update only decision fields through HistoryWriter; never replace a rendered 
   force one immediate recovery attempt, but they must preserve the current outage's retry history;
   only a sustained healthy dwell resets backoff. Every attempt after the first is a `recovery`
   phase, including one prompted by a rotated token.
-- Workspace-level rooms without a machine owner use the platform fallback. Task rooms and
-  the Task Index depend on this behavior; returning no transport silently disables task
-  synchronization.
+- Workspace-level rooms without a machine owner use the platform fallback.
+  Returning no transport silently disables synchronization for those rooms.
 - Resource monitoring follows target ownership: local machines use the local monitor
   transport, remote machines use the optional remote transport, and unknown ownership
   remains pending.

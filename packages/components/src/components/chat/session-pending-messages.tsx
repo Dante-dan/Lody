@@ -9,8 +9,8 @@ import { ConversationColumn } from '@/components/shared/conversation-column';
 import type { SessionAttachmentDraft } from '@/lib/session-attachment-draft';
 import type { SessionSendRecord } from '@/lib/session-send-journal';
 import { cn } from '@/lib/utils';
-import { Button } from '@/ui/button';
-import { Progress } from '@/ui/progress';
+import { Button } from '@lody/ui/button';
+import { Progress } from '@lody/ui/progress';
 import { Spinner } from '@/ui/spinner';
 
 const empty: readonly SessionSendRecord[] = [];
@@ -328,12 +328,12 @@ export function PendingMessageRow({
         {showRetry || showCancel ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
             {showCancel ? (
-              <Button size="sm" variant="ghost" onClick={onCancel}>
+              <Button size="small" variant="ghost" onClick={onCancel}>
                 {t('sessions.cancelPendingSend')}
               </Button>
             ) : null}
             {showRetry ? (
-              <Button size="sm" onClick={onRetry}>
+              <Button size="small" onClick={onRetry}>
                 {t('sessions.retryPendingSend')}
               </Button>
             ) : null}

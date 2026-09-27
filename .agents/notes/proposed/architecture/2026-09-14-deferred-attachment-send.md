@@ -192,3 +192,7 @@ row. The reserved row is asserted through a `data-attachment-progress` hook
 because `Progress` merges to the same `h-1 w-full` and is indistinguishable by
 styling alone; jsdom has no layout, so the equal-height property is guarded
 structurally there and measured in the browser.
+
+## Mainline reconciliation (2026-09-27)
+
+Reconciled with main `ef242986`. The mainline composer upload-wait flow is superseded by immediate durable draft admission: the journal owns subsequent transfer. Preserve current routing/queue inversion, scope fencing, duplicate-submit prevention and field-by-field protection of replacement drafts. Updated composer tests assert complete byte snapshots, failed-admission retry, attachment-only submission and blocked states; upload and recovery failures remain covered by preparation/journal suites. Preserve the keyed conversation virtualizer, reply-room scrolling, image peek and current UI primitives. Renderer draining now precedes the existing desktop CLI shutdown barrier; cancellation retains services and CLI shutdown failure retains ownership.

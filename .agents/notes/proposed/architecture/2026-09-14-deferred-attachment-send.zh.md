@@ -136,3 +136,7 @@ Layer 3 validation: full `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes, 
 - “继续发送”是主动作，“取消发送”是 ghost 次动作；二者紧贴消息放在同一行，而不是独立的控制条。
 
 这只是渲染变更，不改变 journal stage、Effect 生命周期、重试/取消语义、顺序或持久化。`PendingMessageRow` 导出为纯组件，使 Storybook 与 `tests/session-pending-message-row.test.tsx` 不需要 workspace runtime 即可驱动所有状态。回归测试已分别删去重复原因和统一 destructive 样式以确认会失败；ready-file fixture 用来覆盖仅有 ready image 看不到的文件卡回归。已用组件 typecheck、`lint:i18n`、oxlint、完整 481 文件/3,684 测试组件套件，以及 720px 和 380px、浅色和深色的 Storybook 截图验证。浏览器中读取过交叉淡入的 `opacity`、`scale`、`filter` 与 `transition-property`，没有靠假设。两次 mutation 最初静默通过，现已有对应断言：消息状态重新着色、以及移除保留进度行。进度行通过 `data-attachment-progress` 断言，因为 `Progress` 最终合并为同样的 `h-1 w-full`，仅靠样式不能区分；jsdom 没有布局，因此等高先用结构性断言守住，再在浏览器中测量。
+
+## 主线整合（2026-09-27）
+
+已整合主线 `ef242986`。主线输入框等待上传的流程改为立即持久接收 draft，后续传输由 journal 管理。保留当前发送路由及 Queue 反转快捷键、作用域隔离、防重复提交，以及逐字段保护后来替换的草稿。输入框测试改为验证完整附件快照、接收失败重试、仅附件发送和阻断状态；传输与恢复失败继续由 preparation/journal 测试覆盖。保留主线按 key 虚拟列表、回复留白滚动、图片预览和当前 UI 组件。renderer 收尾接在现有 CLI 退出屏障之前，取消时服务不停止，CLI 停止失败仍保留所有权。

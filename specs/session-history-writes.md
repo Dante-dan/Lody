@@ -54,8 +54,15 @@ That tolerance must not authorize creating new malformed items locally.
   edits retain existing request information. Identity changes require complete item parsing;
   changed content blocks are parsed separately. Invalid new fields reject the command before any write.
 - New history accepts existing legacy built-in CLI selector normalization without rewriting
-  stored history. Steer config and same-identity task-proposal edits parse only changed fields.
+  stored history. Steer config edits parse only changed fields.
 - Queue promotion removes its queued row only after history acceptance; failed writes retain it.
+- Composer steering requires authoritative ACP support for acknowledged steering,
+  a live prompt, and a known unfinished assistant turn. During activity, a guide
+  preference or inverted queue submission without that support appends to the
+  regular Queue, including when capability information is unavailable or provisional.
+  It retains queue order and editing/removal until normal promotion; it creates no
+  pending-apply history entry and sends no steer request. This routing decision
+  precedes delivery; submitted native steers retain the outcome rules below.
 - Manual Codex compaction owns its native turn through completion. Stop interrupts
   that turn and retains the ACP prompt until `turn/completed` confirms its outcome
   or the provider connection closes. For an in-flight prompt with a ready ACP session,
@@ -67,8 +74,14 @@ That tolerance must not authorize creating new malformed items locally.
   This deadline does not wait for cancel acknowledgement or restart on repeated Stop.
   Failed termination retains ownership until ACP ends. Start and interrupt
   acknowledgements, like compaction-item completion, do not release execution ownership.
-  The CLI persists unresolved compaction as failed after confirmed cancellation,
-  before accepting another turn.
+  Finalizing an assistant turn settles the context-compaction markers it leaves
+  open, on every path and not only after confirmed cancellation: a marker the
+  provider never carried to a terminal status is persisted as failed before
+  another turn is accepted. Markers superseded by a later compaction marker in
+  the same turn are duplicate identities for one compaction episode — an adapter
+  re-announcing a compaction already in flight — and are removed instead, so one
+  episode renders as one row. A provider update that later arrives for the same
+  `toolCallId` still wins.
   Opening a Session does not trigger a history-repair RPC or rewrite old outcomes.
 - A steer adapter reports one final delivery outcome: `applied`, `not-applied`, or
   `unknown`. Only `not-applied` may return the same user turn to ordinary dispatch;
@@ -79,7 +92,9 @@ That tolerance must not authorize creating new malformed items locally.
   from Stop, transport failure, or local ownership state.
 - Stop and target-prompt completion end local document/preparation/configuration/verdict
   waits, releasing the steer queue and rewrite lease. This does not cancel the raw request
-  or discard its verdict. Already-applied ownership transfer finishes atomically; queued
+  or discard its verdict. Exception: a handoff adapter may answer the yielded prompt before
+  reporting a submitted steer's verdict, so its completion waits for that verdict; the
+  steered prompt is the next turn, never cancellation-drain work. Already-applied ownership transfer finishes atomically; queued
   steers must not begin preparation for a stopped target. Failed outcome persistence must
   still release the application lease and permit cancellation cleanup.
 - Execution owns steer status and exact-id recovery activations in `steerTurnStatuses`.

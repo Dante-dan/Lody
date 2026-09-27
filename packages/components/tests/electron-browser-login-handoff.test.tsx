@@ -9,6 +9,8 @@ import { AuthProvider } from '../src/providers/convex-provider';
 import { StableSessionContext } from '../src/hooks/useStableSession';
 import type { LodyAuthClient } from '../src/lib/auth';
 import { initI18n } from '../src/i18n';
+import { Provider, createStore } from 'jotai';
+import { electronLoginErrorAtom, electronLoginPhaseAtom } from '../src/atoms';
 
 // jsdom cannot navigate to a custom scheme, and `window.location.replace` is
 // unforgeable, so the one navigation primitive is replaced. Everything else in
@@ -97,18 +99,22 @@ function readDeepLinkPayload(deepLinkUrl: string): unknown {
 describe('electron browser sign-in handoff', () => {
   let container: HTMLDivElement;
   let root: Root;
+  let store: ReturnType<typeof createStore>;
 
   const renderLoginPage = async (
     authClient: LodyAuthClient,
-    sessionValue: StableSessionValue = createSessionValue(true)
+    sessionValue: StableSessionValue = createSessionValue(true),
+    desktop = false
   ) => {
     await act(async () => {
       root.render(
-        <AuthProvider authClient={authClient}>
-          <StableSessionContext.Provider value={sessionValue}>
-            <LoginPage replaceLocation={() => undefined} />
-          </StableSessionContext.Provider>
-        </AuthProvider>
+        <Provider store={store}>
+          <AuthProvider authClient={authClient}>
+            <StableSessionContext.Provider value={sessionValue}>
+              <LoginPage replaceLocation={() => undefined} isElectronRenderer={desktop} />
+            </StableSessionContext.Provider>
+          </AuthProvider>
+        </Provider>
       );
     });
   };
@@ -137,6 +143,7 @@ describe('electron browser sign-in handoff', () => {
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
+    store = createStore();
   });
 
   afterEach(() => {
@@ -145,6 +152,34 @@ describe('electron browser sign-in handoff', () => {
     document.body.innerHTML = '';
     window.history.replaceState({}, '', '/');
     vi.restoreAllMocks();
+  });
+
+  it('shows the main-process failure and allows a new browser attempt', async () => {
+    window.history.replaceState({}, '', '/login');
+    store.set(electronLoginPhaseAtom, 'error');
+    store.set(electronLoginErrorAtom, 'exchange_timeout');
+    await renderLoginPage(
+      createAuthClient({
+        signInSocial: async () => {
+          store.set(electronLoginPhaseAtom, 'waiting');
+          store.set(electronLoginErrorAtom, null);
+        },
+      }),
+      createSessionValue(false),
+      true
+    );
+    expect(container.textContent).toContain('The sign-in request timed out');
+    await clickButton(/Open browser to sign in/i);
+    expect(container.textContent).toContain('Waiting for browser sign-in');
+    expect(findButton(/Open browser to sign in/i)?.disabled).toBe(false);
+  });
+
+  it('restores exchange progress from the main snapshot on a newly mounted page', async () => {
+    window.history.replaceState({}, '', '/login');
+    store.set(electronLoginPhaseAtom, 'exchanging');
+    await renderLoginPage(createAuthClient({}), createSessionValue(false), true);
+    expect(container.textContent).toContain('Signing you in');
+    expect(findButton(/Open browser to sign in/i)).toBeUndefined();
   });
 
   it('names the browser account and hands nothing over until the user chooses', async () => {
@@ -189,6 +224,36 @@ describe('electron browser sign-in handoff', () => {
     expect(deepLinkNavigations).toEqual([link!.getAttribute('href')]);
     // Switching accounts stays reachable after the code exists.
     expect(findButton(/Use a different account/i)).toBeDefined();
+  });
+
+  it('returns Nightly authorization to Nightly and preserves its PKCE state', async () => {
+    window.history.replaceState({}, '', `/login${ELECTRON_QUERY}&desktop_channel=nightly`);
+    await renderLoginPage(
+      createAuthClient({
+        transferUser: async () => ({ data: { electron_authorization_code: 'nightly-code' } }),
+      })
+    );
+    await clickButton(/Continue with this account/i);
+    const url = handoffLink()?.getAttribute('href');
+    expect(url).toMatch(/^ai\.lody\.nightly:\/\/auth\/callback#token=/);
+    expect(readDeepLinkPayload(url!)).toEqual({ identifier: 'nightly-code', state: 'state-abc' });
+    expect(deepLinkNavigations).toEqual([url]);
+  });
+
+  it('does not offer a desktop handoff for an unrecognized callback channel', async () => {
+    window.history.replaceState(
+      {},
+      '',
+      `/login${ELECTRON_QUERY}&desktop_channel=https%3A%2F%2Fattacker.test`
+    );
+    await renderLoginPage(
+      createAuthClient({
+        transferUser: async () => ({ data: { electron_authorization_code: 'code' } }),
+      })
+    );
+    expect(findButton(/Continue with this account/i)).toBeUndefined();
+    expect(handoffLink()).toBeNull();
+    expect(deepLinkNavigations).toEqual([]);
   });
 
   it('drops a transfer that lands after the user switched accounts', async () => {
