@@ -277,7 +277,9 @@ function attachMainWindowDiagnostics(window: BrowserWindow, recoveryTarget: Relo
       })
       return response
     },
-    reload: () => requestRendererReload(window),
+    reload: () => {
+      void requestRendererReload(window)
+    },
     quit: () => app.exit(1)
   })
   window.on('unresponsive', () => {

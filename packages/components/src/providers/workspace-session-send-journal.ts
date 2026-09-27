@@ -296,13 +296,12 @@ export function createWorkspaceSessionSendJournal(args: {
         await runtime.repo.flush();
         dispatch = offer === 'not-applied';
       }
+      let activate = false;
       if (dispatch) {
         // Recheck under the session delivery lock: UI state can predate another send.
         dispatch = await runtime.sendResources.withSessionStore(
           record.sessionId,
           async (store) => {
-            if ((store.getState().mq ?? []).some((item) => item.userTurnId !== record.id))
-              return false;
             const rows = await store.sessionData.history.readDirectory(
               0,
               await store.sessionData.history.count()
@@ -312,6 +311,12 @@ export function createWorkspaceSessionSendJournal(args: {
               throw new Error('Saved turn is not available for dispatch');
             const status = rows[position]?.scalars?.status;
             if (status && status !== 'pending') return false;
+            // Even when the fast path waits behind another turn, the CLI must
+            // discover this committed input after restart. Legacy/imported
+            // rows can look unfinished here; only the CLI owns dispatch order.
+            activate = true;
+            if ((store.getState().mq ?? []).some((item) => item.userTurnId !== record.id))
+              return false;
             return !rows
               .slice(0, position)
               .some(
@@ -327,12 +332,14 @@ export function createWorkspaceSessionSendJournal(args: {
           signal
         );
       }
-      if (dispatch) {
+      if (activate) {
         await runtime.writer.upsertDocMeta(getSessionRoomId(record.sessionId), {
           latestUserMsgId: record.id,
         });
         await runtime.repo.flush();
         throwIfSendAborted(signal);
+      }
+      if (dispatch) {
         // RPC accelerates already-persisted history; its acknowledgment alone never retires the journal.
         const [synced] = await Promise.allSettled([
           args.waitForTargetSync(record.sessionId, signal),

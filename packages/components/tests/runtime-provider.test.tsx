@@ -11,6 +11,7 @@ const environment = vi.hoisted(() => ({
   workspace: { id: 'local:workspace', slug: 'local' } as { id: string; slug: string } | null,
 }));
 vi.mock('@/atoms', () => ({
+  userAtom: atom({ id: 'local:user' }),
   currentWorkspaceSlugAtom: atom<string | null>(null),
   currentWorkspaceIdAtom: atom<string | null>(null),
 }));
@@ -54,6 +55,7 @@ vi.mock('@/providers/local-platform-provider', () => ({
   useImplicitLocalWorkspace: () => environment.workspace,
   getLocalWorkspaceSlug: (workspace: { slug: string }) => workspace.slug,
 }));
+vi.mock('../src/components/chat/session-send-recovery', () => ({ SessionSendRecovery: () => null }));
 vi.mock('@/providers/create-workspace-runtime', () => ({ createWorkspaceRuntime: vi.fn() }));
 
 import { RuntimeProvider } from '../src/providers/runtime-provider';
