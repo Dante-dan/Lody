@@ -51,3 +51,7 @@ access without a new capability/security decision in the owning
   `installNavigationGuard` in `window.ts`: `will-navigate` does not fire for a
   server-side 3xx, so a public page redirecting to loopback would otherwise
   commit here and never reach Managed Preview.
+
+Send lifecycle registrations belong to the renderer document. Confirmed process exit
+or committed main-frame navigation retires its requests; a timeout never proves
+that a live owner is gone. Recovery pages must remain reloadable.

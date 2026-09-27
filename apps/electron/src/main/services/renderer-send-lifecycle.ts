@@ -7,21 +7,30 @@ import { productWindows } from '../window-state'
 
 type Reply = { ready: boolean; pending: boolean }
 const registered = new Set<number>()
+const observed = new WeakSet<BrowserWindow['webContents']>()
 const requests = new Map<string, { senderId: number; resolve: (reply: Reply) => void }>()
 
 export function registerRendererSendLifecycle(window: BrowserWindow): void {
   const id = window.webContents.id
   if (registered.has(id)) return
   registered.add(id)
-  window.webContents.once('destroyed', () => {
+  if (observed.has(window.webContents)) return
+  observed.add(window.webContents)
+  const retireDocument = () => {
     registered.delete(id)
     for (const [requestId, request] of requests) {
       if (request.senderId === id) {
         requests.delete(requestId)
-        request.resolve({ ready: false, pending: true })
+        request.resolve({ ready: true, pending: false })
       }
     }
-  })
+  }
+  // A crash or committed main-frame navigation ends this document's ownership
+  // without destroying WebContents. The recovery page has no send listener.
+  // Timeouts never retire a live document; a new product document registers again.
+  window.webContents.on('render-process-gone', retireDocument)
+  window.webContents.on('did-navigate', retireDocument)
+  window.webContents.once('destroyed', retireDocument)
 }
 
 export function resolveRendererSendLifecycle(senderId: number, input: unknown): void {

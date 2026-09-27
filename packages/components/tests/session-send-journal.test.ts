@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LoroDoc } from 'loro-crdt';
 import { createHistoryWriter, type SessionHistory, type SessionId } from '@lody/shared';
 import {
@@ -323,3 +323,52 @@ it('records the replica that actually prepared operations when another window ta
   expect((await f.ports.storage.list())[0]?.sourceReplica).toBe('executor-replica');
   expect(f.writer.readStored().map((turn) => turn.id)).toEqual(['cross-window']);
 });
+
+
+it.each(['seen', undefined] as const)(
+  'durably wakes an idle imported conversation past legacy status %s',
+  async (status) => {
+    const { IDBFactory } = await import('fake-indexeddb');
+    const { createWorkspaceSessionSendJournal } = await import('../src/providers/workspace-session-send-journal');
+    const { createConversationSession } = await import('../src/lib/conversation-view');
+    const { shouldWatchSession, findNextDispatchableUserTurn } = await import('../../../apps/cli/src/session/session-dispatch-logic');
+    vi.stubGlobal('indexedDB', new IDBFactory());
+    vi.stubGlobal('BroadcastChannel', undefined);
+    vi.stubGlobal('navigator', { locks: { request: async (_key: string, _options: unknown, run: () => Promise<unknown>) => run() } });
+    const doc = new LoroDoc();
+    const session = createConversationSession(doc, { sessionId: 'session' as SessionId });
+    session.historyWriter.append({ ...record('builtin:codex:imported:turn:0:old').entry, status, read: true });
+    session.historyWriter.append({ ...record('answer').entry, role: 'assistant', finished: true });
+    const meta = {
+      id: 'session', machineId: 'machine', userId: 'account', status: { type: 'idle' },
+      externalHistory: { provider: { cliType: 'builtin', agentType: 'codex' }, source: 'local-acp-history', sourceAcpSessionId: 'imported' },
+    } as import('@lody/shared').SessionMeta;
+    const store = { doc, sessionData: session.sessionData, history: session.history, getState: () => session.mirror.getState() };
+    const resources = createSessionSendResources({ acquire: async () => store as never, releaseRef: () => {} });
+    let synchronizedMeta: typeof meta | undefined;
+    const journal = createWorkspaceSessionSendJournal({
+      accountId: 'account', sourceReplica: 'original',
+      runtime: {
+        workspaceId: 'workspace', sendResources: resources,
+        repo: { getDocMeta: async () => ({ meta }), flush: async () => {} },
+        writer: { upsertDocMeta: async (_room: string, patch: object) => Object.assign(meta, patch) },
+        requestSessionDispatchTurn: async () => { throw new Error('Must use durable activation behind legacy history'); },
+      } as never,
+      waitForTargetSync: async () => { synchronizedMeta = structuredClone(meta); },
+    });
+    try {
+      await journal.accept({ ...record('next'), entry: { ...record('next').entry, userId: 'account', status: 'pending', inputConfig: { cliType: 'builtin', agentType: 'codex', inputBlocks: [{ type: 'text', text: 'follow up' }] } } });
+      await journal.retry('session' as SessionId);
+      expect((await journal.read('next'))?.stage).toBe('delivered');
+      expect(synchronizedMeta?.latestUserMsgId).toBe('next');
+      expect(shouldWatchSession({ meta: synchronizedMeta!, hasUnprocessedCancelRequest: false, hasRpcTurnOffer: false, hasAccessRetry: false })).toBe(true);
+      expect(findNextDispatchableUserTurn(session.historyWriter.readStored(), synchronizedMeta!)?.id).toBe('next');
+    } finally {
+      await resources.dispose();
+      await journal.close();
+      session.dispose();
+      doc.free();
+      vi.unstubAllGlobals();
+    }
+  }
+);

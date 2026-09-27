@@ -114,3 +114,5 @@ Layer 3 validation: full `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes, 
 资源层整合保留主线的目标同步与 workspace 销毁顺序。作用域所有权规则在不改变保证的前提下压缩，以满足 AGENTS.md 大小限制。
 
 桌面整合先收尾 renderer，再进入现有 CLI 退出屏障；取消时服务不停止，CLI 停止失败仍保留所有权。恢复对话框使用当前 UI 组件。journal、queue-steer、writer 和会话动作共 91 项测试通过，退出顺序与取消测试通过。
+
+Review 修正：普通消息进入历史后，即使旧历史或队列暂时阻止 RPC 快速投递，也会先持久化唤醒标记再同步。历史分类和执行顺序仍归 CLI 管理，旧的导入 `seen` 行不会再让空闲会话漏掉后续消息。Electron 发送注册属于具体渲染文档，不属于复用的 WebContents；确认进程退出或文档导航完成后结束旧请求，仅超时仍阻止退出，新产品文档需要重新注册。回归测试覆盖真实 Loro 历史、journal 落盘与 CLI 监听判断，以及原生事件到实际重载入口；尚未完成打包应用的崩溃注入验收。

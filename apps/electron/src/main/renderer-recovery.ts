@@ -88,9 +88,9 @@ function loadTarget(window: BrowserWindow, target: ReloadTarget): Promise<void> 
   return window.loadFile(target.filePath, target.hash ? { hash: target.hash } : undefined)
 }
 
-export function requestRendererReload(window: BrowserWindow): void {
-  if (window.isDestroyed()) return
-  void prepareRendererSendsForExit('reload', window)
+export function requestRendererReload(window: BrowserWindow): Promise<void> {
+  if (window.isDestroyed()) return Promise.resolve()
+  return prepareRendererSendsForExit('reload', window)
     .then((allowed) => {
       if (allowed && !window.isDestroyed()) reloadRendererAfterCleanup(window)
     })

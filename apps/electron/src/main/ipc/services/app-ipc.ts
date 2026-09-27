@@ -558,6 +558,6 @@ export class AppIpc extends IpcService {
   async requestRendererReload() {
     const { event } = getIpcContext()
     const window = findWindow(event.sender)
-    if (window) requestRendererReload(window)
+    if (window) await requestRendererReload(window)
   }
 }

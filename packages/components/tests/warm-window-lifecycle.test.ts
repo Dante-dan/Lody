@@ -6,8 +6,11 @@ const nativeState = vi.hoisted(() => ({ windows: new Map<number, unknown>(), nex
 // Resolve Electron from its owning app; components does not depend on Electron at runtime.
 vi.mock('../../../apps/electron/node_modules/electron', () => ({
   app: { focus() {} },
+  dialog: { showMessageBox: async () => ({ response: 0 }) },
   BrowserWindow: { fromId: (id: number) => nativeState.windows.get(id) ?? null },
 }));
+
+import { registerRendererSendLifecycle, prepareRendererSendsForExit } from '../../../apps/electron/src/main/services/renderer-send-lifecycle';
 
 import {
   getMainWindow,
@@ -83,6 +86,7 @@ class NativeWindow extends EventEmitter {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+    this.webContents.emit('destroyed');
     this.emit('closed');
     nativeState.windows.delete(this.id);
   }
@@ -215,7 +219,7 @@ describe('claimed warm window lifecycle', () => {
 
   it.each([{ workspace: 'work', sessionId: 'session-1' }, { workspace: 'work' }])(
     'recovers the adopted target instead of reentering warm mode: %j',
-    (target) => {
+    async (target) => {
       const window = new NativeWindow();
       registerProductWindow(window.native, true);
       setReloadTarget(window.native, {
@@ -229,7 +233,7 @@ describe('claimed warm window lifecycle', () => {
         filePath: '/synthetic/index.html',
         hash: path,
       });
-      requestRendererReload(window.native);
+      await requestRendererReload(window.native);
       const route = new URL(path, 'https://synthetic.invalid');
       expect(route.searchParams.has('warm')).toBe(false);
       expect(route.pathname).toBe('sessionId' in target ? '/work/sessions/session-1' : '/work');
@@ -399,5 +403,28 @@ describe('macOS prepared targets', () => {
     spare.webContents.emit('render-process-gone');
     expect(spare.visible).toBe(true);
     expect(spare.destroyed).toBe(false);
+  });
+});
+
+
+describe('send ownership across renderer replacement', () => {
+  it.each(['render-process-gone', 'did-navigate'])('permits recovery after %s, but protects the replacement once registered', async (event) => {
+    vi.useFakeTimers();
+    const window = new NativeWindow();
+    registerProductWindow(window.native, false);
+    setReloadTarget(window.native, { type: 'file', filePath: '/synthetic/index.html' });
+    window.webContents.send = () => {}; // Recovery document has no send listener.
+    registerRendererSendLifecycle(window.native);
+    const waiting = prepareRendererSendsForExit('reload', window.native);
+    window.webContents.emit(event);
+    expect(await waiting).toBe(true);
+    await requestRendererReload(window.native);
+    expect(window.loaded).toEqual({ filePath: '/synthetic/index.html' });
+    expect(await prepareRendererSendsForExit('quit', window.native)).toBe(true);
+    expect(await prepareRendererSendsForExit('close', window.native)).toBe(true);
+    registerRendererSendLifecycle(window.native);
+    const liveButUnresponsive = prepareRendererSendsForExit('quit', window.native);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await liveButUnresponsive).toBe(false);
   });
 });

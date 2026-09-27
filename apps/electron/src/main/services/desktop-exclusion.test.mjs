@@ -100,7 +100,7 @@ void test('quit waits for execution exit, retains ownership on failure, and allo
     },
     quit: () => {
       finalQuitPrevented = false
-      handler({
+      void handler({
         preventDefault() {
           finalQuitPrevented = true
         }
@@ -110,21 +110,21 @@ void test('quit waits for execution exit, retains ownership on failure, and allo
     reportFailure: (error) => failed.resolve(error)
   })
   let prevented = false
-  handler({
+  void handler({
     preventDefault() {
       prevented = true
     }
   })
   assert.equal(prevented, true)
   // Repeated quit must share the pending shutdown instead of running it twice.
-  handler({ preventDefault() {} })
+  void handler({ preventDefault() {} })
   const error = new Error('CLI still alive')
   stopped.reject(error)
   assert.equal(await failed.promise, error)
   assert.equal(finalQuitPrevented, undefined)
   assert.equal(stopCalls, 1)
   stopping = Promise.resolve()
-  handler({ preventDefault() {} })
+  void handler({ preventDefault() {} })
   await quit.promise
   assert.equal(finalQuitPrevented, false)
 })
@@ -159,7 +159,7 @@ void test('quit cancellation preserves services and a later attempt drains rende
   await attempt
   assert.deepEqual(order, ['prepare'])
   allow = true
-  handler({ preventDefault() {} })
+  void handler({ preventDefault() {} })
   await quit.promise
   assert.deepEqual(order, ['prepare', 'prepare', 'stop', 'quit'])
 })
