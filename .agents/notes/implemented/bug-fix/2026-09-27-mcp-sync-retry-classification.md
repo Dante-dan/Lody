@@ -17,4 +17,4 @@ The change types the machine document sync boundary, recognizes the exact fetch 
 
 ## Verification and limits
 
-The regression tests cover the machine document boundary and MCP error payloads. No live network outage was reproduced. The existing #398 PR separately changes whether two local-project freshness reads should block session creation; this note concerns classification when a sync is required and fails.
+The regression tests cover the machine document boundary, MCP error payloads, and preacceptance retry advice. No live network outage was reproduced. The separate issue #398 concerns whether local-project freshness reads should block session creation; this note concerns classification when a sync is required and fails.
