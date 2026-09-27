@@ -107,7 +107,7 @@ public-boundary 检查及文档检查分别通过。已运行 `pnpm format` 并�
 
 第三层正在实现。为关闭“已追加历史但磁盘确认丢失”的窗口，在同一个 HistoryWriter 抽象内先在临时 fork 准备操作，保存原副本名称及原始操作字节，然后才导入当前文档。重启重放相同操作，不重新 append。先 flush 原副本以保留操作依赖；跨窗口恢复先读取原副本，缺失时保留记录并停止，不以新窗口的空历史推断未发送。真实 Loro 测试已覆盖两副本重复重放、缺失依赖与校验失败；运行时、退出、UI 以及完整 IndexedDB 验证仍未接完，不能发布这一层。
 
-Layer 3 validation: full `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes, including 479 component files / 3,670 tests. Queue preparation uses the existing WorkspaceWriter and retains queue format. 原生 queue-steer 保留 queued journal 的身份，但会先将已经投递的 queue 操作提升回已保存的 history 工作；history turn 已持久准备并提交后，才能删除 queue 行或开始 guide 投递。prepared 或 committed 记录只能在披露后显式丢弃；退出登录/清缓存会写入强制清理标记，并在下次启动时实际删除恢复数据库。被恢复记录阻挡的非强制清理会保留请求，但不会阻止 runtime 初始化；一次性 native reset 请求也会在延后前复制为本地启动标记。`pnpm format` and docs check completed; docs report zero errors. No packaged-device acceptance is claimed.
+Layer 3 validation: full `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes, including 479 component files / 3,670 tests. Queue preparation uses the existing WorkspaceWriter and retains queue format. 原生 queue-steer 保留 queued journal 的身份，但会先将已经投递的 queue 操作提升回已保存的 history 工作；删除 queue 行前，完整的 history 意图已经持久保存；guide 投递前才完成 history turn 的准备和提交。删除 queue 行到 history 提交之间崩溃时，从该已保存意图恢复。prepared 或 committed 记录只能在披露后显式丢弃；退出登录/清缓存会写入强制清理标记，并在下次启动时实际删除恢复数据库。被恢复记录阻挡的非强制清理会保留请求，但不会阻止 runtime 初始化；一次性 native reset 请求也会在延后前复制为本地启动标记。`pnpm format` and docs check completed; docs report zero errors. No packaged-device acceptance is claimed.
 
 ## 第四层实现
 
@@ -115,7 +115,7 @@ Layer 3 validation: full `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes, 
 
 预热取消等待原启动及清理结束。持久化取消保护跨窗口迟到结果，取消第一条消息会把建会话信息交给下一条；后续接管也保存该信息，覆盖取消与下一条保存同时发生的情况。version 2 阻止旧读取器发送不完整输入；与操作一起保存实际准备窗口的副本标识。已经结束的 Guide 目标改为后续输入；先前提交结果未知时只核对，不再次 offer。
 
-待发送展示属于对话消息流，不能另做恢复卡片或输入框队列。点击发送后，新对话立即打开，已有对话留在当前页。在 history 可提交前，本机待发送记录按普通、右对齐的用户消息行渲染：附件预览/卡片各自显示准备或上传进度，消息行说明正在等待发送；失败仍保留同一行并提供重试/取消。这样用户始终在原消息上下文中看到状态，不会看到同一条输入被拆到无关的第二个区域。
+待发送的主要展示属于对话消息流，工作区恢复面板保留为次要总览。点击发送后，新对话立即打开，已有对话留在当前页。在 history 可提交前，本机待发送记录按普通、右对齐的用户消息行渲染：附件预览/卡片各自显示准备或上传进度，消息行说明正在等待发送；失败仍保留同一行并提供重试/取消。中断准备的重试、取消和带披露的丢弃入口都放在消息行内，在移动端抽屉中也可访问。
 
 验证：最终 `TMPDIR=/private/tmp NODE_ENV=test pnpm check` 通过，含 480 个组件测试文件、3,677 项测试；随后资源与预热定向测试 9 项及组件类型检查通过，覆盖空闲预热不触发未保存输入提示。重排及并发接管修正后，定向测试 60 项和组件类型检查通过。根格式化、组件 Prettier 和文档检查完成，文档零错误。打包设备、多窗口真实网络及原生移动壳尚未验收；本文仍为 proposed，不推断人工批准。
 
@@ -152,3 +152,8 @@ Review 修正：普通消息进入历史后，即使旧历史或队列暂时阻�
 ## CI 测试生命周期
 
 移动端 opened-by 列表测试在渲染、折叠交互和卸载时等待 React `act`，并仅在每个测试期间启用 act 环境。这样会在 jsdom 销毁前处理完 React 工作，不再依赖 `flushSync` 或固定延时；已有断言仍验证真实列表及共享折叠状态。此栈同时接入主分支的日志测试清理修复：等待文件 transport 的 finish 事件后再删除临时目录。这些修改只明确测试资源的归属，不改变附件或产品行为。
+原生退出的批准状态仅属于当前 document：renderer 在 runtime 清理完成后解除 beforeunload 阻止，主进程仅在该 document 确认清理成功后覆盖卸载阻止。导航或崩溃会清除批准状态；清理失败、迟到回复不能批准卸载。检查回复和 beforeunload 使用相同的待发判断，包含恢复错误。普通和忽略缓存的菜单/键盘重载共用此守卫。行为测试覆盖保留记录时的检查、清理和卸载，以及 Stay、清理失败、迟到回复和 document 更换。
+
+每个账号/工作区的恢复存储允许 100 条未完成消息，消息元数据与已准备 CRDT 操作共用 128 MiB 预算。附件源 Blob 沿用既有文件/图片大小与数量限制，并受浏览器实际 IndexedDB 配额约束；不占用元数据预算，也不额外降低单条消息上限。存储事务失败时保留输入框草稿。全部附件都有成功回执后，在同一次检查点持久化最终输入并释放源 Blob；仍有准备任务需要重试时保留源数据。
+
+根据本窗口活跃任务以及同账号/工作区的 Web Locks（含等待锁的执行者）判断恢复状态，不持久化忙碌标志。启动、进入会话和回到前台时刷新，读取记录不会自动发送旧消息。桌面和移动端的中断消息行内提供“继续发送”；prepared 记录还提供带披露的丢弃入口，因为消息可能已经进入历史。工作区恢复面板仅作为次要总览，不再是唯一恢复入口。

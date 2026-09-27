@@ -10,7 +10,8 @@ import type { PendingFile, PendingImage } from '../atoms/chat-landing-draft';
 export type SessionAttachmentDraft = {
   id: string;
   kind: 'image' | 'file';
-  source: Blob;
+  /** Released only when a durable ready receipt replaces every source. */
+  source?: Blob;
   name: string;
   mimeType: string;
   lastModified: number;

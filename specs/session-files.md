@@ -198,6 +198,10 @@ Cancellation or safe handoff releases pending source Blobs/object URLs once no u
 
 Storage eviction, disk damage, user clearing, and forced process termination are outside an unconditional recovery guarantee. Recovery must not disclose signed-out account content to another account. Privacy clearing and unresolved submissions require explicit user choices.
 
+Recovery storage permits 100 unfinished messages and 128 MiB of message metadata plus prepared CRDT operations per account/workspace. Attachment source Blobs use the existing per-file/image size and count limits and the browser's actual IndexedDB quota; they do not consume the metadata budget or introduce a smaller per-message limit. A failed storage transaction preserves the composer. After every attachment has a ready receipt, persist the final input and release source Blobs in the same checkpoint; retain source bytes while any preparation still needs retry.
+
+Preparation-stage recovery is classified from live local work and the same account/workspace Web Locks (including waiting executors), never a persisted busy flag. Refresh on startup, conversation entry and foreground return; observing a record must not start old messages. An interrupted message has an inline Continue sending action on desktop and mobile; prepared records additionally offer disclosed discard because history publication may already have happened. A workspace recovery panel remains a secondary overview, not the only recovery entry point.
+
 ## 10. Acceptance criteria
 
 These are implementation acceptance requirements, not product tests completed by this change. Use synthetic files, controllable Promises, fault injection, and actual transport observation rather than user attachments or sleep races.

@@ -10,7 +10,10 @@ import {
 import { prepareSessionFile } from './session-file-preparation';
 import { uploadSessionImage } from './session-image-upload';
 import { isUploadAbortedError } from './session-file-upload';
-import { canUseElectronLocalFileSend, sendSessionFileToLocalRuntime } from './electron-session-file-sender';
+import {
+  canUseElectronLocalFileSend,
+  sendSessionFileToLocalRuntime,
+} from './electron-session-file-sender';
 import { throwIfSendAborted, type SessionSendResources } from './session-send-resources';
 import { preparedDraftInput } from './session-attachment-draft';
 import type { SessionSendRecord } from './session-send-journal';
@@ -35,6 +38,7 @@ export async function prepareDraftAttachments(args: {
     if (attachment.ready) continue;
     throwIfSendAborted(args.signal);
     try {
+      if (!attachment.source) throw new Error('Attachment source is unavailable');
       const file = new File([attachment.source], attachment.name, {
         type: attachment.mimeType,
         lastModified: attachment.lastModified,
@@ -60,21 +64,34 @@ export async function prepareDraftAttachments(args: {
         } catch (error) {
           throwIfSendAborted(args.signal);
           const machineId = args.record.targetMachineId;
-          const fileCount = normalizeSessionInputBlocks(args.record.entry.inputConfig?.inputBlocks, '')
-            .filter((block) => block.type === 'file').length +
-            attachments.filter((item) => item.kind === 'file' || item.ready?.type === 'file').length;
+          const fileCount =
+            normalizeSessionInputBlocks(args.record.entry.inputConfig?.inputBlocks, '').filter(
+              (block) => block.type === 'file'
+            ).length +
+            attachments.filter((item) => item.kind === 'file' || item.ready?.type === 'file')
+              .length;
           // Keep the existing same-machine image fallback. Cancellation, remote
           // targets and a full file allowance never authorize a local transfer.
-          if (isUploadAbortedError(error) || !machineId || machineId !== args.localMachineId() ||
-              !canUseElectronLocalFileSend() || fileCount >= SESSION_FILE_MAX_COUNT) throw error;
+          if (
+            isUploadAbortedError(error) ||
+            !machineId ||
+            machineId !== args.localMachineId() ||
+            !canUseElectronLocalFileSend() ||
+            fileCount >= SESSION_FILE_MAX_COUNT
+          )
+            throw error;
           try {
-            const outcome = await args.resources.run((signal) => sendSessionFileToLocalRuntime({
-              workspaceId: args.record.workspaceId,
-              sessionId: args.record.sessionId,
-              machineId,
-              file,
-              signal,
-            }), args.signal);
+            const outcome = await args.resources.run(
+              (signal) =>
+                sendSessionFileToLocalRuntime({
+                  workspaceId: args.record.workspaceId,
+                  sessionId: args.record.sessionId,
+                  machineId,
+                  file,
+                  signal,
+                }),
+              args.signal
+            );
             if (!outcome?.ok || !outcome.files[0]) throw error;
             ready = outcome.files[0];
           } catch {
@@ -123,7 +140,7 @@ export async function prepareDraftAttachments(args: {
   const inputBlocks = preparedDraftInput(args.record.entry.inputConfig, attachments);
   const inputConfig = { ...args.record.entry.inputConfig, inputBlocks };
   await args.checkpoint({
-    attachments,
+    attachments: attachments.map((item) => ({ ...item, source: undefined })),
     entry: { ...args.record.entry, items: inputBlocksToHistoryItems(inputBlocks), inputConfig },
     ...(args.record.queue
       ? {

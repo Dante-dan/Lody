@@ -332,45 +332,100 @@ it('records the replica that actually prepared operations when another window ta
   expect(f.writer.readStored().map((turn) => turn.id)).toEqual(['cross-window']);
 });
 
-
 it.each(['seen', undefined] as const)(
   'durably wakes an idle imported conversation past legacy status %s',
   async (status) => {
     const { IDBFactory } = await import('fake-indexeddb');
-    const { createWorkspaceSessionSendJournal } = await import('../src/providers/workspace-session-send-journal');
+    const { createWorkspaceSessionSendJournal } =
+      await import('../src/providers/workspace-session-send-journal');
     const { createConversationSession } = await import('../src/lib/conversation-view');
-    const { shouldWatchSession, findNextDispatchableUserTurn } = await import('../../../apps/cli/src/session/session-dispatch-logic');
+    const { shouldWatchSession, findNextDispatchableUserTurn } =
+      await import('../../../apps/cli/src/session/session-dispatch-logic');
     vi.stubGlobal('indexedDB', new IDBFactory());
     vi.stubGlobal('BroadcastChannel', undefined);
-    vi.stubGlobal('navigator', { locks: { request: async (_key: string, _options: unknown, run: () => Promise<unknown>) => run() } });
+    vi.stubGlobal('navigator', {
+      locks: {
+        request: async (_key: string, _options: unknown, run: () => Promise<unknown>) => run(),
+      },
+    });
     const doc = new LoroDoc();
     const session = createConversationSession(doc, { sessionId: 'session' as SessionId });
-    session.historyWriter.append({ ...record('builtin:codex:imported:turn:0:old').entry, status, read: true });
+    session.historyWriter.append({
+      ...record('builtin:codex:imported:turn:0:old').entry,
+      status,
+      read: true,
+    });
     session.historyWriter.append({ ...record('answer').entry, role: 'assistant', finished: true });
     const meta = {
-      id: 'session', machineId: 'machine', userId: 'account', status: { type: 'idle' },
-      externalHistory: { provider: { cliType: 'builtin', agentType: 'codex' }, source: 'local-acp-history', sourceAcpSessionId: 'imported' },
+      id: 'session',
+      machineId: 'machine',
+      userId: 'account',
+      status: { type: 'idle' },
+      externalHistory: {
+        provider: { cliType: 'builtin', agentType: 'codex' },
+        source: 'local-acp-history',
+        sourceAcpSessionId: 'imported',
+      },
     } as import('@lody/shared').SessionMeta;
-    const store = { doc, sessionData: session.sessionData, history: session.history, getState: () => session.mirror.getState() };
-    const resources = createSessionSendResources({ acquire: async () => store as never, releaseRef: () => {} });
+    const store = {
+      doc,
+      sessionData: session.sessionData,
+      history: session.history,
+      getState: () => session.mirror.getState(),
+    };
+    const resources = createSessionSendResources({
+      acquire: async () => store as never,
+      releaseRef: () => {},
+    });
     let synchronizedMeta: typeof meta | undefined;
     const journal = createWorkspaceSessionSendJournal({
-      accountId: 'account', sourceReplica: 'original', token: () => null, localMachineId: () => null,
+      accountId: 'account',
+      sourceReplica: 'original',
+      token: () => null,
+      localMachineId: () => null,
       runtime: {
-        workspaceId: 'workspace', sendResources: resources,
+        workspaceId: 'workspace',
+        sendResources: resources,
         repo: { getDocMeta: async () => ({ meta }), flush: async () => {} },
-        writer: { upsertDocMeta: async (_room: string, patch: object) => Object.assign(meta, patch) },
-        requestSessionDispatchTurn: async () => { throw new Error('Must use durable activation behind legacy history'); },
+        writer: {
+          upsertDocMeta: async (_room: string, patch: object) => Object.assign(meta, patch),
+        },
+        requestSessionDispatchTurn: async () => {
+          throw new Error('Must use durable activation behind legacy history');
+        },
       } as never,
-      waitForTargetSync: async () => { synchronizedMeta = structuredClone(meta); },
+      waitForTargetSync: async () => {
+        synchronizedMeta = structuredClone(meta);
+      },
     });
     try {
-      await journal.accept({ ...record('next'), entry: { ...record('next').entry, userId: 'account', status: 'pending', inputConfig: { cliType: 'builtin', agentType: 'codex', inputBlocks: [{ type: 'text', text: 'follow up' }] } } });
+      await journal.accept({
+        ...record('next'),
+        entry: {
+          ...record('next').entry,
+          userId: 'account',
+          status: 'pending',
+          inputConfig: {
+            cliType: 'builtin',
+            agentType: 'codex',
+            inputBlocks: [{ type: 'text', text: 'follow up' }],
+          },
+        },
+      });
       await journal.retry('session' as SessionId);
       expect((await journal.read('next'))?.stage).toBe('delivered');
       expect(synchronizedMeta?.latestUserMsgId).toBe('next');
-      expect(shouldWatchSession({ meta: synchronizedMeta!, hasUnprocessedCancelRequest: false, hasRpcTurnOffer: false, hasAccessRetry: false })).toBe(true);
-      expect(findNextDispatchableUserTurn(session.historyWriter.readStored(), synchronizedMeta!)?.id).toBe('next');
+      expect(
+        shouldWatchSession({
+          meta: synchronizedMeta!,
+          hasUnprocessedCancelRequest: false,
+          hasRpcTurnOffer: false,
+          hasAccessRetry: false,
+        })
+      ).toBe(true);
+      expect(
+        findNextDispatchableUserTurn(session.historyWriter.readStored(), synchronizedMeta!)?.id
+      ).toBe('next');
     } finally {
       await resources.dispose();
       await journal.close();
@@ -380,3 +435,94 @@ it.each(['seen', undefined] as const)(
     }
   }
 );
+
+describe('interrupted work observation', () => {
+  it('does not start recovered messages and distinguishes another window owner', async () => {
+    const external = new Set<string>();
+    const f = fixture({ activeSessions: async () => external });
+    await f.ports.storage.insert({ ...record('restored'), version: 1, stage: 'saved' });
+    await f.journal.refresh();
+    expect(f.journal.getSnapshot()[0]).toMatchObject({ activity: 'interrupted', stage: 'saved' });
+    expect(f.writer.readStored()).toEqual([]);
+    external.add('session');
+    await f.journal.refresh();
+    expect(f.journal.getSnapshot()[0]?.activity).toBe('active');
+    external.clear();
+    await f.journal.refresh();
+    expect(f.journal.getSnapshot()[0]?.activity).toBe('interrupted');
+    expect((await f.ports.storage.list())[0]).not.toHaveProperty('activity');
+  });
+
+  it('publishes live work until its completion, then offers recovery on failure', async () => {
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const f = fixture({
+      prepare: async () => {
+        entered.resolve();
+        await finish.promise;
+        throw new Error('offline');
+      },
+    });
+    await f.journal.accept(record('retry'));
+    const retry = f.journal.retry('session' as SessionId);
+    const rejected = expect(retry).rejects.toThrow('offline');
+    await entered.promise;
+    expect(f.journal.getSnapshot()[0]?.activity).toBe('active');
+    finish.resolve();
+    await rejected;
+    expect(f.journal.getSnapshot()[0]).toMatchObject({ activity: 'interrupted', error: 'offline' });
+  });
+});
+
+it('persists an entire legal attachment message without charging source bytes to CRDT metadata', async () => {
+  const { IDBFactory } = await import('fake-indexeddb');
+  const { createSessionSendJournalStorage } =
+    await import('../src/lib/session-send-journal-storage');
+  const {
+    SESSION_FILE_MAX_COUNT,
+    SESSION_FILE_MAX_SIZE_BYTES,
+    SESSION_IMAGE_MAX_COUNT,
+    SESSION_IMAGE_MAX_SIZE_BYTES,
+  } = await import('@lody/shared');
+  const indexedDB = new IDBFactory();
+  const args = { accountId: 'account', workspaceId: 'workspace', indexedDB };
+  const storage = createSessionSendJournalStorage(args);
+  // Blob parts share immutable backing bytes; model the real full 840 MiB allowance
+  // without allocating a separate 100 MiB array for every file.
+  const file = new Blob([new Uint8Array(SESSION_FILE_MAX_SIZE_BYTES)]);
+  const attachments = [
+    ...Array.from({ length: SESSION_FILE_MAX_COUNT }, (_, i) => ({
+      id: `file-${i}`,
+      kind: 'file' as const,
+      source: file,
+      name: `file-${i}`,
+      mimeType: 'application/octet-stream',
+      lastModified: 1,
+    })),
+    ...Array.from({ length: SESSION_IMAGE_MAX_COUNT }, (_, i) => ({
+      id: `image-${i}`,
+      kind: 'image' as const,
+      source: file.slice(0, SESSION_IMAGE_MAX_SIZE_BYTES),
+      name: `image-${i}`,
+      mimeType: 'image/png',
+      lastModified: 1,
+    })),
+  ];
+  const saved = await storage.insert({
+    ...record('large'),
+    version: 2,
+    stage: 'saved',
+    attachments,
+  });
+  const update = new Uint8Array([1, 2, 3]);
+  await storage.put({ ...saved, stage: 'prepared', update });
+  await storage.close();
+  const reopened = createSessionSendJournalStorage(args);
+  const recovered = (await reopened.list())[0]!;
+  expect(recovered.update).toEqual(update);
+  expect(recovered.attachments?.map((attachment) => attachment.source?.size)).toEqual([
+    ...Array<number>(SESSION_FILE_MAX_COUNT).fill(SESSION_FILE_MAX_SIZE_BYTES),
+    ...Array<number>(SESSION_IMAGE_MAX_COUNT).fill(SESSION_IMAGE_MAX_SIZE_BYTES),
+  ]);
+  await reopened.close();
+});

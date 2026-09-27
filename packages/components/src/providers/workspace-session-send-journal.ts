@@ -128,6 +128,25 @@ export function createWorkspaceSessionSendJournal(args: {
       };
     },
     notifyExternal: () => notify(),
+    activeSessions: async () => {
+      const inventory = await navigator.locks?.query?.();
+      const sessions = new Set<string>();
+      for (const lock of [...(inventory?.held ?? []), ...(inventory?.pending ?? [])]) {
+        if (!lock.name?.startsWith('lody-session-send:[')) continue;
+        try {
+          const [account, workspace, key] = JSON.parse(
+            lock.name.slice('lody-session-send:'.length)
+          );
+          if (account !== accountId || workspace !== runtime.workspaceId || typeof key !== 'string')
+            continue;
+          if (key.startsWith('submit:') || key.startsWith('delivery:'))
+            sessions.add(key.slice(key.indexOf(':') + 1));
+        } catch {
+          /* Unrelated lock names do not describe this journal. */
+        }
+      }
+      return sessions;
+    },
     lock: async (key, signal, execute) => {
       if (!navigator.locks)
         throw new Error(

@@ -2,15 +2,15 @@ import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow } from 'electron';
 
-const nativeState = vi.hoisted(() => ({ windows: new Map<number, unknown>(), nextId: 1 }));
+const nativeState = vi.hoisted(() => ({ windows: new Map<number, unknown>(), nextId: 1, exitResponse: 0 }));
 // Resolve Electron from its owning app; components does not depend on Electron at runtime.
 vi.mock('../../../apps/electron/node_modules/electron', () => ({
   app: { focus() {} },
-  dialog: { showMessageBox: async () => ({ response: 0 }) },
+  dialog: { showMessageBox: async () => ({ response: nativeState.exitResponse }) },
   BrowserWindow: { fromId: (id: number) => nativeState.windows.get(id) ?? null },
 }));
 
-import { registerRendererSendLifecycle, prepareRendererSendsForExit } from '../../../apps/electron/src/main/services/renderer-send-lifecycle';
+import { registerRendererSendLifecycle, prepareRendererSendsForExit, resolveRendererSendLifecycle } from '../../../apps/electron/src/main/services/renderer-send-lifecycle';
 
 import {
   getMainWindow,
@@ -127,6 +127,7 @@ vi.mock('../../../apps/electron/src/main/window', () => ({
 }));
 
 afterEach(() => {
+  nativeState.exitResponse = 0;
   setWindowWarmupEnabled(false);
   setAppQuitting(true);
   for (const window of productWindows) window.destroy();
@@ -426,5 +427,61 @@ describe('send ownership across renderer replacement', () => {
     const liveButUnresponsive = prepareRendererSendsForExit('quit', window.native);
     await vi.advanceTimersByTimeAsync(5000);
     expect(await liveButUnresponsive).toBe(false);
+  });
+});
+
+
+describe('approved document unload', () => {
+  const vetoOverridden = (window: NativeWindow) => {
+    let overridden = false;
+    window.webContents.emit('will-prevent-unload', {
+      preventDefault: () => { overridden = true; },
+    });
+    return overridden;
+  };
+
+  it('overrides a veto only after approved cleanup and retires approval on navigation', async () => {
+    const window = new NativeWindow();
+    registerProductWindow(window.native, false);
+    registerRendererSendLifecycle(window.native);
+    window.webContents.send = (_channel, payload) => {
+      const { requestId } = payload as { requestId: string };
+      resolveRendererSendLifecycle(window.id, { requestId, ready: true, pending: true });
+    };
+    expect(vetoOverridden(window)).toBe(false);
+    // Stay cannot grant an unload bypass.
+    expect(await prepareRendererSendsForExit('quit', window.native)).toBe(false);
+    expect(vetoOverridden(window)).toBe(false);
+    nativeState.exitResponse = 1;
+    expect(await prepareRendererSendsForExit('quit', window.native)).toBe(true);
+    expect(vetoOverridden(window)).toBe(true);
+    window.webContents.emit('did-navigate-in-page');
+    expect(vetoOverridden(window)).toBe(true);
+    window.webContents.emit('did-navigate');
+    registerRendererSendLifecycle(window.native);
+    expect(vetoOverridden(window)).toBe(false);
+  });
+
+  it('failed drain and late replies cannot grant unload permission', async () => {
+    vi.useFakeTimers();
+    nativeState.exitResponse = 1;
+    const window = new NativeWindow();
+    registerProductWindow(window.native, false);
+    registerRendererSendLifecycle(window.native);
+    window.webContents.send = (_channel, payload) => {
+      const { requestId, phase } = payload as { requestId: string; phase: string };
+      resolveRendererSendLifecycle(window.id, { requestId, ready: phase === 'check', pending: true });
+    };
+    expect(await prepareRendererSendsForExit('reload', window.native)).toBe(false);
+    expect(vetoOverridden(window)).toBe(false);
+    let lateId = '';
+    window.webContents.send = (_channel, payload) => {
+      lateId = (payload as { requestId: string }).requestId;
+    };
+    const timedOut = prepareRendererSendsForExit('reload', window.native);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await timedOut).toBe(false);
+    expect(() => resolveRendererSendLifecycle(window.id, { requestId: lateId, ready: true, pending: false })).not.toThrow();
+    expect(vetoOverridden(window)).toBe(false);
   });
 });

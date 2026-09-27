@@ -54,4 +54,6 @@ access without a new capability/security decision in the owning
 
 Send lifecycle registrations belong to the renderer document. Confirmed process exit
 or committed main-frame navigation retires its requests; a timeout never proves
-that a live owner is gone. Recovery pages must remain reloadable.
+that a live owner is gone. Recovery pages must remain reloadable. Successful
+drain authorizes unload only for that document; reset approval on navigation or
+process exit. Every menu/keyboard reload uses the same send guard.

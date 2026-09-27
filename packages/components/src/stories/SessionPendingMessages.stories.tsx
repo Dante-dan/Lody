@@ -6,7 +6,7 @@ import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from '@/atoms/worksp
 import { runtimeAtom, type WorkspaceRuntime } from '@/atoms/runtime';
 import { SessionPendingMessages } from '@/components/chat/session-pending-messages';
 import type { SessionAttachmentDraft } from '@/lib/session-attachment-draft';
-import type { SessionSendRecord } from '@/lib/session-send-journal';
+import type { SessionSendViewRecord } from '@/lib/session-send-journal';
 
 const sessionId = 'attachment-draft-story' as SessionId;
 const workspaceId = 'attachment-draft-workspace' as WorkspaceId;
@@ -36,7 +36,7 @@ const textEntry = (id: string, text: string): SessionHistory =>
     inputConfig: { inputBlocks: [{ type: 'text', text }], cliType: 'builtin', agentType: 'codex' },
   }) as SessionHistory;
 
-const record = (overrides: Partial<SessionSendRecord>): SessionSendRecord => ({
+const record = (overrides: Partial<SessionSendViewRecord>): SessionSendViewRecord => ({
   version: 2,
   id: 'pending-turn',
   sessionId,
@@ -47,6 +47,7 @@ const record = (overrides: Partial<SessionSendRecord>): SessionSendRecord => ({
   entry: textEntry('pending-turn', 'Review these attachments before committing the recovery flow.'),
   delivery: { kind: 'dispatch' },
   stage: 'saved',
+  activity: 'active',
   ...overrides,
 });
 
@@ -65,7 +66,7 @@ function StoryShell({
   records,
   width = 720,
 }: {
-  records: readonly SessionSendRecord[];
+  records: readonly SessionSendViewRecord[];
   width?: number;
 }) {
   const store = createStore();
@@ -74,6 +75,8 @@ function StoryShell({
     getSnapshot: () => records,
     retry: async () => {},
     cancel: async () => {},
+    discard: async () => {},
+    refresh: async () => {},
   };
   store.set(currentWorkspaceIdAtom, workspaceId);
   store.set(currentWorkspaceSlugAtom, 'attachment-draft-story');
@@ -180,5 +183,34 @@ export const FailedWithoutAttachmentReason: Story = {
 export const ConfirmingTheOriginalSend: Story = {
   args: {
     records: [record({ stage: 'prepared', attachments: [readyImage] })],
+  },
+};
+
+/** Reopened after interruption: no fictitious progress; recovery is inline on phones too. */
+export const Interrupted: Story = {
+  args: {
+    width: 380,
+    records: [
+      record({
+        activity: 'interrupted',
+        attachments: [
+          {
+            id: 'interrupted-log',
+            kind: 'file',
+            name: 'diagnostic.log',
+            mimeType: 'text/plain',
+            lastModified: 0,
+            source: new Blob(['log']),
+            progress: 12,
+          },
+        ],
+      }),
+    ],
+  },
+};
+export const InterruptedPrepared: Story = {
+  args: {
+    width: 380,
+    records: [record({ activity: 'interrupted', stage: 'prepared', attachments: [readyImage] })],
   },
 };

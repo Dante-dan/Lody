@@ -4,6 +4,8 @@ const STORE = 'submissions';
 export const SESSION_SEND_DATABASE = 'lody-session-send-v1';
 export const SESSION_SEND_STORAGE_LOCK = 'lody-session-send-storage';
 const MAX_PENDING_RECORDS = 100;
+// This budget bounds metadata and CRDT operations, not attachment source Blobs.
+// Sources retain the composer limits and the browser's actual storage quota.
 const MAX_PENDING_BYTES = 128 * 1024 * 1024;
 
 function requestValue<T>(request: IDBRequest<T>): Promise<T> {
@@ -57,7 +59,7 @@ function decodeRecords(
             typeof attachment.id !== 'string' ||
             !attachment.id ||
             !['image', 'file'].includes(attachment.kind) ||
-            !(attachment.source instanceof Blob) ||
+            (!(attachment.source instanceof Blob) && !attachment.ready) ||
             typeof attachment.name !== 'string' ||
             typeof attachment.mimeType !== 'string' ||
             !Number.isFinite(attachment.lastModified)
@@ -159,18 +161,12 @@ export function createSessionSendJournalStorage(args: {
         const active = values.filter((value) => value.stage !== 'delivered');
         const bytes = active.reduce(
           (sum, value) =>
-            sum +
-            JSON.stringify(value.entry).length * 2 +
-            (value.update?.byteLength ?? 0) +
-            (value.attachments?.reduce((total, item) => total + item.source.size, 0) ?? 0),
+            sum + JSON.stringify(value.entry).length * 2 + (value.update?.byteLength ?? 0),
           0
         );
         if (
           active.length >= MAX_PENDING_RECORDS ||
-          bytes +
-            JSON.stringify(record.entry).length * 2 +
-            (record.attachments?.reduce((total, item) => total + item.source.size, 0) ?? 0) >
-            MAX_PENDING_BYTES
+          bytes + JSON.stringify(record.entry).length * 2 > MAX_PENDING_BYTES
         ) {
           throw new Error(
             'Pending message storage is full; finish or remove pending messages first'
@@ -206,10 +202,7 @@ export function createSessionSendJournalStorage(args: {
           record,
         ].reduce(
           (sum, value) =>
-            sum +
-            JSON.stringify(value.entry).length * 2 +
-            (value.update?.byteLength ?? 0) +
-            (value.attachments?.reduce((total, item) => total + item.source.size, 0) ?? 0),
+            sum + JSON.stringify(value.entry).length * 2 + (value.update?.byteLength ?? 0),
           0
         );
         if (bytes > MAX_PENDING_BYTES) throw new Error('Pending message storage is full');

@@ -7,7 +7,7 @@ import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { getSessionFileIcon } from '@/components/ai-gui/session-file-card';
 import { ConversationColumn } from '@/components/shared/conversation-column';
 import type { SessionAttachmentDraft } from '@/lib/session-attachment-draft';
-import type { SessionSendRecord } from '@/lib/session-send-journal';
+import type { SessionSendRecord, SessionSendViewRecord } from '@/lib/session-send-journal';
 import { cn } from '@/lib/utils';
 import { Button } from '@lody/ui/button';
 import { Progress } from '@lody/ui/progress';
@@ -18,27 +18,32 @@ const emptySnapshot = () => empty;
 const emptySubscribe = () => () => {};
 
 /**
- * One attachment is in exactly one of three states, and all three share a card
+ * Attachments share a card across uploading, interrupted, ready and failed states. The
  * skeleton (icon slot / name + one status line / trailing status slot) so the
  * row does not resize as attachments move between them. `ready` wins over
  * `error`: preparation clears the error when it later succeeds, and a retry
  * skips attachments that already finished.
  */
-type PendingAttachmentState = 'uploading' | 'ready' | 'failed';
+type PendingAttachmentState = 'uploading' | 'interrupted' | 'ready' | 'failed';
 
-const attachmentState = (attachment: SessionAttachmentDraft): PendingAttachmentState =>
-  attachment.ready ? 'ready' : attachment.error ? 'failed' : 'uploading';
+const attachmentState = (
+  attachment: SessionAttachmentDraft,
+  active = true
+): PendingAttachmentState =>
+  attachment.ready ? 'ready' : attachment.error ? 'failed' : active ? 'uploading' : 'interrupted';
 
 /** The one status line inside a card. The failed card owns the whole reason. */
-function useAttachmentStatus(attachment: SessionAttachmentDraft) {
+function useAttachmentStatus(attachment: SessionAttachmentDraft, active: boolean) {
   const { t } = useTranslation();
-  const state = attachmentState(attachment);
+  const state = attachmentState(attachment, active);
   const label =
     state === 'ready'
       ? t('sessions.attachmentPrepared')
       : state === 'failed'
         ? (attachment.error ?? '')
-        : t('sessions.attachmentUploading', { progress: attachment.progress ?? 0 });
+        : state === 'interrupted'
+          ? t('sessions.attachmentInterrupted')
+          : t('sessions.attachmentUploading', { progress: attachment.progress ?? 0 });
   return { state, label };
 }
 
@@ -89,7 +94,7 @@ function PendingFailureNotice({
 }
 
 /**
- * Trailing 32px slot: the state's glyph. All three stay mounted and cross-fade
+ * Trailing 32px slot: the state's glyph. The glyphs stay mounted and cross-fade
  * with opacity/scale/blur, so an attachment settling from uploading to ready or
  * failed reads as one object changing rather than a swap. CSS rather than
  * framer-motion: no other component under chat/ or ai-gui/ pulls that dependency
@@ -110,6 +115,10 @@ function AttachmentStateIcon({ state }: { state: PendingAttachmentState }) {
       <Spinner
         className={cn(glyph(state === 'uploading'), 'size-4 text-muted-foreground')}
         spinning={state === 'uploading'}
+      />
+      <Clock3
+        className={cn(glyph(state === 'interrupted'), 'size-4 text-muted-foreground')}
+        aria-hidden="true"
       />
       <Check
         className={cn(glyph(state === 'ready'), 'size-4 text-muted-foreground')}
@@ -153,15 +162,25 @@ function AttachmentProgressTrack({
   );
 }
 
-function PendingImageAttachment({ attachment }: { attachment: SessionAttachmentDraft }) {
+function PendingImageAttachment({
+  attachment,
+  active,
+}: {
+  attachment: SessionAttachmentDraft;
+  active: boolean;
+}) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   useEffect(() => {
+    if (!attachment.source) {
+      setPreviewUrl(null);
+      return undefined;
+    }
     const url = URL.createObjectURL(attachment.source);
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [attachment.source]);
 
-  const { state, label } = useAttachmentStatus(attachment);
+  const { state, label } = useAttachmentStatus(attachment, active);
   const failed = state === 'failed';
 
   return (
@@ -214,8 +233,14 @@ function PendingImageAttachment({ attachment }: { attachment: SessionAttachmentD
   );
 }
 
-function PendingFileAttachment({ attachment }: { attachment: SessionAttachmentDraft }) {
-  const { state, label } = useAttachmentStatus(attachment);
+function PendingFileAttachment({
+  attachment,
+  active,
+}: {
+  attachment: SessionAttachmentDraft;
+  active: boolean;
+}) {
+  const { state, label } = useAttachmentStatus(attachment, active);
   const failed = state === 'failed';
   const Icon = getSessionFileIcon(attachment.name, attachment.mimeType);
 
@@ -263,8 +288,12 @@ export function PendingMessageRow({
   record,
   onRetry,
   onCancel,
+  onDiscard,
+  busy = false,
 }: {
-  record: SessionSendRecord;
+  record: SessionSendViewRecord;
+  onDiscard?: () => void;
+  busy?: boolean;
   onRetry: () => void;
   onCancel: () => void;
 }) {
@@ -273,6 +302,7 @@ export function PendingMessageRow({
     ?.flatMap((item) => (item.type === 'text' ? [item.text] : []))
     .join('\n');
   const failed = Boolean(record.error);
+  const interrupted = record.activity === 'interrupted';
   const images = record.attachments?.filter((attachment) => attachment.kind === 'image') ?? [];
   const files = record.attachments?.filter((attachment) => attachment.kind === 'file') ?? [];
   // Only fall back to the record-level reason when no card shows one, so the
@@ -282,10 +312,13 @@ export function PendingMessageRow({
   );
   const messageStatus = failed
     ? t('sessions.pendingMessageUploadFailed')
-    : record.stage === 'prepared'
-      ? t('sessions.pendingMessageWaiting')
-      : t('sessions.pendingMessageUploading');
-  const showRetry = failed;
+    : interrupted
+      ? t('sessions.pendingMessageInterrupted')
+      : record.stage === 'prepared'
+        ? t('sessions.pendingMessageWaiting')
+        : t('sessions.pendingMessageUploading');
+  const showRetry = failed || interrupted;
+  const showDiscard = record.stage === 'prepared' && Boolean(onDiscard);
   const showCancel = record.stage === 'saved';
 
   return (
@@ -308,14 +341,22 @@ export function PendingMessageRow({
         {images.length ? (
           <div className="flex w-full flex-wrap justify-end gap-2">
             {images.map((attachment) => (
-              <PendingImageAttachment key={attachment.id} attachment={attachment} />
+              <PendingImageAttachment
+                key={attachment.id}
+                attachment={attachment}
+                active={!interrupted}
+              />
             ))}
           </div>
         ) : null}
         {files.length ? (
           <div className="flex w-full flex-col items-end gap-2">
             {files.map((attachment) => (
-              <PendingFileAttachment key={attachment.id} attachment={attachment} />
+              <PendingFileAttachment
+                key={attachment.id}
+                attachment={attachment}
+                active={!interrupted}
+              />
             ))}
           </div>
         ) : null}
@@ -325,19 +366,29 @@ export function PendingMessageRow({
           </div>
         ) : null}
         {failed && !reasonOnACard ? <PendingFailureNotice reason={record.error!} clamp /> : null}
-        {showRetry || showCancel ? (
+        {showRetry || showCancel || showDiscard ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
             {showCancel ? (
-              <Button size="small" variant="ghost" onClick={onCancel}>
+              <Button size="small" variant="ghost" disabled={busy} onClick={onCancel}>
                 {t('sessions.cancelPendingSend')}
               </Button>
             ) : null}
+            {showDiscard ? (
+              <Button size="small" variant="ghost" disabled={busy} onClick={onDiscard}>
+                {t('sessions.discardPendingSend')}
+              </Button>
+            ) : null}
             {showRetry ? (
-              <Button size="small" onClick={onRetry}>
+              <Button size="small" disabled={busy} onClick={onRetry}>
                 {t('sessions.retryPendingSend')}
               </Button>
             ) : null}
           </div>
+        ) : null}
+        {showDiscard ? (
+          <p className="max-w-sm text-xs text-muted-foreground">
+            {t('sessions.discardPreparedSendDescription')}
+          </p>
         ) : null}
       </article>
     </ConversationColumn>
@@ -354,19 +405,31 @@ export function SessionPendingMessages({ sessionId }: { sessionId: SessionId }) 
     emptySnapshot
   );
   const { t } = useTranslation();
+  const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  useEffect(() => {
+    void journal
+      ?.refresh()
+      .catch((error: unknown) =>
+        setFailure(error instanceof Error ? error.message : t('sessions.sendRecoveryUnavailable'))
+      );
+  }, [journal, sessionId, t]);
   const pending = records.filter(
     (record) =>
       record.sessionId === sessionId && (record.stage === 'saved' || record.stage === 'prepared')
   );
   if (!pending.length) return null;
-  const action = async (record: SessionSendRecord, cancel: boolean) => {
+  const action = async (record: SessionSendRecord, kind: 'retry' | 'cancel' | 'discard') => {
+    setBusy(record.id);
     try {
-      if (cancel) await journal?.cancel(record.id);
+      if (kind === 'cancel') await journal?.cancel(record.id);
+      if (kind === 'discard') await journal?.discard(record.id);
       await journal?.retry(sessionId);
       setFailure(null);
     } catch (error) {
       setFailure(error instanceof Error ? error.message : t('sessions.sendRecoveryUnavailable'));
+    } finally {
+      setBusy(null);
     }
   };
   return (
@@ -375,12 +438,12 @@ export function SessionPendingMessages({ sessionId }: { sessionId: SessionId }) 
         <PendingMessageRow
           key={record.id}
           record={record}
-          onRetry={() => void action(record, false)}
-          onCancel={() => void action(record, true)}
+          busy={busy === record.id}
+          onRetry={() => void action(record, 'retry')}
+          onCancel={() => void action(record, 'cancel')}
+          onDiscard={() => void action(record, 'discard')}
         />
       ))}
-      {/* The retry/cancel ACTION itself failed — a different fault from the
-          record's own error, so it gets its own notice in the same frame. */}
       {failure ? (
         <ConversationColumn className="pb-3">
           <PendingFailureNotice reason={failure} role="alert" />
