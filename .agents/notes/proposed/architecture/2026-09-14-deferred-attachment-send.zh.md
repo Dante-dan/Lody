@@ -102,3 +102,5 @@ public-boundary 检查及文档检查分别通过。已运行 `pnpm format` 并�
 新增确定性测试覆盖并行取消、迟到的 store 获取、兄弟任务隔离、XHR 实际取消及上传进度与成功响应的区别。该层保持添加时上传；持久化发送和完整 draft 行为仍属于后两层。
 
 第二层验证：`TMPDIR=/private/tmp NODE_ENV=test pnpm check` 全部通过（组件 478 个文件、3,661 个测试），`pnpm format` 和 `pnpm run docs check` 已完成；文档无错误。仍未声称完成真实设备上的 draft 验收。
+
+资源层整合保留主线的目标同步与 workspace 销毁顺序。作用域所有权规则在不改变保证的前提下压缩，以满足 AGENTS.md 大小限制。

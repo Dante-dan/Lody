@@ -112,11 +112,7 @@ Replacement contract: [shared rules](../../../shared/AGENTS.md#session-history).
 
 ## Attachment transfer ownership
 
-These rules also bind attachment helpers and UI callers.
-
-- Workspace `sendResources` owns attachment preparation, upload cancellation, and
-  send-path session-store borrows. React unmount does not dispose this owner.
-- Workspace disposal awaits its cleanup before destroying transports or caches.
-  Noncancelable IPC must settle before release; only the cache disposes stores.
-- Cancellation reaches underlying I/O and fences late completion; it never
-  authorizes a fallback upload. Await multipart cleanup before returning failure.
+Binds helpers and UI: workspace `sendResources` owns preparation, cancellation
+and store borrows, independent of React unmount. Dispose it before transports or
+caches; join noncancelable IPC. Only the cache disposes stores. Cancel underlying
+I/O, fence late results, never fall back on cancellation; await multipart cleanup.

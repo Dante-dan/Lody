@@ -105,3 +105,5 @@ Layer 2 creates one workspace Effect resource owner for file preparation, image 
 Deterministic tests cover parallel cancellation, late store acquisition, sibling isolation, actual XHR cancellation, and progress versus successful response. Transfer still starts on addition. Persistent submission and complete draft behavior remain the next two layers.
 
 Layer 2 validation: `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes completely (components: 478 files, 3,661 tests). `pnpm format` and `pnpm run docs check` completed; docs have no errors. Packaged-device draft acceptance remains outstanding.
+
+Mainline resource reconciliation preserves target synchronization and workspace disposal ordering. Scoped ownership rules are condensed without changing their guarantees to remain below the AGENTS.md size gate.
