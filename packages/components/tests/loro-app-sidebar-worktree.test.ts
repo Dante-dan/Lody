@@ -4,9 +4,12 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
-import { LocalProjectItem } from '../src/components/loro-app-sidebar';
+import {
+  hasWorkspaceSidebarTopContent,
+  LocalProjectItem,
+} from '../src/components/loro-app-sidebar';
 import { initI18n } from '../src/i18n';
-import { TooltipProvider } from '../src/ui/tooltip';
+import { Tooltip } from '@lody/ui/tooltip';
 import type { LocalProjectId, MachineId, SessionMeta } from '@lody/shared';
 
 const machineId = 'machine-local' as MachineId;
@@ -25,6 +28,14 @@ const baseSession = {
     machineId,
   },
 } satisfies Omit<SessionMeta, 'id'>;
+
+describe('LoroAppSidebar Workspace section composition', () => {
+  it('leaves top content absent when the current scope hides every section', () => {
+    expect(hasWorkspaceSidebarTopContent(0, false)).toBe(false);
+    expect(hasWorkspaceSidebarTopContent(1, false)).toBe(true);
+    expect(hasWorkspaceSidebarTopContent(0, true)).toBe(true);
+  });
+});
 
 describe('LocalProjectItem session-type icon', () => {
   let root: Root | undefined;
@@ -81,7 +92,7 @@ describe('LocalProjectItem session-type icon', () => {
     flushSync(() => {
       root?.render(
         React.createElement(
-          TooltipProvider,
+          Tooltip.Provider,
           null,
           React.createElement(LocalProjectItem, {
             machineId,
@@ -175,7 +186,7 @@ describe('LocalProjectItem session-type icon', () => {
     flushSync(() => {
       root?.render(
         React.createElement(
-          TooltipProvider,
+          Tooltip.Provider,
           null,
           React.createElement(LocalProjectItem, {
             machineId,

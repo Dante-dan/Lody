@@ -17,7 +17,7 @@ import {
 } from '@lody/shared';
 import { useAtomValue } from 'jotai';
 import { usePostHog } from '@posthog/react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { currentWorkspaceIdAtom, userAtom } from '@/atoms';
 import { getDurationSinceMs, getPerformanceNowMs } from '@/lib/posthog-analytics';
 import {
@@ -28,7 +28,7 @@ import {
 } from './diff-pr-analytics';
 import { DiffViewer } from '@/ui/diff-viewer/diff-viewer';
 import { ScrollArea } from '@/ui/scroll-area';
-import { Skeleton } from '@/ui/skeleton';
+import { Skeleton } from '@lody/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { observeDiffPerfLongTasks } from '@/lib/diff-perf';
 import { FileIcon } from '@/components/icons/file-icons';
@@ -44,8 +44,12 @@ import { useDiffFocusScroll } from './use-diff-focus-scroll';
 import { useSessionAllChangesDiffData } from './use-session-all-changes-diff-data';
 import { useSessionConversationDiffData } from './use-session-conversation-diff-data';
 import { useGitHubReviewComments } from '@/hooks/use-github-review-comments';
-import { withGitHubOperationTokenRetry, withGitHubTokenRetry } from '@/lib/github-token';
-import { getPullRequestNumber, getSessionGitHubState } from '@/lib/session-github-state';
+import {
+  getPullRequestNumber,
+  getPullRequestRepoFullName,
+  getSessionGitHubState,
+} from '@/lib/session-github-state';
+import { GitHubReviewErrorNotice } from './github-review-error-notice';
 import { SessionFileDiffNoticeCard } from './session-file-diff-notice-card';
 import { DiffFileHeaderActions } from '@/ui/diff-viewer/diff-file-header-actions';
 import type { SessionFileProvider } from '@/lib/session-file-provider';
@@ -72,11 +76,11 @@ function FileDiffSkeleton({
         </div>
       </div>
       <div className="space-y-1.5 px-4 py-3">
-        <Skeleton className="h-3 w-full" />
-        <Skeleton className="h-3 w-11/12" />
-        <Skeleton className="h-3 w-4/5" />
-        <Skeleton className="h-3 w-full" />
-        <Skeleton className="h-3 w-3/4" />
+        <Skeleton width="100%" height={12} />
+        <Skeleton width="91%" height={12} />
+        <Skeleton width="80%" height={12} />
+        <Skeleton width="100%" height={12} />
+        <Skeleton width="75%" height={12} />
       </div>
     </div>
   );
@@ -428,19 +432,27 @@ function SessionConversationDiffPanelImpl({
   const { cacheKey, normalizedPaths, resolvedByPath, isDiffUnavailable } = isBaseMode
     ? allChangesDiffData
     : conversationDiffData;
-  const { repoFullName, latestPr } = useMemo(
+  const {
+    sourceSessionId: prSessionId,
+    repoFullName,
+    latestPr,
+  } = useMemo(
     () => getSessionGitHubState(session ?? null, workspaceSession ?? null),
     [session, workspaceSession]
   );
   const latestPrNumber = getPullRequestNumber(latestPr);
   const githubReviewComments = useGitHubReviewComments({
+    sessionId: prSessionId,
     workspaceId: currentWorkspaceId,
-    repoFullName,
+    repoFullName: getPullRequestRepoFullName(latestPr) ?? repoFullName,
     prNumber: latestPrNumber,
     enabled: normalizedPaths.length > 0 && Boolean(latestPrNumber),
   });
-  const { threads: githubReviewCommentThreads, refresh: refreshGitHubReviewComments } =
-    githubReviewComments;
+  const {
+    threads: githubReviewCommentThreads,
+    refresh: refreshGitHubReviewComments,
+    runWithToken: runWithGitHubReviewToken,
+  } = githubReviewComments;
 
   useEffect(() => observeDiffPerfLongTasks() ?? undefined, []);
 
@@ -534,10 +546,10 @@ function SessionConversationDiffPanelImpl({
     if (legacyHeadCommitSha?.trim()) {
       return legacyHeadCommitSha.trim();
     }
-    return await withGitHubTokenRetry(currentWorkspaceId, repoFullName, (token) =>
-      githubFetchPullRequestHeadSha(token, repoFullName, latestPrNumber)
+    return await runWithGitHubReviewToken('read', (token, canonicalRepo) =>
+      githubFetchPullRequestHeadSha(token, canonicalRepo, latestPrNumber)
     );
-  }, [currentWorkspaceId, latestPr, latestPrNumber, repoFullName]);
+  }, [currentWorkspaceId, latestPr, latestPrNumber, repoFullName, runWithGitHubReviewToken]);
 
   const addCommentReferenceToChatInput = useCallback(
     (reference: CommentReferencePayload): boolean => {
@@ -565,18 +577,14 @@ function SessionConversationDiffPanelImpl({
         try {
           const headCommitSha = await resolvePrHeadCommitSha();
           const position = lodyAnchorToGitHubParams(input.anchor, latestPr, headCommitSha);
-          const comment = await withGitHubOperationTokenRetry(
-            currentWorkspaceId,
-            repoFullName,
-            'write',
-            (token) =>
-              githubCreatePRReviewComment(token, repoFullName, latestPrNumber, {
-                body: input.body,
-                path: position.path,
-                commitId: position.commit_id,
-                line: position.line,
-                side: position.side,
-              })
+          const comment = await runWithGitHubReviewToken('write', (token, canonicalRepo) =>
+            githubCreatePRReviewComment(token, canonicalRepo, latestPrNumber, {
+              body: input.body,
+              path: position.path,
+              commitId: position.commit_id,
+              line: position.line,
+              side: position.side,
+            })
           );
           await refreshGitHubReviewComments();
           captureDiffCommentGithubThreadCreated(postHog, diffCommentAnalyticsBase, {
@@ -601,10 +609,10 @@ function SessionConversationDiffPanelImpl({
         if (!currentWorkspaceId || !repoFullName || !latestPrNumber) {
           throw new Error('This session is not linked to a GitHub pull request');
         }
-        await withGitHubOperationTokenRetry(currentWorkspaceId, repoFullName, 'write', (token) =>
+        await runWithGitHubReviewToken('write', (token, canonicalRepo) =>
           githubReplyPRReviewComment(
             token,
-            repoFullName,
+            canonicalRepo,
             latestPrNumber,
             input.githubCommentId,
             input.body
@@ -625,6 +633,7 @@ function SessionConversationDiffPanelImpl({
       refreshGitHubReviewComments,
       repoFullName,
       resolvePrHeadCommitSha,
+      runWithGitHubReviewToken,
     ]
   );
 
@@ -675,7 +684,15 @@ function SessionConversationDiffPanelImpl({
   );
 
   const panelContent = (
-    <div className="w-full space-y-4 py-2">{normalizedPaths.map(renderFileBlock)}</div>
+    <div className="w-full space-y-4 py-2">
+      {githubReviewComments.error && (
+        <GitHubReviewErrorNotice
+          message={githubReviewComments.error.message}
+          onRetry={() => void refreshGitHubReviewComments()}
+        />
+      )}
+      {normalizedPaths.map(renderFileBlock)}
+    </div>
   );
 
   return (

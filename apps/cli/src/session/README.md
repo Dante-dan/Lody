@@ -38,9 +38,13 @@ CLI/MCP orchestration contract is specs/session-orchestration.md.
   machine-local marker store.
 - `session-edit-and-resend-service.ts` — same-session replacement of the last normal User turn.
 - `session-launch-config-resolver.ts` — durable launch config resolution.
+- `workspace-git-service.ts` — observes checkout branches for local folders and worktrees,
+  serializes reads/writes per owner Session, and publishes the last named branch. Execution
+  binds, terminal turns, and authorized Code Collab activation/refresh use this service;
+  observation requires neither a running agent nor a GitHub remote.
 - `turn-post-processing-service.ts` — post-turn work (titles, notifications, diff stats,
   and the `workspaceDirty`/`workspaceUnpushed` probes that drive the Info Bar's
-  Commit & Push action; both cancellation routes run `syncWorkspaceGitState` alone,
+  Commit & Push action; both cancellation routes refresh the branch and run `syncWorkspaceGitState`,
   which self-gates on the session's GitHub binding).
 - `session-diff-stats-target.ts` — chooses which writer owns a session's `diffStats`.
 - `session-access-policy.ts` — local-first dispatch access precheck (optimistic-allow cache,
@@ -225,7 +229,8 @@ Agent `gh` auth for GitHub repo sessions is set up in `session-manager.ts`: it c
 credential broker, prepends the `~/.lody/bin/gh` shim, and injects/refreshes a managed
 `GH_TOKEN` when no user token is present. The shim lives in `../lib/gh-shim-script.ts`; token
 fetching/caching is in `../lib/github-token-manager.ts`; git HTTPS auth uses
-`../lib/git-credential-helper-script.ts`. Session process trees are already correct —
+`../lib/git-credential-helper-script.ts`. A native `gh` earlier in PATH bypasses the shim, so the
+PATH merges keep the shim dir first (see [../lib/AGENTS.md](../lib/AGENTS.md)). Session process trees are already correct —
 `prepareGitHubRepoSessionConfig` injects the env explicitly. The host-side rule is in
 [worktree/AGENTS.md](worktree/AGENTS.md).
 
@@ -233,8 +238,9 @@ fetching/caching is in `../lib/github-token-manager.ts`; git HTTPS auth uses
 
 The effective identity becomes `GIT_AUTHOR_*`/`GIT_COMMITTER_*` in the session env (`session.ts`
 `updateGitIdentity`, re-applied per turn via the execution service's `bindReadySession`). When
-the turn requester is the machine owner, the repository/machine Git identity wins and the
-resolved Lody/GitHub identity is its fallback. A non-owner requester always uses their resolved
+the turn requester is the machine owner, the repository/machine Git identity is used without a cloud profile lookup; missing local
+identity uses neutral LodyAI. Non-owner profile queries have a 60-second deadline; failed or
+timed-out entries are evicted so later turns can retry. A non-owner requester always uses their resolved
 Lody/GitHub identity and can never inherit the machine owner's Git config; if no usable requester
 identity exists, the neutral LodyAI identity is used. The cloud composition root owns hosted
 user resolution because the daemon does not own an end-user browser session; the local access

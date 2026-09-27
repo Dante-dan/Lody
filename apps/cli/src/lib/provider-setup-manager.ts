@@ -171,9 +171,9 @@ export class ProviderSetupManager {
         return;
       }
 
-      // Bub is installed by the user, so its setup has no download phase. The
-      // durable row exists solely to keep the config unpublished until the
-      // real `bub` ACP process passes verification.
+      // Non-managed builtins prepare their command during the live probe:
+      // Bub is user-installed and Dimcode uses npx. Keep the config
+      // unpublished until that ACP process passes verification.
       if (isManagedBuiltinAgentType(setup.config.agentType)) {
         const preparing = await this.updateStatus(setup.id, attempt, 'preparing-runtime');
         if (!preparing || this.stopped) return;
@@ -216,6 +216,10 @@ export class ProviderSetupManager {
         machineId: this.machineId,
         workspaceId: this.workspaceId,
         configId: verifying.config.id,
+        // Provider setup publishes a config only after the runtime it just
+        // installed answered session/new, so this verification never accepts a
+        // cached entry from an earlier install.
+        force: true,
       });
       if (response.success) {
         await this.publishVerifiedConfig(verifying.id, attempt);

@@ -26,7 +26,6 @@ import {
   PreviewConnection,
   Role,
   SessionId,
-  TaskId,
   WorktreeCleanupScriptConfig,
   WorktreeSetupScriptConfig,
 } from '.';
@@ -480,6 +479,7 @@ export const sessionPlanEntrySchema = schema.LoroMap({
 
 export type SessionHistorySendStatus = 'timeout';
 export type SessionHistoryStatus =
+  | 'prepared'
   | 'pending'
   | 'pending_apply'
   | 'delivery_unknown'
@@ -526,8 +526,6 @@ const acpSessionConfigSchema = schema
       configOptionValues: schema.Any({ required: false }),
       /** Workspace MCP catalog ids selected for this session (string[]). */
       mcpServerIds: schema.Any({ required: false }),
-      /** Whether the built-in Lody Task MCP tools are mounted for this Turn. */
-      taskToolsEnabled: schema.Boolean({ required: false }),
       /** Agent Role selected for this Turn; null is explicit None. */
       agentRoleId: agentRoleIdSchema,
       agentRoleRevision: schema.Number({ required: false }),
@@ -587,7 +585,12 @@ export const isSessionHistoryDelivered = (
 ): boolean => {
   const status = resolveSessionHistoryStatus(entry);
   if (status) {
-    return status !== 'pending' && status !== 'pending_apply' && status !== 'delivery_unknown';
+    return (
+      status !== 'prepared' &&
+      status !== 'pending' &&
+      status !== 'pending_apply' &&
+      status !== 'delivery_unknown'
+    );
   }
   return entry?.read === true;
 };
@@ -624,6 +627,9 @@ export const sessionHistorySchema = schema.LoroMap({
   read: schema.Boolean({ required: false }),
   userId: schema.String({ required: false }),
   modelInfo: schema.Any({ required: false }),
+  // Assistant turns: tokens this turn consumed, summed from adapter usage deltas.
+  // A primitive JSON value (`SessionTurnTokenUsage`), replaced whole on each write.
+  tokenUsage: schema.Any({ required: false }),
   // FileDiff 此次对话有哪些文件变更，和具体变更行数
   fileDiff: schema.Any(),
   // Indicates whether the agent's response for this turn has finished
@@ -775,13 +781,6 @@ export type SessionPreviewCandidateMeta = Pick<PreviewCandidate, 'status' | 'upd
 
 export type SessionPreviewConnectionMeta = Pick<PreviewConnection, 'status' | 'updatedAt'>;
 
-export type SessionPreviewLegacyMetaFields = {
-  /** Deprecated legacy detail. Full preview candidate state lives in session doc `preview`. */
-  previewCandidate?: PreviewCandidate;
-  /** Deprecated legacy detail. Full preview connection state lives in session doc `preview`. */
-  previewConnection?: PreviewConnection;
-};
-
 export type SessionExternalHistoryCursorDocState = {
   importedTurnHashes?: string[];
   /**
@@ -850,6 +849,8 @@ export type PendingScheduledTask = {
 };
 
 export type SessionMeta = {
+  /** Latest assistant's actual model; null means no assistant history, absent means unknown. */
+  lastModel?: { modelId?: string; name?: string } | null;
   id: SessionId;
   machineId: MachineId;
   createdAt: string;
@@ -869,6 +870,8 @@ export type SessionMeta = {
   userId: string;
   status?: SessionStatus;
   isArchived?: boolean;
+  /** Shared tab visibility only; closing never changes the session lifecycle. */
+  isTabClosed?: boolean;
   origin?: 'lody' | 'external-acp';
   /** When true, this session is pinned to the top of the sidebar list. */
   isPinned?: boolean;
@@ -885,6 +888,8 @@ export type SessionMeta = {
    */
   agentRoleId?: AgentRoleId;
   agentRoleRevision?: number;
+  /** Schedule provenance only, a UUID of at most 50 UTF-8 bytes. */
+  scheduleId?: string;
   acpSessionId?: ACPSessionId;
   /** Exact Session or child Tab that created/opened this session, when known. */
   openedBySessionId?: SessionId;
@@ -979,12 +984,6 @@ export type SessionMeta = {
   /** Last queue update signal the owning CLI checked when no dispatchable turn was found. */
   messageQueueCheckedAt?: number;
   /**
-   * Task this session belongs to, for navigation back to it. The association
-   * itself, with its provenance, lives in the task document; this is only a
-   * pointer, and a session belongs to at most one task.
-   */
-  taskId?: TaskId;
-  /**
    * When the session started waiting on a human answer, cleared when the request
    * resolves. A list-rendering summary of the durable truth in history (a
    * permission request with no outcome), so surfaces can show "waiting on you"
@@ -1001,8 +1000,7 @@ export type SessionMeta = {
    *
    * Only a human may write it. The reviewer and the authoring agent both run
    * with MCP access to this session, and an agent that could grant itself merge
-   * authority would make the whole gate decorative — the same rule that keeps
-   * MCP from writing a Task's entrusted `agent`.
+   * authority would make the whole gate decorative.
    */
   autoReview?: SessionAutoReviewMeta;
 };
@@ -1063,18 +1061,6 @@ export type SessionLegacyMetaFields = {
   /** Deprecated launch state; new writes store this in project worktree config. */
   worktreeCleanup?: WorktreeCleanupScriptConfig;
 };
-
-export type SessionMetaWithLegacyPreview = Omit<
-  SessionMeta,
-  'previewCandidate' | 'previewConnection'
-> &
-  Partial<SessionPreviewLegacyMetaFields>;
-
-export function getSessionPreviewLegacyFields(
-  session: Pick<SessionMeta, 'previewCandidate' | 'previewConnection'> | null | undefined
-): Partial<SessionPreviewLegacyMetaFields> {
-  return (session ?? {}) as Partial<SessionPreviewLegacyMetaFields>;
-}
 
 export type NeedToDeleteSessionQueueItem =
   | boolean
@@ -1231,6 +1217,12 @@ export type MachineMeta = {
   supportsLocalProjectHistoryRpc?: boolean;
   /** Versioned daemon protocols available to remote and local clients. */
   protocolCapabilities?: MachineProtocolCapabilities;
+  /**
+   * IANA zone of the machine's clock, e.g. `Asia/Shanghai` (under 50 bytes,
+   * rewritten only at registration). Schedules owned by this machine are
+   * authored on this clock; absent on older CLIs.
+   */
+  timeZone?: string;
 };
 
 /**
@@ -1269,7 +1261,7 @@ export type SessionDocMeta = Omit<SessionDoc, '$cid' | 'history'> & {
 export type Session = SessionMeta & SessionDocMeta;
 export type SessionToCreate = Omit<
   SessionMeta,
-  'id' | 'createdAt' | 'chatId' | 'status' | 'isArchived' | 'diffStats'
+  'id' | 'createdAt' | 'chatId' | 'status' | 'isArchived' | 'isTabClosed' | 'diffStats'
 > &
   SessionLaunchConfig & {
     sessionId?: SessionId;

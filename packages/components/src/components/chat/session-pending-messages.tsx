@@ -8,8 +8,8 @@ import { ConversationColumn } from '@/components/shared/conversation-column';
 import type { SessionAttachmentDraft } from '@/lib/session-attachment-draft';
 import type { SessionSendRecord } from '@/lib/session-send-journal';
 import { cn } from '@/lib/utils';
-import { Button } from '@/ui/button';
-import { Progress } from '@/ui/progress';
+import { Button } from '@lody/ui/button';
+import { Progress } from '@lody/ui/progress';
 
 const empty: readonly SessionSendRecord[] = [];
 const emptySnapshot = () => empty;
@@ -50,7 +50,12 @@ function PendingImageAttachment({ attachment }: { attachment: SessionAttachmentD
       </div>
       <div className="space-y-0.5 px-2.5 py-2">
         <p className="truncate text-xs font-medium">{attachment.name}</p>
-        <p className={cn('truncate text-[11px] text-muted-foreground', attachment.error && 'text-destructive')}>
+        <p
+          className={cn(
+            'truncate text-[11px] text-muted-foreground',
+            attachment.error && 'text-destructive'
+          )}
+        >
           {status}
         </p>
       </div>
@@ -157,12 +162,12 @@ function PendingMessageRow({
         {record.error ? <p className="text-xs text-destructive">{record.error}</p> : null}
         <div className="flex gap-1">
           {record.error ? (
-            <Button size="sm" variant="outline" onClick={onRetry}>
+            <Button size="small" variant="secondary" onClick={onRetry}>
               {t('sessions.retryPendingSend')}
             </Button>
           ) : null}
           {record.stage === 'saved' ? (
-            <Button size="sm" variant="ghost" onClick={onCancel}>
+            <Button size="small" variant="ghost" onClick={onCancel}>
               {t('sessions.cancelPendingSend')}
             </Button>
           ) : null}

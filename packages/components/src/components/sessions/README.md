@@ -6,6 +6,12 @@ What each file in this directory is responsible for. Binding rules live in
 
 ## Page shell and tabs
 
+`ask-user-question-card.tsx` owns interactive and read-only question presentation,
+including independent optional notes and secret masking. Its dedicated
+`AskUserQuestionCard` stories cover editing, replay, multiple questions and legacy
+replacement answers. The [answer notes Spec](../../../../../specs/ask-question-answer-notes.md)
+describes the shared parsing and persistence boundary.
+
 | File                                         | Responsibility                                                              |
 | -------------------------------------------- | --------------------------------------------------------------------------- |
 | `session-detail.tsx`                         | Outer session shell: top tabs, side panel, session-switch reset, tab closer |
@@ -14,7 +20,7 @@ What each file in this directory is responsible for. Binding rules live in
 | `session-tab-bar.tsx`                        | Desktop merged top row: session tab pills, status slot, drag sources        |
 | `adaptive-tab-strip.tsx`                     | Width sharing for the tab pills                                             |
 | `session-side-panel-tab-bar.tsx`             | Right-panel tab strip (fixed panels, side chats, viewers)                   |
-| `session-tab-close-target.ts`                | Registration for the Cmd/Ctrl+W close target                                |
+| `session-tab-close-target.ts`                | Resolve the focused tab or last-tab window close target                                |
 | `session-list-rows.ts`                       | Sidebar/tab row derivation, including child grouping by parent              |
 | `child-tab-empty-state.tsx`                  | Suggestions shown in an empty child tab                                     |
 | `session-not-found.tsx`                      | Missing-session surface                                                     |
@@ -29,9 +35,9 @@ What each file in this directory is responsible for. Binding rules live in
 | `session-chat-interface.tsx`                                    | Conversation surface: stream, header variants, read receipts, launchers                                                                             |
 | [`chat-share-image-dialog.tsx`](chat-share-image-dialog.tsx)    | Selected-message card styling, historical metadata, PNG export, and local image copying; [draft contract](../../../../../specs/chat-share-image.md) |
 | `draft-session-chat-interface.tsx`                              | Draft variant of the conversation surface                                                                                                           |
-| `session-chat-input-area.tsx`                                   | Composer: attachments, run-config footer, submit                                                                                                    |
+| `session-chat-input-area.tsx`                                   | Composer: attachments, run-config footer, [upload waiting](../../../../../specs/composer-send-during-upload.md), submit                                                                                                    |
 | `message-queue/`                                                | Queued turns ([scope AGENTS.md](message-queue/AGENTS.md))                                                                                           |
-| `session-message-submit-route.ts`                               | Send vs. queue vs. steer routing decision                                                                                                           |
+| `session-message-submit-route.ts`                               | Capability-gated send, regular queue, and native steer routing                                                                                      |
 | `desktop-run-config-menu.tsx`                                   | Desktop run-config dropdown + permission-mode button                                                                                                |
 | `recent-run-config-menu-group.tsx`                              | "Recently used" run-config entries                                                                                                                  |
 | `composer-agent-role-panel.tsx`, `agent-role-detail-pane.tsx`   | Agent Role selection and the single Role detail pane                                                                                                |
@@ -74,6 +80,7 @@ What each file in this directory is responsible for. Binding rules live in
 | `session-file-quick-open.tsx`                                                                                                             | Quick open over the file index                           |
 | `components/`                                                                                                                             | File tree ([scope AGENTS.md](components/AGENTS.md))      |
 | `session-browser-panel.tsx`, `session-browser-toolbar.tsx`, `session-browser-resume-state.ts`                                             | Session Browser panel, address bar, and resume state     |
+| `session-browser-panel-view.tsx`, `preview-connection-status.tsx` | Shared Browser presentation and connection/recovery UI; used by production and Storybook |
 | `public-browser-surface.tsx`                                                                                                              | Public engine host (Electron `WebContentsView`)          |
 | `managed-preview-surface.tsx`, `managed-preview-frame-cache.ts`                                                                           | Managed Preview host and its LRU frame cache             |
 | `static-html-preview-document.ts`, `session-html-attachment-action.ts`                                                                    | Static `srcdoc` document policy for complete HTML text   |

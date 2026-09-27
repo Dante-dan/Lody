@@ -2,15 +2,20 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { Trans, useTranslation } from 'react-i18next';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowLeft, ArrowRight, ExternalLink, Github, Mail } from 'lucide-react';
-import { Spinner } from '@/ui/spinner';
+import { Spinner } from '@lody/ui/spinner';
 import { usePostHog } from '@posthog/react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import isEmail from 'validator/lib/isEmail';
-import { electronDeepLinkSignInInProgressAtom, nativeSignInInProgressAtom } from '@/atoms';
-import { Button } from '@/ui/button';
-import { Input } from '@/ui/input';
-import { Label } from '@/ui/label';
-import { PasswordInput } from '@/ui/password-input';
+import {
+  electronLoginErrorAtom,
+  electronLoginErrorDetailAtom,
+  electronLoginPhaseAtom,
+  nativeSignInInProgressAtom,
+} from '@/atoms';
+import { Button } from '@lody/ui/button';
+import { Input } from '@lody/ui/input';
+import { Field as UiField } from '@lody/ui/field';
+import { PasswordInput } from '@lody/ui/password-input';
 import { isDevEmailPasswordLoginEnabled } from '@lody/shared/electron-ipc';
 import { setLoginHintCookie } from '@/lib/login-hint-cookie';
 import { formatPasswordValidationFailure, validateNewPassword } from '@/lib/password-validation';
@@ -106,6 +111,10 @@ const getElectronOAuthQuery = () => {
   const clientId = urlParams.get('client_id');
   const state = urlParams.get('state');
   const codeChallenge = urlParams.get('code_challenge');
+  const desktopChannel = urlParams.get('desktop_channel');
+  if (desktopChannel !== null && desktopChannel !== 'stable' && desktopChannel !== 'nightly') {
+    return undefined;
+  }
   if (clientId !== 'electron' || !state || !codeChallenge) {
     return undefined;
   }
@@ -114,6 +123,7 @@ const getElectronOAuthQuery = () => {
     client_id: clientId,
     state,
     code_challenge: codeChallenge,
+    ...(desktopChannel ? { desktop_channel: desktopChannel } : {}),
   };
   const codeChallengeMethod = urlParams.get('code_challenge_method');
   if (codeChallengeMethod) {
@@ -485,35 +495,35 @@ const PROVIDER_CONFIG: {
   icon: React.ComponentType;
   labelKey: string;
   labelDefault: string;
-  variant: 'default' | 'outline';
+  variant: 'primary' | 'secondary';
 }[] = [
   {
     id: 'github',
     icon: GitHubIcon,
     labelKey: 'login.githubSignIn',
     labelDefault: 'Continue with GitHub',
-    variant: 'default',
+    variant: 'primary',
   },
   {
     id: 'google',
     icon: GoogleIcon,
     labelKey: 'login.googleSignIn',
     labelDefault: 'Continue with Google',
-    variant: 'outline',
+    variant: 'secondary',
   },
   {
     id: 'apple',
     icon: AppleIcon,
     labelKey: 'login.appleSignIn',
     labelDefault: 'Continue with Apple',
-    variant: 'outline',
+    variant: 'secondary',
   },
   {
     id: 'discord',
     icon: DiscordIcon,
     labelKey: 'login.discordSignIn',
     labelDefault: 'Continue with Discord',
-    variant: 'outline',
+    variant: 'secondary',
   },
 ];
 
@@ -576,7 +586,7 @@ export function LoginPage({
   // this browser signed in as the previous account, so an automatic transfer
   // would mint an authorization code for the account the user is trying to
   // leave, with no way back. The user picks the account, then this holds the
-  // `lody://auth/callback#token=…` URL that both the automatic navigation and
+  // channel-specific auth callback URL that both the automatic navigation and
   // the visible fallback link use.
   const [electronHandoffUrl, setElectronHandoffUrl] = useState<string | null>(null);
   const [isPreparingElectronHandoff, setIsPreparingElectronHandoff] = useState(false);
@@ -592,11 +602,12 @@ export function LoginPage({
   // cookie still set), and must not produce a handoff link afterwards.
   const electronAccountGenerationRef = useRef(0);
   const autoOpenedElectronHandoffRef = useRef<string | null>(null);
-  // Set the instant the browser hands the auth token back via the `lody://auth/
-  // callback#token=…` deep link (detected centrally in DesktopDeepLinkRouter), so
-  // the desktop login shows a "signing in" spinner while better-auth exchanges
-  // the token for a session.
-  const isCompletingElectronSignIn = useAtomValue(electronDeepLinkSignInInProgressAtom);
+  // Main owns the callback exchange; restored snapshots also recover progress
+  // when this renderer mounts after the browser has returned.
+  const electronLoginPhase = useAtomValue(electronLoginPhaseAtom);
+  const electronLoginError = useAtomValue(electronLoginErrorAtom);
+  const electronLoginErrorDetail = useAtomValue(electronLoginErrorDetailAtom);
+  const isCompletingElectronSignIn = electronLoginPhase === 'exchanging';
   const setNativeSignInInProgress = useSetAtom(nativeSignInInProgressAtom);
   const [providerContentWidth, setProviderContentWidth] = useState<number | null>(null);
   const providerLabelMeasureRef = useRef<HTMLDivElement | null>(null);
@@ -643,7 +654,16 @@ export function LoginPage({
     getAppWindowSearchParams().get('expired') === '1'
       ? t('login.sessionExpired', 'Login expired. Please sign in again.')
       : '';
-  const effectiveError = error || expiredMessage;
+  const desktopLoginError =
+    isElectronRendererLogin && electronLoginError
+      ? t(`login.desktopErrors.${electronLoginError}`)
+      : '';
+  const effectiveError = error || desktopLoginError || expiredMessage;
+  // The category message says what to do; the detail is what support needs.
+  const effectiveErrorDetail =
+    !error && desktopLoginError && electronLoginErrorDetail
+      ? t('login.desktopErrors.detail', { detail: electronLoginErrorDetail })
+      : '';
   const isAnyLoading =
     loadingProvider !== null ||
     isEmailSubmitting ||
@@ -1262,7 +1282,13 @@ export function LoginPage({
         login_surface: loginSurface,
         launch_mode: detectAppLaunchMode(isElectronRenderer),
       });
-      setElectronHandoffUrl(buildElectronRedirectUrl(authorizationCode, electronOAuthQuery.state));
+      setElectronHandoffUrl(
+        buildElectronRedirectUrl(
+          authorizationCode,
+          electronOAuthQuery.state,
+          electronOAuthQuery.desktop_channel
+        )
+      );
     } catch (err) {
       if (!isCurrentAccount()) {
         logElectronOAuthDebug('login page ignored transferUser failure after account switch');
@@ -1362,7 +1388,7 @@ export function LoginPage({
     [isNativeApp]
   );
 
-  // Attempt the `lody://` navigation from an effect rather than inline in the
+  // Attempt the app-scheme navigation from an effect rather than inline in the
   // transfer handler: the fallback link has to be painted before the attempt,
   // because a browser that refuses the custom scheme gives no callback and the
   // link is then the only way forward. Whether any given browser accepts this
@@ -1439,7 +1465,7 @@ export function LoginPage({
 
           <Button
             type="button"
-            variant="outline"
+            variant="secondary"
             onClick={handleEnterEmailView}
             className="h-10 w-full"
             disabled={isButtonsDisabled}
@@ -1555,9 +1581,9 @@ export function LoginPage({
                 className="overflow-hidden"
               >
                 <div className="grid gap-1.5 pb-3">
-                  <Label htmlFor="email-auth-name" className="text-xs font-medium">
+                  <UiField.Label htmlFor="email-auth-name" className="text-xs font-medium">
                     {t('login.nameLabel', 'Name')}
-                  </Label>
+                  </UiField.Label>
                   <Input
                     id="email-auth-name"
                     autoComplete="name"
@@ -1577,9 +1603,9 @@ export function LoginPage({
           </AnimatePresence>
 
           <div className="grid gap-1.5">
-            <Label htmlFor="email-auth-email" className="text-xs font-medium">
+            <UiField.Label htmlFor="email-auth-email" className="text-xs font-medium">
               {t('login.emailLabel', 'Email address')}
-            </Label>
+            </UiField.Label>
             <Input
               ref={emailInputRef}
               id="email-auth-email"
@@ -1600,9 +1626,9 @@ export function LoginPage({
 
           <div className="grid gap-1.5">
             <div className="flex items-center justify-between">
-              <Label htmlFor="email-auth-password" className="text-xs font-medium">
+              <UiField.Label htmlFor="email-auth-password" className="text-xs font-medium">
                 {t('login.passwordLabel', 'Password')}
-              </Label>
+              </UiField.Label>
             </div>
             <PasswordInput
               id="email-auth-password"
@@ -1620,8 +1646,10 @@ export function LoginPage({
                   : t('login.passwordPlaceholder', 'At least 8 characters')
               }
               className="h-10"
-              showPasswordLabel={t('login.showPassword', 'Show password')}
-              hidePasswordLabel={t('login.hidePassword', 'Hide password')}
+              labels={{
+                show: t('login.showPassword', 'Show password'),
+                hide: t('login.hidePassword', 'Hide password'),
+              }}
             />
             {!isSignUp ? (
               <div className="flex justify-end">
@@ -1740,15 +1768,17 @@ export function LoginPage({
         />
       </Button>
       <p className="text-center text-xs leading-5 text-muted-foreground">
-        {t(
-          'login.desktopBrowserHint',
-          'Your browser will return you to Lody Desktop after sign-in.'
-        )}
+        {electronLoginPhase === 'waiting'
+          ? t('login.desktopWaiting')
+          : t(
+              'login.desktopBrowserHint',
+              'Your browser will return you to Lody Desktop after sign-in.'
+            )}
       </p>
       {isDevElectronEmailPasswordLoginEnabled ? (
         <Button
           type="button"
-          variant="outline"
+          variant="secondary"
           onClick={handleEnterEmailView}
           className="h-10 w-full"
           disabled={isButtonsDisabled}
@@ -1790,16 +1820,17 @@ export function LoginPage({
       ) : null}
 
       {electronHandoffUrl ? (
-        <Button asChild className="h-10 w-full">
+        <Button
+          render={<a href={electronHandoffUrl} data-electron-handoff-link />}
+          className="h-10 w-full"
+        >
           {/* A real link: the automatic navigation may be refused, and this is
               then the user's way to open the desktop app. */}
-          <a href={electronHandoffUrl} data-electron-handoff-link>
-            <SocialLoginButtonContent
-              icon={<ExternalLink />}
-              label={t('login.desktopHandoff.openApp', 'Open Lody Desktop')}
-              width={null}
-            />
-          </a>
+          <SocialLoginButtonContent
+            icon={<ExternalLink />}
+            label={t('login.desktopHandoff.openApp', 'Open Lody Desktop')}
+            width={null}
+          />
         </Button>
       ) : (
         <Button
@@ -1828,7 +1859,7 @@ export function LoginPage({
           late result is discarded by the account generation. */}
       <Button
         type="button"
-        variant="outline"
+        variant="secondary"
         onClick={() => void handleSwitchElectronAccount()}
         className="h-10 w-full"
         disabled={isSwitchingElectronAccount}
@@ -1964,6 +1995,11 @@ export function LoginPage({
                 className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-center text-xs text-destructive"
               >
                 {effectiveError}
+                {effectiveErrorDetail ? (
+                  <span className="mt-1 block select-text break-all text-[11px] opacity-80">
+                    {effectiveErrorDetail}
+                  </span>
+                ) : null}
               </motion.p>
             ) : null}
           </AnimatePresence>

@@ -19,6 +19,8 @@ Root `AGENTS.md` applies; this file adds CLI context. Build, PR-poller, and adap
   `splitting: true`, and keep the no-hoisting assertion.
 - Import the CLI's own `version` from `@/pkg`, never a relative `../package.json`; the package
   `name` stays `lody` in every composition.
+- Optional desktop provenance comes from the compiled constant in `utils/desktop-build.ts`,
+  never runtime environment variables. File/hybrid log initialization records it at debug level.
 - Keep `prepare:acp-adapters` before `dev-build.mjs` and Vite: skipping it can silently launch old
   adapter capabilities from a stale `dist/`.
 - `engines.node` is pinned to `>=22.14.0 <23 || >=23.6.0` by better-sqlite3's
@@ -57,7 +59,7 @@ Root `AGENTS.md` applies; this file adds CLI context. Build, PR-poller, and adap
 
 ## Cross-entry agent contracts
 
-Before changing MCP tools, their callers, or delegated Task automation, read
+Before changing MCP tools or their callers, read
 [src/mcp/AGENTS.md](src/mcp/AGENTS.md) for Session acceptance, reply bounds, and
 execution/consent rules. These rules also bind CLI callers outside that directory.
 
@@ -82,6 +84,10 @@ execution/consent rules. These rules also bind CLI callers outside that director
 
 ## Agents, GitHub, and PR status
 
+- Checkout branch observations belong to `session/workspace-git-service.ts`, independent of
+  GitHub/PR support. Publish to the workspace owner, serialize probe plus write, and keep
+  startup/file snapshot observation off the prompt/RPC critical path.
+
 - ACP authentication rules: [src/agent/AGENTS.md](src/agent/AGENTS.md). A capability refresh after
   login proves credentials became usable and must finish inside the renderer's 300-second deadline.
 - Agent `gh` auth for GitHub repo sessions is set up in `src/session/session-manager.ts`; the
@@ -93,6 +99,9 @@ execution/consent rules. These rules also bind CLI callers outside that director
   DeepSeek capability source version and thread the Agent config environment through every
   probe/session source-version derivation, so two endpoint catalogs never share a cache identity.
   Never put the API key or a derivative of it in that cache key.
+- Pi extension scanning runs only the pinned runtime's read-only listing entry under a frozen
+  default or saved-profile environment — never caller-supplied launch fields. Selections
+  require the pinned extension-aware runtime (`piExtensionsProtocolVersion`), not a fallback.
 - `src/lib/pr-poller/` compensates for a broken hosted GitHub webhook → Streams fan-out. Keep
   policy in its pure modules with a thin scheduler, keep priority driven by presence and
   `lastMessageAt` rather than a turn-end hook, and keep only scheduling state (never PR status) in

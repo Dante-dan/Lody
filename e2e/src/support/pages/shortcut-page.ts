@@ -36,6 +36,9 @@ export class ShortcutPage {
       /^(Search commands and chats\.\.\.|搜索命令和对话\.\.\.)$/u
     );
     await expect(palette).toBeVisible();
+    // The dialog moves focus into its input a frame after it renders; until
+    // then Escape still reaches the composer. A person cannot press it sooner.
+    await expect(palette).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(palette).toBeHidden();
 
@@ -91,6 +94,35 @@ export class ShortcutPage {
     const secondaryPage = this.requireSecondaryPage();
     await secondaryPage.reload();
     await expect(secondaryPage.locator('#chat-prompt')).toBeEditable({ timeout: 60_000 });
+  }
+
+  /* The desktop session strip is the ONE tablist labelled "Session tabs"; the
+     right-aside viewer strip is a separate surface, so digit shortcuts must
+     only ever move selection inside this locator. */
+  async openDraftSessionTabsWithShortcut(count: number): Promise<void> {
+    const tabs = this.sessionTabStrip().getByRole('tab');
+    for (let opened = 0; opened < count; opened += 1) {
+      const before = await tabs.count();
+      await this.page.keyboard.press(`${PRIMARY_MODIFIER}+t`);
+      await expect(tabs).toHaveCount(before + 1);
+    }
+  }
+
+  async pressSessionTabDigit(digit: number): Promise<void> {
+    await this.page.bringToFront();
+    await this.page.keyboard.press(`${PRIMARY_MODIFIER}+${digit}`);
+  }
+
+  async expectActiveSessionTabPosition(position: number): Promise<void> {
+    const strip = this.sessionTabStrip();
+    await expect(strip.getByRole('tab').nth(position - 1)).toHaveAttribute('aria-selected', 'true');
+    await expect(strip.locator('[role="tab"][aria-selected="true"]')).toHaveCount(1);
+  }
+
+  private sessionTabStrip(): Locator {
+    return this.page.getByRole('tablist', {
+      name: /^(Session tabs|会话标签页)$/u,
+    });
   }
 
   private settingsDialog(page: Page): Locator {

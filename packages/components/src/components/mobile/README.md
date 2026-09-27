@@ -7,12 +7,16 @@ directory index. Stories: `src/stories/Mobile*.stories.tsx`.
 
 ## Screens and chrome
 
+- `mobile-app-icon-settings.tsx` — host-provided icon previews and native selection
+  below Font size in both narrow and wide Appearance settings (including iPad).
+  The optional `__LODY_APP_ICON__` bridge owns the catalog and
+  installed state; shared UI contains no native artwork or Capacitor dependency.
+  See [app icon contract](../../../../../specs/app-icon-selection.md).
+
 - `mobile-home-screen.tsx` — workspace home. `workspaceTabSpecs` builds the
-  Inbox / Chat / Tasks / Projects dock tabs; the Tasks body is the shared
-  `TasksListBody mobile embedded`, lazy-imported from
-  `../tasks/tasks-workspace.tsx` (`embedded` skips the safe-area BaseHeader under
-  the home chrome). The header's connection/pull pill is absolutely centred on the
-  h-9 chrome row, and the pill bar expands above the scroll region.
+  Inbox / Chat / Projects dock tabs. The header's connection/pull pill is
+  absolutely centred on the h-9 chrome row, and the pill bar expands above the
+  scroll region.
 - `mobile-project-screen.tsx`, `mobile-chat-landing-screen.tsx`,
   `mobile-archive-screen.tsx` — the other top-level screens.
 - `mobile-workspace-layout.tsx`, `mobile-workspace-tabbar.tsx`,
@@ -33,6 +37,10 @@ directory index. Stories: `src/stories/Mobile*.stories.tsx`.
 
 ## Sheets and session surfaces
 
+- `mobile-new-chat-sheet.tsx` provides a no-drag popup container inside its
+  modal, outside its scrolling content. The landing's mobile file input mounts
+  with the composer inside that sheet; the attachment menu stays within Vaul's
+  interaction boundary.
 - Bottom sheets: `mobile-new-chat-sheet.tsx`,
   `mobile-workspace-switcher-sheet.tsx`, `mobile-create-workspace-sheet.tsx`,
   `mobile-delete-workspace-sheet.tsx`, `mobile-worktree-config-sheet.tsx`,
@@ -74,3 +82,7 @@ directory index. Stories: `src/stories/Mobile*.stories.tsx`.
   `mobile-integrations-settings.tsx`, `mobile-stats-settings.tsx`,
   `mobile-project-settings.tsx`, `mobile-local-project-settings.tsx`,
   `mobile-github-project-settings.tsx`.
+
+`mobile-about-settings.tsx` exposes Inbox and Prompt Shortcuts opt-ins under
+Developer mode. Both use the shared feature gates; disabling Developer mode
+retains the saved opt-ins while making the features unavailable.

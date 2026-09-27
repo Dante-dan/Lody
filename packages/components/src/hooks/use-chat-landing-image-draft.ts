@@ -9,9 +9,10 @@ import {
   type WorkspaceId,
 } from '@lody/shared';
 import { useAtom } from 'jotai';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { useTranslation } from 'react-i18next';
 import { chatLandingPendingImagesAtomFamily, type PendingImage } from '@/atoms/chat-landing-draft';
+import { selectPastedClipboardFiles } from '@/lib/file-drop';
 import { validateSessionImageFile } from '@/lib/session-image-upload';
 
 export type ChatLandingImageDraftItem = {
@@ -157,10 +158,15 @@ export function useChatLandingImageDraft(args: {
       if (isMobile) {
         return;
       }
-      const fileItems = Array.from(event.clipboardData.items)
-        .filter((item) => item.type.startsWith('image/'))
-        .map((item) => item.getAsFile())
-        .filter((item): item is File => item !== null);
+      // A Word or PowerPoint copy carries a picture of the selection beside
+      // the text; the text is what the composer wants.
+      const { files: fileItems } = selectPastedClipboardFiles({
+        text: event.clipboardData.getData('text/plain'),
+        files: Array.from(event.clipboardData.items)
+          .filter((item) => item.type.startsWith('image/'))
+          .map((item) => item.getAsFile())
+          .filter((item): item is File => item !== null),
+      });
 
       if (fileItems.length === 0) {
         return;
