@@ -20,7 +20,6 @@ import {
 import { currentWorkspaceIdAtom } from '../src/atoms/workspace-context';
 import { computeSha256Hex, uploadSessionFile } from '../src/lib/session-file-upload';
 import { uploadSessionImage } from '../src/lib/session-image-upload';
-import { resolveSessionMessageSubmitRoute } from '../src/components/sessions/session-message-submit-route';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRole, AgentRoleId, SessionMeta, SessionInputBlock } from '@lody/shared';
@@ -96,7 +95,6 @@ vi.mock('../src/hooks/use-code-collab-session-file-provider', () => ({
 import {
   SessionChatInputArea,
   setSessionChatInputTextDraft,
-  clearSessionChatInputDrafts,
   type SessionChatInputAreaHandle,
   type SessionChatInputAreaProps,
 } from '../src/components/sessions/session-chat-input-area';
@@ -514,10 +512,10 @@ describe('SessionChatInputArea submission feedback', () => {
       expect(submissions).toHaveLength(1);
       expect(submissions[0][0]).toEqual([{ type: 'text', text: 'focus regression draft' }]);
       expect(
-        submissions[0][2]?.attachments?.map(({ kind, name, source }) => ({
+        submissions[0][2]?.attachments?.map(({ kind, name, source: bytes }) => ({
           kind,
           name,
-          size: source.size,
+          size: bytes.size,
         }))
       ).toEqual([
         { kind: 'image', name: 'sample.png', size: 15 },

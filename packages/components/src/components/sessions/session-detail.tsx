@@ -1,5 +1,4 @@
 import { buildDraftUserHistoryEntry } from '@/lib/session-attachment-draft';
-import { isAuxiliaryWindow } from '@/lib/desktop-window';
 import { windowPreparationAtom } from '@/lib/window-preparation';
 import { useEmptySessionDraft } from '@/hooks/use-empty-session-draft';
 import { sessionHasUnreadMessages } from '@/lib/session-read-receipt';
