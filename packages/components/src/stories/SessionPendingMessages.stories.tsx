@@ -5,17 +5,19 @@ import type { SessionHistory, SessionId, WorkspaceId } from '@lody/shared';
 import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from '@/atoms/workspace-context';
 import { runtimeAtom, type WorkspaceRuntime } from '@/atoms/runtime';
 import { SessionPendingMessages } from '@/components/chat/session-pending-messages';
-import type { SessionSendRecord } from '@/lib/session-send-journal';
+import type { SessionSendViewRecord } from '@/lib/session-send-journal';
 
 const sessionId = 'attachment-draft-story' as SessionId;
 const workspaceId = 'attachment-draft-workspace' as WorkspaceId;
 const imageSource = new Blob(
-  [[
-    '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320">',
-    '<rect width="100%" height="100%" fill="#cbd5e1"/>',
-    '<path d="M0 230 90 140l60 50 55-70 115 110v90H0Z" fill="#64748b"/>',
-    '</svg>',
-  ].join('')],
+  [
+    [
+      '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320">',
+      '<rect width="100%" height="100%" fill="#cbd5e1"/>',
+      '<path d="M0 230 90 140l60 50 55-70 115 110v90H0Z" fill="#64748b"/>',
+      '</svg>',
+    ].join(''),
+  ],
   { type: 'image/svg+xml' }
 );
 
@@ -33,7 +35,7 @@ const textEntry = (id: string, text: string): SessionHistory =>
     inputConfig: { inputBlocks: [{ type: 'text', text }], cliType: 'builtin', agentType: 'codex' },
   }) as SessionHistory;
 
-const record = (overrides: Partial<SessionSendRecord>): SessionSendRecord => ({
+const record = (overrides: Partial<SessionSendViewRecord>): SessionSendViewRecord => ({
   version: 2,
   id: 'pending-turn',
   sessionId,
@@ -47,12 +49,14 @@ const record = (overrides: Partial<SessionSendRecord>): SessionSendRecord => ({
   ...overrides,
 });
 
-function StoryShell({ records }: { records: readonly SessionSendRecord[] }) {
+function StoryShell({ records }: { records: readonly SessionSendViewRecord[] }) {
   const store = createStore();
   const journal = {
     subscribe: () => () => {},
     getSnapshot: () => records,
     retry: async () => {},
+    refresh: async () => {},
+    discard: async () => {},
     cancel: async () => {},
   };
   store.set(currentWorkspaceIdAtom, workspaceId);
@@ -172,6 +176,36 @@ export const ConfirmingTheOriginalSend: Story = {
           },
         ],
       }),
+    ],
+  },
+};
+
+export const Interrupted: Story = {
+  args: {
+    records: [
+      {
+        version: 2,
+        id: 'interrupted',
+        sessionId,
+        accountId: 'account',
+        workspaceId,
+        sourceReplica: 'replica',
+        sequence: 1,
+        stage: 'saved',
+        activity: 'interrupted',
+        entry: textEntry('interrupted', 'Keep this message after restarting'),
+        delivery: { kind: 'dispatch' },
+        attachments: [
+          {
+            id: 'file',
+            kind: 'file',
+            source: new Blob(['saved draft']),
+            name: 'notes.txt',
+            mimeType: 'text/plain',
+            lastModified: 1,
+          },
+        ],
+      },
     ],
   },
 };

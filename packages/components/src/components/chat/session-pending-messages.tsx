@@ -6,7 +6,7 @@ import type { SessionId } from '@lody/shared';
 import { activeWorkspaceRuntimeAtom } from '@/atoms/runtime';
 import { ConversationColumn } from '@/components/shared/conversation-column';
 import type { SessionAttachmentDraft } from '@/lib/session-attachment-draft';
-import type { SessionSendRecord } from '@/lib/session-send-journal';
+import type { SessionSendRecord, SessionSendViewRecord } from '@/lib/session-send-journal';
 import { cn } from '@/lib/utils';
 import { Button } from '@lody/ui/button';
 import { Progress } from '@lody/ui/progress';
@@ -15,9 +15,19 @@ const empty: readonly SessionSendRecord[] = [];
 const emptySnapshot = () => empty;
 const emptySubscribe = () => () => {};
 
-function PendingImageAttachment({ attachment }: { attachment: SessionAttachmentDraft }) {
+function PendingImageAttachment({
+  attachment,
+  active,
+}: {
+  attachment: SessionAttachmentDraft;
+  active: boolean;
+}) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   useEffect(() => {
+    if (!attachment.source) {
+      setPreviewUrl(null);
+      return undefined;
+    }
     const url = URL.createObjectURL(attachment.source);
     setPreviewUrl(url);
     return () => URL.revokeObjectURL(url);
@@ -28,7 +38,9 @@ function PendingImageAttachment({ attachment }: { attachment: SessionAttachmentD
     ? t('sessions.attachmentPrepared')
     : attachment.error
       ? attachment.error
-      : t('sessions.attachmentUploading', { progress: attachment.progress ?? 0 });
+      : active
+        ? t('sessions.attachmentUploading', { progress: attachment.progress ?? 0 })
+        : t('sessions.attachmentInterrupted');
 
   return (
     <div className="w-36 overflow-hidden rounded-xl border border-border/60 bg-card/80">
@@ -40,7 +52,7 @@ function PendingImageAttachment({ attachment }: { attachment: SessionAttachmentD
             <ImageIcon className="size-6" aria-hidden="true" />
           </div>
         )}
-        {!attachment.ready && !attachment.error ? (
+        {!attachment.ready && !attachment.error && active ? (
           <Progress
             value={attachment.progress ?? 0}
             aria-label={t('sessions.attachmentUploading', { progress: attachment.progress ?? 0 })}
@@ -63,13 +75,21 @@ function PendingImageAttachment({ attachment }: { attachment: SessionAttachmentD
   );
 }
 
-function PendingFileAttachment({ attachment }: { attachment: SessionAttachmentDraft }) {
+function PendingFileAttachment({
+  attachment,
+  active,
+}: {
+  attachment: SessionAttachmentDraft;
+  active: boolean;
+}) {
   const { t } = useTranslation();
   const status = attachment.ready
     ? t('sessions.attachmentPrepared')
     : attachment.error
       ? attachment.error
-      : t('sessions.attachmentUploading', { progress: attachment.progress ?? 0 });
+      : active
+        ? t('sessions.attachmentUploading', { progress: attachment.progress ?? 0 })
+        : t('sessions.attachmentInterrupted');
 
   return (
     <div className="w-full max-w-sm rounded-xl border border-border/60 bg-card/80 px-3 py-2.5">
@@ -89,7 +109,7 @@ function PendingFileAttachment({ attachment }: { attachment: SessionAttachmentDr
           </span>
         </span>
       </div>
-      {!attachment.ready && !attachment.error ? (
+      {!attachment.ready && !attachment.error && active ? (
         <Progress
           value={attachment.progress ?? 0}
           aria-label={t('sessions.attachmentUploading', { progress: attachment.progress ?? 0 })}
@@ -100,24 +120,32 @@ function PendingFileAttachment({ attachment }: { attachment: SessionAttachmentDr
   );
 }
 
-function PendingMessageRow({
+export function PendingMessageRow({
   record,
   onRetry,
   onCancel,
+  onDiscard,
+  busy = false,
 }: {
-  record: SessionSendRecord;
+  record: SessionSendViewRecord;
   onRetry: () => void;
   onCancel: () => void;
+  onDiscard?: () => void;
+  busy?: boolean;
 }) {
   const { t } = useTranslation();
   const text = record.entry.items
     ?.flatMap((item) => (item.type === 'text' ? [item.text] : []))
     .join('\n');
-  const messageStatus = record.error
-    ? t('sessions.pendingMessageUploadFailed')
-    : record.stage === 'prepared'
-      ? t('sessions.pendingMessageWaiting')
-      : t('sessions.pendingMessageUploading');
+  const interrupted = record.activity === 'interrupted';
+  const messageStatus =
+    interrupted && !record.error
+      ? t('sessions.pendingMessageInterrupted')
+      : record.error
+        ? t('sessions.pendingMessageUploadFailed')
+        : record.stage === 'prepared'
+          ? t('sessions.pendingMessageWaiting')
+          : t('sessions.pendingMessageUploading');
 
   return (
     <ConversationColumn className="px-3 pb-3 sm:pb-4">
@@ -141,7 +169,11 @@ function PendingMessageRow({
             {record.attachments
               .filter((attachment) => attachment.kind === 'image')
               .map((attachment) => (
-                <PendingImageAttachment key={attachment.id} attachment={attachment} />
+                <PendingImageAttachment
+                  key={attachment.id}
+                  attachment={attachment}
+                  active={!interrupted}
+                />
               ))}
           </div>
         ) : null}
@@ -150,7 +182,11 @@ function PendingMessageRow({
             {record.attachments
               .filter((attachment) => attachment.kind === 'file')
               .map((attachment) => (
-                <PendingFileAttachment key={attachment.id} attachment={attachment} />
+                <PendingFileAttachment
+                  key={attachment.id}
+                  attachment={attachment}
+                  active={!interrupted}
+                />
               ))}
           </div>
         ) : null}
@@ -161,17 +197,27 @@ function PendingMessageRow({
         ) : null}
         {record.error ? <p className="text-xs text-destructive">{record.error}</p> : null}
         <div className="flex gap-1">
-          {record.error ? (
-            <Button size="small" variant="secondary" onClick={onRetry}>
+          {record.error || interrupted ? (
+            <Button size="small" variant="secondary" disabled={busy} onClick={onRetry}>
               {t('sessions.retryPendingSend')}
             </Button>
           ) : null}
           {record.stage === 'saved' ? (
-            <Button size="small" variant="ghost" onClick={onCancel}>
+            <Button size="small" variant="ghost" disabled={busy} onClick={onCancel}>
               {t('sessions.cancelPendingSend')}
             </Button>
           ) : null}
+          {record.stage === 'prepared' && onDiscard ? (
+            <Button size="small" variant="ghost" disabled={busy} onClick={onDiscard}>
+              {t('sessions.discardPendingSend')}
+            </Button>
+          ) : null}
         </div>
+        {record.stage === 'prepared' && onDiscard ? (
+          <p className="text-xs text-muted-foreground">
+            {t('sessions.discardPreparedSendDescription')}
+          </p>
+        ) : null}
       </article>
     </ConversationColumn>
   );
@@ -187,19 +233,31 @@ export function SessionPendingMessages({ sessionId }: { sessionId: SessionId }) 
     emptySnapshot
   );
   const { t } = useTranslation();
+  const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  useEffect(() => {
+    void journal
+      ?.refresh()
+      .catch((error: unknown) =>
+        setFailure(error instanceof Error ? error.message : t('sessions.sendRecoveryUnavailable'))
+      );
+  }, [journal, sessionId, t]);
   const pending = records.filter(
     (record) =>
       record.sessionId === sessionId && (record.stage === 'saved' || record.stage === 'prepared')
   );
   if (!pending.length) return null;
-  const action = async (record: SessionSendRecord, cancel: boolean) => {
+  const action = async (record: SessionSendRecord, kind: 'retry' | 'cancel' | 'discard') => {
+    setBusy(record.id);
     try {
-      if (cancel) await journal?.cancel(record.id);
+      if (kind === 'cancel') await journal?.cancel(record.id);
+      if (kind === 'discard') await journal?.discard(record.id);
       await journal?.retry(sessionId);
       setFailure(null);
     } catch (error) {
       setFailure(error instanceof Error ? error.message : t('sessions.sendRecoveryUnavailable'));
+    } finally {
+      setBusy(null);
     }
   };
   return (
@@ -208,8 +266,10 @@ export function SessionPendingMessages({ sessionId }: { sessionId: SessionId }) 
         <PendingMessageRow
           key={record.id}
           record={record}
-          onRetry={() => void action(record, false)}
-          onCancel={() => void action(record, true)}
+          busy={busy === record.id}
+          onRetry={() => void action(record, 'retry')}
+          onCancel={() => void action(record, 'cancel')}
+          onDiscard={() => void action(record, 'discard')}
         />
       ))}
       {failure ? (

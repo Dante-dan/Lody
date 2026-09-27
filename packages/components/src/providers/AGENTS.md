@@ -112,12 +112,11 @@ Replacement contract: [shared rules](../../../shared/AGENTS.md#session-history).
 
 ## Attachment transfer ownership
 
-Binds helpers and UI: workspace `sendResources` owns preparation, cancellation
-and store borrows, independent of React unmount. Dispose it before transports or
-caches; join noncancelable IPC. Only the cache disposes stores. Cancel underlying
-I/O, fence late results, never fall back on cancellation; await multipart cleanup.
+Workspace `sendResources` owns preparation, cancellation and store borrows across
+React unmount. Dispose before transports/caches; join noncancelable IPC. Only the
+cache disposes stores. Cancel I/O, fence late results, await multipart cleanup.
 
-User admission uses the account/workspace journal and one HistoryWriter. Persist
-exact prepared operations before live import; never re-append on recovery. Lock
-submission and delivery separately per session. Sync imported operations before
-retiring recovery records.
+Admission uses the scoped journal and HistoryWriter. Persist exact operations
+before import; never re-append on recovery. Lock submission/delivery separately;
+sync before retiring records. Observe live work and scoped Web Locks; reads must
+not restart interrupted sends. Keep recovery actions reachable inline on mobile.

@@ -1,7 +1,12 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
 import { LoroDoc } from 'loro-crdt';
-import { createHistoryWriter, SESSION_FILE_MAX_COUNT, type SessionHistory, type SessionId } from '@lody/shared';
+import {
+  createHistoryWriter,
+  SESSION_FILE_MAX_COUNT,
+  type SessionHistory,
+  type SessionId,
+} from '@lody/shared';
 import { createSessionSendResources } from '../src/lib/session-send-resources';
 import { createSessionSendJournal } from '../src/lib/session-send-journal';
 import { createSessionSendJournalStorage } from '../src/lib/session-send-journal-storage';
@@ -14,13 +19,34 @@ vi.mock('../src/lib/session-image-upload', () => ({
   uploadSessionImage: (args: { file: File; signal: AbortSignal }) =>
     upload.run!(args.file, args.signal),
 }));
-const local = vi.hoisted(() => ({ enabled: false, machineId: null as string | null, files: [] as string[], fail: false }));
+const local = vi.hoisted(() => ({
+  enabled: false,
+  machineId: null as string | null,
+  files: [] as string[],
+  fail: false,
+}));
 vi.mock('../src/lib/electron-session-file-sender', () => ({
   canUseElectronLocalFileSend: () => local.enabled,
   sendSessionFileToLocalRuntime: async ({ file }: { file: File }) => {
     if (local.fail) return { ok: false, error: 'Local handoff failed' };
     local.files.push(await file.text());
-    return { ok: true, files: [{ type: 'file', transport: 'local', fileId: file.name, fileName: file.name, mimeType: file.type, sizeBytes: file.size, machineId: 'machine', sha256: 'a'.repeat(64), textPreview: false, uploadedAt: 1 }] };
+    return {
+      ok: true,
+      files: [
+        {
+          type: 'file',
+          transport: 'local',
+          fileId: file.name,
+          fileName: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          machineId: 'machine',
+          sha256: 'a'.repeat(64),
+          textPreview: false,
+          uploadedAt: 1,
+        },
+      ],
+    };
   },
 }));
 const cleanup: Array<() => Promise<void>> = [];
@@ -139,7 +165,14 @@ it('preserves the whole message and successful attachment receipts, retrying onl
     ['first', true],
     ['second', false],
   ]);
+  expect(
+    (await f.storage.list())[0]?.attachments?.every((item) => item.source instanceof Blob)
+  ).toBe(true);
   rejectSecond = false;
+  await f.journal.submit('session' as SessionId);
+  const prepared = (await f.storage.list())[0]!;
+  expect(prepared.attachments?.every((item) => item.ready && !item.source)).toBe(true);
+  expect(prepared.entry.items).toHaveLength(3);
   await f.journal.retry('session' as SessionId);
   const turns = f.writer.readStored();
   expect(turns).toHaveLength(1);
@@ -276,7 +309,7 @@ it('reopens saved source bytes and transfers a canceled creation to the next tex
     indexedDB: f.factory,
   });
   const reopened = (await peer.list())[0]!;
-  expect(await reopened.attachments![0]!.source.text()).toBe('original');
+  expect(await reopened.attachments![0]!.source!.text()).toBe('original');
   await f.journal.cancel('first');
   expect((await peer.list()).map((row) => [row.id, row.creation])).toEqual([['next', creation]]);
   await f.journal.retry('session' as SessionId);
@@ -339,33 +372,68 @@ it('keeps creation reachable when cancellation races a following message admissi
   expect(f.writer.readStored().map((turn) => turn.id)).toEqual(['next']);
 });
 
-
 it('prepares a failed image through the existing local handoff and persists its file receipt', async () => {
   Object.assign(local, { enabled: true, machineId: 'machine' });
   const f = fixture();
-  upload.run = async () => { throw new Error('Image upload offline'); };
-  await f.journal.accept({ ...input('local-image', ['image.png']), targetMachineId: 'machine' as never });
+  upload.run = async () => {
+    throw new Error('Image upload offline');
+  };
+  await f.journal.accept({
+    ...input('local-image', ['image.png']),
+    targetMachineId: 'machine' as never,
+  });
   await f.journal.retry('session' as SessionId);
   expect(local.files).toEqual(['image.png']);
-  expect(f.writer.readStored()[0]?.items).toEqual(expect.arrayContaining([
-    expect.objectContaining({ type: 'file', transport: 'local', fileId: 'image.png' }),
-    expect.objectContaining({ type: 'text', text: 'keep this text' }),
-  ]));
+  expect(f.writer.readStored()[0]?.items).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ type: 'file', transport: 'local', fileId: 'image.png' }),
+      expect.objectContaining({ type: 'text', text: 'keep this text' }),
+    ])
+  );
   expect((await f.journal.read('local-image'))?.stage).toBe('delivered');
 });
 
 it.each(['remote', 'no-capability', 'canceled', 'file-limit', 'local-failure'])(
-  'keeps the message recoverable without local image fallback for %s', async (reason) => {
-    Object.assign(local, { enabled: reason !== 'no-capability', machineId: reason === 'remote' ? 'other' : 'machine', fail: reason === 'local-failure' });
+  'keeps the message recoverable without local image fallback for %s',
+  async (reason) => {
+    Object.assign(local, {
+      enabled: reason !== 'no-capability',
+      machineId: reason === 'remote' ? 'other' : 'machine',
+      fail: reason === 'local-failure',
+    });
     const f = fixture();
-    const failure = reason === 'canceled' ? new DOMException('Upload canceled', 'AbortError') : new Error('Image upload offline');
-    upload.run = async () => { throw failure; };
+    const failure =
+      reason === 'canceled'
+        ? new DOMException('Upload canceled', 'AbortError')
+        : new Error('Image upload offline');
+    upload.run = async () => {
+      throw failure;
+    };
     const value = { ...input('blocked', ['image.png']), targetMachineId: 'machine' as never };
-    if (reason === 'file-limit') value.entry.inputConfig!.inputBlocks = Array.from({ length: SESSION_FILE_MAX_COUNT }, (_, i) => ({ type: 'file', fileId: `existing-${i}`, fileName: 'file', mimeType: 'text/plain', sizeBytes: 1, transport: 'local' as const, machineId: 'machine', sha256: 'a'.repeat(64), textPreview: false, uploadedAt: 1 }));
+    if (reason === 'file-limit')
+      value.entry.inputConfig!.inputBlocks = Array.from(
+        { length: SESSION_FILE_MAX_COUNT },
+        (_, i) => ({
+          type: 'file',
+          fileId: `existing-${i}`,
+          fileName: 'file',
+          mimeType: 'text/plain',
+          sizeBytes: 1,
+          transport: 'local' as const,
+          machineId: 'machine',
+          sha256: 'a'.repeat(64),
+          textPreview: false,
+          uploadedAt: 1,
+        })
+      );
     await f.journal.accept(value);
     await expect(f.journal.retry('session' as SessionId)).rejects.toThrow(failure.message);
     expect(local.files).toEqual([]);
     expect(f.writer.readStored()).toEqual([]);
-    expect(await f.journal.read('blocked')).toMatchObject({ stage: 'saved', error: failure.message, attachments: [expect.objectContaining({ error: failure.message })] });
+    expect(await f.journal.read('blocked')).toMatchObject({
+      stage: 'saved',
+      error: failure.message,
+      attachments: [expect.objectContaining({ error: failure.message })],
+    });
   }
 );

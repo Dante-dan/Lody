@@ -63,14 +63,21 @@ export function SessionSendRecovery({ runtime }: { runtime: WorkspaceRuntime | n
     setError(null);
     if (!journal) return undefined;
     let active = true;
-    void journal.refresh().catch((failure: unknown) => {
-      if (active)
-        setError(
-          failure instanceof Error ? failure.message : t('sessions.sendRecoveryUnavailable')
-        );
-    });
+    const refresh = () => {
+      void journal.refresh().catch((failure: unknown) => {
+        if (active)
+          setError(
+            failure instanceof Error ? failure.message : t('sessions.sendRecoveryUnavailable')
+          );
+      });
+    };
+    refresh();
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
     return () => {
       active = false;
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
     };
   }, [journal, t]);
 
