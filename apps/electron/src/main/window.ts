@@ -1,4 +1,4 @@
-import { prepareRendererSendsForExit } from './services/renderer-send-lifecycle'
+import { guardRendererSendClose } from './services/renderer-send-lifecycle'
 import { getWindowTargetPath, presentWindowTarget } from './window-target'
 import { app, BrowserWindow, dialog, nativeTheme, shell } from 'electron'
 import { is } from '@electron-toolkit/utils'
@@ -413,24 +413,11 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
     pendingInitialMaximize.add(window)
   }
   registerProductWindow(window, options.warm ?? false)
-  let closingAfterSendCleanup = false
-  window.on('close', (event) => {
-    if (isAppQuitting()) return
+  guardRendererSendClose(window, () => {
     const hidesInsteadOfClosing =
       !options.auxiliary &&
       (process.platform === 'darwin' || (process.platform === 'win32' && isWindowsTrayAvailable()))
-    if (hidesInsteadOfClosing) return
-    event.preventDefault()
-    if (closingAfterSendCleanup) return
-    closingAfterSendCleanup = true
-    void prepareRendererSendsForExit('close', window)
-      .then((allowed) => {
-        if (allowed && !window.isDestroyed()) window.destroy()
-      })
-      .catch((error: unknown) => console.error('[Electron] Window close cleanup failed', error))
-      .finally(() => {
-        closingAfterSendCleanup = false
-      })
+    return !isAppQuitting() && !hidesInsteadOfClosing
   })
   if (!options.auxiliary) trackMainWindowState(window)
   const initialDevbarEnabled = isDevbarRendererEnabled()

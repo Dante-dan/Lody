@@ -4419,6 +4419,7 @@
   "sessions.discardPendingSend": "Discard recovery",
   "sessions.discardPendingSendDescription": "This message may already have been sent. Discarding recovery data cannot confirm its result.",
   "sessions.discardPreparedSendDescription": "Stop recovery for this message. It may already be in history and being processed; discarding recovery does not recall it.",
+  "sessions.unsavedEditorExitBlocked": "Save your file edits or resolve their conflicts before closing, reloading, or quitting.",
   "sessions.pendingSendExitUnavailable": "Could not confirm pending messages. Keep Lody open and try again.",
   "sessions.pendingSendQuit": "Quit and keep messages",
   "sessions.pendingSendReload": "Reload and keep messages",

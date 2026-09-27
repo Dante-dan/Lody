@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act } from 'react';
+import { act, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createStore, Provider } from 'jotai';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -260,5 +260,130 @@ it.each(['saved', 'prepared'] as const)(
     });
     expect(stored?.stage).toBe('delivered');
     expect(container.textContent).not.toContain('keep my message');
+  }
+);
+
+it.each(['quit', 'reload', 'close'])(
+  'keeps the runtime and unsaved editor alive during %s preflight and commit',
+  async (reason) => {
+    const { useCodeCollabSaveText } = await import('../src/hooks/use-code-collab-save-text');
+    const { hasUnsavedRendererChanges } = await import('../src/lib/renderer-unload-guards');
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+    await initI18n();
+    let live = true;
+    let disk = 'original';
+    let saveFails = false;
+    let editor!: ReturnType<typeof useCodeCollabSaveText>;
+    const provider = {
+      saveText: async (_id: string, text: string) => {
+        if (saveFails) throw new Error('disk unavailable');
+        disk = text;
+        return {
+          status: 'ready',
+          entry: {
+            fileId: 'file',
+            path: 'file.txt',
+            kind: 'text',
+            sourceState: 'live-collaborative',
+          },
+          snapshot: { kind: 'text', text },
+        };
+      },
+    };
+    function Editor() {
+      const value = useCodeCollabSaveText({
+        provider: provider as never,
+        fileId: 'file',
+        enabled: true,
+      });
+      useEffect(() => {
+        editor = value;
+      }, [value]);
+      return null;
+    }
+    const handlers = new Map<string, (payload: unknown) => void>();
+    type Reply = { ready: boolean; pending: boolean; unsaved?: boolean };
+    let reply = deferred<Reply>();
+    vi.stubGlobal('ipc', {
+      invoke: async (channel: string, value: Reply) => {
+        if (channel === 'app.replySendLifecycle') reply.resolve(value);
+      },
+      on: (channel: string, handler: (payload: unknown) => void) => {
+        handlers.set(channel, handler);
+        return () => handlers.delete(channel);
+      },
+      send: () => {},
+    });
+    const runtime = {
+      sendResources: { getActiveCount: () => 0 },
+      dispose: async () => {
+        live = false;
+      },
+    };
+    const rootRoute = createRootRoute({
+      component: () => (
+        <>
+          <SessionSendRecovery runtime={runtime as never} />
+          <Editor />
+        </>
+      ),
+    });
+    const router = createRouter({ routeTree: rootRoute, history: createHashHistory() });
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    cleanups.push(async () => {
+      await act(async () => root.unmount());
+      container.remove();
+      expect(hasUnsavedRendererChanges()).toBe(false);
+    });
+    await act(async () => {
+      root.render(
+        <Provider store={createStore()}>
+          <RouterProvider router={router} />
+        </Provider>
+      );
+    });
+    await act(async () => router.load());
+    const request = async (phase: 'check' | 'commit') => {
+      reply = deferred<Reply>();
+      await act(async () => {
+        handlers.get('app.sendLifecycle')!({ requestId: phase, phase, reason });
+        await reply.promise;
+      });
+      return reply.promise;
+    };
+    // No pending send. The independent editor guard alone must block disposal.
+    await act(async () => editor.onContentChange('unsaved'));
+    expect(await request('check')).toMatchObject({ ready: false, pending: false, unsaved: true });
+    expect(await request('commit')).toMatchObject({ ready: false, unsaved: true });
+    expect(live).toBe(true);
+    expect(disk).toBe('original');
+    expect(unloadBlocked()).toBe(true);
+    // Save failures and conflict-pending remain protected by the same predicate.
+    saveFails = true;
+    await act(async () => editor.flush());
+    expect(editor.status.kind).toBe('error');
+    expect(await request('check')).toMatchObject({ ready: false, unsaved: true });
+    await act(async () => editor.markConflictPending('changed on disk'));
+    expect(await request('commit')).toMatchObject({ ready: false, unsaved: true });
+    expect(live).toBe(true);
+    // Once saved, this guard releases normally; send cleanup can proceed.
+    saveFails = false;
+    await act(async () => {
+      editor.onContentChange('saved edit');
+      await editor.flush();
+    });
+    expect(disk).toBe('saved edit');
+    expect(unloadBlocked()).toBe(false);
+    expect(await request('check')).toMatchObject({ ready: true, pending: false });
+    // An edit during the native confirmation is rechecked at commit.
+    await act(async () => editor.onContentChange('newer edit'));
+    expect(await request('commit')).toMatchObject({ ready: false, unsaved: true });
+    expect(live).toBe(true);
+    await act(async () => editor.flush());
+    expect(await request('commit')).toMatchObject({ ready: true });
+    expect(live).toBe(false);
+    expect(disk).toBe('newer edit');
   }
 );

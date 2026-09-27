@@ -4419,6 +4419,7 @@
   "sessions.discardPendingSend": "丢弃恢复数据",
   "sessions.discardPendingSendDescription": "这条消息可能已经发送。丢弃恢复数据后无法确认其结果。",
   "sessions.discardPreparedSendDescription": "停止恢复此消息。它可能已写入历史并被处理；丢弃恢复记录不会撤回消息。",
+  "sessions.unsavedEditorExitBlocked": "请先保存文件修改或处理保存冲突，再关闭窗口、重载或退出。",
   "sessions.pendingSendExitUnavailable": "无法确认待发送消息的状态。请保持 Lody 打开并重试。",
   "sessions.pendingSendQuit": "退出并保留消息",
   "sessions.pendingSendReload": "重新加载并保留消息",
