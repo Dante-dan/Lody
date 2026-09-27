@@ -1,5 +1,7 @@
 import {
   inputBlocksToHistoryItems,
+  normalizeSessionInputBlocks,
+  SESSION_FILE_MAX_COUNT,
   type MachineId,
   type SessionId,
   type WorkspaceId,
@@ -7,7 +9,8 @@ import {
 } from '@lody/shared';
 import { prepareSessionFile } from './session-file-preparation';
 import { uploadSessionImage } from './session-image-upload';
-import { canUseElectronLocalFileSend } from './electron-session-file-sender';
+import { isUploadAbortedError } from './session-file-upload';
+import { canUseElectronLocalFileSend, sendSessionFileToLocalRuntime } from './electron-session-file-sender';
 import { throwIfSendAborted, type SessionSendResources } from './session-send-resources';
 import { preparedDraftInput } from './session-attachment-draft';
 import type { SessionSendRecord } from './session-send-journal';
@@ -40,19 +43,47 @@ export async function prepareDraftAttachments(args: {
       if (attachment.kind === 'image') {
         const token = args.token();
         if (!token) throw new Error('Image upload requires authentication');
-        const image = await args.resources.run(
-          (signal) =>
-            uploadSessionImage({
-              workspaceId: args.record.workspaceId as WorkspaceId,
+        try {
+          const image = await args.resources.run(
+            (signal) =>
+              uploadSessionImage({
+                workspaceId: args.record.workspaceId as WorkspaceId,
+                sessionId: args.record.sessionId,
+                token,
+                file,
+                signal,
+                onProgress: (progress) => args.report(attachment.id, progress),
+              }),
+            args.signal
+          );
+          ready = { type: 'image', ...image };
+        } catch (error) {
+          throwIfSendAborted(args.signal);
+          const machineId = args.record.targetMachineId;
+          const fileCount = normalizeSessionInputBlocks(args.record.entry.inputConfig?.inputBlocks, '')
+            .filter((block) => block.type === 'file').length +
+            attachments.filter((item) => item.kind === 'file' || item.ready?.type === 'file').length;
+          // Keep the existing same-machine image fallback. Cancellation, remote
+          // targets and a full file allowance never authorize a local transfer.
+          if (isUploadAbortedError(error) || !machineId || machineId !== args.localMachineId() ||
+              !canUseElectronLocalFileSend() || fileCount >= SESSION_FILE_MAX_COUNT) throw error;
+          try {
+            const outcome = await args.resources.run((signal) => sendSessionFileToLocalRuntime({
+              workspaceId: args.record.workspaceId,
               sessionId: args.record.sessionId,
-              token,
+              machineId,
               file,
               signal,
-              onProgress: (progress) => args.report(attachment.id, progress),
-            }),
-          args.signal
-        );
-        ready = { type: 'image', ...image };
+            }), args.signal);
+            if (!outcome?.ok || !outcome.files[0]) throw error;
+            ready = outcome.files[0];
+          } catch {
+            throwIfSendAborted(args.signal);
+            // The original upload failure remains the reason if local handoff
+            // is also unavailable. No second cloud file upload is introduced.
+            throw error;
+          }
+        }
       } else {
         const machineId = args.record.targetMachineId ?? null;
         const fileResult = await prepareSessionFile(args.resources, {
