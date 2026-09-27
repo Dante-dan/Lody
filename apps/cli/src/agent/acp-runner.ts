@@ -56,6 +56,7 @@ import {
   createAcpStartupMonitor,
 } from './acp-startup-monitor';
 import { withLodyNpmCacheForNpx } from './npx-cache';
+import { resolveDeepSeekHarnessSpawn } from './deepseek-harness-runtime';
 import { runNpxStartupWithRecovery } from './acp-npx-startup-policy';
 import { truncateLogText } from '@/utils/log-format';
 import {
@@ -81,7 +82,6 @@ export type CreateAcpClientOptions = {
     agentType: string;
   };
   configOptionValues?: AgentClientOptions['configOptionValues'];
-  taskToolsEnabled?: boolean;
   /** Launcher family (npx/uvx/local) for ACP startup analytics; non-PII. */
   launcher?: AcpLauncher;
   resumeSessionId?: ACPSessionId;
@@ -130,7 +130,6 @@ export const createAcpClient = async (options: CreateAcpClientOptions) => {
     agentConfig: options.agentConfig,
     configOptionValues: options.configOptionValues,
     resolveWorktreeProject: options.resolveWorktreeProject,
-    taskToolsEnabled: options.taskToolsEnabled,
     launcher: options.launcher,
     terminalEnabled: options.terminalEnabled,
     onStartupStage: options.onStartupStage,
@@ -260,7 +259,14 @@ export const spawnAcpProcess = (options: SpawnAcpProcessOptions): ChildProcess =
   }
   const spawnFn = options.spawnImpl ?? spawn;
 
-  return spawnFn(command, args, {
+  const executable = resolveDeepSeekHarnessSpawn({
+    command,
+    args,
+    env: options.env,
+    workdir: options.workdir,
+  });
+
+  return spawnFn(executable.command, executable.args, {
     cwd: options.workdir,
     env: options.env,
     stdio: ['pipe', 'pipe', 'pipe'],

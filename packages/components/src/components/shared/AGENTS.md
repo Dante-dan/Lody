@@ -3,12 +3,16 @@
 Parent `AGENTS.md` files also apply. `CLAUDE.md` is a symlink to this file; edit
 `AGENTS.md` only.
 
-- `AgentActivityIndicator` animations stay CSS-only and compositor-friendly
-  (`transform`/`opacity`). Do not restore canvas frame loops, React animation state, or
-  timers; keep the Storybook Playwright render budgets passing.
+- The live agent status (`AgentActivityRow` in `ai-gui/view.tsx`, and the collapsed
+  group label it hands the status to) shimmers via `.agent-shimmer`, which animates only
+  `transform`. Never switch it to a `background-position`/text-clip shimmer, canvas
+  loop, React animation state or timer: those repaint every frame while an agent
+  works. Keep the Storybook Playwright render budgets passing.
 - `ZoomableImageViewer` is the one image viewer, and it presents per
   surface: full-bleed on touch, a lightbox on desktop (inset photo, translucent mask, a
-  top bar that clears the native window controls). Inset the photo with a transform
+  top bar that clears the native window controls and centers its controls on their
+  line — the y=23 traffic-light row on macOS, the 36px caption strip on Windows).
+  Inset the photo with a transform
   only — `react-photo-view` positions the box it sized itself, so a capped
   `width`/`height` decenters it and padding erases a small image. Its portal sits at
   `--z-image-viewer`, deliberately UNDER `--z-toast`, because the viewer's own copy/save

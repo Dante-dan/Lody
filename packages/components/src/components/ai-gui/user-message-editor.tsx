@@ -1,9 +1,9 @@
 import { useCallback, useLayoutEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Spinner } from '@/ui/spinner';
+import { Spinner } from '@lody/ui/spinner';
 
-import { Button } from '@/ui/button';
-import { Textarea } from '@/ui/textarea';
+import { Button } from '@lody/ui/button';
+import { Textarea } from '@lody/ui/textarea';
 import { cn } from '@/lib/utils';
 import type { ConversationFontSize } from '@/atoms/settings';
 import { conversationTextFontSizeStyle } from './conversation-font-size-classes';
@@ -23,11 +23,8 @@ export type UserMessageEditorProps = {
 /**
  * In-place editor that takes the last user bubble's spot when resending.
  *
- * One surface only: the card carries the border, and the field inside is
- * transparent and chrome-free — the shared `Textarea` is what suppresses the
- * global `:focus-visible` inset ring (`@layer base` in tailwind/index.css) that
- * would otherwise draw a second rectangle around the text. Send matches the
- * composer's black pill so the two writing surfaces read as the same control.
+ * The card owns the editor's focus edge. Its bare Textarea keeps the native
+ * editing behavior without drawing a second focus ring inside the card.
  */
 export function UserMessageEditor({
   value,
@@ -65,7 +62,7 @@ export function UserMessageEditor({
     <div
       className={cn(
         'flex w-[32rem] max-w-full flex-col',
-        'rounded-2xl border border-foreground/[0.10] bg-background px-3 py-2.5',
+        'rounded-2xl border-[0.5px] border-foreground/[0.10] bg-background px-3 py-2.5',
         'shadow-[0_1px_2px_hsl(0_0%_0%/0.04),0_8px_24px_-16px_hsl(0_0%_0%/0.12)]',
         'transition-colors duration-150 focus-within:border-foreground/25',
         'dark:border-input-border/70 dark:bg-input/90 dark:focus-within:border-input-border'
@@ -73,6 +70,8 @@ export function UserMessageEditor({
       aria-busy={isSaving || undefined}
     >
       <Textarea
+        appearance="bare"
+        resize="none"
         ref={focusAtEnd}
         value={value}
         rows={1}
@@ -89,11 +88,7 @@ export function UserMessageEditor({
             if (canSave) onSave();
           }
         }}
-        className={cn(
-          'input-scrollbar resize-none rounded-none border-transparent bg-transparent p-0',
-          'leading-relaxed text-foreground',
-          isSaving && 'text-muted-foreground'
-        )}
+        className={cn('input-scrollbar leading-relaxed', isSaving && 'text-muted-foreground')}
         style={conversationTextFontSizeStyle(conversationFontSize)}
         aria-label={t('sessions.editMessage', 'Edit message')}
       />
@@ -101,24 +96,20 @@ export function UserMessageEditor({
         <Button
           type="button"
           variant="ghost"
-          size="sm"
+          size="small"
+          shape="pill"
           disabled={isSaving}
           onClick={onCancel}
-          className="h-7 rounded-full px-3 text-xs font-normal text-muted-foreground hover:text-foreground"
         >
           {t('common.cancel', 'Cancel')}
         </Button>
         <Button
           type="button"
-          variant="ghost"
-          size="sm"
+          variant="primary"
+          size="small"
+          shape="pill"
           disabled={!canSave}
           onClick={onSave}
-          className={cn(
-            'h-7 rounded-full px-3.5 text-xs font-medium shadow-xs transition-all',
-            'bg-foreground text-background hover:bg-foreground/90 hover:text-background',
-            'active:translate-y-[1px]'
-          )}
         >
           {isSaving ? <Spinner className="h-3.5 w-3.5" /> : null}
           {t('sessions.send', 'Send')}

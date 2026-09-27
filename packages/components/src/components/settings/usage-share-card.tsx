@@ -2,15 +2,11 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import QRCode from 'qrcode';
 import { cn } from '@/lib/utils';
-import {
-  formatCompactNumber,
-  formatUsdCompact,
-  formatUsdTight,
-} from '@/lib/format-compact-number';
+import { formatCompactNumber, formatUsdCompact, formatUsdTight } from '@/lib/format-compact-number';
 import { toIntlLocaleOrEn } from '@/lib/intl-locale';
 import { ensureShareThemeScopes } from '@/components/share-theme-scope';
 import { ModelBrandIcon } from '@/components/icons/model-brand-icon';
-import { Avatar, AvatarFallback, AvatarImage } from '@/ui/avatar';
+import { Avatar } from '@lody/ui/avatar';
 import lodyLogo from '@/assets/lody-icon.png';
 import { createUsageHeatScale, type UsageCalendarModel } from './usage-calendar-model';
 import type { UsageShareGraphic, UsageShareSlice, UsageShareStats } from './usage-share-stats';
@@ -398,12 +394,10 @@ function UsageShareSplit({
               style={{ backgroundColor: `hsl(var(--chart-${(index % 5) + 1}))` }}
             />
             {subject === 'team' ? (
-              <Avatar className="size-4 shrink-0">
-                {slice.image ? <AvatarImage src={slice.image} alt="" /> : null}
-                <AvatarFallback className="text-[8px]">
-                  {slice.label.slice(0, 2).toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
+              <Avatar.Root size="mini">
+                {slice.image ? <Avatar.Image src={slice.image} alt="" /> : null}
+                <Avatar.Fallback>{slice.label.slice(0, 2).toUpperCase()}</Avatar.Fallback>
+              </Avatar.Root>
             ) : (
               <ModelBrandIcon modelId={slice.id} className="size-3.5 shrink-0" />
             )}
@@ -421,7 +415,7 @@ function UsageShareSplit({
             )}
             <span
               className={cn(
-                'shrink-0 text-right font-semibold tabular-nums text-foreground',
+                'shrink-0 text-right font-normal tabular-nums text-foreground',
                 TEXT.meta,
                 compact ? 'ml-auto' : 'ml-4 w-10'
               )}
@@ -439,7 +433,7 @@ function StatCell({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-0">
       <div
-        className={cn('truncate font-semibold leading-none tabular-nums text-foreground', TEXT.stat)}
+        className={cn('truncate font-normal leading-none tabular-nums text-foreground', TEXT.stat)}
       >
         {value}
       </div>
@@ -566,7 +560,7 @@ export function UsageShareCard({
   const heroValue = (
     <span
       className={cn(
-        'whitespace-nowrap font-bold leading-none tracking-tight tabular-nums text-foreground',
+        'whitespace-nowrap font-normal leading-none tracking-tight tabular-nums text-foreground',
         wide ? TEXT.heroWide : TEXT.hero
       )}
     >
@@ -587,7 +581,7 @@ export function UsageShareCard({
   // also print a token count somewhere, or the reader has to guess which is the
   // subject.
   const heroUnits = (
-    <span className={cn('font-medium text-muted-foreground', TEXT.body)}>
+    <span className={cn('font-normal text-muted-foreground', TEXT.body)}>
       {metric === 'tokens' ? t('workspace.usage.tokens') : t('workspace.usage.cost')}
     </span>
   );
@@ -612,10 +606,10 @@ export function UsageShareCard({
   const header = (
     <div className="flex shrink-0 items-center gap-2">
       <img src={lodyLogo} alt="" className="size-4 scale-[1.64] rounded-md" />
-      <span className={cn('font-semibold text-foreground', TEXT.body)}>Lody</span>
+      <span className={cn('font-normal text-foreground', TEXT.body)}>Lody</span>
       <span
         className={cn(
-          'ml-auto rounded-full border border-border/70 px-2 py-1 font-medium leading-none text-muted-foreground',
+          'ml-auto rounded-full border border-border/70 px-2 py-1 font-normal leading-none text-muted-foreground',
           TEXT.meta
         )}
       >
@@ -680,16 +674,16 @@ export function UsageShareCard({
       />
       {wide ? (
         <>
-          <div className={cn('min-w-0 truncate font-semibold text-foreground', TEXT.body)}>
+          <div className={cn('min-w-0 truncate font-normal text-foreground', TEXT.body)}>
             {workspaceName?.trim() || 'Lody'}
           </div>
-          <span className={cn('ml-auto font-medium text-muted-foreground', TEXT.meta)}>
+          <span className={cn('ml-auto font-normal text-muted-foreground', TEXT.meta)}>
             lody.ai
           </span>
         </>
       ) : (
         <div className="min-w-0 flex-1">
-          <div className={cn('truncate font-semibold leading-tight text-foreground', TEXT.body)}>
+          <div className={cn('truncate font-normal leading-tight text-foreground', TEXT.body)}>
             {workspaceName?.trim() || 'Lody'}
           </div>
           <div className={cn('mt-0.5 truncate leading-tight text-muted-foreground', TEXT.meta)}>
@@ -740,7 +734,7 @@ export function UsageShareCard({
                 <div key={cell.label} className="flex items-baseline gap-2">
                   <span
                     className={cn(
-                      'font-semibold leading-none tabular-nums text-foreground',
+                      'font-normal leading-none tabular-nums text-foreground',
                       TEXT.statWide
                     )}
                   >
@@ -763,7 +757,9 @@ export function UsageShareCard({
           />
         </div>
       ) : (
-        <div className={cn('relative flex min-h-0 flex-1 flex-col', rhythm.band, rhythm.padY, PAD_X)}>
+        <div
+          className={cn('relative flex min-h-0 flex-1 flex-col', rhythm.band, rhythm.padY, PAD_X)}
+        >
           {header}
           {/* The headline owns this band alone. The space beside and around it is
               deliberate: see the AGENTS note before filling it with anything. */}
@@ -797,10 +793,10 @@ export function UsageShareCard({
   const canvasSignOff = (
     <div className="mt-4 flex shrink-0 items-center gap-2.5">
       <img src={lodyLogo} alt="" className="size-5 scale-[1.64] rounded-md" />
-      <span className={cn('font-semibold tracking-wide text-white/90', TEXT.body)}>
+      <span className={cn('font-normal tracking-wide text-white/90', TEXT.body)}>
         {workspaceName?.trim() || 'Lody'}
       </span>
-      <span className={cn('font-medium text-white/60', TEXT.meta)}>lody.ai</span>
+      <span className={cn('font-normal text-white/60', TEXT.meta)}>lody.ai</span>
       {qrDataUrl ? (
         <img
           src={qrDataUrl}

@@ -27,12 +27,6 @@ export const setFieldTo = <T>(value: T): SessionFieldChange<T> => ({ kind: 'set'
  */
 export const clearField = <T>(): SessionFieldChange<T> => ({ kind: 'clear' });
 
-/** A user's decision on a task proposal, resolved against the live notice. */
-export type TaskProposalResolution = {
-  readonly taskId?: string;
-  readonly outcome: 'created' | 'dismissed';
-};
-
 /**
  * Reopen (or create) the assistant turn for a (re)started execution. When the
  * turn already exists the adapter clears its terminal footprint
@@ -138,6 +132,19 @@ export interface SessionObservation {
   unsubscribe(): void;
 }
 
+/** Narrow synchronous projection for metadata observers; never materializes bodies. */
+export interface SessionModelSummaryReader {
+  count(): number;
+  readModelSummaryAt(position: number):
+    | {
+        role: string | undefined;
+        modelInfo: { modelId: string | undefined; name: string | undefined };
+        itemCount: number;
+        planCount: number;
+      }
+    | undefined;
+}
+
 /** Authoritative reads. In-process storage returns synchronously; the display
  * cache also accepts delayed reads and fences their results against events. */
 export interface SessionHistoryReader {
@@ -178,16 +185,6 @@ export interface SessionHistoryCommands {
   appendTurn(turn: SessionTurn): Promise<void>;
   /** Replace an existing turn by business id. */
   replaceTurn(turnId: string, turn: SessionTurn): Promise<void>;
-  /**
-   * Resolve a task proposal against the live notice in one entry. The adapter
-   * re-locates the proposal inside its commit; a rendered history snapshot is
-   * never written back.
-   */
-  resolveTaskProposal(
-    entryId: string,
-    proposalId: string,
-    resolution: TaskProposalResolution
-  ): Promise<boolean>;
   /** Answer a permission request located by request id (optionally in one turn). */
   respondPermission(
     requestId: string,
@@ -230,5 +227,4 @@ export type SessionImportResult =
 
 export type SessionActionResult = {
   readonly matched?: boolean;
-  readonly proposal?: import('./task-proposal').TaskProposalPublishResult;
 };

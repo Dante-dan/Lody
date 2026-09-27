@@ -8,27 +8,43 @@ the reasoning behind those rules.
 
 ## Ownership
 
-| Area      | Owner                                            | Contract                                                                          |
-| --------- | ------------------------------------------------ | --------------------------------------------------------------------------------- |
-| Stream    | `view.tsx`, `build-chat-stream-items.ts`         | Stable Virtua rows and scroll.                                                    |
-| User rows | `view.tsx`                                       | Multi-member sender metadata and desktop profile.                                 |
-| Turns     | `assistant-turn-render-blocks.ts`                | Activity groups and foldable segments.                                            |
-| Outline   | `conversation-outline-*`                         | Round ticks and navigation.                                                       |
-| Selection | [`message-selection.tsx`](message-selection.tsx) | Temporary message selection, drag rectangle, range modifiers, and edge scrolling. |
+| Area                    | Owner                                            | Contract                                                                          |
+| ----------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------- |
+| Stream                  | `view.tsx`, `build-chat-stream-items.ts`         | Stable Virtua rows and scroll.                                                    |
+| User rows               | `view.tsx`                                       | Multi-member sender metadata and desktop profile.                                 |
+| Turns                   | `assistant-turn-render-blocks.ts`                | Activity groups and foldable segments.                                            |
+| Outline                 | `conversation-outline-*`                         | Round ticks and navigation.                                                       |
+| Image sharing selection | [`message-selection.tsx`](message-selection.tsx) | Temporary message selection, drag rectangle, range modifiers, and edge scrolling. |
 
 - `conversation-outline-rail.tsx` renders one tick per round (a user turn plus its
   work) and a hover preview; `conversation-outline-arrival-intent.ts` decides when
   a pointer heading for a tick counts as arrival.
-- `markdown-renderer.tsx` wraps Streamdown; `markdown-diff-block.tsx` is the
-  inline diff. Diagrams are split three ways: `use-mermaid-diagram-canvas.tsx`
+- `markdown-renderer.tsx` renders finished text with react-markdown and a
+  streaming turn with `@lobehub/streamdown`. Its dependency patch reveals text
+  already present at mount so switching back to a live Session does not replay
+  the stream fade ([note](../../../../../.agents/notes/implemented/bug-fix/2026-09-26-streamdown-remount-animation.md)).
+  `markdown-code-block.tsx` owns fenced
+  blocks, wrap, and Markdown-fence preview (`markdown-code-highlight.ts` the Shiki
+  tokens); `markdown-diff-block.tsx` is the inline diff; `markdown-mermaid-block.tsx`
+  renders a closed Mermaid fence. Diagrams are split three ways: `use-mermaid-diagram-canvas.tsx`
   owns activation and the gestures that follow it, `mermaid-inline-canvas.ts` the
   pure zoom/pan geometry, and `mermaid-diagram-viewer.tsx` the full-screen
   surface. Invariants live in
   [mermaid-diagram-rendering.md](mermaid-diagram-rendering.md).
 - `message-content-guards.ts` gates which shared `MessageContent` variants render.
-- `chat-failed-error-report.ts` / `chat-failed-detail-dialog.tsx` own raw error
-  extraction and its modal; `terminal-component.tsx` / `terminal-preview.ts` own
-  terminal output.
+- `markdown-file-image.tsx` binds live file Markdown to its owning provider. Local
+  resources load automatically; remote file images show a one-line recessed slot
+  (alt, file name, Load image) and load on click. Relative paths use the opened document; Blob URLs last only for the mounted
+  image. Uploaded attachments without a file provider keep their existing behavior.
+- `chat-failed-error-report.ts` owns raw error extraction; `view.tsx`'s
+  `AgentNoticeBanner` renders warnings and failures, and
+  `build-chat-stream-items.ts` folds them onto the emitting turn. Invariants live
+  in [agent-notices.md](agent-notices.md). `chat-failed-detail-dialog.tsx` is the
+  retired modal, no longer reached from the conversation.
+  `terminal-component.tsx` / `terminal-preview.ts` own terminal output.
+- `conversation-outline-rail.tsx`, `conversation-outline-rail-geometry.ts`, and
+  `conversation-outline-arrival-intent.ts` own the reader-position rail.
+  Invariants live in [conversation-outline.md](conversation-outline.md).
 - `session-file-card.tsx`, `session-file-preview-dialog.tsx`, and
   [session-files-rendering.md](session-files-rendering.md) own attachment and
   image-preview rendering.
@@ -37,12 +53,20 @@ the reasoning behind those rules.
 
 `tests/build-chat-stream-items.test.ts`, `tests/conversation-outline*.test.ts`,
 `tests/user-message-sender-identity.test.tsx`, the `ExtremeConversation` story,
-`AssistantTurnAlignment.stories`, and the multiple-sender states in
+`AssistantTurnAlignment.stories`, `ConversationViewStream.OpenWithBackgroundFacts`
+(open, then release fact batches to check the visible tail), and the multiple-sender states in
 `SessionConversationPage.stories.tsx`.
 
-The mobile footer's leading duration slot — live and finished — is pinned by
-`tests/assistant-turn-action-inset.test.ts` and `tests/session-history-duration.test.ts`,
-and shown by `MobileTurnDurationSlot.stories.tsx`.
+The assistant footer's duration — live and finished on desktop, and the leading
+slot on mobile — is pinned by `tests/assistant-turn-action-inset.test.ts`,
+`tests/chat-virtual-rows-identity.test.ts`, and
+`tests/session-history-duration.test.ts`. The desktop live state is shown by
+`AssistantTurnAlignment.stories.tsx`; `MobileTurnDurationSlot.stories.tsx` shows
+the mobile live and finished states. `tests/agent-activity-row.test.tsx` covers
+live status placement above the subagent task summary, both with and without
+footer actions, and task-summary expansion.
+The [compact duration Spec](../../../../../specs/compact-duration-spacing.md)
+defines locale-specific spacing for these labels.
 
 ## Why the rules read the way they do
 
@@ -50,9 +74,13 @@ and shown by `MobileTurnDurationSlot.stories.tsx`.
   "Exited Plan Mode" card may follow an answer, so the answer is not necessarily
   the final stream item.
 
-- **Virtua `shift={false}` and `bufferSize`.** Shifting reuses stale cumulative
-  heights, so rows overlap. `bufferSize` is a trade between blank space during a
-  fast scroll and keeping resizing rows mounted.
+- **Keyed `@lody/virtua` and `bufferSize`.** Upstream `shift` reuses stale
+  cumulative heights (rows overlap) and only covers rows added at the start;
+  placeholder turns expand in the middle. The keyed fork keeps sizes with row keys
+  and the row at the viewport start in place
+  ([note](../../../../../.agents/notes/implemented/architecture/2026-09-24-virtua-keyed-fork.md)).
+  `bufferSize` is a trade between blank space during a fast scroll and keeping
+  resizing rows mounted.
 - **`buildChatStreamItems()` filtering.** An empty assistant entry renders `null`,
   which Virtua cannot measure, and a duplicate history id produces a duplicate key
   that desyncs the list.
@@ -66,13 +94,18 @@ and shown by `MobileTurnDurationSlot.stories.tsx`.
   tail of the list may be clamped and would otherwise never reach tolerance.
 - **`pendingOutlineJumpRef` instead of render state.** Clicking the already-active
   round may produce no commit, so a render-based flag never clears.
-- **Word-level Streamdown `animated`.** It emits a span per word; the compositor
-  cost is unbounded on a long turn.
+- **Static rendering once a turn finishes.** The stream engine fades only the
+  in-flight tail, but it still parses per block and ships lookbehind regex
+  literals that Safari < 16.4 cannot parse; finished text never needs either
+  ([note](../../../../../.agents/notes/implemented/feature/2026-09-26-lobehub-streamdown.md)).
+- **No replay on a live row remount.** A session switch or virtualized row
+  remount can mount a stream with existing text. The patched engine seeds that
+  text as revealed and continues to animate later additions.
 - **The gutter rule.** Virtua rows are absolutely positioned and ignore scroller
   padding, so the rail has to come from `ConversationColumn`.
 - **The Mermaid viewer replacement, and click-to-activate in a message.**
-  Streamdown's own overlay could not be left on touch, and the pan/zoom canvas it
-  wraps every diagram in swallowed page scrolls that merely passed under one. A
+  The earlier bundled overlay could not be left on touch, and the pan/zoom canvas
+  it wrapped every diagram in swallowed page scrolls that merely passed under one. A
   diagram now becomes a canvas only when the reader asks for one, and an
   unmodified wheel is never taken either way:
   [mermaid-diagram-rendering.md](mermaid-diagram-rendering.md).
@@ -91,3 +124,15 @@ Coverage: `SessionRelationCard.stories.tsx`, `tests/session-relation-card.test.t
 and CLI `tests/operation-progress-history.test.ts`. The latter uses real Loro Mirror
 validation and snapshot reloads, because schema-free document fakes cannot detect
 a missing persisted-history message variant.
+
+## Native text selection
+
+[`use-conversation-text-selection.ts`](../../hooks/use-conversation-text-selection.ts)
+owns native range retention, history leases, and incomplete-copy protection.
+`view.tsx` supplies stable row identities, `keepMounted`, folding snapshots, and
+follow suppression; `markdown-renderer.tsx` holds selected prose presentation.
+Session data and action controls continue updating. This is independent of
+`message-selection.tsx`, which selects messages for image sharing.
+
+The [decision note](../../../../../.agents/notes/implemented/bug-fix/2026-09-20-conversation-text-selection.md)
+records lifecycle, alternatives, and platform verification limits.

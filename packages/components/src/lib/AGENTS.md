@@ -22,10 +22,10 @@ Rationale: [components](../../../../.agents/docs/components-package.md) and
 - `ErrorBoundary`'s `error-boundary-fallback.tsx` displays the real error and one-click
   full-report copy on every build. Details default visible (`showErrorDetails` opts out);
   `lib/error-boundary-report.ts` is the pure copy builder.
-- Crash screens never reload/restart/reset by themselves. `resetKeys` recovery stops at
-  `MAX_AUTOMATIC_RESETS` per repeating error; the fallback reports that retrying stopped,
-  stays visible, and waits for a button press. "Repeating" ignores ids and digit runs, so
-  a per-request id cannot fork one error into many and spend that budget forever.
+- Error/not-found screens use `components/status-page.tsx`; pre-React `boot-failure.ts`
+  draws that column in plain DOM with copied V2 token values, never React/StyleX/Tailwind.
+- Crash screens never reload/restart/reset themselves. `resetKeys` must not clear a captured
+  error; the copyable fallback stays visible until the user presses a recovery button.
 - A cloud query throws into render and keeps throwing. An optional surface inside a larger
   boundary owns an inline `ErrorBoundary`, so a backend failure degrades locally instead of
   replacing the host subtree.
@@ -85,7 +85,8 @@ Rationale: [components](../../../../.agents/docs/components-package.md) and
 - `session-file-open-target.ts` alone owns path normalization. Canonical workspace-relative
   paths (tree, quick open, mobile browser, LSP) travel verbatim. Only Markdown hrefs
   are URL-decoded and stripped of `:<line>` / `#L<line>` suffixes, absolute host
-  roots, and `.../worktrees/<uuid>/` prefixes.
+  roots; same-machine Electron preserves other worktree paths instead of stripping
+  `.../worktrees/<uuid>/` prefixes. Display shortening never rewrites click targets.
   Line anchors travel as fields, not inside paths.
 - Cache resolved opens under BOTH `response.path` (the save identity) and the requested
   path (viewer/change-check identity). After save, refresh EVERY `cacheKeys` alias.

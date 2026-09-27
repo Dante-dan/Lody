@@ -255,6 +255,10 @@ export class LodyOperationCoordinator {
     void this.wake('startup');
   }
 
+  hasPendingWorkForRequester(sessionId: SessionId): boolean {
+    return this.store?.hasPendingWorkForRequester(this.options.workspaceId, sessionId) ?? true;
+  }
+
   stop(): void {
     this.started = false;
     this.metaWatch?.unsubscribe();
@@ -1197,8 +1201,6 @@ export class LodyOperationCoordinator {
           prompt: completionText(operation),
           cliType: frozen.cliType ?? meta.cliType,
           agentType: frozen.agentType ?? meta.agentType,
-          ...(frozen.customAcp ? { customAcp: frozen.customAcp } : {}),
-          ...(frozen.runtimeOverrides ? { runtimeOverrides: frozen.runtimeOverrides } : {}),
           ...(frozen.modeId ? { modeId: frozen.modeId } : {}),
           ...(frozen.modelId ? { modelId: frozen.modelId } : {}),
           ...(frozen.configOptionValues ? { configOptionValues: frozen.configOptionValues } : {}),

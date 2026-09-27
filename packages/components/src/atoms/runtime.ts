@@ -24,10 +24,11 @@ import type {
   SessionDocMeta,
   SessionTurnInputConfig,
   SessionId,
-  TaskId,
-  TaskDocInput,
-  TaskDocState,
+  SessionMeta,
+  SessionOperation,
   MachineId,
+  AgentConfigId,
+  MachinePiExtensionsResponse,
   MachinePingResponse,
   MachineRestartResponse,
   MachineStatusResponse,
@@ -143,21 +144,11 @@ export type PreviewVisualCommentDocStore = {
   waitUntilSynced: () => Promise<void>;
 };
 
-export type TaskDocUpdater =
-  | Partial<TaskDocInput>
-  | ((state: Readonly<TaskDocInput>) => TaskDocInput)
-  | ((state: TaskDocInput) => void);
-
-export type TaskDocStore = {
-  readonly taskId: TaskId;
+export type ScheduleDocStore = {
   readonly roomId: string;
-  readonly doc: LoroDoc;
   readonly firstSynced: Promise<void>;
-  getSyncState: () => RoomSyncState;
-  subscribeSyncState: (listener: (state: RoomSyncState) => void) => () => void;
-  getState: () => TaskDocState;
-  setState: (updater: TaskDocUpdater) => void;
-  subscribe: (listener: (state: TaskDocState) => void) => () => void;
+  getState: () => import('@lody/shared').ScheduleDocument | null;
+  subscribe: (listener: () => void) => () => void;
   dispose: () => void;
   waitUntilSynced: () => Promise<void>;
 };
@@ -167,11 +158,23 @@ export type WorkspaceRuntime = {
    * The workspace slug used for caching the (slug, id) mapping.
    */
   readonly workspaceSlug: string;
+  withScheduleStore: <T>(
+    scheduleId: string,
+    fn: (store: ScheduleDocStore) => Promise<T> | T,
+    options?: { create?: boolean }
+  ) => Promise<T>;
+  acquireScheduleStore: (scheduleId: string) => Promise<ScheduleDocStore>;
+  releaseScheduleStoreRef: (scheduleId: string) => void;
   /**
    * The workspace id used for IndexedDB/WebSocket connections.
    */
   readonly workspaceId: WorkspaceId;
   readonly repo: LoroRepo;
+  /** Read targets from the ready metadata source, independently of UI projection. */
+  readSessionOperationTargets: (
+    sessionId: SessionId,
+    operation: SessionOperation
+  ) => Promise<[SessionMeta, ...SessionMeta[]]>;
   /** Workspace-owned, scoped LRU for owner-session file-index Flock resources. */
   readonly codeCollabFileIndexCache: CodeCollabFileIndexCache;
   /**
@@ -216,6 +219,13 @@ export type WorkspaceRuntime = {
   ) => Promise<T>;
   releaseSessionStore: (sessionId: SessionId) => Promise<void>;
   acquireSessionStore: (sessionId: SessionId) => Promise<SessionDocStore>;
+  /**
+   * The session's store if it is already open, synchronously, without taking a
+   * reference. Lets a newly mounted conversation render a cached session in
+   * its first commit; the consumer still acquires it to keep it alive.
+   * Optional: runtimes without a synchronous cache always open asynchronously.
+   */
+  peekSessionStore?: (sessionId: SessionId) => SessionDocStore | undefined;
   releaseSessionStoreRef: (sessionId: SessionId) => void;
   withPreviewVisualCommentStore: <T>(
     sessionId: SessionId,
@@ -224,10 +234,6 @@ export type WorkspaceRuntime = {
   releasePreviewVisualCommentStore: (sessionId: SessionId) => Promise<void>;
   acquirePreviewVisualCommentStore: (sessionId: SessionId) => Promise<PreviewVisualCommentDocStore>;
   releasePreviewVisualCommentStoreRef: (sessionId: SessionId) => void;
-  withTaskStore: <T>(taskId: TaskId, fn: (store: TaskDocStore) => Promise<T> | T) => Promise<T>;
-  releaseTaskStore: (taskId: TaskId) => Promise<void>;
-  acquireTaskStore: (taskId: TaskId) => Promise<TaskDocStore>;
-  releaseTaskStoreRef: (taskId: TaskId) => void;
   sendControl: (message: ClientToServer) => void;
   waitForSessionCreateResponse: (
     sessionId: SessionId,
@@ -367,7 +373,7 @@ export type WorkspaceRuntime = {
     requestedByUserId: string,
     target: PreviewTarget,
     approval: PreviewTargetApproval,
-    options?: { replaceExisting?: boolean; timeoutMs?: number }
+    options?: { restart?: boolean; timeoutMs?: number }
   ) => Promise<SessionPreviewCreateResponse | null>;
   resolveMachineTargetPlane: (
     machineId: MachineId,
@@ -459,6 +465,12 @@ export type WorkspaceRuntime = {
     },
     options?: { timeoutMs?: number; ownerSessionId?: SessionId | string }
   ) => Promise<CodeCollabV2LspUnsupported | CodeCollabV2Error | null>;
+  requestSessionPreviewStatus: (
+    machineId: MachineId,
+    sessionId: SessionId,
+    requestedByUserId: string,
+    options?: { renewEndpointId?: string; timeoutMs?: number }
+  ) => Promise<import('@lody/shared').SessionPreviewStatusResponse | null>;
   requestSessionPreviewRevoke: (
     machineId: MachineId,
     sessionId: SessionId,
@@ -480,6 +492,10 @@ export type WorkspaceRuntime = {
     args: { description: string; reporterUserId: string; requestToken: string },
     options?: { timeoutMs?: number }
   ) => Promise<MachineBugReportResponse | null>;
+  requestMachinePiExtensions: (
+    machineId: MachineId,
+    options?: { configId?: AgentConfigId }
+  ) => Promise<MachinePiExtensionsResponse>;
   dispose: () => Promise<void>;
 };
 
