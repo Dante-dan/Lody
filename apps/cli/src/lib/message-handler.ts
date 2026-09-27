@@ -497,7 +497,11 @@ function getMachineCommandEventImpact(events: readonly MachineFlockEvent[]): {
     if (parsed?.kind === 'deleteLocalProjectCommand') {
       deleteLocalProject = true;
     }
-    if (parsed?.kind === 'providerSetup' || parsed?.kind === 'providerSetupCancellation') {
+    if (
+      parsed?.kind === 'providerSetup' ||
+      parsed?.kind === 'providerSetupCancellation' ||
+      parsed?.kind === 'agentConfig'
+    ) {
       providerSetup = true;
     }
   }
@@ -8790,7 +8794,23 @@ export class MessageHandler {
       this.logger.debug(`[${sessionId}] Generating session title because title is missing`);
       const resolvedTitleConfig =
         titleConfig ?? (await this.resolveTitleConfig(sessionId, meta?.agentConfigId));
+      const provider = meta?.agentConfigId
+        ? await this.workspaceDocument.getAgentConfigById(meta.agentConfigId, this.machineId)
+        : null;
+      if (meta?.agentConfigId && !provider) return null;
+      if (
+        provider &&
+        !provider.codexAuth &&
+        (await getCodexProfileStore().list(this.workspaceId)).some(
+          (profile) => profile.configId === provider.id && profile.machineId === this.machineId
+        )
+      )
+        return null;
+      const codexProfile = provider?.codexAuth
+        ? await getCodexProfileStore().resolve(this.workspaceId, provider)
+        : undefined;
       const title = await generateTitleIsolated({
+        codexProfile: codexProfile ? { profile: codexProfile } : undefined,
         cliType,
         agentType,
         customAcp,
@@ -9760,3 +9780,4 @@ export class MessageHandler {
     this.logger.debug(`[GC] Session ${sessionId} cleaned`);
   }
 }
+import { getCodexProfileStore } from '@/agent/codex-profile-store';
