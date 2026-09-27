@@ -25,7 +25,7 @@ Lody 目前运行 0.20.0，外加一个上游已经吸收的补丁。因此 Lody
 3. 然后给 CLI 加上真正的"先数据后游标"屏障；
 4. 等上游 `SqliteRepoStore` 具备副本能力之后，再以同样方式绑定 CLI 的游标。
 
-不复制任何现有游标。唯一的迁移代价是每个 Meta/Flock 房间 bootstrap 一次，而这也是修复已经损坏的缓存的唯一途径。目前只实现了第 1 步，并做了跨版本存储验证；尚未做任何性能测量。最主要的未验证风险是 IndexedDB strict 持久化在繁忙工作区上的写入开销。
+不复制任何现有游标。唯一的迁移代价是每个 Meta/Flock 房间 bootstrap 一次，而这也是修复已经损坏的缓存的唯一途径。第 1 步已上线（#1049），第 2 步是 #1058。第 3 步并入了第 4 步，后者已在分支上实现，等待 loro-repo 发版。测量只发现一项真实成本：IndexedDB 的 strict 持久化会让 cloud 模式下的 flush 屏障在有 N 个脏资源时慢约 N 倍。它不影响正确性；第 2 步的按资源屏障降低了这一成本，其余由 loro-repo#140 处理。
 
 ## 上游变化（0.20.0 → 0.20.3，`main` 位于 `5862a2b`）
 
@@ -174,6 +174,55 @@ Lody 目前运行 0.20.0，外加一个上游已经吸收的补丁。因此 Lody
   - 在繁忙 Meta 流下，macOS Chromium 上 strict 事务的频率，以及它占用的主线程和磁盘时间。
   - 如果 strict 写入太贵，退回阶段 0 的行为，而不是放宽写入顺序。
 - **checkpoint 的 key（已知限制）：** key 是不透明的 stream URL。因此网关 origin 变化时会触发 bootstrap，而过去 `getLoroStreamsRemoteCursorUrlAliases` 可以避免这种情况。改为按 `(bucketId, streamId)` 作 key 需要上游修改。
+
+**阶段 1 的实际实现（[#1058](https://github.com/LodyAI/Lody/pull/1058)；可直接使用已锁定的 0.20.3）。**
+
+- **接线。** `workspace-streams-transport.ts` 用 `createRepoStreamsPersistence(repo, { documentRemoteCursorStore })` 构建渲染端 transport。容错的按窗口游标库现在只服务 LoroDoc 房间。
+  - 每个房间的屏障是它自己的 `persist*Now`，而不是整库 `repo.flush()`。这也消除了阶段 0 测到的多资源 strict 提交成本的大部分，因为一次屏障只提交它自己的资源。
+- **Meta 恢复。** `invalidateMetaRemoteCursor` 通过 `repo.getReplicaCheckpointStore({ kind: "meta", flock: repo.getMeta() })` 删除 Meta checkpoint。
+  - `localStorage` 跳过标记改为在 cloud transport 接入之前删除该 checkpoint。
+  - 容错游标库中已无用的 `shouldBypassPrimaryLoad` 选项及其测试已删除。
+  - 两处删除都使用 `getWorkspaceMetaStreamUrl`，与 transport 写入时的 key 相同。
+- **`tests/workspace-streams-transport.test.ts`**（在 fake-indexeddb 上使用真实的 `IndexedDBStorageAdaptor` 和容错游标库，对接脚本化的 Streams 服务端）：
+  - 一个标签页如果在兄弟标签页推进共享数据库之前就已加载，会 bootstrap，而不是从兄弟标签页的尾部继续（不一致 3）。
+  - 在运行时使用的 Meta key 上删除后，下一次同步会 bootstrap。
+- **消融。**
+  - 改动前的写法（共享游标库 + `repo.flush()` 屏障）会让这两个测试都失败。
+  - Meta key 漂移会让恢复测试失败。
+  - 去掉启动时的删除，会让 `create-workspace-runtime-meta-recovery.test.ts` 中新增的标记测试失败。
+- **测试隔离修复。** 该文件的测试现在每个用例都会 stub `globalThis.localStorage`。运行时读取的是它，此前一个测试写入的跳过标记会泄漏到之后的所有测试。
+- **评审修复（P1）。** 删除可疑的 Meta checkpoint 现在是接入 cloud transport 的硬性前置条件，Web 和 dual 两条路径都一样。
+  - 删除失败时（例如 IndexedDB 连接正在关闭），接入失败，标记保留，由现有的接入/重连路径重试。此前失败会被吞掉，transport 从可疑 checkpoint 继续同步，下一次同步成功还会永久清掉标记。
+  - 运行期失效只在删除成功后才设置一次性标志。
+  - 只有本页面生命周期确实删除过 checkpoint，才会清除标记。
+  - 回归测试：Web 与 dual 下，删除失败时都不会调用 `addTransport('cloud')`，标记保留；下一次接入先删除再接入。两个测试在被评审的 head 上都会失败。
+- **评审修复（P1，Web 重试）。** Web 只在 `setAuthToken` 和 Meta 恢复时接入 transport，所以 token 不变时，首次接入失败后没有任何可达的重试路径：本地重连循环要求 transport 已接入，而此时还没有任何房间跟踪器。
+  - 现在会显式记录 Web 接入失败，由 `webAttachReconnectLoop` 按共享的退避策略重试。token 变化路径和 Meta 恢复的重启路径都已覆盖。
+  - 相同 token 的 `setAuthToken`、网络恢复/页面唤醒以及兜底定时器也会触发重试；token 变化、离线和 dispose 会停止它。
+  - 回归测试：相同 token 重试、只靠退避的重试（删除严格先于接入，Meta 同步后标记被清除），以及 dispose 后不留下待执行的重试计时器。去掉各自的机制后，对应测试都会失败。
+- **评审修复（P1，接入阻塞期间 token 轮换）。** Web 接入的 single-flight 会让新 token 复用上一个 token 正在进行的接入。那次接入的 provider 已被轮换时的 teardown 清掉，却仍会发布 transport，留下“已接入但没有 token provider”的运行时。
+  - 现在每次 `teardownTransport` 都会同步递增 Web 接入的代际；它不等待正在进行的接入，因为那次接入可能正卡在删除上。
+  - 接入在 `prepareStreamsAccess` 之后、删除 checkpoint 之后以及 `addTransport` 之后都会重新检查代际（最后一种情况会移除刚加上的 transport）。被取代的接入不发布任何东西，也不登记重试。
+  - 复用只限于同一代。新一代从不等待旧接入（它可能正卡在删除或房间路由上），而是立即建立自己的 provider 和 transport。
+  - loro-repo 在 `addTransport` 开始时就已注册 transport。因此 teardown 在递增代际的同时记录是否有任何 Web cloud add 正在进行，并在 sign-out 或 dispose 返回之前移除该 transport。
+  - 由于各代之间互不等待，多代的 add 可能同时进行。因此进行中的 add 按代际分别记录，每一代只清除自己的记录；若只用一个标志，较早的 add 结束时会让下一次 sign-out 看不到仍在进行的较新 add。
+  - teardown 在递增代际之后、第一个 await 之前，同步停止 Web 重试循环并丢弃待重试的接入。所有重试路径（循环、唤醒事件、相同 token 重放）都需要一个待重试的接入。否则在 teardown 的 await 期间，一次唤醒事件就可能以新代际启动接入，复用 teardown 随后会作废的 provider，留下“已接入但没有 provider”的运行时。
+  - 接入的错误路径同样受代际约束：被取代的接入之后如果以普通错误失败，会被转换为"已被取代"，不得上报分析事件、停止下一代的 presence 或登记重试。被取代的 add 最终返回时不会再次移除 `cloud`，因此不会误删下一代的同名 transport。
+  - 回归测试：
+    - 删除阻塞时 token 从 t1 轮换到 t2：t2 在旧删除放行之前就接入，只接入一次，且 `ensureDocStream` 可用。
+    - 删除阻塞期间 dispose 或 sign-out 后，不会接入、不会加入 Meta，也不会重试。
+    - `addTransport` 挂起时，sign-out 与 dispose 返回时 cloud transport 已被移除。
+    - 被取代的 add 在下一个 token 接入之后才返回，也不会移除该 token 的 transport。
+    - 两个 add 同时进行时，即使较早的先结束，下一次 sign-out 仍会在返回前移除较新的那个。
+    - 被取代的接入之后在删除或 add 阶段以普通错误失败时，不会影响 presence 和重试，下一个 token 的 `ensureDocStream` 仍然可用。
+    - token 变化的 teardown 卡在第一个 await 时，唤醒事件不会启动任何接入；新 token 自己的接入完成后 `ensureDocStream` 可用。
+    - 去掉各自的机制后，对应测试都会失败。
+- **评审修复（P1，dual 标记）。** dual 运行时监听的是本地 Meta binding，而它通常在 cloud 接入之前就已同步完成，所以标记永远不会被清除。之后每次 cloud 接入都会删除一个有效的 cloud checkpoint 并重新 bootstrap。
+  - 现在 dual 模式下，只有 cloud Meta binding 的首次同步才会清除标记，并且要求该 tracker 仍是当前的、且正是这次 cloud 接入删除了 checkpoint。
+  - 本地 binding 的同步成功只在 Web 上清除标记。
+  - detach 或新的可疑标记都会重置这个“本次接入已删除”的证明。
+  - 回归测试：删除后 cloud 首次同步会清除标记；被替换的 cloud 会话迟到的首次同步（之后的接入删除失败）不会清除。去掉各自的保护后，对应测试都会失败。
+- **Web 端的合并条件。** 新旧版本标签页混用需要 loro-dev/loro-repo#138。Electron 所有窗口运行同一个包，只有回滚时才会受影响。
 
 ### 阶段 2：CLI 使用真正的屏障（不依赖上游）
 
