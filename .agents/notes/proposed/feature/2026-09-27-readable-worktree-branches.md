@@ -10,9 +10,10 @@ Translation: current
 Issue #289 reports that opaque worktree branch names make session work hard to
 identify and publish. The proposed path keeps the initial ID branch until the
 first accepted title arrives, then renames only a new, unchanged and unpublished
-branch while reconciling Git with Session metadata. This avoids putting draft
-prompt text in preparation RPC, but requires a small durable rename state and
-crash-recovery check before it can be implemented safely.
+branch while reconciling Git with Session metadata. The reference implementation
+now has a durable one-time rename intent and checks the current Git branch,
+HEAD and remote publication before acting. The design remains proposed while
+the issue's UX feedback and contribution handoff are outstanding.
 
 ## Decision and alternatives
 
@@ -37,6 +38,11 @@ reconciliation path; a slug helper by itself has no user-visible value.
 - Current [worktree creation](../../../../apps/cli/src/session/worktree/worktree-manager.ts)
   allocates before title generation; [ACP title Spec](../../../../specs/acp-session-titles.md)
   documents the later Provider event.
-- No code behavior or tests are claimed for this design-only reference. The
-  publication and recovery rules remain open for maintainer review. No upstream
-  PR exists; the fork PR context-handoff requirement remains separate.
+- The reference branch now includes a bounded ASCII slug, a one-time intent in
+  `SessionMeta`, and a Git rename guarded by the repository lock. A focused
+  local Git test covers an untouched branch, moved HEAD, a published ref,
+  collision suffix, and an unusable title. A SessionManager test covers both
+  speculative adoption eligibility and recovery after Git rename. Title callback
+  ordering still needs integration coverage before this is ready for an upstream PR.
+- No upstream PR exists. The fork PR context-handoff requirement remains a
+  separate entry gate; this note does not claim user publication or approval.

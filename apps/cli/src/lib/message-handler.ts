@@ -8705,6 +8705,7 @@ export class MessageHandler {
       ]);
       if (applied) {
         this.logger.debug(`[${sessionId}] Session title updated from agent: ${sanitized}`);
+        await this.sessionManager.maybeRenameWorktreeAfterTitle(sessionId, sanitized);
       }
     } catch (error) {
       this.logger.debug(
@@ -8841,6 +8842,7 @@ export class MessageHandler {
         );
       } else {
         this.logger.debug(`[${sessionId}] Session title stored in metadata: ${title}`);
+        await this.sessionManager.maybeRenameWorktreeAfterTitle(sessionId, title);
       }
       // The generated value is still safe to reuse for a branch name even when a
       // concurrent user rename prevented it from being written as the session title.

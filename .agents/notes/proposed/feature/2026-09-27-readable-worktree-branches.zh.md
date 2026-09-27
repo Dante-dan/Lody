@@ -9,8 +9,8 @@ Translation: current
 
 #289 指出 worktree 的随机分支名让会话工作难以辨认和发布。建议先保留 ID 分支，
 待首个有效标题到达后，仅对新的、未变化且未发布的分支改名，并对账 Git 与会话元数据。
-这样不必在准备阶段的 RPC 中传递草稿提示词，但安全实现仍需要持久化的改名状态和
-崩溃恢复检查。
+参考实现已记录持久的一次性改名意图，并在操作前核实 Git 分支、HEAD 和远端发布
+状态。issue 的体验反馈与投稿来源交接尚未完成，设计仍标为 proposed。
 
 ## 决定与替代方案
 
@@ -31,5 +31,8 @@ worktree 在持久会话之前建立，而 Provider 标题在初始化后才到�
 - 当前 [worktree 创建](../../../../apps/cli/src/session/worktree/worktree-manager.ts)
   早于标题生成；[ACP 标题 Spec](../../../../specs/acp-session-titles.zh.md)记录了较晚的
   Provider 事件。
-- 本参考只有设计，没有实现代码或通过的行为测试。发布状态及恢复规则仍待维护者
-  评审。没有上游 PR；fork PR 的会话来源要求是独立门槛。
+- 参考分支现有受限 ASCII 短名、`SessionMeta` 中的一次性意图和仓库锁保护的 Git
+  改名。本地 Git 定向测试覆盖未改动分支、HEAD 已移动、已发布引用、碰撞后缀及
+  无法转换的标题。SessionManager 测试覆盖推测性接管资格与 Git 改名后的恢复；
+  标题回调时序仍需集成验证，才能准备上游 PR。
+- 没有上游 PR。fork PR 的公开会话交接是独立门槛；本文不声称用户已发布或批准。

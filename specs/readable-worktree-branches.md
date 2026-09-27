@@ -59,5 +59,10 @@ branch, actual Git HEAD ref, and later restore target must agree in each case.
   [worktree lifecycle](session-worktree-lifecycle.md) already depend on the
   real Git branch matching durable Session metadata.
 
-The exact publication check and crash-recovery transition need implementation
-tests before this draft is treated as an approved behavior guarantee.
+The reference implementation checks the local upstream, remote-tracking refs,
+and remote heads before renaming; it records an attempted target before Git
+changes the ref, then reconciles the actual branch into Session metadata. A
+local Git test covers an untouched branch, moved HEAD, published ref, collision
+suffix, and unusable title. SessionManager tests cover speculative adoption and
+recovery after Git rename. Title callback ordering still needs integration
+coverage. This draft is not an approved behavior guarantee.
