@@ -369,7 +369,7 @@ export function PendingMessageRow({
         {showRetry || showCancel || showDiscard ? (
           <div className="flex flex-wrap items-center justify-end gap-2">
             {showCancel ? (
-              <Button size="small" variant="ghost" disabled={busy} onClick={onCancel}>
+              <Button size="small" variant="ghost" onClick={onCancel}>
                 {t('sessions.cancelPendingSend')}
               </Button>
             ) : null}

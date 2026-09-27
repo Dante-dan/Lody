@@ -181,6 +181,8 @@ it.each(['saved', 'prepared'] as const)(
       ],
     };
     const delivered = deferred<void>();
+    const preparing = deferred<void>();
+    const allowPreparation = deferred<void>();
     const journal = createSessionSendJournal({
       resources,
       storage: {
@@ -198,7 +200,11 @@ it.each(['saved', 'prepared'] as const)(
         close: async () => {},
       },
       lock: async (_key, _signal, execute) => execute(),
-      prepare: async () => new Uint8Array([1]),
+      prepare: async () => {
+        preparing.resolve();
+        await allowPreparation.promise;
+        return new Uint8Array([1]);
+      },
       commit: async () => {},
       deliver: async () => {},
     });
@@ -216,6 +222,7 @@ it.each(['saved', 'prepared'] as const)(
     document.body.append(container);
     const root = createRoot(container);
     cleanups.push(async () => {
+      allowPreparation.resolve();
       await act(async () => root.unmount());
       container.remove();
       await resources.dispose();
@@ -236,8 +243,19 @@ it.each(['saved', 'prepared'] as const)(
     expect(resume).toBeDefined();
     if (stage === 'prepared')
       expect(buttons.some((button) => button.textContent?.includes('Discard'))).toBe(true);
+    if (stage === 'saved') {
+      await act(async () => {
+        resume!.click();
+        await preparing.promise;
+      });
+      const cancel = Array.from(container.querySelectorAll('button')).find((button) =>
+        button.textContent?.includes('Cancel')
+      );
+      expect(cancel?.disabled).toBe(false);
+    }
     await act(async () => {
-      resume!.click();
+      allowPreparation.resolve();
+      if (stage === 'prepared') resume!.click();
       await delivered.promise;
     });
     expect(stored?.stage).toBe('delivered');
