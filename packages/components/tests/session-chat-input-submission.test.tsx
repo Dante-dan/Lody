@@ -11,7 +11,8 @@ import {
   type RefObject,
 } from 'react';
 import { getDefaultStore } from 'jotai';
-import { authTokenAtom } from '../src/atoms/runtime';
+import { createSessionSendResources } from '../src/lib/session-send-resources';
+import { authTokenAtom, runtimeAtom } from '../src/atoms/runtime';
 import { localProbeResultAtom } from '../src/atoms/local-probe';
 import {
   canUseElectronLocalFileSend,
@@ -135,10 +136,13 @@ function ScopeSwitchOnCommit({
 }
 
 describe('SessionChatInputArea submission feedback', () => {
+  let resources: ReturnType<typeof createSessionSendResources>;
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
 
   beforeEach(async () => {
+    resources = createSessionSendResources({ acquire: async () => { throw new Error('Unexpected store borrow'); }, releaseRef: () => {} });
+    getDefaultStore().set(runtimeAtom, { workspaceId: 'workspace-upload', sendResources: resources } as never);
     vi.mocked(uploadSessionImage).mockReset();
     vi.mocked(computeSha256Hex).mockReset();
     vi.mocked(uploadSessionFile).mockReset();
@@ -289,6 +293,8 @@ describe('SessionChatInputArea submission feedback', () => {
 
   afterEach(async () => {
     await act(async () => root?.unmount());
+    await resources.dispose();
+    getDefaultStore().set(runtimeAtom, null);
     getDefaultStore().set(localProbeResultAtom, null);
     getDefaultStore().set(authTokenAtom, null);
     getDefaultStore().set(currentWorkspaceIdAtom, null);
