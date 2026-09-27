@@ -26,7 +26,7 @@ The proposal is a staged rollout:
 3. Give the CLI real data-before-cursor barriers.
 4. Only after an upstream `SqliteRepoStore` replica capability exists, bind the CLI's cursors the same way.
 
-No existing cursor is copied. The only migration cost is one bootstrap per Meta/Flock room, which is also the only way to repair an already-damaged cache. Only step 1 is implemented, with a cross-version storage check; nothing has been measured. The main unverified risk is the write cost of IndexedDB's strict durability on busy workspaces.
+No existing cursor is copied. The only migration cost is one bootstrap per Meta/Flock room, which is also the only way to repair an already-damaged cache. Step 1 has shipped (#1049) and step 2 is #1058. Step 3 was folded into step 4, which is implemented on a branch awaiting the loro-repo release. Measurement found one real cost: IndexedDB's strict durability makes cloud-mode flush barriers about N× slower when N resources are dirty. It does not affect correctness; step 2's per-resource barriers reduce it, and loro-repo#140 addresses the rest.
 
 ## Upstream change (0.20.0 → 0.20.3, `main` at `5862a2b`)
 
@@ -175,6 +175,55 @@ Separately, a real full disk makes the CLI daemon exit through an uncaught log-t
   - strict-durability transaction rate and main-thread and disk time under a busy Meta stream on macOS Chromium.
   - If strict writes are too expensive, fall back to Phase 0 behavior. Do not relax the ordering.
 - **Checkpoint key (limit):** it is the opaque stream URL, so a gateway-origin change forces bootstraps where `getLoroStreamsRemoteCursorUrlAliases` used to avoid them. Keying checkpoints by `(bucketId, streamId)` would need an upstream change.
+
+**Phase 1 as implemented ([#1058](https://github.com/LodyAI/Lody/pull/1058); works with the pinned 0.20.3).**
+
+- **Wiring.** `workspace-streams-transport.ts` builds the renderer transport with `createRepoStreamsPersistence(repo, { documentRemoteCursorStore })`. The resilient per-window cursor database now serves LoroDoc rooms only.
+  - Each room's barrier is its own `persist*Now`, not a full `repo.flush()`. That also removes most of the multi-resource strict-commit cost measured under Phase 0, because a barrier commits only its own resource.
+- **Meta recovery.** `invalidateMetaRemoteCursor` deletes the Meta checkpoint through `repo.getReplicaCheckpointStore({ kind: "meta", flock: repo.getMeta() })`.
+  - The `localStorage` bypass marker now deletes that checkpoint before the cloud transport attaches.
+  - The resilient store's now-unused `shouldBypassPrimaryLoad` option and its test are removed.
+  - Both deletions use `getWorkspaceMetaStreamUrl`, the same key the transport writes.
+- **`tests/workspace-streams-transport.test.ts`** (real `IndexedDBStorageAdaptor` and resilient cursor store on fake-indexeddb, scripted Streams server):
+  - A tab that hydrated before a sibling tab advanced the shared databases bootstraps instead of resuming at the sibling's tail (mismatch 3).
+  - Deleting at the runtime's Meta key makes the next sync bootstrap.
+- **Ablations.**
+  - The pre-change wiring (shared cursor database plus a `repo.flush()` barrier) fails both tests.
+  - A drifted Meta key fails the recovery test.
+  - Dropping the startup deletion fails the new marker test in `create-workspace-runtime-meta-recovery.test.ts`.
+- **Test-isolation fix.** That file's tests now stub `globalThis.localStorage` per test. The runtime reads it, and a bypass marker from one test previously leaked into every later one.
+- **Review fix (P1).** Deleting the suspect Meta checkpoint is now a hard precondition of the cloud attach, on both the web and dual paths.
+  - If the delete rejects (for example, the IndexedDB connection is closing), the attach fails, the marker is kept, and the existing attach/reconnect paths retry. Previously the failure was swallowed, the transport resumed from the suspect checkpoint, and the next successful sync cleared the marker for good.
+  - Runtime invalidation latches its one-shot flag only after a successful delete.
+  - The marker is cleared only once this page lifetime has actually deleted the checkpoint.
+  - Regressions: for both web and dual, a rejected delete means no `addTransport('cloud')` and the marker survives; the next attach deletes first, then attaches. Both fail against the reviewed head.
+- **Review fix (P1, web retry).** Web attaches only from `setAuthToken` and meta recovery, so a failed first attach under an unchanged token had no reachable retry. The local reconnect loop requires an attached transport, and no room tracker exists yet.
+  - A web attach failure is now recorded explicitly, and `webAttachReconnectLoop` retries it under the shared backoff. That covers the token-change path and the meta-recovery restart path.
+  - A same-token `setAuthToken`, network/visibility wake and the backstop also trigger the retry. Token change, offline and dispose stop it.
+  - Regressions: same-token retry, backoff-only retry (delete strictly before attach, marker cleared after Meta sync), and no pending retry timer after dispose. Each fails when its mechanism is removed.
+- **Review fix (P1, token rotation during a blocked attach).** The single-flight web attach let a new token share an in-flight attach from the previous token. That attach had already lost its provider to the rotation's teardown, yet it still published the transport, leaving an attached runtime with no token provider.
+  - Every `teardownTransport` now bumps a web attach generation synchronously; it does not await the attach, which may be blocked on the delete.
+  - An attach re-checks its generation after `prepareStreamsAccess`, after the checkpoint delete and after `addTransport` (removing the transport it just added). A superseded attach publishes nothing and records no retry.
+  - Sharing is limited to one generation. A newer generation never waits for an older attach, which may be stuck on the delete or on room routing; it builds its own provider and transport at once.
+  - loro-repo registers a transport as soon as `addTransport` starts. Teardown therefore records, together with the generation bump, whether any web cloud add is in flight, and removes that transport before sign-out or dispose returns.
+  - Because generations do not wait for each other, adds of several generations can overlap. In-flight adds are therefore tracked per generation, and each clears only its own entry; with a single flag, an older add finishing would hide a newer in-flight add from the next sign-out.
+  - Teardown stops the web retry loop and drops its pending attempt synchronously, right after the generation bump and before its first await. Every retry path (the loop, wake edges, same-token replay) needs a pending attempt. Otherwise a wake edge during teardown's awaits could start an attach in the new generation, reusing the provider the teardown then invalidates, and leave the runtime attached with no provider.
+  - The attach's error path is fenced as well: a superseded attach that later fails with an ordinary error is converted to a supersession. It must not emit analytics, stop the next generation's presence, or record a retry. The superseded add does not remove `cloud` again when it finally resolves, so it cannot hit the next generation's transport of the same id.
+  - Regressions:
+    - Rotating t1→t2 while the delete is blocked attaches t2 before the old delete is released, exactly once, and `ensureDocStream` works.
+    - Dispose or sign-out during a blocked delete never attaches, joins or retries.
+    - With `addTransport` held, sign-out and dispose have already removed the cloud transport when they return.
+    - A superseded add that resolves after the next token attached does not remove that token's transport.
+    - With two adds in flight, the older finishing first still leaves the next sign-out to remove the newer one before returning.
+    - A superseded attach whose delete or add later fails with an ordinary error leaves presence and retries alone, and the next token's `ensureDocStream` still works.
+    - A wake edge while a token-change teardown is held in its first await starts no attach, and the new token's own attach leaves `ensureDocStream` working.
+    - Each of these fails when its mechanism is removed.
+- **Review fix (P1, dual marker).** The dual runtime watches its local Meta binding, which usually synced before the cloud plane attached, so the marker was never cleared. Every later cloud attach deleted a valid cloud checkpoint and bootstrapped again.
+  - In dual mode the marker is now cleared only by the cloud Meta binding's first sync, and only while that tracker is still current and the same cloud attach deleted the checkpoint.
+  - The local binding's success clears it only on the web.
+  - A detach, or a new suspicion marker, resets that per-attach proof.
+  - Regressions: delete, then cloud first sync, clears the marker. A replaced cloud session's late first sync, after a later attach failed to delete, keeps it. Each fails when its guard is removed.
+- **Merge gate for the web.** Mixed-version tabs need loro-dev/loro-repo#138. Electron runs one bundle for all windows, so it is exposed only on rollback.
 
 ### Phase 2: real CLI barriers (independent of upstream)
 
