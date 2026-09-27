@@ -203,7 +203,7 @@ export function PendingMessageRow({
             </Button>
           ) : null}
           {record.stage === 'saved' ? (
-            <Button size="small" variant="ghost" disabled={busy} onClick={onCancel}>
+            <Button size="small" variant="ghost" onClick={onCancel}>
               {t('sessions.cancelPendingSend')}
             </Button>
           ) : null}
