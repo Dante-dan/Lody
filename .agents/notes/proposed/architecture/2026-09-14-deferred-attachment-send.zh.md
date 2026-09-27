@@ -110,3 +110,7 @@ public-boundary 检查及文档检查分别通过。已运行 `pnpm format` 并�
 Layer 3 validation: full `TMPDIR=/private/tmp NODE_ENV=test pnpm check` passes, including 479 component files / 3,670 tests. Queue preparation uses the existing WorkspaceWriter and retains queue format. 原生 queue-steer 保留 queued journal 的身份，但会先将已经投递的 queue 操作提升回已保存的 history 工作；history turn 已持久准备并提交后，才能删除 queue 行或开始 guide 投递。prepared 或 committed 记录只能在披露后显式丢弃；退出登录/清缓存会写入强制清理标记，并在下次启动时实际删除恢复数据库。被恢复记录阻挡的非强制清理会保留请求，但不会阻止 runtime 初始化；一次性 native reset 请求也会在延后前复制为本地启动标记。`pnpm format` and docs check completed; docs report zero errors. No packaged-device acceptance is claimed.
 
 跨窗口接管时记录实际准备操作的副本；接管输入的窗口不一定拥有原操作基线。确定性 journal 测试覆盖此恢复边界。
+
+资源层整合保留主线的目标同步与 workspace 销毁顺序。作用域所有权规则在不改变保证的前提下压缩，以满足 AGENTS.md 大小限制。
+
+桌面整合先收尾 renderer，再进入现有 CLI 退出屏障；取消时服务不停止，CLI 停止失败仍保留所有权。恢复对话框使用当前 UI 组件。journal、queue-steer、writer 和会话动作共 91 项测试通过，退出顺序与取消测试通过。
