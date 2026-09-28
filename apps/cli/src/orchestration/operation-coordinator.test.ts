@@ -22,6 +22,7 @@ import {
 
 import { LodyOperationCoordinator } from './operation-coordinator';
 import { LodyOperationStore } from './operation-store';
+import { SessionCreateDispatchValidationError } from '@/commands/session';
 
 const roots = new Set<string>();
 const TEST_NOW_MS = Date.parse('2026-07-20T00:00:00Z');
@@ -397,6 +398,39 @@ afterEach(async () => {
 });
 
 describe('LodyOperationCoordinator', () => {
+  it('finishes a deterministic create selection failure without a retry timer', async () => {
+    vi.useFakeTimers();
+    const harness = await makeHarness({
+      operationKind: 'session_create',
+      targetInputDurable: false,
+      materializeTargetOverride: async () => {
+        throw new SessionCreateDispatchValidationError(
+          'Unknown ACP config option: reasoning_effort'
+        );
+      },
+    });
+    harness.coordinator.start();
+    await harness.coordinator.idle();
+    const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
+    try {
+      expect(store.get(harness.requesterSessionId, 'review-round-1').items[0]).toMatchObject({
+        status: 'failed',
+        error: {
+          code: 'COMMAND_REJECTED',
+          retryable: false,
+          message: expect.stringContaining('reasoning_effort'),
+        },
+      });
+      expect(harness.materializeTarget).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await harness.coordinator.idle();
+      expect(harness.materializeTarget).toHaveBeenCalledTimes(1);
+    } finally {
+      store.close();
+      harness.coordinator.stop();
+    }
+  });
+
   it('returns the retained target-write failure when materialization reaches its deadline', async () => {
     vi.useFakeTimers();
     let nowMs = TEST_NOW_MS;

@@ -72,6 +72,7 @@ const FrozenConfigSchema = z
             modeId: z.string().optional(),
             modelId: z.string().optional(),
             configOptionValues: z.record(z.string(), z.union([z.string(), z.boolean()])).optional(),
+            validatedConfigIds: z.array(z.string()).optional(),
             inheritSessionDefaults: z.literal(false).optional(),
           })
           // Older stored configs may still carry `taskToolsEnabled`; drop it.

@@ -1357,6 +1357,8 @@ export type ResolvedTurnDispatchConfig = {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, string | boolean>;
+  /** Frozen ids already checked against the selected model, not the probe snapshot. */
+  validatedConfigIds?: string[];
   /** Prevent create replay from re-reading mutable defaults from the requester history. */
   inheritSessionDefaults?: false;
   /**
@@ -1376,6 +1378,14 @@ export type ResolvedTurnDispatchConfig = {
   runConfig?: AgentRunConfigSelection;
 };
 
+/** A create selector rejected by the resolved target capability cannot heal on retry. */
+export class SessionCreateDispatchValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionCreateDispatchValidationError';
+  }
+}
+
 /**
  * Turns a semantic run-config selection into the concrete mode/model/config
  * option values the target agent advertises. Explicit ids on the config win over
@@ -1393,9 +1403,13 @@ export function applyAgentRunConfigSelection(
   validatedConfigIds: ReadonlySet<string>;
   unverifiedSelections: readonly string[];
 } {
-  const { runConfig, ...rest } = config;
+  const { runConfig, validatedConfigIds, ...rest } = config;
   if (!hasAgentRunConfigSelection(runConfig)) {
-    return { config: rest, validatedConfigIds: new Set(), unverifiedSelections: [] };
+    return {
+      config: rest,
+      validatedConfigIds: new Set(validatedConfigIds),
+      unverifiedSelections: [],
+    };
   }
   const resolved = resolveAgentRunConfigSelection(runConfig, capability);
   const configOptionValues = {
@@ -1408,7 +1422,10 @@ export function applyAgentRunConfigSelection(
       ...((resolved.modelId ?? rest.modelId) ? { modelId: resolved.modelId ?? rest.modelId } : {}),
       ...(Object.keys(configOptionValues).length > 0 ? { configOptionValues } : {}),
     },
-    validatedConfigIds: new Set(resolved.validatedConfigIds ?? []),
+    validatedConfigIds: new Set([
+      ...(validatedConfigIds ?? []),
+      ...(resolved.validatedConfigIds ?? []),
+    ]),
     unverifiedSelections: resolved.unverifiedSelections ?? [],
   };
 }
@@ -2971,13 +2988,20 @@ async function resolveEffectiveSessionCreateDispatchConfig(args: {
         localOnly: args.localOnly,
       })
     : undefined;
-  const requested = applyAgentRunConfigSelection(dispatchConfig, capability);
-  validateTurnModeAndModel(requested.config, capability);
-  validateTurnConfigOptionValues(
-    requested.config.configOptionValues,
-    capability,
-    requested.validatedConfigIds
-  );
+  let requested;
+  try {
+    requested = applyAgentRunConfigSelection(dispatchConfig, capability);
+    validateTurnModeAndModel(requested.config, capability);
+    validateTurnConfigOptionValues(
+      requested.config.configOptionValues,
+      capability,
+      requested.validatedConfigIds
+    );
+  } catch (error) {
+    throw new SessionCreateDispatchValidationError(
+      error instanceof Error ? error.message : String(error)
+    );
+  }
   return {
     ...withBuiltinDefaultTurnMode(
       mergeTurnDispatchConfig(
@@ -2988,6 +3012,9 @@ async function resolveEffectiveSessionCreateDispatchConfig(args: {
       capability
     ),
     inheritSessionDefaults: false,
+    ...(requested.validatedConfigIds.size > 0
+      ? { validatedConfigIds: [...requested.validatedConfigIds] }
+      : {}),
   };
 }
 

@@ -542,6 +542,50 @@ describe('session command helpers', () => {
     ).toThrow(/Allowed values/);
   });
 
+  it('preserves target-model validation when a frozen create config is replayed', () => {
+    const capability: AcpCapabilityCacheEntry = {
+      ...createAcpCapability(),
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          currentValue: 'gpt-6-sol',
+          options: [
+            { value: 'gpt-6-sol', name: 'GPT 6' },
+            { value: 'gpt-5.6-sol', name: 'GPT 5.6' },
+          ],
+        },
+      ],
+      models: [],
+      modelReasoningEfforts: { 'gpt-6-sol': [], 'gpt-5.6-sol': ['medium'] },
+    };
+    const accepted = applyAgentRunConfigSelection(
+      {
+        runConfig: { modelId: 'gpt-5.6-sol', reasoningEffort: 'medium' },
+      },
+      capability
+    );
+    const frozen = {
+      ...accepted.config,
+      validatedConfigIds: [...accepted.validatedConfigIds],
+      inheritSessionDefaults: false as const,
+    };
+    const replayed = applyAgentRunConfigSelection(frozen, capability);
+    expect(replayed.validatedConfigIds.has('reasoning_effort')).toBe(true);
+    expect(() =>
+      validateTurnConfigOptionValues(
+        replayed.config.configOptionValues,
+        capability,
+        replayed.validatedConfigIds
+      )
+    ).not.toThrow();
+    expect(() =>
+      validateTurnConfigOptionValues(replayed.config.configOptionValues, capability)
+    ).toThrow(/Unknown ACP config option/);
+  });
+
   it('drops inherited ACP config options that are no longer compatible', () => {
     expect(
       filterCompatibleTurnConfigOptionValues(

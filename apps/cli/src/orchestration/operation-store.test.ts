@@ -344,6 +344,7 @@ describe('LodyOperationStore', () => {
               modeId: 'default',
               modelId: 'gpt-5',
               configOptionValues: { fast: true },
+              validatedConfigIds: ['reasoning_effort'],
               inheritSessionDefaults: false as const,
             },
           ],
@@ -356,6 +357,7 @@ describe('LodyOperationStore', () => {
           modeId: 'default',
           modelId: 'gpt-5',
           configOptionValues: { fast: true },
+          validatedConfigIds: ['reasoning_effort'],
           inheritSessionDefaults: false,
         },
       ]);

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 
 import type { RepoWatchHandle } from 'loro-repo';
+import { SessionCreateDispatchValidationError } from '@/commands/session';
 
 import {
   buildMissingEmail,
@@ -640,6 +641,15 @@ export class LodyOperationCoordinator {
           await this.options.materializeTarget(operation, item, index, signal);
         } catch (error) {
           if (signal.aborted) return item;
+          if (error instanceof SessionCreateDispatchValidationError) {
+            this.clearMaterializationRetry(operation, index);
+            return {
+              status: 'failed',
+              ...(item.label ? { label: item.label } : {}),
+              target: item.target,
+              error: makeLodyError('COMMAND_REJECTED', error.message, false),
+            };
+          }
           this.recordMaterializationFailure(operation, index, 'target-input-write', error);
           const delayMs = this.armMaterializationFailureRetry(operation, index);
           this.options.logger.warn(
