@@ -87,6 +87,10 @@ Machine liveness is three-state, and the states are not interchangeable. A fresh
 heartbeat means online. The absence of one on a SYNCED transport means offline. An
 unsynced transport means unknown. `getOnlineMachineIds()` returning null means the
 presence room is not joined — status unknown, not offline.
+An earlier successful join does not establish the status of a later read: a
+`reconnecting` room invalidates that evidence, and callers must not retain an
+empty online-ID snapshot across reads. Renderer lists likewise show Offline only
+while their presence subscription is synced.
 
 Carry that distinction all the way to the consumer instead of flattening it. Only a
 definite offline may block work: the MCP dispatch guards refuse on `'offline'` alone,

@@ -135,6 +135,33 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+describe('CliPresenceRuntime join status', () => {
+  it('requires a new joined edge after a room disconnects', async () => {
+    const presence = createRuntime();
+    // The status callback belongs to an attached transport. No network call is
+    // needed to exercise the transition seen by machine liveness readers.
+    (presence as unknown as { transport: object }).transport = { close: async () => {} };
+    const handleRoomStatus = (
+      presence as unknown as { handleRoomStatus: (status: string) => void }
+    ).handleRoomStatus.bind(presence);
+
+    handleRoomStatus('joined');
+    await expect(presence.waitUntilJoined(1_000)).resolves.toBe(true);
+
+    handleRoomStatus('reconnecting');
+    const rejoined = presence.waitUntilJoined(1_000);
+    let settled = false;
+    void rejoined.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    handleRoomStatus('joined');
+    await expect(rejoined).resolves.toBe(true);
+  });
+});
+
 describe('CliPresenceRuntime heartbeat delivery observability', () => {
   const BASE_MS = Date.UTC(2026, 8, 20, 14, 0, 0);
   const neverSettles = (): Promise<void> => new Promise<void>(() => {});

@@ -2179,13 +2179,21 @@ const makeMachineLivenessLookupForMcp = (
   manager: LoroDocumentManager,
   ctx: ReturnType<typeof getSessionContext>
 ): ((machineId: MachineId) => Promise<McpMachineLiveness>) => {
-  let onlineMachineIds: ReturnType<LoroDocumentManager['getOnlineMachineIds']> | undefined;
+  // Share an in-flight read within a batch, but do not retain its result after
+  // the room can disconnect: a formerly empty Set is not durable offline proof.
+  let pendingOnlineMachineIds: ReturnType<LoroDocumentManager['getOnlineMachineIds']> | undefined;
   return async (machineId) => {
     if (machineId === (ctx.machineId as MachineId)) {
       return 'online';
     }
-    onlineMachineIds ??= manager.getOnlineMachineIds();
-    const resolved = await onlineMachineIds;
+    pendingOnlineMachineIds ??= manager.getOnlineMachineIds();
+    const read = pendingOnlineMachineIds;
+    let resolved: Awaited<typeof read>;
+    try {
+      resolved = await read;
+    } finally {
+      if (pendingOnlineMachineIds === read) pendingOnlineMachineIds = undefined;
+    }
     if (resolved === null) {
       return 'unknown';
     }

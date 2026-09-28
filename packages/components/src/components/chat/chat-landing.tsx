@@ -88,7 +88,11 @@ import {
 } from '@/atoms';
 import { docMetaCacheReadyAtom, sessionMetaCountAtom } from '@/atoms/doc-meta';
 import { localProbeAttemptedAtom, localProbeResultAtom } from '@/atoms/local-probe';
-import { lodyPresenceNowMsAtom, lodyPresenceStatesAtom } from '@/atoms/presence';
+import {
+  lodyPresenceNowMsAtom,
+  lodyPresenceStatesAtom,
+  lodyPresenceSyncStateAtom,
+} from '@/atoms/presence';
 import { buildAgentPrompt } from '@/lib';
 import { getAppCurrentPathWithSearch } from '@/lib/app-location';
 import { isImeComposingKeyboardEvent } from '@/lib/ime';
@@ -749,11 +753,15 @@ function WorkspaceChatLanding({
   const localProbeResult = useAtomValue(localProbeResultAtom);
   const localProbeAttempted = useAtomValue(localProbeAttemptedAtom);
   const onlineMachineIds = useOnlineMachineIds();
+  const presenceSyncState = useAtomValue(lodyPresenceSyncStateAtom);
   const onlineMachineIdsRef = useRef(onlineMachineIds);
   onlineMachineIdsRef.current = onlineMachineIds;
-  const isPresenceMachineOnline = useCallback(
-    (machineId: string) => onlineMachineIds.has(machineId as MachineId),
-    [onlineMachineIds]
+  const presenceSyncStateRef = useRef(presenceSyncState);
+  presenceSyncStateRef.current = presenceSyncState;
+  const isPresenceMachineReachable = useCallback(
+    (machineId: string) =>
+      presenceSyncState !== 'synced' || onlineMachineIds.has(machineId as MachineId),
+    [onlineMachineIds, presenceSyncState]
   );
   const freshRepositories = useCloudQuery(
     cloudOperations.github.getWorkspaceRepositories,
@@ -1897,9 +1905,9 @@ function WorkspaceChatLanding({
     return getChatLandingHasAnyOnlineMachine({
       localMachineId: visibleLocalMachineId,
       machines,
-      isMachineOnline: isPresenceMachineOnline,
+      isMachineOnline: isPresenceMachineReachable,
     });
-  }, [visibleLocalMachineId, machines, isPresenceMachineOnline]);
+  }, [visibleLocalMachineId, machines, isPresenceMachineReachable]);
   const onlineMachineCount = useMemo(() => {
     let count = 0;
     for (const machineId of machines.keys()) {
@@ -2082,7 +2090,7 @@ function WorkspaceChatLanding({
           machineId,
           localMachineId: visibleLocalMachineId,
           machines,
-          isMachineOnline: isPresenceMachineOnline,
+          isMachineOnline: isPresenceMachineReachable,
         })
       ) {
         continue;
@@ -2090,7 +2098,7 @@ function WorkspaceChatLanding({
       next.set(machineId, machine);
     }
     return next;
-  }, [executorConfigs, isPresenceMachineOnline, machines, visibleLocalMachineId]);
+  }, [executorConfigs, isPresenceMachineReachable, machines, visibleLocalMachineId]);
 
   // Suppress empty-state flashes during cold start, but do not let a stalled
   // Convex visibility query mask machine/agent data already available from the
@@ -2476,7 +2484,8 @@ function WorkspaceChatLanding({
           projectMachineId: project.machineId,
           visibleLocalMachineId,
           targetMachine: machinesRef.current.get(project.machineId),
-          isMachineOnline: (machineId) => onlineMachineIdsRef.current.has(machineId),
+          isMachineOnline: (machineId) =>
+            presenceSyncStateRef.current !== 'synced' || onlineMachineIdsRef.current.has(machineId),
         })
       ) {
         throw new Error(
@@ -2551,9 +2560,9 @@ function WorkspaceChatLanding({
       projectMachineId: selectedLocalProjectMachineId,
       visibleLocalMachineId,
       targetMachine: machines.get(selectedLocalProjectMachineId),
-      isMachineOnline: isPresenceMachineOnline,
+      isMachineOnline: isPresenceMachineReachable,
     });
-  }, [isPresenceMachineOnline, machines, selectedLocalProjectMachineId, visibleLocalMachineId]);
+  }, [isPresenceMachineReachable, machines, selectedLocalProjectMachineId, visibleLocalMachineId]);
   const localGitStateLoadKey = useMemo(
     () =>
       getLocalProjectGitStateLoadKey({
@@ -3393,9 +3402,9 @@ function WorkspaceChatLanding({
       machineId: selectedMachineId,
       localMachineId: visibleLocalMachineId,
       machines,
-      isMachineOnline: isPresenceMachineOnline,
+      isMachineOnline: isPresenceMachineReachable,
     });
-  }, [selectedMachineId, machines, visibleLocalMachineId, isPresenceMachineOnline]);
+  }, [selectedMachineId, machines, visibleLocalMachineId, isPresenceMachineReachable]);
 
   // The agent selector must always be scoped to exactly one machine.
   const localProjectMachineId =
@@ -4849,7 +4858,7 @@ function WorkspaceChatLanding({
           ),
           isWorking: activity.isWorking,
           isWaitingPermission: activity.isWaitingPermission,
-          isOffline: !isOnline,
+          isOffline: presenceSyncState === 'synced' && !isOnline,
           hasUnreadMessages: activity.hasUnreadMessages,
           isPinned: Boolean(session.isPinned),
           machineId: session.machineId,
@@ -4913,6 +4922,7 @@ function WorkspaceChatLanding({
     liveSessionStatuses,
     mobileHomeShowArchived,
     onlineMachineIds,
+    presenceSyncState,
     showProjectSharing,
     t,
     teamMembersByUserId,
@@ -5751,7 +5761,7 @@ function WorkspaceChatLanding({
           ),
           isWorking: activity.isWorking,
           isWaitingPermission: activity.isWaitingPermission,
-          isOffline: !isOnline,
+          isOffline: presenceSyncState === 'synced' && !isOnline,
           hasUnreadMessages: activity.hasUnreadMessages,
           isPinned: Boolean(session.isPinned),
           machineId: session.machineId,
@@ -5782,6 +5792,7 @@ function WorkspaceChatLanding({
     mobileProjectContext,
     mobileProjectShowArchived,
     onlineMachineIds,
+    presenceSyncState,
     t,
     teamMembersByUserId,
     userId,

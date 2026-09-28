@@ -90,7 +90,7 @@ export class CliPresenceRuntime {
   private joinRetryTimer: NodeJS.Timeout | null = null;
   private rejoinTimer: NodeJS.Timeout | null = null;
   private rejoinBackoffIndex = 0;
-  private joinedOnce = false;
+  private joined = false;
   private joinedWaiters: Array<(joined: boolean) => void> = [];
 
   constructor(private readonly options: CliPresenceRuntimeOptions) {
@@ -228,6 +228,8 @@ export class CliPresenceRuntime {
       this.republishLocalState();
       return;
     }
+    // A snapshot from an earlier joined interval is no longer proof of absence.
+    this.joined = false;
     // The transport retries retriable failures internally; `error` and
     // `disconnected` are terminal for its read loop and need an explicit
     // rejoin, otherwise presence silently stops flowing for the rest of the
@@ -275,7 +277,7 @@ export class CliPresenceRuntime {
 
   private resolveJoinedWaiters(joined: boolean): void {
     if (joined) {
-      this.joinedOnce = true;
+      this.joined = true;
     }
     const waiters = this.joinedWaiters;
     this.joinedWaiters = [];
@@ -289,7 +291,7 @@ export class CliPresenceRuntime {
    * bootstrap. Local-only presence production does not satisfy this boundary.
    */
   waitUntilJoined(timeoutMs: number): Promise<boolean> {
-    if (this.joinedOnce && this.transport) return Promise.resolve(true);
+    if (this.joined && this.transport) return Promise.resolve(true);
     if (this.stopped || !this.transport) return Promise.resolve(false);
     return new Promise((resolve) => {
       let settled = false;
@@ -332,7 +334,7 @@ export class CliPresenceRuntime {
     const transport = this.transport;
     this.transport = null;
     this.started = false;
-    this.joinedOnce = false;
+    this.joined = false;
     this.resolveJoinedWaiters(false);
     this.rejoinBackoffIndex = 0;
     await transport.close();

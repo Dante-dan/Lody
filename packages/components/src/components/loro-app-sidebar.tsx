@@ -85,7 +85,11 @@ import { localMachineIdAtom } from '@/atoms/local-probe';
 import { getLocalProjectVisibilityKey } from '@/lib/visible-local-project-index';
 import { selectAndWriteLocalProject } from '@/lib/local-project-import';
 import { importSidebarLocalProject } from '@/components/sidebar-local-project-import';
-import { lodyPresenceNowMsAtom, lodyPresenceStatesAtom } from '@/atoms/presence';
+import {
+  lodyPresenceNowMsAtom,
+  lodyPresenceStatesAtom,
+  lodyPresenceSyncStateAtom,
+} from '@/atoms/presence';
 import {
   chatScopeAtom,
   chatsCollapsedAtom,
@@ -1711,6 +1715,7 @@ export function LoroAppSidebar({
   });
   const localMachineId = useAtomValue(localMachineIdAtom);
   const onlineMachineIds = useOnlineMachineIds();
+  const presenceSyncState = useAtomValue(lodyPresenceSyncStateAtom);
   const visibleMachineIds = useMemo(() => Array.from(machineMetaMap.keys()), [machineMetaMap]);
   const pendingLocalProjectRemovals = usePendingLocalProjectRemovals(visibleMachineIds);
   useLocalProjectRemovalResultNotifications(visibleMachineIds);
@@ -2584,7 +2589,8 @@ export function LoroAppSidebar({
             childSessionsByParent,
             liveSessionStatuses
           );
-          const isOffline = !onlineMachineIds.has(session.machineId);
+          const isOffline =
+            presenceSyncState === 'synced' && !onlineMachineIds.has(session.machineId);
           // Local projects linked to a GitHub repo can have a PR; carry it so the
           // row shows the same PR icon / hover info as GitHub rows.
           const prInfo = getLatestPullRequestInfo(session);
@@ -2635,6 +2641,7 @@ export function LoroAppSidebar({
     localProjectSessionsByKey,
     liveSessionStatuses,
     onlineMachineIds,
+    presenceSyncState,
     repoSessions,
     resolveOpenerRowId,
     resolveSessionAuthor,

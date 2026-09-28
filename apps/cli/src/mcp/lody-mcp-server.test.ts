@@ -1160,6 +1160,21 @@ describe('session MCP input schemas', () => {
     await expect(unavailable('machine-id')).resolves.toBe('online');
   });
 
+  it('does not reuse a joined snapshot after presence becomes unavailable', async () => {
+    const getOnlineMachineIds = vi
+      .fn()
+      .mockResolvedValueOnce(new Set<string>())
+      .mockResolvedValueOnce(null);
+    const machineLiveness = makeMachineLivenessLookupForMcp(
+      { getOnlineMachineIds } as never,
+      createMcpContext()
+    );
+
+    await expect(machineLiveness('remote-a')).resolves.toBe('offline');
+    await expect(machineLiveness('remote-a')).resolves.toBe('unknown');
+    expect(getOnlineMachineIds).toHaveBeenCalledTimes(2);
+  });
+
   it('truncates history text on Unicode boundaries with exact omitted bytes', () => {
     const original = '🚀审查'.repeat(100);
     const result = truncateUtf8HeadTail(original, 101);
