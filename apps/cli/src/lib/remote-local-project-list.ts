@@ -125,6 +125,9 @@ export async function listRemoteLocalProjects(args: {
   const deniedById = machineAccess.find(
     (entry) => entry.machine.id === selector && !entry.access.allowed
   );
+  if (!deniedById && authorizedMachines.length === 0) {
+    throw new Error('No authorized machines are available in this workspace.');
+  }
   const machine = deniedById?.machine ?? selectRemoteProjectMachine(authorizedMachines, selector);
   const access = machineAccess.find((entry) => entry.machine.id === machine.id)?.access;
   if (!access?.allowed) {

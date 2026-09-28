@@ -13,7 +13,7 @@ A failed hosted machine access registration left a running daemon without anothe
 
 `MessageHandler.activateRemoteServices` made one registration attempt and logged a rejection. A transient failure therefore persisted until restart or another unrelated registration path. Retry starts at one second, doubles to a five-minute cap, stops after success, and is cancelled during cleanup. The existing in-flight promise and successful-registration cache still prevent duplicate requests.
 
-The create and project-list commands first selected from allowed machines. If the daemon's machine metadata existed but its registration was denied, the commands reported a missing machine or an empty authorized list. They now recognize a denied exact machine ID, then require its access verdict before reading projects or dispatching a Session. Unknown selectors still report `Machine not found` with only authorized candidates; a known denied ID reports the denial reason and points to daemon logs only for `machine_not_registered`.
+The create and project-list commands first selected from allowed machines. If the daemon's machine metadata existed but its registration was denied, the commands reported a missing machine or an empty authorized list. They now recognize a denied exact machine ID, then require its access verdict before reading projects or dispatching a Session. Unknown selectors report `Machine not found` with only authorized candidates when some exist, or `No authorized machines are available in this workspace` when none do. A known denied ID reports the denial reason and points to daemon logs only for `machine_not_registered`.
 
 ## Scope and verification
 

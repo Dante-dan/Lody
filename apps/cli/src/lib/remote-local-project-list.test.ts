@@ -199,6 +199,24 @@ describe('remote local project list', () => {
     expect(manager.syncFlockDocOrThrow).not.toHaveBeenCalled();
   });
 
+  it('keeps the empty authorized-workspace diagnostic for an unknown selector', async () => {
+    const { manager } = createFixtureManager();
+
+    await expect(
+      listRemoteLocalProjects({
+        manager,
+        auth,
+        workspace,
+        machineSelector: 'missing-machine',
+        dependencies: {
+          ...fixtureDependencies,
+          verifyAccess: async () => ({ allowed: false, reason: 'machine_not_registered' }),
+        },
+      })
+    ).rejects.toThrow('No authorized machines are available in this workspace.');
+    expect(manager.syncFlockDocOrThrow).not.toHaveBeenCalled();
+  });
+
   it('requires a unique machine name while accepting an exact id', () => {
     const duplicate = { ...targetMachine, id: authMachineId };
     expect(selectRemoteProjectMachine([targetMachine, duplicate], targetMachineId)).toBe(

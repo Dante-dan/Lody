@@ -2329,6 +2329,9 @@ export function selectTargetMachineForCreate(args: {
       (row) => row.machine.id === selector && !row.access.allowed
     );
     if (denied) return requireAccess(denied.machine);
+    if (machines.length === 0) {
+      throw new Error('No authorized machines are available in this workspace.');
+    }
     return selectUniqueMachineByIdOrName(machines, selector);
   };
   if (args.parentMachineId) {

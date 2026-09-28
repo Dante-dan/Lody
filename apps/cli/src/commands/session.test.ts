@@ -411,6 +411,27 @@ describe('session command helpers', () => {
     ).not.toThrow(localMachine.id);
   });
 
+  it('keeps the empty authorized-workspace diagnostic for an unknown create target', () => {
+    const localMachine = createMachineMeta({ id: 'local-machine' as MachineId });
+    const machineAccess = [
+      {
+        machine: localMachine,
+        access: { allowed: false as const, reason: 'machine_not_registered' as const },
+      },
+    ];
+
+    expect(() =>
+      selectTargetMachineForCreate({
+        machineAccess,
+        authMachineId: localMachine.id,
+        machineSelector: 'missing-machine',
+      })
+    ).toThrow('No authorized machines are available in this workspace.');
+    expect(() =>
+      selectTargetMachineForCreate({ machineAccess, authMachineId: localMachine.id })
+    ).toThrow(`Machine access denied for ${localMachine.id}: machine_not_registered.`);
+  });
+
   it('binds session command requester identity to CLI auth', () => {
     expect(() =>
       resolveSessionCommandRequesterUserId({ userId: 'machine-owner' }, 'current-session-user')

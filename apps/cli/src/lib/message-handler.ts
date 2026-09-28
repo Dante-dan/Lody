@@ -5749,7 +5749,7 @@ export class MessageHandler {
       if (this.cleanedUp || this.machineAccessRegistrationRetryTimer) return;
       const attempt = ++this.machineAccessRegistrationRetryAttempt;
       const delayMs = Math.min(
-        1_000 * 2 ** Math.min(attempt - 1, 8),
+        1_000 * 2 ** Math.min(attempt - 1, 9),
         MessageHandler.MACHINE_ACCESS_REGISTRATION_RETRY_MAX_DELAY_MS
       );
       this.logger.warn(
