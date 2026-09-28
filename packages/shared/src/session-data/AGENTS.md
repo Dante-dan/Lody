@@ -50,6 +50,11 @@
   with a commit-time guard against regressing an advanced execution status.
 - Test the real Loro reader and writer. Delayed reads use small injected Promise
   gates; there is no test-only implementation of the complete command API.
+- Normalized subagent events persist inside `subagent_task.run`, keyed by root ACP
+  session plus run id. Bind the initiating turn once; child output never changes root
+  turn identity, plan, tools, or accounting. Ignore unregistered/terminal output,
+  reject lineage cycles, and retain incomplete observation across snapshots. Declare
+  nested transcript streaming fields in `schema.ts`; legacy rows stay unchanged.
 
 - Durable submission preparation stays within HistoryWriter: prepare on a fork,
   persist the exact operations and their baseline before publishing, then replay
