@@ -13,7 +13,7 @@ bound, so the windowed path avoids mirroring it into memory as an array. Everyth
   window. In React use `useSessionDoc().history`, `useConversationTail`,
   `useTurnRange`, or `useSessionTurnFacts` for a whole-history fact.
 - **Write** domain commands through `store.sessionData` (`@lody/shared/session-data`):
-  `applyHistoryAction`, `appendTurn`, `replaceTurn`, `resolveTaskProposal` and
+  `applyHistoryAction`, `appendTurn`, `replaceTurn` and
   `respondPermission`. It is composed over the same doc and the
   one shared writer; a rejected command surfaces as a failure, never a silent drop.
 - The composition owns one HistoryWriter; the UI store does not expose it.
@@ -29,6 +29,9 @@ Full-history actions use the authoritative consistent full-read operation.
 Performance comparisons must use the current full-Mirror baseline.
 
 ## Lightweight hosted entries
+
+- `lib/client-build-info.ts` owns build provenance for About and reports. Bug report
+  metadata contains only build constants, distinct from remote machine logs.
 
 - Public/auth entry points that bypass the full product router import route-agnostic
   surfaces. Keep host navigation behind callback props so those surfaces do not import
@@ -46,6 +49,15 @@ Performance comparisons must use the current full-Mirror baseline.
   `repositionInputs={false}` explicitly opts out of both Vaul repositioning and
   this inset; callers using it own their keyboard layout.
 
+## Working session status
+
+- Session marks use `ui/working-status-mark.tsx`, mounted across the status change
+  and fed via `useWorkingHandOver` because unread arrives after presence.
+  `WorkingGrid` shares one viewport observer: only visible marks animate; returning
+  marks sample the shared clock. Animate only `transform`/`opacity` from
+  `startTime = 0`, never per-frame script or React state.
+  [Decision](../../../.agents/notes/implemented/feature/2026-09-24-sidebar-working-grid.md).
+
 ## Keyboard navigation
 
 - Each independently navigable list owns one `FocusScope` and one
@@ -58,9 +70,10 @@ Performance comparisons must use the current full-Mirror baseline.
 
 ## Zen layout
 
-- `zenLayoutModeAtom` is a transient visibility override, never a persisted sidebar
-  preference. Entering or leaving Zen must not write `sidebarCollapsedAtom` or a
-  Session's persisted right-panel `open` state, so the exact pre-Zen layout restores.
+- Zen preserves sidebar preferences when hiding/restoring a visible layout.
+  If all available sidebars are already closed, its toggle reveals them instead.
+  The mounted desktop Session owns `zenRightPanelAtom` and clears it on unmount.
+  Behavior: [Zen layout](../../../specs/zen-layout.md).
 - An explicit request to show either sidebar exits Zen and reveals that sidebar. Use
   the shared layout-state actions for the navigation sidebar; every Session action
   that opens a viewer, Files, Changes, PR, Browser, or Side Chat must clear Zen.
@@ -69,6 +82,14 @@ Performance comparisons must use the current full-Mirror baseline.
   ordinarily collapsed right panel.
 
 ## Workspace transitions
+
+- Default app entry opens the workspace chat landing; never persist or restore the
+  last visited route. Explicit deep links and requested window targets retain their destination.
+
+- Dock counts derive from complete active metadata and the sidebar's child activity
+  summary. Publish absolute snapshots, including zero, on change and every 30 seconds;
+  focus/visibility restoration reconciles too. Keep the timer independent of count
+  changes and mount it only in the ready workspace's elected window.
 
 - Authenticated workspace switches keep `MainLayout` mounted: the sidebar and
   workspace identity are stable chrome, while the content pane shows a scoped
@@ -89,10 +110,10 @@ Performance comparisons must use the current full-Mirror baseline.
 ## ACP selectors
 
 - Built-in Codex reasoning selectors normalize cached options against exact model support
-  in `components/shared/acp-selector-options.ts`: Astra, Sol, and Terra expose Max/Ultra;
-  Luna exposes Max only. Keep this aligned with the ACP model catalog; a model version
-  threshold cannot represent per-model differences, and cached efforts may belong to
-  a different selected model.
+  in `components/shared/acp-selector-options.ts`: GPT-6 Astra/Sol and GPT-5.6 Sol/Terra
+  expose Max/Ultra; GPT-6 Luna and GPT-5.6 Luna expose Max only. Keep this aligned with
+  the ACP model catalog; a model version threshold cannot represent per-model differences,
+  and cached efforts may belong to a different selected model.
 
 ## ACP authentication
 

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { expect } from '@playwright/test';
+import { quoteCommandArgument } from './command-line.js';
 
 const execFileAsync = promisify(execFile);
 const SCRIPTED_ACP_ENTRY = resolve(
@@ -18,13 +19,10 @@ export type ScriptedAcpEvent = {
   event: string;
   sessionId?: string;
   mode?: string;
+  /** `[MARK:<value>]` carried by the user prompt, when present. */
+  marker?: string;
   stopReason?: string;
 };
-
-function quoteCommandArgument(value: string): string {
-  if (/^[A-Za-z0-9_./:\\-]+$/u.test(value)) return value;
-  return `"${value.replace(/["\\$`]/gu, '\\$&')}"`;
-}
 
 function isProcessAlive(pid: number): boolean {
   try {

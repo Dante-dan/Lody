@@ -1,11 +1,10 @@
 import { useAtom, useAtomValue } from 'jotai';
 import { useTranslation } from 'react-i18next';
-import { Switch } from '@/ui/switch';
+import { Switch } from '@lody/ui/switch';
 import {
   developerModeEnabledAtom,
   inboxBetaEnabledAtom,
-  promptShortcutsBetaEnabledAtom,
-  tasksBetaEnabledAtom,
+  semanticShortcutsBetaEnabledAtom,
 } from '@/atoms/settings';
 import { CompactRow, CompactSection } from './compact-layout';
 
@@ -22,30 +21,16 @@ import { CompactRow, CompactSection } from './compact-layout';
 export function BetaFeaturesSection() {
   const { t } = useTranslation();
   const developerModeEnabled = useAtomValue(developerModeEnabledAtom);
-  const [tasksBetaEnabled, setTasksBetaEnabled] = useAtom(tasksBetaEnabledAtom);
   const [inboxBetaEnabled, setInboxBetaEnabled] = useAtom(inboxBetaEnabledAtom);
 
-  const [promptShortcutsBetaEnabled, setPromptShortcutsBetaEnabled] = useAtom(
-    promptShortcutsBetaEnabledAtom
+  const [semanticShortcutsEnabled, setSemanticShortcutsEnabled] = useAtom(
+    semanticShortcutsBetaEnabledAtom
   );
 
   if (!developerModeEnabled) return null;
 
   return (
     <CompactSection title={t('settings.beta.title', 'Beta features')}>
-      <CompactRow
-        label={t('settings.beta.tasks', 'Tasks')}
-        helper={t(
-          'settings.beta.tasksHelper',
-          'Track work you are not starting yet, separately from chats. In development — expect rough edges.'
-        )}
-      >
-        <Switch
-          checked={tasksBetaEnabled}
-          onCheckedChange={setTasksBetaEnabled}
-          aria-label={t('settings.beta.tasks', 'Tasks')}
-        />
-      </CompactRow>
       <CompactRow
         label={t('settings.beta.inbox', 'Inbox')}
         helper={t(
@@ -59,17 +44,18 @@ export function BetaFeaturesSection() {
           aria-label={t('settings.beta.inbox', 'Inbox')}
         />
       </CompactRow>
+
       <CompactRow
-        label={t('settings.tabs.promptShortcuts', 'Prompt Shortcuts')}
+        label={t('settings.beta.semanticShortcuts', 'Pointer-aware close shortcut')}
         helper={t(
-          'settings.beta.promptShortcutsHelper',
-          'Create reusable prompts and insert them with /. In development — expect rough edges.'
+          'settings.beta.semanticShortcutsHelper',
+          'On desktop, close the active tab in the conversation or right panel you last pointed at or used with the keyboard.'
         )}
       >
         <Switch
-          checked={promptShortcutsBetaEnabled}
-          onCheckedChange={setPromptShortcutsBetaEnabled}
-          aria-label={t('settings.tabs.promptShortcuts', 'Prompt Shortcuts')}
+          checked={semanticShortcutsEnabled}
+          onCheckedChange={setSemanticShortcutsEnabled}
+          aria-label={t('settings.beta.semanticShortcuts', 'Pointer-aware close shortcut')}
         />
       </CompactRow>
     </CompactSection>

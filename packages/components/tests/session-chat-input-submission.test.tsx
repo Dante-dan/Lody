@@ -1,6 +1,26 @@
 // @vitest-environment jsdom
 
-import { act, createElement, createRef, type RefObject } from 'react';
+import {
+  act,
+  cloneElement,
+  createElement,
+  createRef,
+  useLayoutEffect,
+  useState,
+  type ReactElement,
+  type RefObject,
+} from 'react';
+import { getDefaultStore } from 'jotai';
+import { createSessionSendResources } from '../src/lib/session-send-resources';
+import { authTokenAtom, runtimeAtom } from '../src/atoms/runtime';
+import { localProbeResultAtom } from '../src/atoms/local-probe';
+import {
+  canUseElectronLocalFileSend,
+  sendSessionFileToLocalRuntime,
+} from '../src/lib/electron-session-file-sender';
+import { currentWorkspaceIdAtom } from '../src/atoms/workspace-context';
+import { computeSha256Hex, uploadSessionFile } from '../src/lib/session-file-upload';
+import { uploadSessionImage } from '../src/lib/session-image-upload';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentRole, AgentRoleId, SessionMeta, SessionInputBlock } from '@lody/shared';
@@ -18,6 +38,20 @@ const sessionAgentRoleState = vi.hoisted(() => ({
 }));
 
 vi.mock('@posthog/react', () => ({ usePostHog: () => null }));
+vi.mock('../src/lib/electron-session-file-sender', () => ({
+  canUseElectronLocalFileSend: vi.fn(() => false),
+  sendSessionFileToLocalRuntime: vi.fn(async () => null),
+}));
+vi.mock('../src/lib/session-file-upload', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  computeSha256Hex: vi.fn(),
+  computeTextPreviewable: vi.fn(async () => true),
+  uploadSessionFile: vi.fn(),
+}));
+vi.mock('../src/lib/session-image-upload', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  uploadSessionImage: vi.fn(),
+}));
 
 vi.mock('../src/components/mentions/mention-session-source', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -63,10 +97,11 @@ import {
   SessionChatInputArea,
   setSessionChatInputTextDraft,
   type SessionChatInputAreaHandle,
+  type SessionChatInputAreaProps,
 } from '../src/components/sessions/session-chat-input-area';
 import { initI18n } from '../src/i18n';
 import { MAX_PASTED_TEXT_BYTE_SIZE } from '../src/lib/pasted-text-draft';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -80,11 +115,45 @@ function deferredBoolean() {
   return { promise, resolve };
 }
 
+function ScopeSwitchOnCommit({
+  child,
+  retire,
+}: {
+  child: ReactElement<SessionChatInputAreaProps>;
+  retire: boolean;
+}) {
+  const [retired, setRetired] = useState(false);
+  useLayoutEffect(() => {
+    if (retire) setRetired(true);
+  }, [retire]);
+  return retired
+    ? cloneElement(child, {
+        session: { ...child.props.session, id: `${child.props.session.id}-retired` as never },
+      })
+    : child;
+}
+
 describe('SessionChatInputArea submission feedback', () => {
+  let resources: ReturnType<typeof createSessionSendResources>;
   let root: Root | null = null;
   let container: HTMLDivElement | null = null;
 
   beforeEach(async () => {
+    resources = createSessionSendResources({
+      acquire: async () => {
+        throw new Error('Unexpected store borrow');
+      },
+      releaseRef: () => {},
+    });
+    getDefaultStore().set(runtimeAtom, {
+      workspaceId: 'workspace-upload',
+      sendResources: resources,
+    } as never);
+    vi.mocked(uploadSessionImage).mockReset();
+    vi.mocked(computeSha256Hex).mockReset();
+    vi.mocked(uploadSessionFile).mockReset();
+    vi.mocked(canUseElectronLocalFileSend).mockReturnValue(false);
+    vi.mocked(sendSessionFileToLocalRuntime).mockReset();
     sessionAgentRoleState.control = {
       items: [],
       selectedRoleId: null,
@@ -230,7 +299,14 @@ describe('SessionChatInputArea submission feedback', () => {
 
   afterEach(async () => {
     await act(async () => root?.unmount());
+    await resources.dispose();
+    getDefaultStore().set(runtimeAtom, null);
+    getDefaultStore().set(localProbeResultAtom, null);
+    getDefaultStore().set(authTokenAtom, null);
+    getDefaultStore().set(currentWorkspaceIdAtom, null);
+    vi.restoreAllMocks();
     Reflect.deleteProperty(window, '__LODY_NATIVE__');
+    Reflect.deleteProperty(window.navigator, 'userAgent');
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
     root = null;
     container?.remove();
@@ -342,10 +418,16 @@ describe('SessionChatInputArea submission feedback', () => {
     isArchived = false,
     composerRef,
     claimNavigationFocus,
+    isVisible = true,
+    overrides = {},
+    retireOnCommit = false,
   }: {
     sessionId?: string;
-    onSendMessage: (blocks: SessionInputBlock[]) => Promise<boolean>;
+    onSendMessage: SessionChatInputAreaProps['onSendMessage'];
     isArchived?: boolean;
+    isVisible?: boolean;
+    overrides?: Partial<SessionChatInputAreaProps>;
+    retireOnCommit?: boolean;
     composerRef?: RefObject<SessionChatInputAreaHandle | null>;
     claimNavigationFocus?: () => boolean;
   }) {
@@ -356,34 +438,39 @@ describe('SessionChatInputArea submission feedback', () => {
     }
     await act(async () => {
       root!.render(
-        createElement(SessionChatInputArea, {
-          ref: composerRef,
-          claimNavigationFocus,
-          session: {
-            id: sessionId,
-            userId: 'user-1',
-            machineId: 'machine-1',
-            cliType: 'builtin',
-            agentType: 'codex',
-            status: { type: 'idle' },
-            isArchived,
-            createdAt: '2026-09-05T00:00:00.000Z',
-          } as SessionMeta,
-          sessionLocalProjectRootPath: null,
-          isMachineRemoved: false,
-          isAgentBusy: false,
-          isDark: false,
-          isEmptyConversation: false,
-          selectedModeId: null,
-          selectedModelId: null,
-          modeOptions: [],
-          modelOptions: [],
-          onModeChange: () => undefined,
-          onModelChange: () => undefined,
-          onSendMessage,
-          onStop: () => undefined,
-          onRemoveQueueItem: async () => undefined,
-          initialInputText: 'focus regression draft',
+        createElement(ScopeSwitchOnCommit, {
+          retire: retireOnCommit,
+          child: createElement(SessionChatInputArea, {
+            ref: composerRef,
+            isVisible,
+            claimNavigationFocus,
+            session: {
+              id: sessionId,
+              userId: 'user-1',
+              machineId: 'machine-1',
+              cliType: 'builtin',
+              agentType: 'codex',
+              status: { type: 'idle' },
+              isArchived,
+              createdAt: '2026-09-05T00:00:00.000Z',
+            } as SessionMeta,
+            sessionLocalProjectRootPath: null,
+            isMachineRemoved: false,
+            isAgentBusy: false,
+            isDark: false,
+            isEmptyConversation: false,
+            selectedModeId: null,
+            selectedModelId: null,
+            modeOptions: [],
+            modelOptions: [],
+            onModeChange: () => undefined,
+            onModelChange: () => undefined,
+            onSendMessage,
+            onStop: () => undefined,
+            onRemoveQueueItem: async () => undefined,
+            initialInputText: 'focus regression draft',
+            ...overrides,
+          }),
         })
       );
     });
@@ -403,6 +490,160 @@ describe('SessionChatInputArea submission feedback', () => {
       }
     });
   }
+
+  async function attachDrafts(composerRef: RefObject<SessionChatInputAreaHandle | null>) {
+    Object.defineProperty(URL, 'createObjectURL', {
+      configurable: true,
+      value: () => 'blob:draft',
+    });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: () => undefined });
+    await act(async () =>
+      composerRef.current!.handleImageDrop([
+        new File(['synthetic-image'], 'sample.png', { type: 'image/png' }),
+        new File(['synthetic-file'], 'notes.txt', { type: 'text/plain' }),
+      ])
+    );
+  }
+
+  it.each(['keyboard', 'button'] as const)(
+    'hands off complete drafts through %s without starting uploads in the composer',
+    async (source) => {
+      const composerRef = createRef<SessionChatInputAreaHandle>();
+      const acceptance = deferredBoolean();
+      const submissions: Parameters<SessionChatInputAreaProps['onSendMessage']>[] = [];
+      const textarea = await renderComposer({
+        composerRef,
+        onSendMessage: (...args) => {
+          submissions.push(args);
+          return acceptance.promise;
+        },
+      });
+      await attachDrafts(composerRef);
+      expect(container!.textContent).toContain('notes.txt');
+      expect(submissions).toEqual([]);
+      await submit(source);
+      await submit('keyboard');
+      expect(submissions).toHaveLength(1);
+      expect(submissions[0][0]).toEqual([{ type: 'text', text: 'focus regression draft' }]);
+      expect(
+        submissions[0][2]?.attachments?.map(({ kind, name, source: bytes }) => ({
+          kind,
+          name,
+          size: bytes.size,
+        }))
+      ).toEqual([
+        { kind: 'image', name: 'sample.png', size: 15 },
+        { kind: 'file', name: 'notes.txt', size: 14 },
+      ]);
+      expect(uploadSessionImage).not.toHaveBeenCalled();
+      expect(uploadSessionFile).not.toHaveBeenCalled();
+      expect(textarea.disabled).toBe(true);
+      await act(async () => acceptance.resolve(true));
+      expect(textarea.value).toBe('');
+      expect(container!.textContent).not.toContain('notes.txt');
+    }
+  );
+
+  it('retains all drafts after failed admission and retries the same bytes', async () => {
+    const composerRef = createRef<SessionChatInputAreaHandle>();
+    const submissions: Parameters<SessionChatInputAreaProps['onSendMessage']>[] = [];
+    const textarea = await renderComposer({
+      composerRef,
+      onSendMessage: async (...args) => {
+        submissions.push(args);
+        return false;
+      },
+    });
+    await attachDrafts(composerRef);
+    await submit('keyboard');
+    expect(textarea.disabled).toBe(false);
+    expect(textarea.value).toBe('focus regression draft');
+    expect(container!.textContent).toContain('notes.txt');
+    await submit('keyboard');
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1][2]?.attachments).toEqual(submissions[0][2]?.attachments);
+  });
+
+  it('retains queue inversion for attachment-only draft handoff', async () => {
+    const composerRef = createRef<SessionChatInputAreaHandle>();
+    const submissions: Parameters<SessionChatInputAreaProps['onSendMessage']>[] = [];
+    const textarea = await renderComposer({
+      composerRef,
+      onSendMessage: async (...args) => {
+        submissions.push(args);
+        return true;
+      },
+    });
+    await attachDrafts(composerRef);
+    await act(async () => composerRef.current!.setInputText(''));
+    await act(async () =>
+      textarea.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Enter',
+          ctrlKey: true,
+          shiftKey: true,
+          bubbles: true,
+        })
+      )
+    );
+    expect(submissions).toHaveLength(1);
+    expect(submissions[0][0]).toEqual([]);
+    expect(submissions[0][2]?.invertSubmitBehavior).toBe(true);
+    expect(submissions[0][2]?.attachments).toHaveLength(2);
+  });
+
+  it.each([
+    { isMachineRemoved: true },
+    { isExternalHistoryRefreshing: true },
+    { durableAgentRoleReady: false },
+    { freeTurnLimitNotice: { current: 20, limit: 20 } },
+    { isArchived: true },
+    { isVisible: false },
+  ])('does not hand off drafts when blocked: %j', async (overrides) => {
+    const composerRef = createRef<SessionChatInputAreaHandle>();
+    const sessionId = `blocked-draft-${++nextSession}`;
+    const submissions: SessionInputBlock[][] = [];
+    const onSendMessage = async (blocks: SessionInputBlock[]) => {
+      submissions.push(blocks);
+      return true;
+    };
+    await renderComposer({ composerRef, sessionId, onSendMessage });
+    await attachDrafts(composerRef);
+    await renderComposer({
+      composerRef,
+      sessionId,
+      onSendMessage,
+      isArchived: 'isArchived' in overrides ? overrides.isArchived : false,
+      overrides,
+    });
+    await submit('keyboard');
+    expect(submissions).toEqual([]);
+    expect(container!.textContent).toContain('notes.txt');
+  });
+
+  it('a late draft acceptance preserves an external replacement prompt', async () => {
+    const composerRef = createRef<SessionChatInputAreaHandle>();
+    const acceptance = deferredBoolean();
+    const textarea = await renderComposer({ composerRef, onSendMessage: () => acceptance.promise });
+    await attachDrafts(composerRef);
+    await submit('keyboard');
+    await act(async () => composerRef.current!.setInputText('next message'));
+    await act(async () => acceptance.resolve(true));
+    expect(textarea.value).toBe('next message');
+  });
+
+  it('boundary: hidden composer rejects synthetic Enter even without uploads', async () => {
+    const delivered: SessionInputBlock[][] = [];
+    await renderComposer({
+      isVisible: false,
+      onSendMessage: async (blocks) => {
+        delivered.push(blocks);
+        return true;
+      },
+    });
+    await submit('keyboard');
+    expect(delivered).toEqual([]);
+  });
 
   it.each([
     ['keyboard', true],
@@ -443,11 +684,18 @@ describe('SessionChatInputArea submission feedback', () => {
     }
   );
 
-  for (const mobilePlatform of ['narrow-browser', 'wide-native'] as const) {
+  for (const mobilePlatform of ['mobile-browser', 'wide-native'] as const) {
     function setMobilePlatform() {
       if (mobilePlatform === 'wide-native') {
         Object.defineProperty(window, '__LODY_NATIVE__', { configurable: true, value: true });
       } else {
+        // A narrow desktop-class window stays in the desktop family now, so a
+        // mobile browser is simulated by the phone identity, not width alone.
+        Object.defineProperty(window.navigator, 'userAgent', {
+          configurable: true,
+          value:
+            'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148',
+        });
         Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
       }
     }
@@ -625,36 +873,64 @@ describe('SessionChatInputArea submission feedback', () => {
   });
 
   /** jsdom has no ClipboardEvent, and React only reads `clipboardData`. */
-  function createPasteEvent(text: string) {
+  function createPasteEvent(text: string, files: File[] = []) {
     const event = new Event('paste', { bubbles: true, cancelable: true });
     Object.defineProperty(event, 'clipboardData', {
       value: {
         getData: (type: string) => (type === 'text/plain' ? text : ''),
-        items: [],
-        files: [],
+        items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+        files,
       },
     });
     return event;
   }
 
+  function readBlobAsText(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ''));
+      reader.onerror = () => reject(reader.error ?? new Error('Unable to read blob'));
+      reader.readAsText(blob);
+    });
+  }
+
+  it('leaves a rich-text paste to the browser instead of attaching its bitmap', async () => {
+    const textarea = await renderComposer({ onSendMessage: async () => true });
+    // A Word or PowerPoint copy carries a picture of the selection beside the
+    // text; consuming the paste for that picture dropped the text entirely.
+    const event = createPasteEvent('Quarterly plan', [
+      new File(['png'], 'image.png', { type: 'image/png' }),
+    ]);
+
+    await act(async () => {
+      textarea.dispatchEvent(event);
+    });
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(textarea.value).toBe('focus regression draft');
+  });
+
   describe('oversize pastes', () => {
-    let errors: string[] = [];
+    let errorToast: ReturnType<typeof vi.spyOn>;
 
     beforeEach(() => {
-      errors = [];
-      vi.spyOn(toast, 'error').mockImplementation((message) => {
-        errors.push(String(message));
-        return 'toast';
-      });
+      errorToast = vi.spyOn(toast, 'error').mockImplementation(() => 'toast');
     });
 
     afterEach(() => {
-      vi.mocked(toast.error).mockRestore();
+      errorToast.mockRestore();
     });
 
-    it('refuses a paste past the byte ceiling and leaves the draft untouched', async () => {
-      const textarea = await renderComposer({ onSendMessage: async () => true });
-      const event = createPasteEvent('a'.repeat(MAX_PASTED_TEXT_BYTE_SIZE + 1));
+    it('turns a paste past the byte ceiling into a text attachment', async () => {
+      const pastedText = 'a'.repeat(MAX_PASTED_TEXT_BYTE_SIZE + 1);
+      const submissions: Parameters<SessionChatInputAreaProps['onSendMessage']>[] = [];
+      const textarea = await renderComposer({
+        onSendMessage: async (...args) => {
+          submissions.push(args);
+          return true;
+        },
+      });
+      const event = createPasteEvent(pastedText);
 
       await act(async () => {
         textarea.dispatchEvent(event);
@@ -662,8 +938,47 @@ describe('SessionChatInputArea submission feedback', () => {
 
       expect(event.defaultPrevented).toBe(true);
       expect(textarea.value).toBe('focus regression draft');
-      expect(errors).toHaveLength(1);
-      expect(errors[0]).toContain('too large');
+      expect(container!.textContent).toContain('pasted-text.txt');
+      expect(errorToast).not.toHaveBeenCalled();
+
+      await submit('keyboard');
+
+      const attachment = submissions[0]?.[2]?.attachments?.[0];
+      expect(attachment).toMatchObject({
+        kind: 'file',
+        name: 'pasted-text.txt',
+        mimeType: 'text/plain',
+      });
+      expect(attachment?.source?.size).toBe(new TextEncoder().encode(pastedText).length);
+      expect(attachment?.source ? await readBlobAsText(attachment.source) : undefined).toBe(
+        pastedText
+      );
+    });
+
+    it('merges the generated file with real clipboard files', async () => {
+      const pastedText = 'a'.repeat(MAX_PASTED_TEXT_BYTE_SIZE + 1);
+      const submissions: Parameters<SessionChatInputAreaProps['onSendMessage']>[] = [];
+      const textarea = await renderComposer({
+        onSendMessage: async (...args) => {
+          submissions.push(args);
+          return true;
+        },
+      });
+      const event = createPasteEvent(pastedText, [
+        new File(['notes'], 'notes.txt', { type: 'text/plain' }),
+        new File(['rendered image'], 'image.png', { type: 'image/png' }),
+      ]);
+
+      await act(async () => {
+        textarea.dispatchEvent(event);
+      });
+      await submit('keyboard');
+
+      expect(submissions[0]?.[2]?.attachments?.map(({ name }) => name)).toEqual([
+        'pasted-text.txt',
+        'notes.txt',
+      ]);
+      expect(errorToast).not.toHaveBeenCalled();
     });
 
     it('still collapses a paste that sits at the ceiling', async () => {
@@ -675,7 +990,7 @@ describe('SessionChatInputArea submission feedback', () => {
       });
 
       expect(event.defaultPrevented).toBe(true);
-      expect(errors).toEqual([]);
+      expect(errorToast).not.toHaveBeenCalled();
       expect(textarea.value).toContain('Pasted');
       expect(textarea.value).toContain('focus regression draft');
       expect(textarea.value).not.toContain('aaaa');

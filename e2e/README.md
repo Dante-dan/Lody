@@ -45,6 +45,8 @@ pnpm e2e:full
 pnpm e2e:scout
 pnpm e2e:scout -- --journey review --iterations 50
 pnpm e2e:scout:ablation -- --iterations 12
+pnpm e2e:load -- --sessions 24 --body-bytes 1024,8192,65536
+pnpm e2e:load -- --sessions 100 --samples 8
 pnpm e2e:acceptance -- --subject desktop-local-bootstrap
 pnpm e2e:acceptance -- --subject desktop-session-lifecycle \
   --before before.json --after after.json --retained-path retained-path.txt
@@ -67,6 +69,43 @@ Optional before/after JSON and a retained-path summary are copied into the
 round, then covered by its checksummed manifest.
 Scout operation, classification, and triage are specified in
 [the Scout contract](./SCOUT.md).
+
+The load lane first creates synthetic persisted Sessions through the real
+Electron/CLI/ACP path, then closes and relaunches the same isolated profile.
+The warm launch proves that the expected Session count, a representative
+message, an editable composer, and a scroll action remain usable while the
+harness records preload milestones, textless-frame/blank-surface samples, and
+process/resource snapshots. It writes
+`artifacts/load/<round>/load-result.json`, `seed/boot.json`,
+`reopen/boot.json`, `reopen/runtime.json`, `reopen/heavy-session.png`, and a
+Playwright `reopen/trace.zip`. The default 24-session run is a bounded baseline;
+larger counts are opt-in and do not establish a performance threshold.
+
+## Codex account acceptance
+
+The opt-in [Codex recorder](scripts/acceptance-codex-profiles.mts) exercises the built
+desktop, bundled CLI, real managed Codex, and macOS system keychain. Only external
+device-auth and model wires are simulated by [the synthetic provider](fixtures/codex-external-wire.mjs).
+It proves two independent ChatGPT accounts, restoring A after B, two simultaneous native
+requests on account A held until both reach a deterministic response barrier, a custom API session,
+rejected key replacement preserving the old key, and UI deletion cleaning the API vault.
+The successful video, screenshots, result, and cleanup evidence remain under the ignored
+`artifacts/acceptance/` directory. This is acceptance, not a promoted regression journey.
+
+On macOS with `openssl` and an unlocked user keychain:
+
+```bash
+pnpm e2e:build
+LODY_CODEX_ACCEPTANCE_RUNTIME_DIR=/absolute/path/to/isolated-runtime-cache \
+  pnpm --dir e2e exec tsx --tsconfig ../apps/cli/tsconfig.json scripts/acceptance-codex-profiles.mts
+```
+
+The runtime cache is owned by this command and prepared through the normal checksum-verified
+public runtime downloader before recording. Every run uses a fresh application profile;
+the fixture CA is process-scoped, never installed as system trust. The OS `HOME` remains
+available for keychain access, while `CODEX_HOME`, Lody data, userData, workspace, and host
+endpoint are isolated. Cleanup targets only synthetic profile entries and retains history.
+Windows/Linux vaults, real-account refresh, and remote desktop transport need separate gates.
 
 ## Journey registry
 

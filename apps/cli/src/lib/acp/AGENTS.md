@@ -8,11 +8,28 @@ edit-evidence extraction; `history-apply.ts` owns the CRDT history writes. Proto
 reference: `context/acp-protocol.md`; per-agent payload quirks:
 `context/acp-agent-edit-evidence.md`.
 
+Tool updates are sparse per-toolCallId patches. Preserve omitted fields; present
+content/locations lists replace the previous list, including empty-list clears.
+Apply this to edit evidence as well as history, after terminal-output compaction.
+
 ## Ownership is bound at enqueue time
 
-Validated `_meta.lody.task` snapshots survive history filtering while running and
-merge by taskId. They are lifecycle facts, not repeated terminal output; never
+Negotiated Core subagent events retain root/run ownership through the shared
+history reducer. Enrich child tools per `(sessionId, runId, toolCallId)`; root
+permission mirrors must not duplicate child edit evidence. Child turn IDs never
+replace parent turn IDs. Disconnect marks live runs unknown and incomplete.
+Child edit evidence resolves its committed run's assistant entry, including when
+a later parent turn flushes it; unregistered child tools publish no evidence.
+
+Validated task-lifecycle `_meta` snapshots survive history filtering while running
+and merge by taskId — `_meta.lody.task` and Devin's `cognition.ai/subagent_*`
+markers alike. They are lifecycle facts, not repeated terminal output; never
 drop them under the generic intermediate-tool snapshot compaction rule.
+
+Devin `cognition.ai/subagent_context`-tagged non-tool updates for a known subagent
+are dropped in `AgentClient.sessionUpdate` BEFORE usage/config/title consumers;
+tool updates continue so permission-requested rows and edit evidence still
+resolve in history.
 
 Machine RPC `session/cancel` with `subagentTaskId` forwards only to the native
 AgentClient for the exact active parent turn. It never marks the parent cancelled
@@ -26,9 +43,9 @@ not silently create uuid entries for unowned output; that is what prevents
 bad-network retry tails and duplicate dispatch from rendering the same agent turn
 twice.
 
-## Scheduling tools are the one `rawInput`/`rawOutput` exception
+## Root scheduling tools are the one `rawInput`/`rawOutput` exception
 
-INVARIANT: `history-apply.ts` strips `rawInput`/`rawOutput` from ALL generic tool
+INVARIANT: In the root transcript, `history-apply.ts` strips `rawInput`/`rawOutput` from ALL generic tool
 calls (they are unstructured by spec) EXCEPT the four scheduling tools in
 `SCHEDULING_TOOL_NAMES` (`CronCreate` / `CronDelete` / `CronList` / `ScheduleWakeup`,
 matched via `_meta.lody.toolName`). For those, the small `rawInput`/`rawOutput` are
@@ -51,6 +68,10 @@ The former `_meta.claudeCode.toolName` carrier is read only by the centralized
 one-release compatibility path; new provider output must use the Core contract.
 
 ## Flush, evidence, and shutdown
+
+Permission requests must drain earlier buffered/in-flight ACP updates before
+materializing a missing tool row. If the bounded drain leaves queued writes,
+cancel the request rather than inserting a tool into an unfinished text stream.
 
 Turn finalization cancels unanswered permission/question requests in the owning
 assistant entry through the existing history write. Preserve answered outcomes

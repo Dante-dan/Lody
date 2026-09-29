@@ -63,7 +63,13 @@ labelClassName`) so the stage diffstat never clips. Wired from
   content, right after the PR number, so it is only visible when the PR is
   expanded; one click toggles its check-run popover (`PrCiRun[]` is
   presentational; production maps the active PR's live GitHub check-run fetch
-  into it). Color budget: ambient
+  into it via `mapGitHubCheckRunToPrCiRun`). The verdict reads only the newest
+  attempt of each check (`selectLatestCheckRuns` keys by app + name, highest id
+  wins), so a re-run that went green clears an earlier failure; cancelled/stale
+  runs render as `cancelled` and never make CI "failed" nor enter the Fix CI
+  snapshot. The same shared summary feeds the PR tab: its verdict ignores
+  cancelled/stale runs unless nothing else ran, and PR-cache entries read back
+  from IndexedDB are re-derived with `normalizeCheckRunsSummary`. Color budget: ambient
   chips (status/goal/schedule) render NEUTRAL (goal state reads from its
   pulse + popover, not an inline tint); color is reserved for genuine
   status — the expanded PR status icon and the ±diff counts.
@@ -148,7 +154,10 @@ labelClassName`) so the stage diffstat never clips. Wired from
   gate destructive history rewrites and expose an explicit Codex Pause control.
   ScheduleChip reuses `useResolvedScheduledTasks`/`ScheduledTaskList` from
   `scheduled-tasks-panel.tsx` (same adaptive countdown clock, cannot drift).
-  The message queue intentionally stays OUT of the bar. The bar renders on
+  The message queue intentionally stays OUT of the bar's items; the bar only
+  hosts it in the `queue` slot above the pill (or alone, glued to the composer,
+  when the bar is otherwise empty), because only the bar knows whether it renders.
+  The bar renders on
   BOTH desktop and mobile from `session-chat-interface.tsx` (status + goal +
   schedule + context); it fully replaced the sticky `SessionGoalBanner`, the
   in-composer `ScheduledTasksPanel`, the mobile `SessionStatusStrip`
@@ -159,3 +168,22 @@ labelClassName`) so the stage diffstat never clips. Wired from
   decision feed. An inactive proven-ready session replaces its sidebar diff stat
   with the green bordered Mergeable pill; the active row hides both because the
   Info Bar owns the merge control.
+
+## Related-Sessions chip
+
+`session-relations-chip.tsx` renders a `MessagesSquare` chip in the info bar's
+cluster zone, via the bar's `relations` slot, whenever the current Session sits
+in an opened-by tree (`lib/session-relation-tree.ts`). Like Preview it is a
+plain action, never staged: one click toggles `PopoverActionChip`'s popover,
+which anchors to the pill (the `@lody/ui` Popover `anchor` resolving the enclosing
+`[data-info-bar-surface]`) and takes its width.
+
+The popover shows the complete tree: every ancestor from the topmost live
+opener down, and every descendant. Edges connect rows (root Sessions); a Tab
+opener resolves to its root like the sidebar tree, without the sidebar's depth
+cap. A row is its root Session plus its top Tabs as equal pills; closed Tabs
+are hidden unless current. Each pill is agent icon, live title, and the sidebar's
+`SessionRowStatusIndicator` (waiting > working > unread); the current Session is
+highlighted. Tab pills navigate with root + exact tab ids. The page reads only
+a boolean (`useHasSessionRelations`); the chip builds the tree in the leaf.
+Decision: [relations note](../notes/implemented/feature/2026-09-24-session-relations-chip.md).

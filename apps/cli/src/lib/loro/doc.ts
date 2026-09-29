@@ -42,6 +42,7 @@ import {
   getAcpCapabilityCacheKey,
   normalizeSessionPullRequestMeta,
   getServerNow,
+  shouldRenewAcpCapabilityFetchTime,
   isLoroRepoDocDeleted,
   getMachineFlockAcpCapabilities,
   getMachineFlockProviderSetupCancellations,
@@ -53,6 +54,7 @@ import {
   writeMachineFlockRowToFlock,
   type AcpConfigOptionSummary,
   type AcpCommandSummary,
+  type AcpModelControls,
   type SessionGoalAction,
   type AcpCapabilityCacheEntry,
   type SessionForkOperation,
@@ -87,6 +89,7 @@ import {
   attachAutoMarkLatestUserHistoryAsRead,
   type AutoMarkLatestUserHistoryAsReadHandle,
 } from './history-auto-read';
+import { attachSessionModelSummary, latestSessionModelFromReader } from './session-model-summary';
 
 import {
   LoroConnectionRecoveryController,
@@ -104,10 +107,16 @@ import { redactProxyUrl, sanitizeUrlForLogging } from '@/utils/log-sanitize';
 import { getProxyForUrl } from 'proxy-from-env';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import type { RateLimit } from 'acp-extension-core';
-import { createCliSqliteRepoStore } from './sqlite-repo-store';
+import type { RemoteCursorStore } from '@loro-dev/streams-crdt';
+import {
+  createCliSqliteRepoStore,
+  createDocumentRemoteCursorStore,
+  type DocumentCursorScope,
+} from './sqlite-repo-store';
 import { streamsRoomBinding, type StreamsRoomBinding } from './streams-room-binding';
 import { formatErrorMessage } from '@/utils/format-error';
 import {
+  findSoleMachineAgentConfig,
   listMergedAgentConfigs,
   readMachineBuiltinAgentOptOuts,
   readMergedAgentConfigById,
@@ -280,11 +289,17 @@ class ProxiedWebSocket extends WebSocketOriginal {
 
 (globalThis as unknown as GlobalWithWebSocket).WebSocket = ProxiedWebSocket;
 
-import { PersistCoalescer } from './persist-coalescer';
 import { readTimeoutEnv, withTimeout } from './timeout-utils';
 import { ConcurrentQueue } from '../concurrent-queue';
 import type { CliSqliteRepoStore } from './sqlite-repo-store';
 import type { CloudBillingPort, CloudStreamsTokenPort } from '@lody/platform';
+
+/**
+ * A local SQLite flush that finishes under this budget is routine; only a
+ * slower one is worth a record in the default log. Observed healthy flushes sit
+ * around 2ms with a tail well under 50ms.
+ */
+const LORO_REPO_FLUSH_SLOW_LOG_MS = 200;
 
 type AcpModeSummary = {
   id: string;
@@ -311,18 +326,15 @@ export interface LoroDocumentManagerOptions {
   machineMonitorRuntime?: CliMachineMonitorRuntime | null;
   localLoroDataPlaneServer?: LocalLoroDataPlaneServer | null;
   sqliteRepoStore?: CliSqliteRepoStore | null;
+  /** LoroDoc Streams cursors for this process; see `DocumentCursorScope`. */
+  documentRemoteCursorStore?: RemoteCursorStore | null;
   remoteStreamsAttached?: boolean;
   streamsTokens?: CloudStreamsTokenPort | null;
   cloudBilling?: CloudBillingPort | null;
 }
 
 export type LoroRepoPersistReason =
-  | 'remote-doc-sync'
-  | 'remote-meta-sync'
-  | 'remote-flock-sync'
   | 'session-local-base-ref'
-  /** One flush standing in for several remote sync events; see `scheduleRemoteSyncPersist`. */
-  | 'remote-sync-coalesced'
   | 'session-fork-prepare'
   | 'session-fork-commit'
   | 'session-fork-rollback'
@@ -338,6 +350,7 @@ export class LoroDocumentManager {
   private readonly logger: Logger;
   private readonly localLoroDataPlaneServer: LocalLoroDataPlaneServer | null;
   private readonly sqliteRepoStore: CliSqliteRepoStore | null;
+  private readonly documentRemoteCursorStore: RemoteCursorStore | null;
   private remoteStreamsAttached: boolean;
   private remoteStreamsGeneration: number;
   private machineExistenceWatcher: RepoWatchHandle | null = null;
@@ -361,6 +374,11 @@ export class LoroDocumentManager {
     logger: Logger,
     options: {
       attachRemoteOnCreate?: boolean;
+      /**
+       * Only the daemon passes `shared-durable`; see `DocumentCursorScope`.
+       * The default keeps LoroDoc progress in this process's memory.
+       */
+      documentCursorScope?: DocumentCursorScope;
       streamsTokens?: CloudStreamsTokenPort | null;
       cloudBilling?: CloudBillingPort | null;
     } = {}
@@ -452,6 +470,10 @@ export class LoroDocumentManager {
         machineMonitorRuntime,
         localLoroDataPlaneServer,
         sqliteRepoStore: cliSqliteRepoStore,
+        documentRemoteCursorStore: createDocumentRemoteCursorStore(
+          cliSqliteRepoStore,
+          options.documentCursorScope ?? 'process'
+        ),
         remoteStreamsAttached: false,
         streamsTokens: options.streamsTokens ?? null,
         cloudBilling: options.cloudBilling ?? null,
@@ -512,6 +534,7 @@ export class LoroDocumentManager {
     this.logger = options.logger;
     this.localLoroDataPlaneServer = options.localLoroDataPlaneServer ?? null;
     this.sqliteRepoStore = options.sqliteRepoStore ?? null;
+    this.documentRemoteCursorStore = options.documentRemoteCursorStore ?? null;
     this.remoteStreamsAttached = options.remoteStreamsAttached ?? false;
     this.streamsTokens = options.streamsTokens ?? null;
     this.cloudBilling = options.cloudBilling ?? null;
@@ -594,7 +617,7 @@ export class LoroDocumentManager {
     if (this.remoteStreamsAttached) {
       return;
     }
-    if (!this.sqliteRepoStore) {
+    if (!this.sqliteRepoStore || !this.documentRemoteCursorStore) {
       throw new Error('sqlite_repo_store_unavailable');
     }
     if (!this.streamsTokens) {
@@ -604,20 +627,9 @@ export class LoroDocumentManager {
     const streamsTransport = await createCliStreamsTransport({
       workspaceId: this.workspaceId,
       tokenProvider: this.streamsTokens.createTokenProvider({ workspaceId: this.workspaceId }),
-      remoteCursorStore: this.sqliteRepoStore.remoteCursorStore,
+      repo: this.repo,
+      documentRemoteCursorStore: this.documentRemoteCursorStore,
       logger: this.logger,
-      // These resolve as soon as the flush is SCHEDULED, not once it has run —
-      // the transport must not block on local persistence. See
-      // `scheduleRemoteSyncPersist`.
-      onPersistDoc: async () => {
-        this.scheduleRemoteSyncPersist('remote-doc-sync');
-      },
-      onPersistMeta: async () => {
-        this.scheduleRemoteSyncPersist('remote-meta-sync');
-      },
-      onPersistFlockDoc: async () => {
-        this.scheduleRemoteSyncPersist('remote-flock-sync');
-      },
     });
     installStreamsDiagnostics(this.logger);
     const detachStreamsTransportStatusListener = streamsTransport.adapter.onStatusChange(
@@ -732,52 +744,23 @@ export class LoroDocumentManager {
    */
   async persistPendingChanges(reason: LoroRepoPersistReason): Promise<void> {
     const startedAt = Date.now();
-    this.logger.debug(`[${this.workspaceId}] Loro repo flush started (reason=${reason})`);
+    this.logger.trace(`[${this.workspaceId}] Loro repo flush started (reason=${reason})`);
     await withSlowOperationWarning(
       this.repo.flush(),
       this.logger,
       `loro-repo.flush(${reason})`,
       this.workspaceId
     );
-    this.logger.debug(
-      `[${this.workspaceId}] Loro repo flush completed (reason=${reason} duration=${
-        Date.now() - startedAt
-      }ms)`
-    );
-  }
-
-  /**
-   * Coalesces the Streams transport's per-sync-event persist requests; see
-   * {@link PersistCoalescer}. Callers that need a real durability barrier
-   * (session fork) keep calling `persistPendingChanges` directly.
-   */
-  private readonly remoteSyncPersist = new PersistCoalescer<LoroRepoPersistReason>({
-    debounceMs: readTimeoutEnv('LODY_LORO_REMOTE_PERSIST_DEBOUNCE_MS', 200),
-    flush: async (reasons) => {
-      const single = reasons.length === 1 ? reasons[0] : undefined;
-      if (!single) {
-        this.logger.debug(
-          `[${this.workspaceId}] Coalescing ${reasons.length} remote sync persists: ${reasons.join(', ')}`
-        );
-      }
-      await this.persistPendingChanges(single ?? 'remote-sync-coalesced');
-    },
-    onError: (error) => {
-      this.logger.debug(
-        `[${this.workspaceId}] Coalesced remote-sync flush failed: ${formatErrorMessage(error)}`
-      );
-    },
-  });
-
-  /**
-   * Ask for a local persist after a remote sync event.
-   *
-   * Deliberately not awaited by the transport callbacks: this is a local durability
-   * barrier, not a correctness one — the data is already in the in-memory CRDT and,
-   * being remote in origin, still in the cloud too.
-   */
-  private scheduleRemoteSyncPersist(reason: LoroRepoPersistReason): void {
-    this.remoteSyncPersist.request(reason);
+    // A healthy flush lands in a few milliseconds, so only a flush slow enough
+    // to be worth investigating reaches the default file sink. A flush that hangs instead of returning is
+    // still reported by withSlowOperationWarning above.
+    const durationMs = Date.now() - startedAt;
+    const completed = `[${this.workspaceId}] Loro repo flush completed (reason=${reason} duration=${durationMs}ms)`;
+    if (durationMs >= LORO_REPO_FLUSH_SLOW_LOG_MS) {
+      this.logger.debug(completed);
+    } else {
+      this.logger.trace(completed);
+    }
   }
 
   /**
@@ -1374,6 +1357,20 @@ export class LoroDocumentManager {
     return false;
   }
 
+  async findSoleAgentConfig(
+    cliType: AgentConfigCliType,
+    agentType: string,
+    machineId: MachineId
+  ): Promise<AgentConfigMeta | undefined> {
+    return await findSoleMachineAgentConfig(
+      this.repo,
+      this.workspaceId,
+      machineId,
+      cliType,
+      agentType
+    );
+  }
+
   /** Managed builtin provider types the user removed on this machine, so they must not be auto-registered at startup. */
   async getBuiltinAgentOptOuts(machineId: MachineId): Promise<Set<ManagedBuiltinAgentType>> {
     return await readMachineBuiltinAgentOptOuts(this.repo, this.workspaceId, machineId);
@@ -1524,7 +1521,7 @@ export class LoroDocumentManager {
     modelReasoningEfforts?: Record<string, string[]>,
     acknowledgedSteer = false,
     goalActions?: SessionGoalAction[],
-    options: { signal?: AbortSignal } = {}
+    options: AcpCapabilityWriteOptions = {}
   ): Promise<AcpCapabilityCacheEntry> {
     options.signal?.throwIfAborted();
     if (!this.machine) {
@@ -1654,8 +1651,6 @@ export class LoroDocumentManager {
     this.machineExistenceWatcher = null;
     this.remoteStreamsStatusUnsubscribe?.();
     this.remoteStreamsStatusUnsubscribe = null;
-    // A coalesced flush may still be waiting out its debounce window.
-    await this.remoteSyncPersist.flushNow();
     await this.destroyRepo({ fast: options.fast });
   }
 
@@ -1764,6 +1759,7 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
   private detachDocRoomStatusListener: (() => void) | null = null;
   private readonly docRoomStatusListeners = new Set<(status: RepoTransportRoomStatus) => void>();
   private historyAutoReadHandle: AutoMarkLatestUserHistoryAsReadHandle | null = null;
+  private modelSummary: ReturnType<typeof attachSessionModelSummary> | null = null;
   private destroyed = false;
   /**
    * CRDT-neutral read/write seam over the same doc and the Mirror's one shared
@@ -1799,6 +1795,8 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
    * `init()` calls it with the opened handle; tests call it with a fixture doc.
    */
   composeSessionData(doc: LoroDoc, initialState?: SessionDocInitialState): void {
+    this.modelSummary?.dispose();
+    this.modelSummary = null;
     this.historyAutoReadHandle?.dispose();
     this.historyAutoReadHandle = null;
     this.mirror?.dispose();
@@ -1862,6 +1860,44 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
   }
 
   /**
+   * Project the latest assistant model into catalog metadata. Armed with the
+   * other write observers, never with a temporary snapshot open.
+   */
+  attachModelSummary(): void {
+    if (this.modelSummary) return;
+    this.modelSummary = attachSessionModelSummary(
+      {
+        subscribe: (listener) => {
+          const observation = this.sessionData.history.observe(() => listener());
+          return () => observation.unsubscribe();
+        },
+        latestModel: () => latestSessionModelFromReader(this.sessionData.history),
+      },
+      async (lastModel, active) => {
+        const current = await this.repo.getDocMeta(this.roomId);
+        const meta = current?.meta as SessionMeta | undefined;
+        // Hidden fork targets and deleted sessions must never be published by a projection.
+        if (!active() || !current || isLoroRepoDocDeleted(current) || meta?.id !== this.sessionId)
+          return false;
+        if (JSON.stringify(meta.lastModel) !== JSON.stringify(lastModel)) {
+          await this.repo.upsertDocMeta(this.roomId, { lastModel });
+        }
+        return true;
+      },
+      () =>
+        this.logger.warn(
+          `[${this.sessionId}] Failed to publish model summary; retry on next history change`
+        )
+    );
+    if (this.sessionData.history.count() > 0) void this.modelSummary.sync();
+  }
+
+  /** Re-run the projection once a catalog row the publisher previously skipped exists. */
+  async syncModelSummary(): Promise<void> {
+    await this.modelSummary?.flush();
+  }
+
+  /**
    * The domain seam for session history. Callers express business operations
    * (`appendTurn`, `setTurnField`, `respondPermission`, ...) and never see the
    * Loro doc, the Mirror, or a container id.
@@ -1903,6 +1939,7 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
     // auto-read write policy; normal init arms it and marks the initial turn.
     if (!options.skipAutoRead) {
       this.attachAutoRead();
+      this.attachModelSummary();
       await this.markLatestUserHistoryAsSeenIfNeeded();
     }
     this.remoteSyncReady = this.startDocRoomSync();
@@ -1990,6 +2027,7 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
     // Offline composition is a normal open; arm the auto-read policy that
     // composition no longer owns.
     this.attachAutoRead();
+    this.attachModelSummary();
   }
 
   private async startDocRoomSync(): Promise<void> {
@@ -2841,7 +2879,11 @@ export class SessionDocument implements LoroDocument<Omit<SessionDocMeta, 'histo
       return;
     }
 
+    await this.modelSummary?.flush();
     this.destroyed = true;
+
+    this.modelSummary?.dispose();
+    this.modelSummary = null;
 
     this.historyAutoReadHandle?.dispose();
     this.historyAutoReadHandle = null;
@@ -2887,6 +2929,17 @@ const getAliveDocMeta = async <Meta>(repo: LoroRepo, roomId: string): Promise<Me
 
 type MachineMetaPatch = Partial<MachineMeta> & Pick<MachineMeta, 'id'>;
 
+export type AcpCapabilityWriteOptions = {
+  signal?: AbortSignal;
+  sessionTitle?: boolean;
+  /**
+   * Every model's controls from the adapter's `_meta.lody.modelCapabilities`,
+   * stored in the config's own `acpModelCapability` row. Absent means this
+   * response carried no declaration; the stored row is then left untouched.
+   */
+  modelCapabilities?: Record<string, AcpModelControls>;
+};
+
 const serializeAcpCapabilityWithoutFetchTime = (entry: AcpCapabilityCacheEntry): string =>
   JSON.stringify({
     cliType: entry.cliType,
@@ -2901,6 +2954,7 @@ const serializeAcpCapabilityWithoutFetchTime = (entry: AcpCapabilityCacheEntry):
     availableCommands: entry.availableCommands,
     sessionFork: entry.sessionFork,
     acknowledgedSteer: entry.acknowledgedSteer,
+    sessionTitle: entry.sessionTitle,
     sessionForkWorktree: entry.sessionForkWorktree,
   });
 
@@ -2987,7 +3041,7 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
     modelReasoningEfforts?: Record<string, string[]>,
     acknowledgedSteer = false,
     goalActions?: SessionGoalAction[],
-    options: { signal?: AbortSignal } = {}
+    options: AcpCapabilityWriteOptions = {}
   ): Promise<AcpCapabilityCacheEntry> {
     options.signal?.throwIfAborted();
     const normalizedModes = modes.map((mode) => ({
@@ -3013,6 +3067,7 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
       sessionFork,
       acknowledgedSteer,
       goalActions: goalActions?.length ? goalActions : undefined,
+      sessionTitle: options.sessionTitle,
       sessionForkWorktree: sessionFork,
       modelReasoningEfforts:
         modelReasoningEfforts && Object.keys(modelReasoningEfforts).length > 0
@@ -3023,22 +3078,35 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
     const handle = await this.openMachineFlockDoc();
     options.signal?.throwIfAborted();
     const capabilityKey = getAcpCapabilityCacheKey(configId);
+    // Reads the stored row alone, without per-model controls, so the
+    // comparison below sees exactly what was written.
     const existing = getMachineFlockAcpCapabilities(
       readMachineFlockRowsFromFlock(handle.flock, { families: ['acpCapability'] })
     )[capabilityKey];
-    if (
+    // The per-model row holds no timestamp, so an unchanged declaration is
+    // skipped by the row comparison and costs no write or sync.
+    const modelCapabilitiesChanged =
+      options.modelCapabilities !== undefined &&
+      writeMachineFlockRowToFlock(handle.flock, {
+        key: machineFlockKeys.acpModelCapability(configId),
+        value: { version: 1, sourceVersion, models: options.modelCapabilities },
+      });
+    const capabilityUnchanged =
       existing &&
       serializeAcpCapabilityWithoutFetchTime(existing) ===
-        serializeAcpCapabilityWithoutFetchTime(entry)
-    ) {
-      return existing;
-    }
+        serializeAcpCapabilityWithoutFetchTime(entry) &&
+      // Unchanged content is still rewritten once it is old enough: the refresh
+      // cache trusts `fetchedAt`, and an entry never renewed would expire once
+      // and then miss on every later request, re-probing forever.
+      !shouldRenewAcpCapabilityFetchTime(existing, entry.fetchedAt);
     options.signal?.throwIfAborted();
-    const changed = writeMachineFlockRowToFlock(handle.flock, {
-      key: machineFlockKeys.acpCapability(configId),
-      value: entry,
-    });
-    if (changed) {
+    const changed =
+      !capabilityUnchanged &&
+      writeMachineFlockRowToFlock(handle.flock, {
+        key: machineFlockKeys.acpCapability(configId),
+        value: entry,
+      });
+    if (changed || modelCapabilitiesChanged) {
       await this.repo.flush();
       if (this.markMachineFlockDirty) {
         this.markMachineFlockDirty('acp-capability-update');
@@ -3046,7 +3114,7 @@ export class MachineDocument implements LoroDocument<{}, MachineMeta> {
         await handle.syncOnce().catch(() => undefined);
       }
     }
-    return entry;
+    return (capabilityUnchanged ? existing : undefined) ?? entry;
   }
 
   async getAcpCapabilities(configId: AgentConfigId): Promise<AcpCapabilityCacheEntry | undefined> {

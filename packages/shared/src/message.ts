@@ -26,6 +26,8 @@ import type {
   SessionPreviewCreateResponse,
   SessionPreviewRevokeRequest,
   SessionPreviewRevokeResponse,
+  SessionPreviewStatusRequest,
+  SessionPreviewStatusResponse,
 } from './preview';
 import type { ProjectSkillsResult } from './acp/skills';
 import type { RpcSecretPublicKey } from './rpc-secret';
@@ -44,6 +46,8 @@ export type {
   SessionPreviewEndpointReleaseResponse,
   SessionPreviewRevokeRequest,
   SessionPreviewRevokeResponse,
+  SessionPreviewStatusRequest,
+  SessionPreviewStatusResponse,
 } from './preview';
 
 // ============================================
@@ -251,6 +255,14 @@ export interface MachineStatusResponse {
   error?: string;
 }
 
+export interface MachinePreviewControlResponse {
+  type: 'machine/preview-control_response';
+  machineId: MachineId;
+  success: boolean;
+  runtimeNonce?: string;
+  error?: string;
+}
+
 export interface MachinePingRequest {
   type: 'machine/ping';
   machineId: MachineId;
@@ -327,6 +339,13 @@ export interface MachineAcpCapabilitiesRefreshRequest {
   machineId: MachineId;
   workspaceId: WorkspaceId;
   configId: AgentConfigId;
+  /**
+   * Start the agent even when the persisted entry still matches the launch
+   * inputs. Reserved for requests a user or a setup workflow made on purpose
+   * (Settings refresh, post-authentication verification, provider setup); the
+   * default path answers from the cache when it can.
+   */
+  force?: boolean;
 }
 
 export interface MachineAcpCapabilitiesRefreshResponse {
@@ -479,6 +498,7 @@ export interface MachineAcpAuthenticationProgressMessage {
     | 'auth-methods'
     | 'authorization'
     | 'input-required'
+    | 'runtime-download'
     | 'output'
     | 'authenticated'
     | 'cancelled'
@@ -503,6 +523,10 @@ export interface MachineAcpAuthenticationProgressMessage {
   stream?: 'stdout' | 'stderr';
   output?: string;
   error?: string;
+  /** Managed runtime installed before the login process can spawn. */
+  runtimeName?: string;
+  runtimePhase?: 'downloading' | 'verifying' | 'extracting' | 'publishing' | 'complete';
+  runtimePercent?: number;
 }
 
 /**
@@ -754,7 +778,8 @@ export type LocalSessionControlRequest =
   | SessionFileSendLocalRequest
   | PreviewCandidateReportRequest
   | SessionPreviewCreateRequest
-  | SessionPreviewRevokeRequest;
+  | SessionPreviewRevokeRequest
+  | SessionPreviewStatusRequest;
 
 export type LocalSessionControlResponse =
   | SessionCreateAck
@@ -780,7 +805,8 @@ export type LocalSessionControlResponse =
   | SessionFileSendLocalResponse
   | PreviewCandidateReportResponse
   | SessionPreviewCreateResponse
-  | SessionPreviewRevokeResponse;
+  | SessionPreviewRevokeResponse
+  | SessionPreviewStatusResponse;
 
 export type LocalProjectFileListResult = {
   paths: string[];

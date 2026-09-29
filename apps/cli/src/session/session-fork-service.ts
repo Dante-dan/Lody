@@ -3,6 +3,8 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   getServerNow,
+  resolveSessionAcpTargetId,
+  resolveSessionAcpRuntimeConfig,
   getSessionRoomId,
   isLoroRepoDocDeleted,
   SessionId,
@@ -16,10 +18,10 @@ import {
   type SessionForkSpec,
   type SessionForkOperation,
   type SessionHistoryInput,
+  type SessionAcpRuntimeConfigSnapshot,
   type SessionMeta,
   type ProjectRef,
   resolveSessionMcpSelection,
-  resolveSessionTaskToolsEnabled,
 } from '@lody/shared';
 import type { SessionSnapshot, SessionTurn } from '@lody/shared/session-data';
 import type { Logger } from '@/utils/logger';
@@ -41,15 +43,18 @@ const execFileAsync = promisify(execFile);
 /** Recovery opens only store-listed docs; keep even that small fan-out bounded. */
 const FORK_RECOVERY_CONCURRENCY = 4;
 
+type ForkRuntimeConfig = Omit<SessionAcpRuntimeConfigSnapshot, 'acpSessionId' | 'revision'>;
+
 type WorktreeForkPreparedInput = {
   spec: SessionForkSpec;
   source: SessionMeta;
-  sourceTitle: string;
+  sourceAcpSessionId: NonNullable<SessionMeta['acpSessionId']>;
   targetDoc: Awaited<ReturnType<LoroDocumentManager['getOrCreateSessionDoc']>>;
   targetMeta: SessionMeta;
   marker: SessionForkOperationMarker;
   historyResult: NonNullable<ReturnType<typeof cloneHistoryThroughTurn>>;
   sourceSnapshot: SessionSnapshot;
+  sourceRuntimeConfig?: ForkRuntimeConfig;
   agentConfig: NonNullable<Awaited<ReturnType<LoroDocumentManager['getAgentConfigById']>>>;
   user: { name: string; email: string };
   operation: SessionForkOperation;
@@ -355,7 +360,6 @@ export class SessionForkService {
           agentCliType: marker.cleanup.cliType,
           agentType: marker.cleanup.agentType as never,
           mcpServerIds: resolveSessionMcpSelection(history),
-          taskToolsEnabled: false,
           project: marker.cleanup.project as ProjectRef,
           sessionId: targetSessionId,
           githubRepo: marker.cleanup.repoFullName,
@@ -455,7 +459,8 @@ export class SessionForkService {
       );
     }
     const sourceBusy = this.deps.isSourceBusy(sourceSessionId);
-    if (!source.acpSessionId || !source.agentConfigId) {
+    const sourceAcpSessionId = resolveSessionAcpTargetId(source);
+    if (!sourceAcpSessionId || !source.agentConfigId) {
       return sessionForkFailure(
         spec,
         'FORK_UNAVAILABLE',
@@ -475,12 +480,14 @@ export class SessionForkService {
     // This detached capture belongs to the fork operation, which may outlive
     // the cached source document while git creates the new worktree.
     const sourceSnapshots = sourceDoc.sessionData.snapshots;
-    const [targetExisting, sourceSnapshot, agentConfig, user] = await Promise.all([
-      this.deps.workspaceDocument.repo.getDocMeta(targetRoomId),
-      sourceSnapshots.capture(),
-      this.deps.workspaceDocument.getAgentConfigById(source.agentConfigId, source.machineId),
-      reusedUser ?? this.deps.userResolver.resolve(spec.requestedByUserId),
-    ]);
+    const [targetExisting, sourceSnapshot, agentConfig, user, sourceControlState] =
+      await Promise.all([
+        this.deps.workspaceDocument.repo.getDocMeta(targetRoomId),
+        sourceSnapshots.capture(),
+        this.deps.workspaceDocument.getAgentConfigById(source.agentConfigId, source.machineId),
+        reusedUser ?? this.deps.userResolver.resolve(spec.requestedByUserId),
+        sourceDoc.getDocState(),
+      ]);
     if (worktreeFork) {
       const targetDoc = await this.deps.workspaceDocument.getOrCreateSessionDoc(targetSessionId);
       const existingOperation = targetDoc.getForkOperation();
@@ -576,13 +583,24 @@ export class SessionForkService {
       );
     }
 
+    const runtimeConfig = sourceControlState?.acpRuntimeConfig;
+    const baseline = resolveSessionAcpRuntimeConfig(historyResult.history, [], runtimeConfig);
+    const sourceRuntimeConfig: ForkRuntimeConfig | undefined =
+      baseline && runtimeConfig?.acpSessionId === sourceAcpSessionId
+        ? {
+            basedOnUserTurnId: runtimeConfig.basedOnUserTurnId,
+            modelId: baseline.modelId,
+            modeId: baseline.modeId,
+            configOptionValues: baseline.configOptionValues,
+          }
+        : undefined;
     const forkSessionTurnId = historyResult.acpTurnId;
     if (sourceBusy) {
       const sourceRuntime = this.deps.sessionManager.getSession(sourceSessionId);
       const sourceAgent = sourceRuntime?.agentClient;
       if (
         !sourceRuntime?.acpSessionId ||
-        sourceRuntime.acpSessionId !== source.acpSessionId ||
+        sourceRuntime.acpSessionId !== sourceAcpSessionId ||
         !sourceAgent?.supportsActiveTurnFork() ||
         !forkSessionTurnId
       ) {
@@ -762,12 +780,13 @@ export class SessionForkService {
       const preparedInput: WorktreeForkPreparedInput = {
         spec,
         source,
-        sourceTitle,
+        sourceAcpSessionId,
         targetDoc,
         targetMeta,
         marker,
         historyResult,
         sourceSnapshot,
+        sourceRuntimeConfig,
         agentConfig,
         user,
         operation,
@@ -829,7 +848,6 @@ export class SessionForkService {
             agentCliType: source.cliType,
             agentType: source.agentType,
             mcpServerIds: resolveSessionMcpSelection(historyResult.history),
-            taskToolsEnabled: resolveSessionTaskToolsEnabled(historyResult.history),
             customAcp: agentConfig.customAcp,
             runtimeOverrides: agentConfig.runtimeOverrides,
             env: agentConfig.env,
@@ -844,7 +862,7 @@ export class SessionForkService {
             userEmail: user.email,
           },
           {
-            forkSessionId: source.acpSessionId,
+            forkSessionId: sourceAcpSessionId,
             forkSessionTurnId,
             deferAcpSessionIdPersistence: true,
           }
@@ -873,6 +891,12 @@ export class SessionForkService {
           sourceSnapshot,
           historyResult.history as unknown as readonly SessionTurn[]
         );
+        if (sourceRuntimeConfig) {
+          targetDoc.applyAcpRuntimeConfigPatch(sourceRuntimeConfig.basedOnUserTurnId, {
+            ...sourceRuntimeConfig,
+            acpSessionId: targetSession.acpSessionId,
+          });
+        }
         await this.deps.workspaceDocument.persistPendingChanges('session-fork-commit');
       } catch (error) {
         throw new SessionForkOperationError(
@@ -933,11 +957,13 @@ export class SessionForkService {
     const {
       spec,
       source,
+      sourceAcpSessionId,
       targetDoc,
       targetMeta,
       marker,
       historyResult,
       sourceSnapshot,
+      sourceRuntimeConfig,
       agentConfig,
       user,
       operation,
@@ -954,7 +980,6 @@ export class SessionForkService {
       agentCliType: source.cliType,
       agentType: source.agentType,
       mcpServerIds: resolveSessionMcpSelection(historyResult.history),
-      taskToolsEnabled: resolveSessionTaskToolsEnabled(historyResult.history),
       customAcp: agentConfig.customAcp,
       runtimeOverrides: agentConfig.runtimeOverrides,
       env: agentConfig.env,
@@ -972,7 +997,7 @@ export class SessionForkService {
     };
     try {
       await this.deps.sessionManager.createSession(config, {
-        forkSessionId: source.acpSessionId!,
+        forkSessionId: sourceAcpSessionId,
         forkSessionTurnId: historyResult.acpTurnId,
         deferAcpSessionIdPersistence: true,
       });
@@ -994,6 +1019,7 @@ export class SessionForkService {
               timeout: 10_000,
             })
           ).stdout.trim() || undefined;
+      const targetAcpSessionId = targetSession.acpSessionId;
       const branchName = resolvedBranch ?? targetMeta.baseBranch;
       // Record the real branch name so a crash inside the commit block can
       // still republish complete meta from the marker. Best-effort: the marker
@@ -1015,10 +1041,16 @@ export class SessionForkService {
           sourceSnapshot,
           historyResult.history as unknown as readonly SessionTurn[]
         );
+        if (sourceRuntimeConfig) {
+          targetDoc.applyAcpRuntimeConfigPatch(sourceRuntimeConfig.basedOnUserTurnId, {
+            ...sourceRuntimeConfig,
+            acpSessionId: targetAcpSessionId,
+          });
+        }
         targetDoc.setForkOperation(undefined);
         await this.deps.workspaceDocument.repo.upsertDocMeta(targetRoomId, {
           ...targetMeta,
-          acpSessionId: targetSession.acpSessionId,
+          acpSessionId: targetAcpSessionId,
           status: SessionStatusFactory.idle(),
           branchName,
         });
@@ -1062,8 +1094,15 @@ export class SessionForkService {
             : String(publicError.detail ?? error)
         }`
       );
+      return;
     } finally {
       this.activeOperations.delete(operation.id);
+    }
+    // The fork is durable; a display projection cannot authorize compensation.
+    try {
+      await targetDoc.syncModelSummary();
+    } catch {
+      this.deps.logger.warn(`[${targetSessionId}] Failed to publish fork model summary`);
     }
   }
 }

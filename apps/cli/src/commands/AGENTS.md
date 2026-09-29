@@ -42,11 +42,6 @@ Command entrypoints, the daemon runner, and session dispatch from the CLI/MCP bo
   before reading by default; sync failure is a command failure with an `--offline` hint.
   `--offline` is the explicit local-cache path, never an automatic fallback. `lody sync` is the
   explicit workspace sync command and excludes Code Collab file-index Flock docs.
-- Persisting a non-empty Task document makes loro-repo register `e/task-<id>` in workspace meta;
-  Task fields are not copied into `m/task-<id>/*`. `listWorkspaceTaskIds` combines that physical
-  source (`listAliveRoomIds` over `e/*`) with visible Task Index rows, repairs a missing row from
-  its document, and honors an explicit tombstone. `sync`, `export`, and account deletion must
-  retain BOTH discovery paths so an interrupted or legacy write cannot escape coverage.
 
 ## `lody app`
 
@@ -80,11 +75,10 @@ Command entrypoints, the daemon runner, and session dispatch from the CLI/MCP bo
 - `--local-project … --worktree` sets `ProjectRef.useWorktree`; daemon startup consumes it in
   `../session/session-execution-service.ts` and worktree creation happens in
   `../session/session-manager.ts`.
-- Local create resolves `ProjectRef.githubRepoFullName` from the project's `origin` for direct AND
-  worktree sessions, exactly like desktop creation, because `repoFullName`, PR actions, and
-  post-turn PR detection all read it. Bind only a repository the workspace enables, recording the
-  workspace's spelling; an unauthorized, absent, or unreadable one leaves the Session local rather
-  than failing create.
+- Local create records the GitHub repository identified by the local Git remote for both direct
+  and worktree sessions, matching desktop creation. Remote identity is not authorization:
+  the machine PR reconciler verifies access through authenticated GitHub reads, without a
+  product-cloud repository registry. An absent/unreadable remote leaves creation local.
 - Dispatch point-of-no-rollback (`createSessionResult` / `sendSessionChatResult`):
   `writeDispatchPointer` commits `latestUserMsgId` locally, after which the daemon may already be
   executing the turn. `confirmDispatchSyncedBestEffort` is AWAITED so the push completes before

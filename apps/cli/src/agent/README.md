@@ -10,11 +10,13 @@ context/acp-agent-edit-evidence.md. Adapter source repositories and builtin prov
 [apps/cli/AGENTS.md](../../AGENTS.md). Where updates go after they arrive:
 context/message-flow.md "Upstream".
 
-| Boundary           | Owner                                        | Responsibility                                                               |
-| ------------------ | -------------------------------------------- | ---------------------------------------------------------------------------- |
-| ACP connection     | [AgentClient](agent-client.ts)               | Negotiates capabilities, tracks raw requests, and classifies steer evidence. |
-| Process startup    | [Runner](acp-runner.ts)                      | Spawns agents under the shared startup gate.                                 |
-| Runtime resolution | [Managed runtimes](managed-agent-runtime.ts) | Resolves pinned distributions and verifies their artifacts.                  |
+| Boundary           | Owner                                                                    | Responsibility                                                                   |
+| ------------------ | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| ACP connection     | [AgentClient](agent-client.ts)                                           | Negotiates capabilities, tracks raw requests, and classifies steer evidence.     |
+| Process startup    | [Runner](acp-runner.ts)                                                  | Spawns agents under the shared startup gate.                                     |
+| Runtime resolution | [Managed runtimes](managed-agent-runtime.ts)                             | Resolves pinned distributions and verifies their artifacts.                      |
+| Codex credentials  | [Profiles](codex-profile-store.ts), [broker](codex-credential-broker.ts) | Host-bound homes and vault generations; redirect-denying user-side API requests. |
+| Codex process uses | [Usage records](codex-profile-process-usage.ts) | Independent process records for deletion cleanup; same-profile sessions remain concurrent. |
 
 ## Files
 
@@ -22,16 +24,23 @@ context/message-flow.md "Upstream".
   capabilities (fs, elicitation), permission/fs request handling, update callbacks. Lody
   ACP extensions are consumed through `acp-extension-core`, so capability discovery lives
   at `agentCapabilities._meta.lody`, session metadata at `_meta.lody`, and custom methods
-  use the Core `_lody/...` names.
+  use the Core `_lody/...` names. Session initialization advertises Core answer notes
+  alongside standard form elicitation; the shared Ask Question bridge retains the
+  selection and separately keyed note through durable permission history.
 - `acp-runner.ts` — process spawn/restart around the client. Spawn + initialize +
   `newSession`/`loadSession` share `acp-session-start-gate.ts`.
 - `acp-session-start-gate.ts` — process-wide start semaphore used by
   `Session.createAgent`, `startLocalAcpAgent`, and history-catalog ACP spawn.
-- `setting.ts` — launch resolution for every agent kind.
+- `setting.ts` — launch resolution for every agent kind, including the pinned
+  `npx --prefer-offline -y dimcode@0.5.10 acp` builtin. Dimcode reuses the
+  profile-owned npm cache and startup recovery; credentials remain in its own
+  configuration or provider environment.
 - `deepseek-harness-runtime.ts` — Harness-home (`DSH_HOME`, then `~/.dsh`), atomic-config,
   and npx launch wrapper around the `packages/acp-extension-dsh` submodule. It converts
   the adapter entry to a file URL for Cordis ESM imports, including Windows drive paths,
-  while preset and session directories remain filesystem paths.
+  while preset and session directories remain filesystem paths. Its Windows bootstrap
+  suppresses child consoles inside npm and DSH, including the pinned native Job
+  runner; [compatibility scope and verification](../../../../.agents/notes/implemented/bug-fix/2026-09-22-dsh-windows-console-popups.md).
 - `managed-agent-runtime.ts` — pinned Codex/Claude Code/Grok native and Kimi Node-package
   `.tar.zst` artifacts, checksums, resumable downloads, the active installation profile's
   `agent-binaries` layout, and best-effort `bin` symlinks for complete native CLIs.
@@ -47,6 +56,14 @@ context/message-flow.md "Upstream".
 - `fixtures/` — synthetic test fixtures.
 
 ## Background
+
+### ACP file errors
+
+`fs/read_text_file` maps a missing local file to ACP resource-not-found (`-32002`).
+Other I/O errors propagate, and session validation runs before file access. Provider
+filesystem adapters translate that protocol error to their engine's native missing-file
+semantics. In particular, Kimi may enter Plan before a plan file exists; reading its
+status must retain the distinction between an absent file and an unreadable one.
 
 ### Grok permission handling
 
@@ -128,6 +145,25 @@ the endpoint's `/models` list rather than local catalog additions. Harness JSONL
 stores: an empty or zstd root uses upstream's `zstd`, a raw-only legacy root keeps `none`,
 and a mixed root fails with both paths named.
 
+On Windows, both session and probe/title spawns resolve the selected npx shim from
+the final child PATH and execute its adjacent `node_modules/npm/bin/npx-cli.js`
+with Lody's Node. This keeps the full pinned closure out of `cmd.exe`, whose
+8191-character limit is smaller than the package argument list. Native executable
+shims remain direct launches; a script shim without the standard npm entry fails
+with an actionable error instead of falling through to another installation.
+Cache isolation, startup budgets, and retries still see the original npx command
+and arguments; conversion happens after those policies, on each spawn attempt.
+See the [Windows command-length fix](../../../../.agents/notes/implemented/bug-fix/2026-09-21-dsh-windows-command-length.md).
+
+### Claude upstream 0.84.0 source synchronization
+
+The bundled Claude gitlink includes upstream 0.84.0 while the fork package remains
+0.79.0. Lody builds that source directly, with SDK 0.3.284 / Claude Code 2.1.284;
+no npm adapter release is required. Lody advertises Core extensions and standard
+ACP capabilities, without AIR, terminal-output deltas or session notices. Standard
+tool fields and text fallback remain authoritative. Consumer audit and limits:
+[compatibility decision](../../../../.agents/notes/implemented/bug-fix/2026-09-29-claude-acp-sparse-updates.md).
+
 ### Managed runtimes
 
 Codex version/archive pins come from `codex-runtime-manifest.json`, which the outer
@@ -138,7 +174,12 @@ the adapter lockfile, regenerates all eight zstd archives after a version change
 the canonical production objects, and then atomically updates the manifest.
 
 Grok launches the pinned `acp-extension-grok` compatibility adapter with an official,
-unmodified R2-managed runtime in `GROK_PATH`; the submodule owns the private-wire contract
+unmodified R2-managed runtime in `GROK_PATH`. Archive, executable, and source integrity
+pins live in `grok-runtime-manifest.json`. Version changes regenerate all six targets
+from exact official npm metadata; the operator updates this manifest only after full
+production upload/readback. The CLI rejects adapter/manifest version drift. See the
+[automatic pin refresh decision](../../../../.agents/notes/implemented/process/2026-09-25-grok-pin-refresh.md).
+The submodule owns the private-wire contract
 and minimum official version. Kimi is different: `packages/acp-extension-kimi` owns the
 Lody-maintained runtime source and implements the shared `acp-extension-core` contract.
 
@@ -156,9 +197,13 @@ Which authentication path runs is decided by the provider, not the caller: a man
 runs its pinned login command, and everything else (registry and custom ACP) opens a
 temporary standard ACP connection in the same bounded lifecycle. Kimi runs `acp --login`;
 Grok runs the official `login --device-auth`; Claude Code runs the official
-`auth login --claudeai` subscription flow; Codex always runs the official
-`login --device-auth` ChatGPT flow so Web can complete authentication against a remote
-machine.
+`auth login --claudeai` subscription flow. Codex ChatGPT runs official
+`login --device-auth`; managed API profiles use the existing secret-input interaction
+and a tools-free Responses probe. [Account profiles](../../../../specs/codex-account-profiles.md)
+owns isolation, generation rotation, concurrency and compatibility guarantees.
+Each new ChatGPT profile lets Codex use its native credential-storage default inside
+the profile's private `CODEX_HOME`; older ready profiles retain their keyring setting.
+The host never moves a global `auth.json` to switch accounts.
 
 Remote Web transport stores only an ephemeral-ECDH/AES-GCM envelope in the 24-hour request
 stream; the target machine keeps the recipient private key in memory and decrypts
@@ -203,30 +248,30 @@ override entries still apply only when their source-version suffix matches the s
 
 ### Session titles
 
-Builtin Claude, Codex and Grok own session title generation through ACP
-`session_info_update`; Kimi and the DeepSeek Harness still use `title-generator.ts` /
-`response-utils.ts` and the `titleGeneration` config. `BUILTIN_ACP_TITLE_OWNERSHIP` in
-`packages/shared/src/ai.ts` is the single table behind both facts, and its doc comment
-carries the per-adapter mechanism; the audit evidence and what each remaining gap would
-cost to close live in the [decision note](../../../../.agents/notes/implemented/architecture/2026-09-08-acp-owned-session-titles.md).
+Providers advertising Core `agentCapabilities._meta.lody.sessionTitle: { version: 1 }`
+own automatic title generation. After the main ACP session initializes, dispatch
+uses its live capability to skip `title-generator.ts`; capability cache freshness
+cannot cause a duplicate process on the first launch. Probes and normal session
+creation persist `sessionTitle` for the settings dialog, including runtime overrides
+and custom providers. A custom command's cached source must match before hiding
+its title settings.
 
-Two predicates read that table, and the difference between them is the part worth knowing.
-`acpOwnsSessionTitleGeneration()` keeps the isolated session out of an agent's title path
-and hides its obsolete title settings. `trustsUntaggedAcpSessionTitle()` is narrower: it
-answers whether a pushed title may be stored without a `_meta.lody.titleSource` tag, which
-is true only for the adapters that send no tag at all. Codex owns its generation but tags
-every title and previews the raw first prompt as `fallback`, so trusting it untagged would
-make that preview the session title.
+`session_info_update` with `_meta.lody.titleSource` `generated` or `explicit`
+feeds the existing sanitized, conditional title write. Fallback/unset or malformed
+tags are rejected; user titles are preserved. The generated tag requires the
+capability. Legacy explicit tags remain compatible. Failed provider generation
+leaves the draft title; there is no timeout-triggered duplicate generation.
 
-A runtime override revokes ownership. `BuiltinRuntimeOverrides` can aim the same
-`agentType` at an executable predating the title behaviour, and that session would otherwise
-get no title at all — generator skipped, nothing pushed, and the setting that would fix it
-hidden — so an overridden runtime keeps the local generator.
+The builtin Claude/Codex/Grok identity table remains compatibility for older
+managed runtimes. Overrides revoke that fallback, but can independently advertise
+the new capability. Only legacy Claude/Grok titles are trusted without a tag.
+See the [contract](../../../../specs/acp-session-titles.md) and
+[original compatibility decision](../../../../.agents/notes/implemented/architecture/2026-09-08-acp-owned-session-titles.md).
 
 The daemon does not name branches. A worktree session stays on the `session/<id>` branch
-`worktree-manager.ts` created for it, and `syncSessionBranchName` records whatever branch the
-session is actually on after every turn, so an agent that renames the branch itself is picked
-up. For GitHub projects the agent is asked to do exactly that — see
+`worktree-manager.ts` created for it. [WorkspaceGitService](../session/workspace-git-service.ts)
+observes branch changes independently of GitHub; its lifecycle and activation triggers are
+defined by the [checkout branch contract](../../../../specs/workspace-branch-state.md). For GitHub projects the agent is asked to do exactly that — see
 `GITHUB_WORKTREE_SYSTEM_COMMANDS` in `session/session-execution-helpers.ts`.
 
 This used to be an automatic prompt-to-branch rename, removed because it could not be made

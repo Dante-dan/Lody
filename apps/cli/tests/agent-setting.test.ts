@@ -8,12 +8,14 @@ import {
   ACP_EXTENSION_DSH_QUERY_PATH_ENV,
   ACP_EXTENSION_DSH_SESSION_ROOT_ENV,
 } from 'acp-extension-dsh/profile';
-import { REGISTRY_ACP_AGENTS } from '@lody/shared';
+import { REGISTRY_ACP_AGENTS, CODEX_PROFILE_LEGACY_LAUNCH_GUARD } from '@lody/shared';
+import { spawn } from 'node:child_process';
 
 import {
   getAcpCapabilitySourceVersion,
   mergeLoginShellEnv,
   resolveACPSetting,
+  resolveExpectedAcpCapabilitySourceVersion,
   resolveBuiltinAuthenticationProcessLaunch,
   resolveBuiltinACPSetting,
   resolveACPProcessLaunchAsync,
@@ -28,12 +30,14 @@ import {
   BUILTIN_KIMI_CAPABILITY_SOURCE_VERSION,
 } from '../src/agent/managed-agent-runtime';
 import * as managedRuntime from '../src/agent/managed-agent-runtime';
+import * as managedRuntimeUpdates from '../src/agent/managed-runtime-update-coordinator';
 import { parseNpxPackageSpecFromArgs } from '../src/agent/npx-cache';
 import {
   DEEPSEEK_HARNESS_CAPABILITY_SOURCE_VERSION,
   DEEPSEEK_HARNESS_HOME_ENV,
   DEEPSEEK_HARNESS_VERSION,
 } from '../src/agent/deepseek-harness-runtime';
+import { getGhShimHostBinDir, prependGhShimBinDirToPath } from '../src/lib/gh-shim-script';
 
 function getRegistryAgent(agentType: string) {
   const agent = REGISTRY_ACP_AGENTS.find((candidate) => candidate.id === agentType);
@@ -44,6 +48,82 @@ function getRegistryAgent(agentType: string) {
 }
 
 describe('resolveBuiltinACPSetting', () => {
+  it('keeps the managed-profile legacy guard on both native login and ACP launch, so neither can use global auth', async () => {
+    const input = {
+      cliType: 'builtin' as const,
+      agentType: 'codex',
+      runtimeOverrides: { codexPath: CODEX_PROFILE_LEGACY_LAUNCH_GUARD },
+    };
+    const login = await resolveBuiltinAuthenticationProcessLaunch({ ...input, action: 'login' });
+    expect(login?.command).toContain(CODEX_PROFILE_LEGACY_LAUNCH_GUARD);
+    expect(() => spawn(login!.command, login!.args)).toThrow();
+    const acp = await resolveACPProcessLaunchAsync(input);
+    expect(acp.env?.CODEX_PATH).toContain(CODEX_PROFILE_LEGACY_LAUNCH_GUARD);
+    expect(() => spawn(acp.env!.CODEX_PATH!, ['app-server'])).toThrow();
+  });
+  it('requires the current extension-aware Pi runtime and keys the selected catalog', async () => {
+    const support = vi
+      .spyOn(managedRuntime, 'PI_EXTENSIONS_SUPPORTED', 'get')
+      .mockReturnValue(true);
+    const manager = vi.spyOn(managedRuntime, 'getManagedAgentRuntimeManager').mockReturnValue({
+      ensureCurrentRuntime: async () => ({
+        runtimeName: 'pi',
+        version: '0.2.0',
+        platformArch: 'node',
+        command: '/managed/pi/index.js',
+      }),
+      resolveRuntimeForLaunch: async () => {
+        throw new Error('Older fallback must not be used');
+      },
+    } as ReturnType<typeof managedRuntime.getManagedAgentRuntimeManager>);
+    try {
+      const input = {
+        cliType: 'builtin' as const,
+        agentType: 'pi',
+        runtimeOverrides: { piExtensions: ['/fixture/plugin.ts'] },
+      };
+      expect(await resolveACPProcessLaunchAsync(input)).toEqual({
+        command: process.execPath,
+        args: ['/managed/pi/index.js', '-e', '/fixture/plugin.ts'],
+        capabilitySourceVersion:
+          'builtin-pi:0.2.0+override:{"piExtensions":["/fixture/plugin.ts"]}',
+      });
+      support.mockReturnValue(false);
+      await expect(resolveACPProcessLaunchAsync(input)).rejects.toThrow(
+        'does not support selected extensions'
+      );
+    } finally {
+      manager.mockRestore();
+      support.mockRestore();
+    }
+  });
+  it('keeps legacy Pi runnable outside the catalog until confirmation', () => {
+    expect(REGISTRY_ACP_AGENTS.some((agent) => agent.id === 'pi-acp')).toBe(false);
+    const launch = resolveACPSetting({ cliType: 'registry', agentType: 'pi-acp' });
+    expect(launch.exec.args).toContain('pi-acp@0.0.33');
+  });
+
+  it('launches the downloaded Pi closure with Node and its actual capability version', async () => {
+    const manager = vi.spyOn(managedRuntime, 'getManagedAgentRuntimeManager').mockReturnValue({
+      resolveRuntimeForLaunch: async () => ({
+        runtimeName: 'pi',
+        version: '0.1.0-local',
+        targetVersion: '0.1.0-local',
+        platformArch: 'node',
+        command: '/managed/pi/package/dist/index.js',
+        updateAvailable: false,
+      }),
+    } as ReturnType<typeof managedRuntime.getManagedAgentRuntimeManager>);
+    try {
+      expect(await resolveACPProcessLaunchAsync({ cliType: 'builtin', agentType: 'pi' })).toEqual({
+        command: process.execPath,
+        args: ['/managed/pi/package/dist/index.js'],
+        capabilitySourceVersion: 'builtin-pi:0.1.0-local',
+      });
+    } finally {
+      manager.mockRestore();
+    }
+  });
   it('requires the async launcher for managed builtin runtimes', () => {
     expect(() => resolveBuiltinACPSetting('claude')).toThrow(/resolveACPProcessLaunchAsync/);
     expect(() => resolveBuiltinACPSetting('codex')).toThrow(/resolveACPProcessLaunchAsync/);
@@ -170,6 +250,24 @@ describe('resolveBuiltinACPSetting', () => {
     }
   });
 
+  it('resolves Dimcode to a pinned npx ACP launch understood by cache recovery', async () => {
+    for (const extraArgs of [undefined, ['--verbose']]) {
+      const input = { cliType: 'builtin' as const, agentType: 'dimcode', extraArgs };
+      const launch = await resolveACPProcessLaunchAsync(input);
+      expect(launch).toEqual({
+        command: 'npx',
+        args: ['--prefer-offline', '-y', 'dimcode@0.5.10', 'acp', ...(extraArgs ?? [])],
+        capabilitySourceVersion: getAcpCapabilitySourceVersion(input),
+      });
+      expect(parseNpxPackageSpecFromArgs(launch.args)).toEqual({
+        name: 'dimcode',
+        version: '0.5.10',
+      });
+      expect(launch.capabilitySourceVersion).toBe('builtin-dimcode:0.5.10');
+    }
+    expect(() => resolveBuiltinACPSetting('dimcode')).toThrow(/resolveACPProcessLaunchAsync/);
+  });
+
   it('launches Bub through the user-installed `bub acp` command', async () => {
     await expect(
       resolveACPProcessLaunchAsync({
@@ -253,6 +351,23 @@ describe('resolveBuiltinACPSetting', () => {
       });
     }
   );
+
+  it('never launches another provider for Pi authentication', async () => {
+    await expect(
+      resolveBuiltinAuthenticationProcessLaunch({
+        cliType: 'builtin',
+        agentType: 'pi',
+        action: 'status',
+      })
+    ).resolves.toBeNull();
+    await expect(
+      resolveBuiltinAuthenticationProcessLaunch({
+        cliType: 'builtin',
+        agentType: 'pi',
+        action: 'login',
+      })
+    ).rejects.toThrow('Configure Pi credentials');
+  });
 
   it('uses Kimi ACP login and skips unsupported status probing', async () => {
     await expect(
@@ -346,6 +461,157 @@ describe('resolveBuiltinACPSetting', () => {
     }
   });
 
+  describe('resolveExpectedAcpCapabilitySourceVersion', () => {
+    const managedKimiInstallation = {
+      runtimeName: 'kimi-code' as const,
+      version: '0.36.0',
+      targetVersion: '0.37.0',
+      platformArch: 'node',
+      command: '/managed/kimi/package/dist/main.mjs',
+      updateAvailable: false,
+    };
+
+    const withManagedRuntimeManager = async <T>(
+      manager: Partial<ReturnType<typeof managedRuntime.getManagedAgentRuntimeManager>>,
+      run: () => Promise<T>
+    ): Promise<T> => {
+      const managerSpy = vi
+        .spyOn(managedRuntime, 'getManagedAgentRuntimeManager')
+        .mockReturnValue(
+          manager as ReturnType<typeof managedRuntime.getManagedAgentRuntimeManager>
+        );
+      try {
+        return await run();
+      } finally {
+        managerSpy.mockRestore();
+      }
+    };
+
+    it('names the version a managed-runtime launch would stamp without resolving a launch', async () => {
+      const resolveRuntimeForLaunch = vi.fn().mockResolvedValue(managedKimiInstallation);
+      const getRuntimeStatus = vi.fn().mockResolvedValue({
+        kind: 'installed',
+        platformArch: 'node',
+        version: managedKimiInstallation.version,
+        targetVersion: managedKimiInstallation.targetVersion,
+        command: managedKimiInstallation.command,
+        updateAvailable: false,
+      });
+      const input = { cliType: 'builtin' as const, agentType: 'kimi' };
+
+      const { expected, launched } = await withManagedRuntimeManager(
+        { resolveRuntimeForLaunch, getRuntimeStatus },
+        async () => ({
+          expected: await resolveExpectedAcpCapabilitySourceVersion(input),
+          launched: (await resolveACPProcessLaunchAsync(input)).capabilitySourceVersion,
+        })
+      );
+
+      expect(expected).toBe(launched);
+      expect(getRuntimeStatus).toHaveBeenCalledWith('kimi-code');
+      expect(resolveRuntimeForLaunch).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses to name a version while the managed runtime is not installed', async () => {
+      const getRuntimeStatus = vi
+        .fn()
+        .mockResolvedValue({ kind: 'not-installed', platformArch: 'node', version: '0.37.0' });
+
+      await expect(
+        withManagedRuntimeManager({ getRuntimeStatus }, () =>
+          resolveExpectedAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'kimi' })
+        )
+      ).resolves.toBeUndefined();
+    });
+
+    it('keeps a runtime override off the managed-runtime path', async () => {
+      const getRuntimeStatus = vi.fn();
+      const input = {
+        cliType: 'builtin' as const,
+        agentType: 'kimi',
+        runtimeOverrides: { kimiPath: '/opt/kimi' },
+      };
+
+      const { expected, launched } = await withManagedRuntimeManager(
+        { getRuntimeStatus },
+        async () => ({
+          expected: await resolveExpectedAcpCapabilitySourceVersion(input),
+          launched: (await resolveACPProcessLaunchAsync(input)).capabilitySourceVersion,
+        })
+      );
+
+      expect(expected).toBe(launched);
+      expect(getRuntimeStatus).not.toHaveBeenCalled();
+    });
+
+    it('matches a registry launch without consulting a managed runtime', async () => {
+      const getRuntimeStatus = vi.fn();
+      const input = { cliType: 'registry' as const, agentType: 'amp-acp' };
+
+      const { expected, launched } = await withManagedRuntimeManager(
+        { getRuntimeStatus },
+        async () => ({
+          expected: await resolveExpectedAcpCapabilitySourceVersion(input),
+          launched: (await resolveACPProcessLaunchAsync(input)).capabilitySourceVersion,
+        })
+      );
+
+      expect(expected).toBe(launched);
+      expect(getRuntimeStatus).not.toHaveBeenCalled();
+    });
+
+    it('refuses to name a Pi version when selected extensions would force a runtime update', async () => {
+      const getRuntimeStatus = vi.fn().mockResolvedValue({
+        kind: 'installed',
+        platformArch: 'node',
+        version: '0.1.0',
+        targetVersion: '0.2.0',
+        command: '/managed/pi/cli.js',
+        updateAvailable: true,
+      });
+
+      // With extensions the launcher installs the target version before it
+      // starts, so the installed 0.1.0 is not what a probe would run.
+      await expect(
+        withManagedRuntimeManager({ getRuntimeStatus }, () =>
+          resolveExpectedAcpCapabilitySourceVersion({
+            cliType: 'builtin',
+            agentType: 'pi',
+            runtimeOverrides: { piExtensions: ['/ext/one'] },
+          })
+        )
+      ).resolves.toBeUndefined();
+    });
+
+    it('still queues a managed-runtime update when it answers from the installed version', async () => {
+      const enqueue = vi.fn();
+      const getRuntimeStatus = vi.fn().mockResolvedValue({
+        kind: 'installed',
+        platformArch: 'node',
+        version: '0.36.0',
+        targetVersion: '0.37.0',
+        command: '/managed/kimi/package/dist/main.mjs',
+        updateAvailable: true,
+      });
+      const coordinatorSpy = vi
+        .spyOn(managedRuntimeUpdates, 'getManagedRuntimeUpdateCoordinator')
+        .mockReturnValue({ enqueue } as unknown as ReturnType<
+          typeof managedRuntimeUpdates.getManagedRuntimeUpdateCoordinator
+        >);
+      try {
+        await expect(
+          withManagedRuntimeManager({ getRuntimeStatus }, () =>
+            resolveExpectedAcpCapabilitySourceVersion({ cliType: 'builtin', agentType: 'kimi' })
+          )
+        ).resolves.toBe('builtin-kimi:0.36.0');
+      } finally {
+        coordinatorSpy.mockRestore();
+      }
+
+      expect(enqueue).toHaveBeenCalledWith('kimi-code');
+    });
+  });
+
   it('ignores legacy local Codex ACP env overrides in the sync resolver', () => {
     const previousPath = process.env.LODY_LOCAL_CODEX_ACP_PATH;
     const previousEnabled = process.env.LODY_LOCAL_CODEX_ACP;
@@ -412,6 +678,25 @@ describe('resolveBuiltinACPSetting', () => {
     });
     expect(getAcpCapabilitySourceVersion({ cliType: 'registry', agentType: 'factory-droid' })).toBe(
       `factory-droid@${agent.version}`
+    );
+  });
+
+  it('keeps Devin on the downloadable registry binary path', () => {
+    const agent = getRegistryAgent('devin');
+
+    expect(agent.distribution.local).toBeUndefined();
+    expect(Object.keys(agent.distribution.binary ?? {})).toEqual(
+      expect.arrayContaining([
+        'darwin-aarch64',
+        'darwin-x86_64',
+        'linux-aarch64',
+        'linux-x86_64',
+        'windows-aarch64',
+        'windows-x86_64',
+      ])
+    );
+    expect(() => resolveACPSetting({ cliType: 'registry', agentType: 'devin' })).toThrow(
+      /resolveACPProcessLaunchAsync/
     );
   });
 
@@ -649,6 +934,58 @@ describe('mergeLoginShellEnv', () => {
     const shell = { PATH: '/usr/bin' };
 
     expect(splitPath(mergeLoginShellEnv(base, shell).PATH)).toEqual(['/usr/bin']);
+  });
+
+  it('keeps the gh shim dir ahead of login-shell and default ACP entries', () => {
+    // The session env prepends the shim, but the login shell and default ACP dirs are
+    // merged in front of it afterwards. /usr/bin/gh would then win and run without
+    // the shim's per-command credential selection.
+    // Sessions use the shim dir of their own workspace broker, not the default one.
+    const statePath = join(tmpdir(), 'broker-workspace-a.json');
+    const shimDir = getGhShimHostBinDir(statePath);
+    const base = { PATH: prependGhShimBinDirToPath('/proj/node_modules/.bin:/usr/bin', statePath) };
+    const shell = { PATH: '/home/u/.local/bin:/usr/local/bin:/usr/bin:/bin' };
+
+    const spawned = withDefaultAcpPathEntries(mergeLoginShellEnv(base, shell));
+
+    expect(splitPath(spawned.PATH)).toEqual([
+      shimDir,
+      join(homedir(), '.local/bin'),
+      join(homedir(), 'bin'),
+      join(homedir(), '.claude/local'),
+      '/home/u/.local/bin',
+      '/usr/local/bin',
+      '/usr/bin',
+      '/bin',
+      '/proj/node_modules/.bin',
+    ]);
+  });
+
+  it("keeps the session's own shim first when the login shell carries another workspace's", () => {
+    // A daemon started from inside a Lody agent inherits that agent's shim dir, and the
+    // login-shell PATH is derived from the daemon's. Pinning the first shim dir found
+    // would route this session's gh/git through the other workspace's broker.
+    const ownShimDir = getGhShimHostBinDir(join(tmpdir(), 'broker-workspace-a.json'));
+    const foreignShimDir = getGhShimHostBinDir(join(tmpdir(), 'broker-workspace-b.json'));
+    const base = { PATH: [ownShimDir, foreignShimDir, '/usr/bin'].join(delimiter) };
+    const shell = { PATH: [foreignShimDir, '/usr/local/bin', '/usr/bin'].join(delimiter) };
+
+    const spawned = withDefaultAcpPathEntries(mergeLoginShellEnv(base, shell));
+
+    expect(splitPath(spawned.PATH)[0]).toBe(ownShimDir);
+  });
+
+  it('does not promote a shim dir the base PATH did not lead with', () => {
+    // Terminal PTYs merge onto the daemon env, which never deliberately leads with a shim.
+    const foreignShimDir = getGhShimHostBinDir(join(tmpdir(), 'broker-workspace-b.json'));
+    const base = { PATH: ['/usr/bin', foreignShimDir].join(delimiter) };
+    const shell = { PATH: ['/usr/local/bin', foreignShimDir, '/usr/bin'].join(delimiter) };
+
+    expect(splitPath(mergeLoginShellEnv(base, shell).PATH)).toEqual([
+      '/usr/local/bin',
+      foreignShimDir,
+      '/usr/bin',
+    ]);
   });
 
   it('lets base win for non-PATH vars but fills in vars only the shell has', () => {

@@ -8,7 +8,8 @@ import {
   SessionChatStreamView,
   type ChatStreamItem,
 } from '@/components/ai-gui/view';
-import { Button } from '@/ui/button';
+import { Button } from '@lody/ui/button';
+import { clearSavedScrollStates, saveScrollState } from '@/lib/conversation-scroll/saved-state';
 
 const sessionId = 'hydration-regression' as SessionId;
 const platform = createLocalPlatformProvider({
@@ -117,25 +118,58 @@ export const MobileLeadingContent: Story = {
   args: { ...PermissionActivity.args, topInset: 64 },
 };
 
-/** Cold virtualizer mount with enough rows to expose estimated-height restoration. */
-function ColdTailStory() {
+/**
+ * A cold mount with enough rows to expose estimated heights: the scroll engine
+ * has no saved sizes, so every row starts at an estimate. With `cachedOffset`
+ * the session reopens at a saved reading position (row `cold-4` at the top).
+ */
+function ColdTailStory({ cachedOffset = false }: { cachedOffset?: boolean }) {
   const [opened, setOpened] = useState(0);
-  const items: ChatStreamItem[] = Array.from({ length: 1000 }, (_, turnIndex) => ({
-    type: 'message',
-    turnIndex,
-    sessionId,
-    message: {
-      id: `cold-${turnIndex}`,
-      role: 'user',
-      timestamp: '2026-09-13T00:00:00.000Z',
-      items: [{ type: 'text', text: `Message ${turnIndex}` }],
-    },
-  }));
+  const items: ChatStreamItem[] = Array.from(
+    { length: cachedOffset ? 30 : 1000 },
+    (_, turnIndex) => ({
+      type: 'message',
+      turnIndex,
+      sessionId,
+      message: {
+        id: `cold-${turnIndex}`,
+        role: 'user',
+        timestamp: '2026-09-13T00:00:00.000Z',
+        items: [{ type: 'text', text: `Message ${turnIndex}` }],
+      },
+    })
+  );
   return (
     <PlatformContext.Provider value={platform}>
       <div className="flex h-screen flex-col">
-        <Button onClick={() => setOpened((n) => n + 1)}>Open conversation</Button>
-        <div className="min-h-0 flex-1">
+        <Button
+          onClick={() => {
+            // Every open is cold: saved sizes would already count as measured.
+            clearSavedScrollStates();
+            if (cachedOffset) {
+              saveScrollState(sessionId, {
+                formatVersion: 1,
+                intent: {
+                  kind: 'read',
+                  anchor: {
+                    kind: 'turn',
+                    turnId: 'cold-4',
+                    turnIndex: 4,
+                    rowKey: 'cold-4',
+                    item: null,
+                    offsetPx: 0,
+                  },
+                  screenY: 0,
+                },
+                sizes: null,
+              });
+            }
+            setOpened((n) => n + 1);
+          }}
+        >
+          Open conversation
+        </Button>
+        <div className={cachedOffset ? 'h-[400px] shrink-0' : 'min-h-0 flex-1'}>
           {opened > 0 && (
             <SessionChatStreamView
               key={opened}
@@ -146,7 +180,10 @@ function ColdTailStory() {
               renderMessageRow={({ message }) => (
                 <div
                   data-cold-tail={message.id === 'cold-999' ? '' : undefined}
-                  style={{ minHeight: message.id === 'cold-999' ? 420 : 80, padding: 16 }}
+                  style={{
+                    minHeight: cachedOffset ? 300 : message.id === 'cold-999' ? 420 : 80,
+                    padding: 16,
+                  }}
                 >
                   {message.id}
                 </div>
@@ -160,3 +197,4 @@ function ColdTailStory() {
 }
 
 export const ColdTail: Story = { render: () => <ColdTailStory /> };
+export const ColdCachedOffset: Story = { render: () => <ColdTailStory cachedOffset /> };

@@ -2,6 +2,16 @@
 
 Parent instructions apply.
 
+- Local Session/catalog tools route through `session/call-tool` to the daemon's
+  existing repo. `session-tool-router.ts` reuses SDK-parsed MCP arguments and
+  parses daemon inputs; `session-command-environment.ts` scopes identity and
+  host operations with AsyncLocalStorage. Require an active local user Turn and
+  exact workspace/machine scope; never open a second local writer replica.
+  Cloud keeps its authenticated command runtime and remote recovery confirmation.
+
+- MCP sharing requires the active Turn user to equal the CLI authenticated account.
+  Fail closed on shared-machine account mismatch; never substitute the machine owner.
+
 - `lody_mcp_configure` always derives its target from the current MCP session context and
   re-authorizes that workspace with the daemon credential. Never accept a workspace selector.
 - MCP configuration is an execution and credential boundary. The tool may act only on an
@@ -28,6 +38,11 @@ Parent instructions apply.
   the workspace catalog; no driving-Turn mention authorization is required. Resolve its target,
   Prompt prefix, revision, and concrete run config before Operation acceptance. Recovery uses
   the frozen canonical Prompt and target dispatch config and never rereads the mutable catalog.
+  A Role may target any reachable Machine, whatever the requester's context; a Local Project
+  requester defaults to a child only for a same-Machine Role. `readDelegatedMachineAccess`
+  requires both the executing Machine owner and the driving human to be able to use the target
+  (owned, or shared plus shared project); never decide it from synced `MachineMeta.ownerUserId`
+  ([note](../../../../.agents/notes/implemented/bug-fix/2026-09-28-mcp-cross-machine-agent-role.md)).
 - Session orchestration derives its human identity from the active execution runtime populated
   by the dispatch payload, not from the daemon credential, Session owner, or observed history.
   An absent active runtime fails closed; never reconstruct invocation identity from history.
@@ -41,13 +56,18 @@ Parent instructions apply.
   `lody_session_create_many` tools. When `agentRoleId` is present, tolerate manual Machine, Agent,
   and run-config fields but remove them before resolution: the current Role row is authoritative
   and those fields must not influence validation, canonical identity, recovery, or dispatch.
-- The driving Turn's frozen `taskToolsEnabled` gates the complete `lody_task_*` family for
-  both stdio and HTTP transports. Missing means disabled. Do not merely hide creation: disabled
-  servers publish no Task tools, and a still-resident Agent whose next Turn disables the feature
-  is rejected at every Task handler. Task-originated automation explicitly freezes `true` so it
-  can update and comment on the Task it is executing.
 
-## Session and Task tool contracts
+## Session tool contracts
+
+- Resource discovery uses `lib/resource-discovery.ts` for CLI and MCP. Resolve the
+  active Turn user for MCP, never the daemon owner. Role list/get use
+  `canReadAgentRole`; explicit Role creation retains its separate existing contract.
+  Preserve unavailable readable Roles and three-state presence. List MCP entries
+  through the allowlisted summary, never return launch/connection credentials.
+- Directory cursors bind resource, workspace, user and filters. Operations additionally
+  bind requester Session and query only that user's machine-local rows; list replies
+  contain no canonical prompt or assistant output. See
+  [discovery Spec](../../../../specs/resource-discovery.md).
 
 - MCP session tools use stable machine/session/agent-config ids and strict, narrow input schemas.
   Create/chat Commands require a caller-chosen Operation id, and Create persists the Operation
@@ -55,9 +75,21 @@ Parent instructions apply.
   target for daemon replay, and `session_create({ operationId, resume: true })` recovers it without
   the prompt. Completion is delivered automatically — no public wait tool — and legacy `wait=true`
   is a temporary adapter new callers must not use.
+- Chat follow-ups inherit omitted mode/model/options from the target's last model turn
+  (else its last matching turn). Explicit fields and category options
+  win; a model change drops old options. Validate effort/Fast against the final model:
+  probe mismatch cannot reject them, and missing per-model data defers to runtime. Drop
+  incompatible inherited selectors; fill builtin mode only when still empty.
+  ([note](../../../../.agents/notes/implemented/bug-fix/2026-09-17-chat-follow-up-inherits-target-run-config.md))
 - `lody_session_create_options` publishes valid run-config values per agent config and stays
   sparse by default (online Machines, one agent config, the current local project, no GitHub
   fetch), expanding only through explicit query inputs.
+- Machine liveness is THREE-state. `getOnlineMachineIds()` returning null means the presence room
+  could not be joined — status UNKNOWN, never offline. Block a dispatch or report `MACHINE_OFFLINE`
+  only for a definite `offline`; an unknown Machine proceeds and fails against its own deadline,
+  and a surface reporting liveness carries the state, not a boolean. Collapsing unknown to offline
+  refused healthy Machines and silently emptied candidate lists during a cold start or reconnect
+  backoff. Contract: `specs/loro-ephemeral-presence-channel.md`.
 - `session_list` defaults to 20 (maximum 100) and `session_history` to 10 (maximum 50 and 128 KiB);
   keep the MCP surface bounded though the CLI retains `session history --all`. `session_list`
   and `session_status_many` derive busy/idle from the same history, durable queue, presence, and
@@ -65,24 +97,7 @@ Parent instructions apply.
 - `session_history` pages through `SessionData.history.readVisiblePage`, never `getHistory()`:
   `limit` counts displayable turns, the cursor is the raw position from the previous page, and
   hidden/empty rows never shift it. A page reports `hasMore` from the underlying raw rows, so a
-  scan budget never claims the history ended.
-- Bound every task reply: body 64 KiB with head-and-tail truncation
-  (`bodyTruncated`/`bodyOmittedBytes`), newest 20 comments with `commentCount`, 50 links,
-  `lody_task_list` 20/100 with `matched`. `lody_task_edit_body` still matches exactly against the
-  FULL body server-side.
-- `lody_task_list` reads the Task Index Flock ONLY: never open task documents on a list path, and
-  never return `order`.
-- `lody_task_update` writes every scalar property EXCEPT `agent`, and never the body: the body goes
-  through the exact-match edit, and `agent` is the sole automation consent.
-- INVARIANT: `status`, `ownerId`, and `projects` all sit in the delegated-automation eligibility
-  predicate (`planTaskAutomation`), so an agent write to any of them can START a session on an
-  already-entrusted task; anything in that predicate is an execution trigger. Its attributed
-  activity entry is an audit record, NOT a user-visible notice.
-- `ownerId` on an agent WRITE accepts ONLY `""` (unassign) — `TaskOwnerIdWriteSchema` — because
-  naming an owner points `isTaskAutomationEligible` somewhere new and could route a task into
-  execution under this operator's credentials on someone else's consent; it also disposes of the
-  `me` filter sentinel. Keep that restriction at the MCP boundary, NOT in `task-doc.ts`.
-- `lody_task_create` versus `lody_task_propose` splits on WHO ASKED (user request → create now;
-  agent-noticed follow-up → proposal card), and that split lives in the tool descriptions on
-  purpose. The proposal writer hydrates the Session doc, flushes locally, and confirms remote sync
-  before `ok`.
+  scan budget never claims the history ended. Session mentions expand to
+  `[@Title](session://<sessionId>)`; resolve them with this tool, accepting a bare id or a
+  `session://` URI.
+  ([note](../../../../.agents/notes/implemented/feature/2026-09-18-session-mention-uri-and-paste.md))

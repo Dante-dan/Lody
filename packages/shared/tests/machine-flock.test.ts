@@ -4,6 +4,7 @@ import {
   applyMachineFlockRowEvents,
   applyProviderSetupCancellationToFlock,
   buildMachineDeleteLocalProjectCommand,
+  buildSessionLaunchConfig,
   deleteAgentConfigFromFlock,
   deleteMachineFlockRowFromFlock,
   getMachineFlockAcpCapabilities,
@@ -212,6 +213,7 @@ describe('machine Flock helpers', () => {
     const sessionId = 'session-1' as SessionId;
     const launchConfig = {
       customAcp: { command: 'node', args: ['agent.js'] },
+      runtimeOverrides: { piExtensions: ['/fixture/plugin.ts'] },
       env: { TOKEN: 'secret' },
       worktreeSetup: { scripts: { bash: 'pnpm install' }, timeoutMs: 30_000 },
     };
@@ -225,6 +227,7 @@ describe('machine Flock helpers', () => {
 
     const rows = readMachineFlockRowsFromFlock(flock);
     expect(getMachineFlockSessionLaunchConfig(rows, sessionId)).toEqual(launchConfig);
+    expect(buildSessionLaunchConfig(launchConfig)).toEqual(launchConfig);
     expect(
       mergeSessionLaunchConfig(getMachineFlockSessionLaunchConfig(rows, sessionId), {
         env: { FALLBACK: 'ignored' },
@@ -368,6 +371,50 @@ describe('machine Flock helpers', () => {
       [getAcpCapabilityCacheKey(configId)]: row.value,
       [getAcpCapabilityCacheKey(secondConfigId)]: secondRow.value,
     });
+  });
+
+  it('attaches declared per-model controls only for the matching source version', () => {
+    const flock = new FakeMachineFlock();
+    const configId = 'config-1' as AgentConfigId;
+    const capability = {
+      cliType: 'builtin',
+      agentType: 'codex',
+      cacheVersion: 2,
+      sourceVersion: 'v1',
+      modes: [],
+      models: [],
+      fetchedAt: 1,
+    } as const;
+    const models = { 'gpt-6': { effortValues: ['low', 'max'], fastMode: true } };
+    writeMachineFlockRowToFlock(flock, {
+      key: machineFlockKeys.acpCapability(configId),
+      value: capability,
+    });
+    writeMachineFlockRowToFlock(flock, {
+      key: machineFlockKeys.acpModelCapability(configId),
+      value: { version: 1, sourceVersion: 'v1', models },
+    });
+    const key = getAcpCapabilityCacheKey(configId);
+
+    expect(
+      getMachineFlockAcpCapabilities(readMachineFlockRowsFromFlock(flock))[key]
+        ?.declaredModelControls
+    ).toEqual(models);
+    // The stored capability row itself never carries the per-model controls.
+    expect(
+      getMachineFlockAcpCapabilities(
+        readMachineFlockRowsFromFlock(flock, { families: ['acpCapability'] })
+      )[key]?.declaredModelControls
+    ).toBeUndefined();
+
+    writeMachineFlockRowToFlock(flock, {
+      key: machineFlockKeys.acpModelCapability(configId),
+      value: { version: 1, sourceVersion: 'v0', models },
+    });
+    expect(
+      getMachineFlockAcpCapabilities(readMachineFlockRowsFromFlock(flock))[key]
+        ?.declaredModelControls
+    ).toBeUndefined();
   });
 
   it('extracts agent config rows', () => {

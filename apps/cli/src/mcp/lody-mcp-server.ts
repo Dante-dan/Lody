@@ -2,14 +2,14 @@ import { spawn } from 'child_process';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'path';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { McpServer } from '@modelcontextprotocol/server';
+import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { Effect } from 'effect';
 import { z } from 'zod';
+import { requestSessionShare } from '@/lib/session-share-delivery';
 import {
+  ACP_CAPABILITY_ROW_FAMILIES,
   getAcpCapabilityCacheKey,
-  getActiveTaskPrLinks,
-  getActiveTaskSessionLinks,
   getMachineFlockAcpCapabilities,
   getMachineFlockDocId,
   getWorkspaceFlockDocId,
@@ -21,7 +21,6 @@ import {
   readMachineFlockRowsFromFlock,
   readWorkspaceFlockRowsFromFlock,
   listWorkspaceAgentRoles,
-  summarizeAgentRunConfigCapabilities,
   type AcpCapabilityCacheEntry,
   type AgentRunConfigSelection,
   LocalSessionControlResponseSchema,
@@ -30,7 +29,6 @@ import {
   SESSION_FILE_MAX_COUNT,
   SESSION_FILE_MAX_SIZE_BYTES,
   SESSION_IMAGE_MAX_COUNT,
-  TASK_IMAGE_MAX_COUNT,
   SessionFileUploadRequestSchema,
   SessionFileUploadResponseSchema,
   SessionImageUploadRequestSchema,
@@ -41,9 +39,7 @@ import {
   shouldBypassSessionQuota,
   type LodySessionPresenceState,
   type LocalSessionControlRequest,
-  type AgentConfigMeta,
   type AgentRole,
-  type LocalProjectId,
   type LocalProjectMeta,
   type MachineId,
   type MachineMeta,
@@ -52,15 +48,6 @@ import {
   type SessionMeta,
   SessionActiveInvocationContextResultSchema,
   type SessionActiveInvocationContextResult,
-  type TaskId,
-  type TaskIndexRow,
-  type TaskPrProvider,
-  type TaskPriority,
-  type TaskStatus,
-  TASK_LABEL_MAX_COUNT,
-  TASK_LABEL_MAX_LENGTH,
-  TASK_PRIORITY_VALUES,
-  TASK_STATUS_VALUES,
   type WorkspaceId,
   LODY_MAX_CHAIN_DEPTH,
   LODY_OPERATION_DEFAULT_DEADLINE_SECONDS,
@@ -93,6 +80,7 @@ import {
   withWorkspaceManager,
   getCommandSessionSharingPort,
   WorkspaceSyncUnavailableError,
+  classifyLocalDaemonIpcError,
 } from '@/lib/command-runtime';
 import { listMergedAgentConfigs } from '@/lib/agent-config-machine-flock';
 import {
@@ -101,17 +89,6 @@ import {
   writeReviewRun,
 } from '@/lib/review-automation/review-automation-store';
 import { applyReviewSubmission } from '@/lib/review-automation/review-automation-submit';
-import {
-  appendAgentTaskComment,
-  applyAgentTaskBodyEdit,
-  applyAgentTaskUpdate,
-  createTaskFromAgent,
-  listTasksFromIndex,
-  readTask,
-  type TaskListFilter,
-  type TaskSnapshot,
-  type TaskUpdateInput,
-} from '@/lib/task-doc';
 import type { LoroDocumentManager } from '@/lib/loro/doc';
 import { readMachineLocalProjects } from '@/lib/local-project-meta';
 import { listWorkspaceGitHubRepositoriesForCliToken } from '@/lib/workspace';
@@ -141,12 +118,12 @@ import {
   LodyOperationStore,
   LodyOperationStoreError,
   runWithOperationStoreBusyRetry,
+  OperationListQuerySchema,
 } from '@/orchestration/operation-store';
-import { publishTaskProposal } from '@/mcp/task-proposal';
+import { registerScheduleTools } from './schedule-tools';
 import { truncateSessionHistoryText as truncateUtf8HeadTail } from '@/mcp/session-history-page';
 import { buildSessionHistoryForReader } from '@/mcp/session-history-handler';
 import { version as cliVersion } from '@/pkg';
-import { uploadTaskImages } from '@/lib/task-image-upload';
 import {
   configureWorkspaceMcpServer,
   WorkspaceMcpConfigureToolInputSchema,
@@ -154,6 +131,13 @@ import {
 } from '@/mcp/workspace-mcp-configure';
 import { captureSessionCommandEvent } from '@/commands/analytics-events';
 import { captureCli, initCliAnalytics } from '@/lib/analytics/posthog';
+import { registerDiscoveryTools } from './discovery-tools';
+import { createResourceDiscovery } from '@/lib/resource-discovery-runtime';
+import { getCliPlatformKind } from '@/lib/cli-platform';
+import { summarizeDiscoveryAgent as summarizeAgentConfig } from '@/lib/resource-discovery';
+import { SessionDiscoveryFilterShape, matchesSessionDiscovery } from '@/lib/discovery-query';
+import { getSessionCommandEnvironment } from '@/lib/session-command-environment';
+import { createSessionToolRegistrar, type SessionToolHandlers } from './session-tool-router';
 
 const PREVIEW_TOOL_NAME = 'lody_report_preview_candidate';
 const IMAGE_UPLOAD_TOOL_NAME = 'lody_upload_images';
@@ -174,19 +158,10 @@ const SESSION_RENAME_TOOL_NAME = 'lody_session_rename';
 const SESSION_RENAME_MANY_TOOL_NAME = 'lody_session_rename_many';
 const OPERATION_GET_TOOL_NAME = 'lody_operation_get';
 const OPERATION_CANCEL_TOOL_NAME = 'lody_operation_cancel';
-const TASK_LIST_TOOL_NAME = 'lody_task_list';
-const TASK_GET_TOOL_NAME = 'lody_task_get';
-const TASK_CREATE_TOOL_NAME = 'lody_task_create';
-const TASK_PROPOSE_TOOL_NAME = 'lody_task_propose';
-const TASK_UPDATE_TOOL_NAME = 'lody_task_update';
-const TASK_EDIT_BODY_TOOL_NAME = 'lody_task_edit_body';
-const TASK_COMMENT_TOOL_NAME = 'lody_task_comment';
-const TASK_IMAGE_UPLOAD_TOOL_NAME = 'lody_task_upload_images';
 const REVIEW_SUBMIT_TOOL_NAME = 'lody_review_submit';
 const SESSION_FILE_MAX_SIZE_MB = Math.floor(SESSION_FILE_MAX_SIZE_BYTES / (1024 * 1024));
 const SESSION_CONTROL_TIMEOUT_MS = 30_000;
 const LODY_CLI_DEFAULT_TIMEOUT_MS = 10 * 60_000;
-const escapeMarkdownImageAlt = (value: string): string => value.replaceAll(/[\\\]]/gu, '\\$&');
 const MAX_MCP_SESSION_WAIT_TIMEOUT_SECONDS = 3_600;
 const MAX_MCP_COMMAND_BATCH_SIZE = 20;
 const MAX_MCP_STATUS_BATCH_SIZE = 50;
@@ -197,22 +172,6 @@ const DEFAULT_MCP_SESSION_HISTORY_LIMIT = 10;
 const MAX_MCP_SESSION_HISTORY_LIMIT = 50;
 const MAX_MCP_SESSION_HISTORY_BYTES = 128 * 1024;
 const MAX_MCP_SESSION_TITLE_CHARS = 200;
-// A task body has no length limit in the document (the web editor is a free-form
-// markdown field), so reading one must be bounded like session history is or a
-// long task blows the caller's context. Head-and-tail keeps both ends, which is
-// what an exact-match body edit needs; `truncated` tells the agent its view is
-// partial so it does not assume it has seen the whole document.
-const MAX_MCP_TASK_BODY_BYTES = 64 * 1024;
-const MAX_MCP_TASK_LINKS = 50;
-// Body edits are the largest thing an agent writes into a task, and a Loro
-// document keeps its history — oversized text never shrinks and every client
-// syncing that task pays for it forever. Sized to the read budget so an agent can
-// still replace anything it was shown; its siblings (propose/comment) cap at 20k.
-const MAX_MCP_TASK_EDIT_CHARS = 64_000;
-// Listing reads the workspace Task Index, so a page is cheap — but the reply
-// still lands in the caller's context, so it is bounded like session_list.
-const DEFAULT_MCP_TASK_LIST_LIMIT = 20;
-const MAX_MCP_TASK_LIST_LIMIT = 100;
 // File uploads stream up to 100 MB through the CLI to R2 — minutes on a slow
 // uplink. A 30s cap would abort the MCP call while the upload keeps running,
 // reporting a false failure (and inviting duplicate agent retries).
@@ -276,22 +235,6 @@ const ImageUploadToolInputSchema = z
       .min(1)
       .max(SESSION_IMAGE_MAX_COUNT)
       .describe('Image file paths to upload to the current Lody conversation.'),
-  })
-  .strict();
-
-const TaskImageUploadToolInputSchema = z
-  .object({
-    paths: z
-      .array(
-        z
-          .string()
-          .trim()
-          .min(1)
-          .describe('Absolute path or session-workspace-relative path to an image file.')
-      )
-      .min(1)
-      .max(TASK_IMAGE_MAX_COUNT)
-      .describe('Images to upload for use in a task description or comment.'),
   })
   .strict();
 
@@ -830,6 +773,7 @@ const SessionCancelToolInputSchema = z
 
 const SessionListToolInputSchema = z
   .object({
+    ...SessionDiscoveryFilterShape,
     archive: z.enum(['active', 'archived', 'any']).default('active'),
     createdBy: z.literal('me').optional(),
     openedBy: z.string().trim().min(1).optional(),
@@ -874,7 +818,9 @@ const SessionHistoryToolInputSchema = z
       .trim()
       .min(1)
       .optional()
-      .describe('Target session id, or current. Defaults to current.'),
+      .describe(
+        'Target session id, or current. Defaults to current. Also accepts a `session://<sessionId>` URI from a session mention link.'
+      ),
     cursor: z.string().trim().min(1).optional(),
     limit: z
       .number()
@@ -890,7 +836,6 @@ const SessionHistoryToolInputSchema = z
 
 type PreviewToolInput = z.infer<typeof PreviewToolInputSchema>;
 type ImageUploadToolInput = z.infer<typeof ImageUploadToolInputSchema>;
-type TaskImageUploadToolInput = z.infer<typeof TaskImageUploadToolInputSchema>;
 type FileUploadToolInput = z.infer<typeof FileUploadToolInputSchema>;
 type FeedbackToolInput = z.infer<typeof FeedbackToolInputSchema>;
 type SessionCreateOptionsToolInput = z.infer<typeof SessionCreateOptionsToolInputSchema>;
@@ -941,7 +886,6 @@ export interface McpSessionContext {
   sessionId: SessionId;
   localControlSocketPath: string | undefined;
   workdir: string;
-  taskToolsEnabled: boolean;
 }
 
 // The stdio entrypoint is a dedicated per-session process, so its context can
@@ -962,7 +906,6 @@ const getSessionContext = (): McpSessionContext =>
     ),
     localControlSocketPath: readOptionalEnv('LODY_MCP_SOCKET_PATH', 'LODY_PREVIEW_MCP_SOCKET_PATH'),
     workdir: readOptionalEnv('LODY_MCP_WORKDIR', 'LODY_PREVIEW_MCP_WORKDIR') ?? process.cwd(),
-    taskToolsEnabled: readOptionalEnv('LODY_MCP_TASK_TOOLS_ENABLED') === '1',
   };
 
 // One connection per machine-level store for the whole MCP server process,
@@ -1062,6 +1005,8 @@ const postSessionControl = async (
 const readActiveInvocationContext = async (
   ctx: McpSessionContext
 ): Promise<SessionActiveInvocationContextResult> => {
+  const environment = getSessionCommandEnvironment();
+  if (environment) return environment.host.readInvocation(ctx.sessionId);
   const response = await Effect.runPromise(
     makeLocalControlClientAuto({ socketPath: ctx.localControlSocketPath })
       .machineRpc(
@@ -1210,12 +1155,21 @@ const parseJsonCliOutput = (stdout: string): unknown => {
 const runLodyCliJson = async (args: string[], timeoutMs?: number): Promise<unknown> =>
   parseJsonCliOutput((await runLodyCli(args, timeoutMs)).stdout);
 
+const SESSION_URI_PREFIX = 'session://';
+
+const stripSessionUriPrefix = (value: string): string =>
+  value.startsWith(SESSION_URI_PREFIX) ? value.slice(SESSION_URI_PREFIX.length) : value;
+
 const resolveMcpSessionId = (
   sessionId: string | undefined,
   ctx: ReturnType<typeof getSessionContext>
 ) => {
   const normalized = normalizeCliValue(sessionId);
-  return normalized && normalized !== 'current' ? normalized : ctx.sessionId;
+  if (!normalized || normalized === 'current') {
+    return ctx.sessionId;
+  }
+  // Mentions arrive as `session://<id>`; accept that form as well as a bare id.
+  return stripSessionUriPrefix(normalized);
 };
 
 const getMcpWorkspaceId = (ctx: ReturnType<typeof getSessionContext>) =>
@@ -1318,10 +1272,7 @@ const resolveMcpSessionCreate = (
     return {
       input,
       prompt: input.prompt,
-      dispatchConfig: {
-        ...buildMcpTurnDispatchConfig(input),
-        taskToolsEnabled: invoking?.frozenInputConfig.taskToolsEnabled === true,
-      },
+      dispatchConfig: buildMcpTurnDispatchConfig(input),
     };
   }
 
@@ -1332,17 +1283,10 @@ const resolveMcpSessionCreate = (
       false
     );
   }
+  // A Role may run on any Machine the requester can access; the shared create
+  // path enforces that access. Only a Local Project child is filesystem-bound,
+  // so a Role on another Machine starts as an independent Session there.
   const project = requester.project;
-  if (project?.kind !== 'github' && role.machineId !== requester.machineId) {
-    throw new LodyOperationStoreError(
-      'AGENT_ROLE_MACHINE_MISMATCH',
-      project?.kind === 'local'
-        ? `Agent Role ${role.name} must run on the Local Project's Machine.`
-        : `Agent Role ${role.name} must run on the current Machine in a chat Session.`,
-      false
-    );
-  }
-
   let useCurrentSessionAsParent = input.useCurrentSessionAsParent;
   let workContext = input.workContext;
   if (
@@ -1357,6 +1301,7 @@ const resolveMcpSessionCreate = (
     };
   } else if (
     project?.kind === 'local' &&
+    role.machineId === requester.machineId &&
     useCurrentSessionAsParent === undefined &&
     workContext === undefined
   ) {
@@ -1375,7 +1320,6 @@ const resolveMcpSessionCreate = (
     prompt: composeAgentRolePrompt(role.promptPrefix, input.prompt),
     dispatchConfig: {
       ...role.runConfig,
-      taskToolsEnabled: invoking?.frozenInputConfig.taskToolsEnabled === true,
       inheritSessionDefaults: false,
     },
     role,
@@ -1718,6 +1662,10 @@ const sessionListFingerprint = (
         executionContext: input.executionContext,
         pullRequest: input.pullRequest,
         updatedAfter: input.updatedAfter,
+        query: input.query,
+        machineId: input.machineId,
+        agentConfigId: input.agentConfigId,
+        agentRoleId: input.agentRoleId,
       })
     )
     .digest('hex');
@@ -1760,6 +1708,7 @@ const matchesSessionListFilters = (
   ctx: ReturnType<typeof getSessionContext>,
   userId: string
 ): boolean => {
+  if (!matchesSessionDiscovery(session, input)) return false;
   if (input.archive === 'active' && session.isArchived === true) return false;
   if (input.archive === 'archived' && session.isArchived !== true) return false;
   if (input.createdBy === 'me' && session.userId !== userId) return false;
@@ -2192,28 +2141,6 @@ const resolveInvokingTurnSource = async (): Promise<InvokingTurnSource> => {
   };
 };
 
-const assertInvokingTurnTaskToolsEnabled = async (
-  manager: LoroDocumentManager,
-  sessionId: SessionId
-): Promise<void> => {
-  const session = await readCurrentSessionMeta(manager, sessionId);
-  if (!session) {
-    throw new LodyOperationStoreError(
-      'SESSION_NOT_FOUND',
-      `Requester Session not found: ${sessionId}`,
-      false
-    );
-  }
-  const source = await resolveInvokingTurnSource();
-  if (source.inputConfig.taskToolsEnabled !== true) {
-    throw new LodyOperationStoreError(
-      'TASK_TOOLS_DISABLED',
-      'Lody Task tools are disabled for the driving user turn.',
-      false
-    );
-  }
-};
-
 const resolveInvokingTurnContext = async (session: SessionMeta): Promise<InvokingTurnContext> => {
   const source = await resolveInvokingTurnSource();
   const chainDepth = source.inputConfig.chainDepth ?? 0;
@@ -2236,26 +2163,47 @@ const resolveInvokingTurnContext = async (session: SessionMeta): Promise<Invokin
   };
 };
 
-const makeMachineOnlineLookupForMcp = (
+/**
+ * Machine liveness is THREE-state, and the states are not interchangeable.
+ *
+ * `getOnlineMachineIds()` returns null when the presence room could not be joined,
+ * which means "status unknown", never "offline" (`lib/loro/AGENTS.md`). Collapsing
+ * null to offline made every guard below refuse a healthy Machine with a false
+ * reason whenever presence was merely unavailable — a cold daemon start or a
+ * reconnect backoff is enough. Only a positive absence from a joined presence room
+ * may block work; `commands/agent-config.ts` takes the same position.
+ */
+type McpMachineLiveness = 'online' | 'offline' | 'unknown';
+
+const makeMachineLivenessLookupForMcp = (
   manager: LoroDocumentManager,
   ctx: ReturnType<typeof getSessionContext>
-): ((machineId: MachineId) => Promise<boolean>) => {
+): ((machineId: MachineId) => Promise<McpMachineLiveness>) => {
   let onlineMachineIds: ReturnType<LoroDocumentManager['getOnlineMachineIds']> | undefined;
   return async (machineId) => {
     if (machineId === (ctx.machineId as MachineId)) {
-      return true;
+      return 'online';
     }
     onlineMachineIds ??= manager.getOnlineMachineIds();
-    return (await onlineMachineIds)?.has(machineId) === true;
+    const resolved = await onlineMachineIds;
+    if (resolved === null) {
+      return 'unknown';
+    }
+    return resolved.has(machineId) ? 'online' : 'offline';
   };
 };
 
-const assertMachineOnlineForSingleCommand = async (
+/**
+ * Blocks only what is KNOWN to be offline. An unknown Machine proceeds and fails
+ * later against its own deadline if it really is down, which is a truthful slow
+ * failure instead of a fast wrong one.
+ */
+const assertMachineNotOfflineForSingleCommand = async (
   manager: LoroDocumentManager,
   machineId: MachineId,
   ctx: ReturnType<typeof getSessionContext>
 ): Promise<void> => {
-  if (!(await makeMachineOnlineLookupForMcp(manager, ctx)(machineId))) {
+  if ((await makeMachineLivenessLookupForMcp(manager, ctx)(machineId)) === 'offline') {
     throw new LodyOperationStoreError(
       'MACHINE_OFFLINE',
       `Target Machine is offline: ${machineId}`,
@@ -2300,26 +2248,6 @@ const assertDifferentMcpSession = (
   }
 };
 
-const summarizeAgentConfig = (config: AgentConfigMeta, capability?: AcpCapabilityCacheEntry) => {
-  const runConfig = summarizeAgentRunConfigCapabilities(capability);
-  return {
-    id: config.id,
-    machineId: config.machineId,
-    name: config.name,
-    description: config.description,
-    cliType: config.cliType,
-    agentType: config.agentType,
-    // Valid values for the create tool's modelId/reasoningEffort/fastMode/planMode
-    // inputs. Empty/false means the agent does not offer that control, or it has
-    // not reported capabilities on this Machine yet.
-    //
-    // Reasoning effort and fast mode are per model. Prefer a model entry's own
-    // reasoningEffortValues; the top-level list and fastMode were measured under
-    // measuredForModelId and may differ for another model.
-    runConfig,
-  };
-};
-
 /**
  * ACP capabilities cached per agent config on the target Machine's Flock doc.
  * Same source the create path validates against, so create_options never
@@ -2332,7 +2260,9 @@ const readMachineAcpCapabilities = async (
 ): Promise<Record<string, AcpCapabilityCacheEntry>> => {
   const handle = await manager.repo.openFlockDoc(getMachineFlockDocId(workspaceId, machineId));
   return getMachineFlockAcpCapabilities(
-    readMachineFlockRowsFromFlock(handle.flock, { families: ['acpCapability'] })
+    readMachineFlockRowsFromFlock(handle.flock, {
+      families: ACP_CAPABILITY_ROW_FAMILIES,
+    })
   );
 };
 
@@ -2461,13 +2391,21 @@ const buildSessionCreateOptions = async (
     const requesterUserId = invoking.identity.userId;
     const delegatedRequester = toDelegatedSessionRequester(invoking.identity);
     const machineEntries = await listAliveDocMetas<MachineMeta>(manager, isMachineDocRoomId);
+    // Null here is "presence unavailable", so liveness is UNKNOWN for every remote
+    // Machine; see makeMachineLivenessLookupForMcp. Treating that as offline used to
+    // drop healthy Machines out of the candidate list with no warning at all.
     const onlineMachineIds = await manager.getOnlineMachineIds();
-    const isMachineOnline = (machineId: MachineId): boolean =>
-      machineId === auth.machineId || onlineMachineIds?.has(machineId) === true;
+    const machineLivenessOf = (machineId: MachineId): McpMachineLiveness => {
+      if (machineId === auth.machineId) return 'online';
+      if (onlineMachineIds === null) return 'unknown';
+      return onlineMachineIds.has(machineId) ? 'online' : 'offline';
+    };
     const machineCandidates = selectMachineMetasForOptions(
       machineEntries.map((entry) => entry.meta),
       input.machineId
-    ).filter((machine) => input.machineId !== undefined || isMachineOnline(machine.id));
+    ).filter(
+      (machine) => input.machineId !== undefined || machineLivenessOf(machine.id) !== 'offline'
+    );
     const machines = await filterAuthorizedMachinesForOptions(
       auth,
       workspaceId,
@@ -2536,23 +2474,24 @@ const buildSessionCreateOptions = async (
           selectedMachine,
           project,
           requesterUserId,
-          isMachineOnline(selectedMachine.id)
+          machineLivenessOf(selectedMachine.id) !== 'offline'
         )
       )
     );
     const repoQuery = normalizeCliValue(input.repoQuery)?.toLowerCase();
-    const repos = repoQuery
-      ? (
-          await listWorkspaceGitHubRepositoriesForCliToken({
-            token: auth.token,
-            workspaceId,
-            requesterUserId,
-            enabledOnly: true,
-          })
-        )
-          .filter((repo) => repo.fullName.toLowerCase().includes(repoQuery))
-          .slice(0, MAX_MCP_CREATE_OPTION_MATCHES)
-      : [];
+    const repos =
+      repoQuery && !getSessionCommandEnvironment()
+        ? (
+            await listWorkspaceGitHubRepositoriesForCliToken({
+              token: auth.token,
+              workspaceId,
+              requesterUserId,
+              enabledOnly: true,
+            })
+          )
+            .filter((repo) => repo.fullName.toLowerCase().includes(repoQuery))
+            .slice(0, MAX_MCP_CREATE_OPTION_MATCHES)
+        : [];
     return {
       ok: true,
       current: await buildSessionCurrentInfo(manager, workspaceId, currentSession),
@@ -2561,7 +2500,10 @@ const buildSessionCreateOptions = async (
       machines: machines.map((machine) => ({
         id: machine.id,
         name: machine.name,
-        online: isMachineOnline(machine.id),
+        // `online` keeps its meaning (known online). `onlineStatus` is additive so a
+        // caller can tell "we checked and it is down" from "we could not check".
+        online: machineLivenessOf(machine.id) === 'online',
+        onlineStatus: machineLivenessOf(machine.id),
         canUse: true,
       })),
       agentConfigs: agentConfigs.map((config) =>
@@ -2618,7 +2560,7 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
       return await withOperationStore((store) => store.snapshot(retry));
     }
     const targetMachineId = (resolved.input.machineId ?? currentSession.machineId) as MachineId;
-    await assertMachineOnlineForSingleCommand(manager, targetMachineId, ctx);
+    await assertMachineNotOfflineForSingleCommand(manager, targetMachineId, ctx);
     const createOptions = buildMcpCreateOptions(resolved.input, ctx);
     bindMcpCreateContext(createOptions, invoking.identity, currentSession);
     bindAgentRoleCreateOptions(createOptions, resolved.role);
@@ -2778,7 +2720,7 @@ const startSessionChatOperation = async (args: SessionChatToolInput): Promise<un
       );
     }
     assertDifferentMcpSession(currentSession, targetSession);
-    await assertMachineOnlineForSingleCommand(manager, targetSession.machineId, ctx);
+    await assertMachineNotOfflineForSingleCommand(manager, targetSession.machineId, ctx);
     try {
       await validateSessionChatTarget({
         auth,
@@ -2842,10 +2784,7 @@ const startSessionChatOperation = async (args: SessionChatToolInput): Promise<un
         manager,
         pendingItem.target.sessionId,
         args.prompt,
-        {
-          ...resolveTurnDispatchConfig({}),
-          taskToolsEnabled: invoking.frozenInputConfig.taskToolsEnabled === true,
-        },
+        resolveTurnDispatchConfig({}),
         undefined,
         undefined,
         {
@@ -3083,7 +3022,7 @@ const startSessionCreateManyOperation = async (
     if (retry) {
       return await withOperationStore((store) => store.snapshot(retry));
     }
-    const isMachineOnline = makeMachineOnlineLookupForMcp(manager, ctx);
+    const machineLiveness = makeMachineLivenessLookupForMcp(manager, ctx);
     const validatedItems = await mapWithConcurrency(
       expanded,
       5,
@@ -3141,7 +3080,7 @@ const startSessionCreateManyOperation = async (
           };
         }
         const targetMachineId = (resolved.input.machineId ?? requester.machineId) as MachineId;
-        if (!(await isMachineOnline(targetMachineId))) {
+        if ((await machineLiveness(targetMachineId)) === 'offline') {
           return {
             operationItem: batchFailure(
               'MACHINE_OFFLINE',
@@ -3335,7 +3274,7 @@ const startSessionChatManyOperation = async (args: SessionChatManyToolInput): Pr
     if (retry) {
       return await withOperationStore((store) => store.snapshot(retry));
     }
-    const isMachineOnline = makeMachineOnlineLookupForMcp(manager, ctx);
+    const machineLiveness = makeMachineLivenessLookupForMcp(manager, ctx);
     const initialItems = await mapWithConcurrency(
       expanded,
       5,
@@ -3365,7 +3304,7 @@ const startSessionChatManyOperation = async (args: SessionChatManyToolInput): Pr
             item.label
           );
         }
-        if (!(await isMachineOnline(target.machineId))) {
+        if ((await machineLiveness(target.machineId)) === 'offline') {
           return batchFailure(
             'MACHINE_OFFLINE',
             `Target Machine is offline: ${target.machineId}`,
@@ -3454,10 +3393,7 @@ const startSessionChatManyOperation = async (args: SessionChatManyToolInput): Pr
             manager,
             storedItem.target.sessionId,
             expandedItem.prompt,
-            {
-              ...resolveTurnDispatchConfig({}),
-              taskToolsEnabled: invoking.frozenInputConfig.taskToolsEnabled === true,
-            },
+            resolveTurnDispatchConfig({}),
             undefined,
             undefined,
             {
@@ -3491,247 +3427,6 @@ const startSessionChatManyOperation = async (args: SessionChatManyToolInput): Pr
     return snapshotOperation(ctx.sessionId as SessionId, args.operationId);
   });
 };
-
-const TaskGetToolInputSchema = z
-  .object({
-    taskId: z.string().trim().min(1).describe('Task id to read.'),
-  })
-  .strict();
-
-const TaskStatusInputSchema = z.enum(
-  TASK_STATUS_VALUES as unknown as [TaskStatus, ...TaskStatus[]]
-);
-
-const TaskPriorityInputSchema = z.enum(
-  TASK_PRIORITY_VALUES as unknown as [TaskPriority, ...TaskPriority[]]
-);
-
-const TaskLabelsInputSchema = z
-  .array(z.string().trim().min(1).max(TASK_LABEL_MAX_LENGTH))
-  .max(TASK_LABEL_MAX_COUNT);
-
-/** The `me` sentinel `lody_task_list` accepts, resolved against the operator. */
-const TASK_OWNER_SELF_ALIAS = 'me';
-
-/**
- * Owner on a WRITE: agents may only UNASSIGN.
- *
- * Assigning accountability to a person is a human act, in the same category as
- * entrusting an agent. Letting an agent name an owner points the delegated
- * automation predicate somewhere new — `isTaskAutomationEligible` runs a task
- * only when its owner is the local operator, so an agent that could write that
- * field could route a Task that references this operator's agent config into
- * execution under this operator's credentials, on a consent that belongs to
- * whoever set the agent field rather than to the operator. Unassigning is the
- * one direction that can only ever REDUCE eligibility, so it stays open.
- *
- * This lives at the MCP boundary, not in `task-doc.ts`: the document layer is
- * also the path for human-driven writes (the app already assigns owners, and a
- * `lody task` command would), and it must stay general.
- */
-const TaskOwnerIdWriteSchema = z
-  .string()
-  .trim()
-  .refine((value) => value === '', {
-    message:
-      'Agents may only unassign an owner: pass "" . Assigning a person is a human act, and "me" is a lody_task_list filter rather than a user id.',
-  });
-
-/**
- * A task selects ONE project in v1 (Run binds the new session to it, and a
- * session has a single working directory), so this is a single value rather than
- * a list. The vocabulary matches `lody_session_create`'s work context so an
- * agent does not have to learn a second way to name a project.
- */
-const TaskProjectInputSchema = z.discriminatedUnion('kind', [
-  z
-    .object({
-      kind: z.literal('github'),
-      repo: z.string().trim().min(1).describe('GitHub repo full name, such as owner/repo.'),
-      branch: z.string().trim().min(1).optional().describe('Base branch; defaults to main.'),
-    })
-    .strict(),
-  z
-    .object({
-      kind: z.literal('local'),
-      projectId: z
-        .string()
-        .trim()
-        .min(1)
-        .describe('Local project id returned by lody_session_create_options.'),
-      branch: z.string().trim().min(1).optional().describe('Optional Git branch.'),
-      worktree: z
-        .boolean()
-        .optional()
-        .describe('Run the task in an isolated local git worktree for the project.'),
-    })
-    .strict(),
-]);
-
-type TaskProjectInput = z.infer<typeof TaskProjectInputSchema>;
-
-// Same default the task project selector applies in the app
-// (`task-project-key.ts`), so a project named through either surface reads back
-// the same.
-const DEFAULT_TASK_GITHUB_BRANCH = 'main';
-
-const toTaskProjectRef = (input: TaskProjectInput): ProjectRef =>
-  input.kind === 'github'
-    ? {
-        kind: 'github',
-        repoFullName: input.repo,
-        branch: input.branch ?? DEFAULT_TASK_GITHUB_BRANCH,
-      }
-    : {
-        kind: 'local',
-        localProjectId: input.projectId as LocalProjectId,
-        ...(input.branch ? { branch: input.branch } : {}),
-        ...(input.worktree ? { useWorktree: true } : {}),
-      };
-
-const TaskListToolInputSchema = z
-  .object({
-    status: z
-      .array(TaskStatusInputSchema)
-      .min(1)
-      .max(TASK_STATUS_VALUES.length)
-      .optional()
-      .describe('Keep only these statuses.'),
-    ownerId: z
-      .string()
-      .trim()
-      .optional()
-      .describe('Owner user id, "me" for the signed-in operator, or "" for unassigned tasks.'),
-    hasAgent: z
-      .boolean()
-      .optional()
-      .describe('true keeps only tasks entrusted to an agent; false keeps only tasks without one.'),
-    titleContains: z
-      .string()
-      .trim()
-      .min(1)
-      .max(200)
-      .optional()
-      .describe('Case-insensitive substring of the title.'),
-    limit: z
-      .number()
-      .int()
-      .min(1)
-      .max(MAX_MCP_TASK_LIST_LIMIT)
-      .optional()
-      .describe(`Maximum rows to return. Default ${DEFAULT_MCP_TASK_LIST_LIMIT}.`),
-  })
-  .strict();
-
-const TaskCreateToolInputSchema = z
-  .object({
-    title: z.string().trim().min(1).max(200).describe('Short title for the task.'),
-    body: z
-      .string()
-      .max(20_000)
-      .optional()
-      .describe('Markdown description: context, acceptance criteria, links.'),
-    status: TaskStatusInputSchema.optional().describe('Defaults to backlog.'),
-    priority: TaskPriorityInputSchema.optional().describe('Omit to leave the task untriaged.'),
-    labels: TaskLabelsInputSchema.optional(),
-    ownerId: TaskOwnerIdWriteSchema.optional().describe(
-      'Pass "" to create the task unassigned. Omit it to own the task as the signed-in operator; you cannot assign it to someone else.'
-    ),
-    project: TaskProjectInputSchema.optional().describe(
-      'Repository or local project this work belongs to.'
-    ),
-  })
-  .strict();
-
-const TaskProposeToolInputSchema = z
-  .object({
-    proposalId: z
-      .string()
-      .trim()
-      .min(1)
-      .max(64)
-      .describe('Caller-chosen stable id so re-proposing the same work does not stack up cards.'),
-    title: z.string().trim().min(1).max(200).describe('Short title for the proposed task.'),
-    body: z.string().max(20_000).optional().describe('Markdown draft for the task description.'),
-  })
-  .strict();
-
-const TASK_UPDATE_FIELDS = [
-  'status',
-  'title',
-  'ownerId',
-  'priority',
-  'labels',
-  'project',
-  'pullRequestUrl',
-] as const;
-
-const TaskUpdateToolInputSchema = z
-  .object({
-    taskId: z.string().trim().min(1),
-    status: TaskStatusInputSchema.optional().describe(
-      'New task status. done and canceled are recorded in the task thread with your name; they do not notify the owner, so if a person needs to know, leave a comment.'
-    ),
-    title: z.string().trim().min(1).max(200).optional().describe('Replacement title.'),
-    ownerId: TaskOwnerIdWriteSchema.optional().describe(
-      'Pass "" to clear the owner. Assigning the task to a person is a human act and is not available here; ask the owner in a comment instead.'
-    ),
-    priority: z
-      .union([TaskPriorityInputSchema, z.literal('none')])
-      .optional()
-      .describe('New priority, or "none" to clear it.'),
-    labels: TaskLabelsInputSchema.optional().describe(
-      'Replaces the whole label set; pass [] to clear.'
-    ),
-    project: TaskProjectInputSchema.optional().describe(
-      'Repository or local project this work belongs to.'
-    ),
-    pullRequestUrl: z
-      .string()
-      .trim()
-      .url()
-      .optional()
-      .describe(
-        'Pull request produced by this work. Linking it delegates task completion to the pull request.'
-      ),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    if (TASK_UPDATE_FIELDS.every((field) => value[field] === undefined)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Provide at least one field to change: ${TASK_UPDATE_FIELDS.join(', ')}.`,
-      });
-    }
-  });
-
-const TaskEditBodyToolInputSchema = z
-  .object({
-    taskId: z.string().trim().min(1),
-    oldString: z
-      .string()
-      .max(MAX_MCP_TASK_EDIT_CHARS)
-      .describe(
-        'Exact text to replace in the current body. Use an empty string to append a new section.'
-      ),
-    newString: z.string().max(MAX_MCP_TASK_EDIT_CHARS).describe('Replacement text.'),
-  })
-  .strict();
-
-const TaskCommentToolInputSchema = z
-  .object({
-    taskId: z.string().trim().min(1),
-    body: z.string().trim().min(1).max(20_000).describe('Markdown comment to add to the task.'),
-  })
-  .strict();
-
-type TaskListToolInput = z.infer<typeof TaskListToolInputSchema>;
-type TaskGetToolInput = z.infer<typeof TaskGetToolInputSchema>;
-type TaskCreateToolInput = z.infer<typeof TaskCreateToolInputSchema>;
-type TaskProposeToolInput = z.infer<typeof TaskProposeToolInputSchema>;
-type TaskUpdateToolInput = z.infer<typeof TaskUpdateToolInputSchema>;
-type TaskEditBodyToolInput = z.infer<typeof TaskEditBodyToolInputSchema>;
-type TaskCommentToolInput = z.infer<typeof TaskCommentToolInputSchema>;
 
 /**
  * Mirrors `ReviewSubmissionSchema` as a plain object so the MCP SDK can publish
@@ -3784,154 +3479,10 @@ const ReviewSubmitToolInputSchema = z
 
 type ReviewSubmitToolInput = z.infer<typeof ReviewSubmitToolInputSchema>;
 
-/** Provider is derived from the URL: the agent should not have to say it. */
-const resolveTaskPrProvider = (url: string): TaskPrProvider =>
-  url.includes('gitlab') ? 'gitlab' : 'github';
-
-/**
- * Resolves the list filter, translating "me" against the signed-in operator.
- * Kept pure so the resolution is covered without a workspace.
- */
-const buildTaskListFilter = (args: TaskListToolInput, operatorUserId: string): TaskListFilter => ({
-  ...(args.status ? { status: args.status } : {}),
-  ...(args.ownerId !== undefined
-    ? { ownerId: args.ownerId === TASK_OWNER_SELF_ALIAS ? operatorUserId : args.ownerId }
-    : {}),
-  ...(args.hasAgent !== undefined ? { hasAgent: args.hasAgent } : {}),
-  ...(args.titleContains ? { titleContains: args.titleContains } : {}),
-  limit: args.limit ?? DEFAULT_MCP_TASK_LIST_LIMIT,
-});
-
-const buildTaskUpdateInput = (
-  args: TaskUpdateToolInput,
-  sessionId: SessionId
-): TaskUpdateInput => ({
-  ...(args.status ? { status: args.status } : {}),
-  ...(args.title !== undefined ? { title: args.title } : {}),
-  ...(args.ownerId !== undefined ? { ownerId: args.ownerId } : {}),
-  ...(args.priority !== undefined
-    ? { priority: args.priority === 'none' ? null : args.priority }
-    : {}),
-  ...(args.labels !== undefined ? { labels: args.labels } : {}),
-  ...(args.project ? { projects: [toTaskProjectRef(args.project)] } : {}),
-  ...(args.pullRequestUrl
-    ? {
-        pullRequest: {
-          url: args.pullRequestUrl,
-          provider: resolveTaskPrProvider(args.pullRequestUrl),
-          originSessionId: sessionId,
-        },
-      }
-    : {}),
-});
-
-const resolveTaskActor = async (
-  manager: LoroDocumentManager,
-  sessionId: SessionId
-): Promise<{ agentConfigId?: string; name?: string }> => {
-  const session = await readCurrentSessionMeta(manager, sessionId);
-  if (!session?.agentConfigId) {
-    return {};
-  }
-  const config = await manager.getAgentConfigById(session.agentConfigId).catch(() => undefined);
-  return {
-    agentConfigId: session.agentConfigId,
-    ...(config?.name ? { name: config.name } : {}),
-  };
-};
-
-/** Bounded task body for any MCP reply, with truncation stated rather than implied. */
-const summarizeTaskBodyForMcp = <K extends string>(body: string, key: K) => {
-  const bounded = truncateUtf8HeadTail(body, MAX_MCP_TASK_BODY_BYTES);
-  return (
-    'truncated' in bounded
-      ? { [key]: bounded.text, bodyTruncated: true, bodyOmittedBytes: bounded.omittedBytes }
-      : { [key]: bounded.text }
-  ) as Record<K, string> & {
-    bodyTruncated?: true;
-    bodyOmittedBytes?: number;
-  };
-};
-
-/**
- * One row of `lody_task_list`, built from the index row alone. `order` stays out:
- * it is the board's manual position, meaningless without the board, and it is a
- * fractional index whose format callers must not depend on.
- */
-const summarizeTaskIndexRowForMcp = (row: TaskIndexRow) => ({
-  taskId: row.taskId,
-  title: row.title,
-  status: row.status,
-  ownerId: row.ownerId,
-  ...(row.priority ? { priority: row.priority } : {}),
-  ...(row.labels && row.labels.length > 0 ? { labels: row.labels } : {}),
-  hasAgent: Boolean(row.hasAgent),
-  ...(row.projectKind ? { projectKind: row.projectKind, projectKey: row.projectKey } : {}),
-  sessionCount: row.sessionCount ?? 0,
-  prCount: row.prCount ?? 0,
-  updatedAt: row.updatedAt,
-});
-
-const summarizeTaskForMcp = (snapshot: TaskSnapshot) => {
-  const sessionLinks = getActiveTaskSessionLinks(snapshot.links);
-  const prLinks = getActiveTaskPrLinks(snapshot.links);
-  const allComments = snapshot.timeline.filter((entry) => entry.kind === 'comment');
-  const projects = snapshot.meta.projects ?? [];
-  return {
-    taskId: snapshot.meta.taskId,
-    title: snapshot.meta.title,
-    status: snapshot.meta.status,
-    ownerId: snapshot.meta.ownerId,
-    ...(snapshot.meta.priority ? { priority: snapshot.meta.priority } : {}),
-    ...(snapshot.meta.labels && snapshot.meta.labels.length > 0
-      ? { labels: snapshot.meta.labels }
-      : {}),
-    hasAgent: Boolean(snapshot.meta.agent),
-    // Readable, never writable through these tools: entrusting an agent is the
-    // automation consent and stays a human act.
-    ...(projects.length > 0
-      ? { projects: projects.map((project) => summarizeProjectRefForMcp(project)) }
-      : {}),
-    ...summarizeTaskBodyForMcp(snapshot.body, 'body'),
-    sessions: sessionLinks.slice(-MAX_MCP_TASK_LINKS).map((link) => ({
-      sessionId: link.sessionId,
-      origin: link.origin,
-    })),
-    ...(sessionLinks.length > MAX_MCP_TASK_LINKS ? { sessionCount: sessionLinks.length } : {}),
-    pullRequests: prLinks.slice(-MAX_MCP_TASK_LINKS).map((link) => ({
-      url: link.url,
-      provider: link.provider,
-    })),
-    ...(prLinks.length > MAX_MCP_TASK_LINKS ? { pullRequestCount: prLinks.length } : {}),
-    comments: allComments.slice(-20).map((entry) => ({
-      actor: entry.actorKind,
-      actorName: entry.actorName,
-      body: entry.body,
-      createdAt: entry.createdAt,
-    })),
-    // Say when older comments exist instead of quietly returning the last 20.
-    ...(allComments.length > 20 ? { commentCount: allComments.length } : {}),
-  };
-};
-
 export const __lodyMcpServerInternals = {
-  TaskListToolInputSchema,
-  TaskGetToolInputSchema,
-  TaskCreateToolInputSchema,
-  TaskProposeToolInputSchema,
-  TaskUpdateToolInputSchema,
-  TaskEditBodyToolInputSchema,
-  TaskCommentToolInputSchema,
-  resolveTaskPrProvider,
-  buildTaskListFilter,
-  buildTaskUpdateInput,
-  toTaskProjectRef,
-  summarizeTaskForMcp,
-  summarizeTaskIndexRowForMcp,
   FeedbackToolInputSchema,
   FileUploadToolInputSchema,
   ImageUploadToolInputSchema,
-  TaskImageUploadToolInputSchema,
   PreviewToolInputSchema,
   SessionCreateOptionsToolInputSchema,
   SessionCreateToolInputSchema,
@@ -3964,7 +3515,7 @@ export const __lodyMcpServerInternals = {
   summarizeProjectRefForMcp,
   resolveSessionExecutionSnapshot,
   readSessionExecutionSnapshot,
-  makeMachineOnlineLookupForMcp,
+  makeMachineLivenessLookupForMcp,
   startSessionChatOperation,
   startSessionChatManyOperation,
   getSessionContext,
@@ -3976,16 +3527,95 @@ export const __lodyMcpServerInternals = {
   resolveUploadPath,
   truncateUtf8HeadTail,
   SESSION_CONTROL_TIMEOUT_MS,
+  resolveMcpSessionId,
 };
 
-export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}): McpServer {
+export function buildLodyMcpServer(): McpServer {
+  return buildSessionToolServer();
+}
+
+export function buildSessionToolServer(handlers?: SessionToolHandlers): McpServer {
   // The HTTP host is long-lived and the stdio server normally lives for the
   // Agent session. Initialization is idempotent and local-platform telemetry
   // remains hard-disabled inside the analytics layer.
   initCliAnalytics();
-  const server = new McpServer({
-    name: 'lody',
-    version: '0.1.0',
+  const server = new McpServer(
+    {
+      name: 'lody',
+      version: '0.1.0',
+    },
+    {
+      instructions: [
+        'Session mentions in user messages may appear as markdown links of the form [@Title](session://<sessionId>).',
+        'To read that conversation, call lody_session_history with sessionId set to the <sessionId> (the part after session://), or pass the full session:// URI.',
+        'Paginate with nextCursor when you need older turns.',
+      ].join(' '),
+    }
+  );
+  registerScheduleTools(server, {
+    execute: async (command) => {
+      const ctx = getSessionContext();
+      const { sendScheduleCommand } = await import('@/lib/schedules/schedule-command-client');
+      return sendScheduleCommand(command, {
+        workspace: getMcpWorkspaceId(ctx),
+        requesterSessionId: ctx.sessionId,
+      });
+    },
+  });
+
+  const registerSessionTool = createSessionToolRegistrar(
+    server,
+    async (name, args, execute) => {
+      if (getCliPlatformKind() !== 'local' || getSessionCommandEnvironment()) return execute();
+      try {
+        const ctx = getSessionContext();
+        const outcome = await Effect.runPromise(
+          makeLocalControlClientAuto({ socketPath: ctx.localControlSocketPath })
+            .machineRpc(
+              {
+                method: 'session/call-tool',
+                machineId: ctx.machineId,
+                workspaceId: ctx.workspaceId,
+                ownerSessionId: ctx.sessionId,
+                params: {
+                  sessionId: ctx.sessionId,
+                  name,
+                  arguments: z.record(z.string(), z.json()).parse(args),
+                },
+              },
+              { timeoutMs: SESSION_CONTROL_TIMEOUT_MS }
+            )
+            .pipe(Effect.either)
+        );
+        if (outcome._tag === 'Left') throw classifyLocalDaemonIpcError(outcome.left);
+        const response = outcome.right;
+        if (!response.ok) throw new Error(response.error);
+        if (!('type' in response.result) || response.result.type !== 'session/tool-result')
+          throw new Error('Unexpected Session tool response');
+        return { content: response.result.content, isError: response.result.isError };
+      } catch (error) {
+        return mcpErrorResult(error);
+      }
+    },
+    handlers
+  );
+
+  registerDiscoveryTools(registerSessionTool, async (read) => {
+    const ctx = getSessionContext();
+    const source = await resolveInvokingTurnSource();
+    const auth = getCliAuthContextOrThrow('mcp');
+    const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
+    return withWorkspaceManager(auth, workspace, 'mcp-discovery', async (manager) =>
+      read(
+        await createResourceDiscovery({
+          manager,
+          auth,
+          workspaceId: workspace.id as WorkspaceId,
+          delegatedRequester: { userId: source.userId },
+          selectedMcpServerIds: source.inputConfig.mcpServerIds,
+        })
+      )
+    );
   });
 
   server.registerTool(
@@ -4018,10 +3648,11 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     {
       title: 'Request a conversation share',
       description:
-        'Request a static share of this conversation only when the user asks to share. A confirmation card appears in the current Lody conversation. The user must review and confirm in the app before any content is uploaded or a link is created. Supply a stable requestId and reuse it after an ambiguous response. The response echoes that requestId; shareRequestId is a separate server record ID, never a retry key. sessionIds may explicitly include related conversations; the current conversation is always included. This tool cannot approve, upload, update, reset or revoke a share and never returns a link credential.',
+        'Request a static share only when the user asks to share. Supply a short purpose for the consent card. The user approves once in Lody; the client then automatically publishes and returns the complete bearer URL to you. The card explicitly discloses this. Supply a stable requestId; repeat this call with the same requestId, purpose and targets while pending or confirmed to receive the result, including after a timeout. shareRequestId is a server record ID, never a retry key. The current conversation is always included. Do not retry cancelled or expired requests with a new ID without a new user request. This tool cannot approve, upload, reset or revoke shares.',
       inputSchema: z
         .object({
           requestId: z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/),
+          purpose: z.string().trim().min(1).max(280),
           sessionIds: z
             .array(z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/))
             .max(31)
@@ -4029,7 +3660,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
         })
         .strict(),
     },
-    async (args) => {
+    async (args, extra) => {
       try {
         const port = getCommandSessionSharingPort();
         if (!port) throw new Error('Sharing is unavailable on this platform');
@@ -4037,14 +3668,20 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
         const source = await resolveInvokingTurnSource();
         const identity = buildInvocationIdentity(source);
         return jsonTextResult(
-          await port.request({
-            workspaceId: getMcpWorkspaceId(ctx),
-            requestId: args.requestId,
-            sourceSessionId: ctx.sessionId,
-            sourceTurnId: identity.sourceTurnId,
-            requesterUserId: identity.userId,
-            sessionIds: [...new Set([ctx.sessionId, ...(args.sessionIds ?? [])])],
-          })
+          await requestSessionShare(
+            port,
+            {
+              workspaceId: getMcpWorkspaceId(ctx),
+              requestId: args.requestId,
+              purpose: args.purpose,
+              sourceSessionId: ctx.sessionId,
+              sourceTurnId: identity.sourceTurnId,
+              requesterUserId: identity.userId,
+              sessionIds: [...new Set([ctx.sessionId, ...(args.sessionIds ?? [])])],
+            },
+            getCliAuthContextOrThrow('mcp').userId,
+            extra.mcpReq.signal
+          )
         );
       } catch (error) {
         return mcpErrorResult(error);
@@ -4102,7 +3739,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     {
       title: 'Report frontend dev server preview',
       description:
-        'Use this immediately after starting or discovering a frontend/web dev server for the current Lody session. Report the loopback host and port before telling the user the server is ready, so Lody can offer a preview. This only reports a candidate. After a successful report, tell the user to click the Browser button in the bar directly above the message input; Lody opens the reported address directly, creating the remote tunnel it needs.',
+        "Use this immediately after starting or discovering a frontend/web dev server for the current Lody session. Report the loopback host and port before telling the user the server is ready. On remote-preview-enabled machines, a validated report from the session owner's active agent starts preparing the authenticated remote tunnel in the background. Reporting does not wait for tunnel readiness. Tell the user to click the Browser button in the bar directly above the message input to open the preview.",
       // Pass the full ZodObject (not `.shape`) so `.strict()` carries through to SDK
       // validation; the MCP SDK runs `safeParseAsync` against this before invoking the
       // handler, so no second `.parse(args)` is needed below.
@@ -4154,7 +3791,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
         }
 
         return textResult(
-          `Preview candidate reported for ${args.protocol}://${args.host}:${args.port}${args.path ?? '/'}. Tell the user to click the Browser button in the bar directly above the message input. Lody opens this address directly, creating the remote tunnel it needs.`
+          `Preview candidate reported for ${args.protocol}://${args.host}:${args.port}${args.path ?? '/'}. Eligible remote previews prepare in the background; this response does not mean the tunnel is ready. Tell the user to click the Browser button in the bar directly above the message input to open the preview.`
         );
       } catch (error) {
         return textResult(`Failed to report preview candidate: ${String(error)}`, true);
@@ -4200,43 +3837,6 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  const taskImageUploadTool = server.registerTool(
-    TASK_IMAGE_UPLOAD_TOOL_NAME,
-    {
-      title: 'Upload images for a Lody task',
-      description:
-        'Upload local images to the current workspace and return stable Markdown image references. Use the returned markdown in lody_task_comment, lody_task_edit_body, or lody_task_propose. Unlike lody_upload_images, this does not add anything to the current conversation.',
-      inputSchema: TaskImageUploadToolInputSchema,
-    },
-    async (args: TaskImageUploadToolInput) => {
-      try {
-        const ctx = getSessionContext();
-        const auth = getCliAuthContextOrThrow('mcp');
-        const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
-        await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
-          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
-        });
-        const images = await uploadTaskImages({
-          paths: args.paths.map((filePath) => resolveUploadPath(filePath, ctx.workdir)),
-          workspaceId: workspace.id as WorkspaceId,
-          token: auth.token,
-        });
-        return jsonTextResult({
-          ok: true,
-          images: images.map((image) => ({
-            imageId: image.imageId,
-            fileName: image.fileName,
-            mimeType: image.mimeType,
-            sizeBytes: image.sizeBytes,
-            markdown: `![${escapeMarkdownImageAlt(image.fileName ?? 'image')}](${image.markdownUrl})`,
-          })),
-        });
-      } catch (error) {
-        return mcpErrorResult(error);
-      }
-    }
-  );
-
   server.registerTool(
     FILE_UPLOAD_TOOL_NAME,
     {
@@ -4278,12 +3878,12 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CREATE_OPTIONS_TOOL_NAME,
     {
       title: 'List session create options',
       description:
-        'Discover stable ids and current-session metadata for creating a Lody session. The default response is intentionally sparse: online machines, the current/default agent config, the current local project, and no GitHub repositories. Use agentConfigQuery, localProjectQuery, or repoQuery to request bounded matches. Each agent config reports the runConfig accepted by lody_session_create.',
+        'Discover current-session metadata and sparse candidates for creating a Lody session: online machines, the current/default agent config, the current local project, and no GitHub repositories. Searches return at most 20 matches, not a complete catalog. Use lody_machine_list, lody_project_list, lody_agent_config_list, and lody_agent_role_list for paginated discovery. Each agent config reports the runConfig accepted by lody_session_create.',
       inputSchema: SessionCreateOptionsToolInputSchema,
     },
     async (args: SessionCreateOptionsToolInput) => {
@@ -4295,12 +3895,12 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CREATE_TOOL_NAME,
     {
       title: 'Create a Lody session',
       description:
-        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To use an Agent Role, pass agentRoleId; the current workspace catalog row supplies the exact Machine, Agent config, model, reasoning, and permission mode. If manual machine or run-config fields are also present, the Role takes precedence and those fields are ignored. To recover an already accepted create without resending its prompt, send only operationId with resume=true. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
+        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To use an Agent Role, pass agentRoleId; the current workspace catalog row supplies the exact Machine, Agent config, model, reasoning, and permission mode. If manual machine or run-config fields are also present, the Role takes precedence and those fields are ignored. A Role may run on any Machine the owner of this Machine can use; to work in a project there, pass workContext for a local project on that Machine (find it with lody_session_create_options machineId + localProjectQuery). Without workContext a Role on another Machine starts as a plain chat there. To recover an already accepted create without resending its prompt, send only operationId with resume=true. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
       inputSchema: SessionCreateToolInputSchema,
     },
     async (input) => {
@@ -4389,7 +3989,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CHAT_TOOL_NAME,
     {
       title: 'Send a prompt to a Lody session',
@@ -4454,7 +4054,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CREATE_MANY_TOOL_NAME,
     {
       title: 'Create multiple Lody sessions',
@@ -4472,7 +4072,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CHAT_MANY_TOOL_NAME,
     {
       title: 'Chat multiple Lody sessions',
@@ -4489,7 +4089,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CANCEL_TOOL_NAME,
     {
       title: 'Cancel a Lody session turn',
@@ -4501,6 +4101,14 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
         const ctx = getSessionContext();
         const auth = getCliAuthContextOrThrow('mcp');
         await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
+        const environment = getSessionCommandEnvironment();
+        if (environment) {
+          const sessionId = resolveMcpSessionId(args.sessionId, ctx) as SessionId;
+          const session = await readCurrentSessionMeta(environment.manager, sessionId);
+          if (!session || session.machineId !== auth.machineId)
+            throw new Error('Session not found on this machine');
+          return jsonTextResult(await environment.host.cancelSession(sessionId));
+        }
         return jsonTextResult(
           await runLodyCliJson([
             'session',
@@ -4517,7 +4125,37 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
+    'lody_operation_list',
+    {
+      description:
+        'List durable Operation summaries owned by the current Session and invoking user. Optional state filter and keyset pagination. Completion is automatic; do not poll.',
+      inputSchema: OperationListQuerySchema,
+      annotations: { readOnlyHint: true },
+    },
+    async (args) => {
+      try {
+        const ctx = getSessionContext();
+        const source = await resolveInvokingTurnSource();
+        return jsonTextResult(
+          await withOperationStore((store) =>
+            store.listForRequester(
+              {
+                workspaceId: getMcpWorkspaceId(ctx) as WorkspaceId,
+                requesterSessionId: ctx.sessionId as SessionId,
+                requesterUserId: source.userId,
+              },
+              args
+            )
+          )
+        );
+      } catch (error) {
+        return mcpErrorResult(error);
+      }
+    }
+  );
+
+  registerSessionTool(
     OPERATION_GET_TOOL_NAME,
     {
       title: 'Get a Lody Operation snapshot',
@@ -4537,7 +4175,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     OPERATION_CANCEL_TOOL_NAME,
     {
       title: 'Cancel a Lody Operation',
@@ -4556,13 +4194,16 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
           store.cancel(requesterSessionId, args.operationId)
         );
         if (cancellation.didCancel && before.state === 'active') {
+          const environment = getSessionCommandEnvironment();
           const startedTargets = before.items.filter(
             (item) => item.status === 'active' && item.inputDurable
           );
           await Promise.allSettled(
             startedTargets.map((item) =>
               item.status === 'active'
-                ? runLodyCliJson(buildOperationTargetCancelArgs(getMcpWorkspaceId(ctx), item))
+                ? environment
+                  ? environment.host.cancelSession(item.target.sessionId, item.target.userTurnId)
+                  : runLodyCliJson(buildOperationTargetCancelArgs(getMcpWorkspaceId(ctx), item))
                 : Promise.resolve()
             )
           );
@@ -4576,7 +4217,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_RENAME_TOOL_NAME,
     {
       title: 'Rename a Lody session',
@@ -4599,7 +4240,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_RENAME_MANY_TOOL_NAME,
     {
       title: 'Rename multiple Lody sessions',
@@ -4649,7 +4290,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_LIST_TOOL_NAME,
     {
       title: 'List Lody sessions',
@@ -4666,7 +4307,7 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_STATUS_MANY_TOOL_NAME,
     {
       title: 'Get Lody session statuses',
@@ -4683,316 +4324,16 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_HISTORY_TOOL_NAME,
     {
       title: 'Read Lody session history',
-      description: `Read one bounded visible transcript page, oldest-to-newest. Omit cursor for the newest page; nextCursor reads older entries. Defaults to ${DEFAULT_MCP_SESSION_HISTORY_LIMIT}, max ${MAX_MCP_SESSION_HISTORY_LIMIT}, with a 128 KiB response cap.`,
+      description: `Read one bounded visible transcript page, oldest-to-newest. Use this for [@Title](session://<sessionId>) mention links: pass sessionId as the <sessionId> or the full session:// URI. Omit cursor for the newest page; nextCursor reads older entries. Defaults to ${DEFAULT_MCP_SESSION_HISTORY_LIMIT}, max ${MAX_MCP_SESSION_HISTORY_LIMIT}, with a 128 KiB response cap.`,
       inputSchema: SessionHistoryToolInputSchema,
     },
     async (args: SessionHistoryToolInput) => {
       try {
         return jsonTextResult(await buildSessionHistory(args));
-      } catch (error) {
-        return mcpErrorResult(error);
-      }
-    }
-  );
-
-  const taskListTool = server.registerTool(
-    TASK_LIST_TOOL_NAME,
-    {
-      title: 'List Lody tasks',
-      description:
-        'Find tasks in this workspace by status, owner, agent, or title, and get their ids so you can read or update one. Returns list summaries only — call lody_task_get for a task description, comments, or links.',
-      inputSchema: TaskListToolInputSchema,
-    },
-    async (args: TaskListToolInput) => {
-      try {
-        const ctx = getSessionContext();
-        const auth = getCliAuthContextOrThrow('mcp');
-        const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
-        return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
-          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
-          const filter = buildTaskListFilter(args, auth.userId);
-          const page = await listTasksFromIndex(manager, workspace.id as WorkspaceId, filter);
-          return jsonTextResult({
-            ok: true,
-            tasks: page.rows.map(summarizeTaskIndexRowForMcp),
-            // State truncation rather than implying the page is everything.
-            ...(page.matched > page.rows.length ? { matched: page.matched } : {}),
-          });
-        });
-      } catch (error) {
-        return mcpErrorResult(error);
-      }
-    }
-  );
-
-  const taskGetTool = server.registerTool(
-    TASK_GET_TOOL_NAME,
-    {
-      title: 'Read a Lody task',
-      description:
-        'Read a task: title, status, owner, description body, linked sessions and pull requests, and recent comments. Read before editing the body so your edit matches the current text.',
-      inputSchema: TaskGetToolInputSchema,
-    },
-    async (args: TaskGetToolInput) => {
-      try {
-        const ctx = getSessionContext();
-        const auth = getCliAuthContextOrThrow('mcp');
-        const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
-        return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
-          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
-          const snapshot = await readTask(manager, args.taskId as TaskId);
-          if (!snapshot) {
-            return jsonTextResult(
-              {
-                ok: false,
-                error: makeLodyError('TASK_NOT_FOUND', `Task not found: ${args.taskId}`, false),
-              },
-              true
-            );
-          }
-          return jsonTextResult({ ok: true, task: summarizeTaskForMcp(snapshot) });
-        });
-      } catch (error) {
-        return mcpErrorResult(error);
-      }
-    }
-  );
-
-  const taskCreateTool = server.registerTool(
-    TASK_CREATE_TOOL_NAME,
-    {
-      title: 'Create a Lody task',
-      description:
-        'Create a task now, when the user asked in this conversation to record one. For follow-up work you noticed yourself, use lody_task_propose instead so the user decides. The task is created immediately and attributed to you; it is never started automatically, because only a person can entrust a task to an agent.',
-      inputSchema: TaskCreateToolInputSchema,
-    },
-    async (args: TaskCreateToolInput) => {
-      try {
-        const ctx = getSessionContext();
-        const auth = getCliAuthContextOrThrow('mcp');
-        const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
-        return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
-          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
-          const actor = await resolveTaskActor(manager, ctx.sessionId as SessionId);
-          const snapshot = await createTaskFromAgent(
-            manager,
-            workspace.id as WorkspaceId,
-            {
-              title: args.title,
-              ...(args.body !== undefined ? { body: args.body } : {}),
-              ...(args.status ? { status: args.status } : {}),
-              ...(args.ownerId !== undefined ? { ownerId: args.ownerId } : {}),
-              ...(args.priority ? { priority: args.priority } : {}),
-              ...(args.labels ? { labels: args.labels } : {}),
-              ...(args.project ? { projects: [toTaskProjectRef(args.project)] } : {}),
-            },
-            actor,
-            auth.userId
-          );
-          if (!snapshot) {
-            return jsonTextResult(
-              {
-                ok: false,
-                error: makeLodyError('TASK_EMPTY', 'A task needs a title or a description.', false),
-              },
-              true
-            );
-          }
-          return jsonTextResult({ ok: true, task: summarizeTaskForMcp(snapshot) });
-        });
-      } catch (error) {
-        return mcpErrorResult(error);
-      }
-    }
-  );
-
-  const taskProposeTool = server.registerTool(
-    TASK_PROPOSE_TOOL_NAME,
-    {
-      title: 'Propose a Lody task',
-      description:
-        'Suggest that work be recorded as a task, when the user asks you to note something for later or you find follow-up work outside the current scope. This does not create the task: it puts a card in this conversation that the user can confirm now or days from now. Reuse the same proposalId to update your own pending proposal instead of adding another card.',
-      inputSchema: TaskProposeToolInputSchema,
-    },
-    async (args: TaskProposeToolInput) => {
-      try {
-        const ctx = getSessionContext();
-        const auth = getCliAuthContextOrThrow('mcp');
-        const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
-        return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
-          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
-          const sessionId = ctx.sessionId as SessionId;
-          const actor = await resolveTaskActor(manager, sessionId);
-          const proposal = await publishTaskProposal(manager, sessionId, args, actor);
-          return jsonTextResult({
-            ok: true,
-            proposalId: args.proposalId,
-            ...proposal,
-            note: proposal.pending
-              ? 'The proposal is synchronized. A Tasks-enabled client can now render the confirmation card.'
-              : 'This proposal was already resolved, so it was not reopened.',
-          });
-        });
-      } catch (error) {
-        return mcpErrorResult(error);
-      }
-    }
-  );
-
-  const taskUpdateTool = server.registerTool(
-    TASK_UPDATE_TOOL_NAME,
-    {
-      title: 'Update a Lody task',
-      description:
-        'Change a task: status, title, priority, labels, project, and the pull request this work produced. Linking a pull request delegates completion to it: the task finishes when the pull request merges. Every change is attributed to you on the task. The description is edited separately with lody_task_edit_body. Two things stay human-only: entrusting an agent, and assigning an owner to a person (you may clear an owner).',
-      inputSchema: TaskUpdateToolInputSchema,
-    },
-    async (args: TaskUpdateToolInput) => {
-      try {
-        const ctx = getSessionContext();
-        const auth = getCliAuthContextOrThrow('mcp');
-        const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
-        return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
-          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
-          const sessionId = ctx.sessionId as SessionId;
-          const actor = await resolveTaskActor(manager, sessionId);
-          const snapshot = await applyAgentTaskUpdate(
-            manager,
-            workspace.id as WorkspaceId,
-            args.taskId as TaskId,
-            buildTaskUpdateInput(args, sessionId),
-            actor
-          );
-          if (!snapshot) {
-            return jsonTextResult(
-              {
-                ok: false,
-                error: makeLodyError('TASK_NOT_FOUND', `Task not found: ${args.taskId}`, false),
-              },
-              true
-            );
-          }
-          return jsonTextResult({ ok: true, task: summarizeTaskForMcp(snapshot) });
-        });
-      } catch (error) {
-        return mcpErrorResult(error);
-      }
-    }
-  );
-
-  const taskEditBodyTool = server.registerTool(
-    TASK_EDIT_BODY_TOOL_NAME,
-    {
-      title: 'Edit a Lody task description',
-      description:
-        'Replace an exact snippet of a task description, the same way a file edit works. oldString must match the current body exactly; an empty oldString appends. On a mismatch the current body is returned so you can retry. Every edit is attributed to you and recorded on the task, so edit directly rather than asking for permission first.',
-      inputSchema: TaskEditBodyToolInputSchema,
-    },
-    async (args: TaskEditBodyToolInput) => {
-      try {
-        const ctx = getSessionContext();
-        const auth = getCliAuthContextOrThrow('mcp');
-        const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
-        return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
-          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
-          const sessionId = ctx.sessionId as SessionId;
-          const actor = await resolveTaskActor(manager, sessionId);
-          const result = await applyAgentTaskBodyEdit(
-            manager,
-            workspace.id as WorkspaceId,
-            args.taskId as TaskId,
-            { oldString: args.oldString, newString: args.newString },
-            actor,
-            sessionId
-          );
-          if (!result.ok) {
-            if (result.code === 'NO_MATCH') {
-              return jsonTextResult(
-                {
-                  ok: false,
-                  error: makeLodyError(
-                    'BODY_NO_MATCH',
-                    'oldString was not found in the current task body. Retry against currentBody.',
-                    true
-                  ),
-                  ...summarizeTaskBodyForMcp(result.body, 'currentBody'),
-                },
-                true
-              );
-            }
-            if (result.code === 'AMBIGUOUS_MATCH') {
-              return jsonTextResult(
-                {
-                  ok: false,
-                  error: makeLodyError(
-                    'BODY_AMBIGUOUS_MATCH',
-                    `oldString matches ${result.occurrences} places; include more context to make it unique.`,
-                    true
-                  ),
-                },
-                true
-              );
-            }
-            return jsonTextResult(
-              {
-                ok: false,
-                error: makeLodyError('TASK_NOT_FOUND', `Task not found: ${args.taskId}`, false),
-              },
-              true
-            );
-          }
-          return jsonTextResult({
-            ok: true,
-            added: result.added,
-            removed: result.removed,
-            task: summarizeTaskForMcp(result.snapshot),
-          });
-        });
-      } catch (error) {
-        return mcpErrorResult(error);
-      }
-    }
-  );
-
-  const taskCommentTool = server.registerTool(
-    TASK_COMMENT_TOOL_NAME,
-    {
-      title: 'Comment on a Lody task',
-      description:
-        'Add a comment to a task thread — a progress note, a summary of what you did, or a question for the owner. Comments are coordination, not execution: posting one never starts work.',
-      inputSchema: TaskCommentToolInputSchema,
-    },
-    async (args: TaskCommentToolInput) => {
-      try {
-        const ctx = getSessionContext();
-        const auth = getCliAuthContextOrThrow('mcp');
-        const workspace = await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
-        return await withWorkspaceManager(auth, workspace, 'mcp', async (manager) => {
-          await assertInvokingTurnTaskToolsEnabled(manager, ctx.sessionId as SessionId);
-          const sessionId = ctx.sessionId as SessionId;
-          const actor = await resolveTaskActor(manager, sessionId);
-          const appended = await appendAgentTaskComment(
-            manager,
-            workspace.id as WorkspaceId,
-            args.taskId as TaskId,
-            { body: args.body, originSessionId: sessionId },
-            actor
-          );
-          if (!appended) {
-            return jsonTextResult(
-              {
-                ok: false,
-                error: makeLodyError('TASK_NOT_FOUND', `Task not found: ${args.taskId}`, false),
-              },
-              true
-            );
-          }
-          return jsonTextResult({ ok: true, taskId: args.taskId });
-        });
       } catch (error) {
         return mcpErrorResult(error);
       }
@@ -5129,26 +4470,9 @@ export function buildLodyMcpServer(config: { taskToolsEnabled?: boolean } = {}):
     }
   );
 
-  if (config.taskToolsEnabled !== true) {
-    for (const tool of [
-      taskImageUploadTool,
-      taskListTool,
-      taskGetTool,
-      taskCreateTool,
-      taskProposeTool,
-      taskUpdateTool,
-      taskEditBodyTool,
-      taskCommentTool,
-    ]) {
-      tool.disable();
-    }
-  }
   return server;
 }
 
 export async function runLodyMcpServer(): Promise<void> {
-  const context = getSessionContext();
-  await buildLodyMcpServer({ taskToolsEnabled: context.taskToolsEnabled }).connect(
-    new StdioServerTransport()
-  );
+  await buildLodyMcpServer().connect(new StdioServerTransport());
 }

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionAccessControl } from '../src/components/session-sharing';
 import type { SessionPublicShareStatus, SessionSharingState } from '../src/lib/session-sharing';
-import { TooltipProvider } from '../src/ui/tooltip';
+import { Tooltip } from '@lody/ui/tooltip';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -61,9 +61,9 @@ describe('SessionAccessControl', () => {
   }) {
     await act(async () => {
       root.render(
-        <TooltipProvider>
+        <Tooltip.Provider>
           <SessionAccessControl {...props} onShareWithTeam={vi.fn()} />
-        </TooltipProvider>
+        </Tooltip.Provider>
       );
     });
   }
@@ -77,14 +77,15 @@ describe('SessionAccessControl', () => {
   async function openMenu(): Promise<void> {
     await act(async () => {
       trigger().dispatchEvent(
-        new TestPointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'mouse' })
+        new TestPointerEvent('mousedown', { bubbles: true, button: 0, pointerType: 'mouse' })
       );
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
   }
 
   function menuItem(label: string): HTMLElement {
     const item = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
-      (candidate) => candidate.textContent?.includes(label)
+      (candidate) => candidate.textContent === label
     );
     expect(item, label).toBeDefined();
     return item!;
@@ -114,7 +115,7 @@ describe('SessionAccessControl', () => {
       publicShare: { status: 'none', onOpen },
     });
 
-    expect(trigger().textContent).toContain('Share conversation');
+    expect(trigger().textContent).toContain('Share');
     expect(trigger().getAttribute('aria-haspopup')).toBeNull();
 
     await act(async () => trigger().click());
@@ -124,7 +125,7 @@ describe('SessionAccessControl', () => {
   it('offers the share button before any team visibility resolves', async () => {
     await render({ publicShare: { status: 'none', onOpen: vi.fn() } });
 
-    expect(trigger().textContent).toContain('Share conversation');
+    expect(trigger().textContent).toContain('Share');
   });
 
   it('reports a published conversation as shared without a menu', async () => {
@@ -133,8 +134,7 @@ describe('SessionAccessControl', () => {
       publicShare: { status: 'shared', onOpen: vi.fn() },
     });
 
-    expect(trigger().textContent).toContain('Shared');
-    expect(trigger().textContent).not.toContain('Share conversation');
+    expect(trigger().textContent).toBe('Shared');
   });
 
   it('does not claim a conversation is shared before the status resolves', async () => {
@@ -143,7 +143,7 @@ describe('SessionAccessControl', () => {
       publicShare: { status: 'unknown', onOpen: vi.fn() },
     });
 
-    expect(trigger().textContent).toContain('Share conversation');
+    expect(trigger().textContent).toContain('Share');
   });
 
   it('keeps publishing inside the menu of a private conversation', async () => {
@@ -157,7 +157,7 @@ describe('SessionAccessControl', () => {
 
     await openMenu();
     expect(menuItem('Share project with team…')).toBeDefined();
-    await act(async () => menuItem('Share conversation').click());
+    await act(async () => menuItem('Share').click());
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
 

@@ -1,4 +1,8 @@
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { RequestError } from '@agentclientprotocol/sdk';
 import type { MachineId, SessionId, WorkspaceId } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 
@@ -13,9 +17,11 @@ const connectionMocks = vi.hoisted(() => ({
   cancel: vi.fn(),
 }));
 
-vi.mock('@agentclientprotocol/sdk', () => ({
+vi.mock('@agentclientprotocol/sdk', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@agentclientprotocol/sdk')>()),
   PROTOCOL_VERSION: 1,
   ClientSideConnection: class {
+    readonly signal = new AbortController().signal;
     readonly initialize = connectionMocks.initialize;
     readonly newSession = connectionMocks.newSession;
     readonly loadSession = connectionMocks.loadSession;
@@ -43,6 +49,7 @@ function deferred<T>() {
 function createLogger(): Logger {
   const logger: Logger = {
     debug: vi.fn(),
+    trace: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
@@ -60,6 +67,45 @@ describe('AgentClient session preparation gate', () => {
     vi.clearAllMocks();
     connectionMocks.initialize.mockResolvedValue({ agentCapabilities: {} });
     connectionMocks.newSession.mockResolvedValue({ sessionId: 'acp-session-1' });
+  });
+
+  it('returns ACP resource-not-found for missing files while preserving reads and other failures', async () => {
+    const workdir = await mkdtemp(join(tmpdir(), 'lody-acp-files-'));
+    const client = new AgentClient({
+      logger: createLogger(),
+      sessionId: 'file-read-session' as SessionId,
+      terminalManager: {} as never,
+      onUpdateMessage: vi.fn(),
+      onRequestPermission: vi.fn(),
+    });
+    try {
+      await client.startSession({} as never, workdir);
+      const missing = join(workdir, 'missing-plan.md');
+      await expect(
+        client.readTextFile({ sessionId: 'acp-session-1', path: missing })
+      ).rejects.toMatchObject({
+        code: -32002,
+        data: { uri: missing },
+      });
+      await expect(
+        client.readTextFile({ sessionId: 'acp-session-1', path: missing })
+      ).rejects.toBeInstanceOf(RequestError);
+      const path = join(workdir, 'plan.md');
+      await writeFile(path, 'first\nsecond\nthird\n');
+      await expect(
+        client.readTextFile({ sessionId: 'acp-session-1', path, line: 2, limit: 1 })
+      ).resolves.toEqual({ content: 'second' });
+      const notDirectory = join(path, 'child');
+      await expect(readFile(notDirectory)).rejects.toMatchObject({ code: 'ENOTDIR' });
+      await expect(
+        client.readTextFile({ sessionId: 'acp-session-1', path: notDirectory })
+      ).rejects.toMatchObject({ code: 'ENOTDIR' });
+      await expect(
+        client.readTextFile({ sessionId: 'other-session', path: missing })
+      ).rejects.toThrow('Mismatched ACP session');
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
+    }
   });
 
   it.each(['new', 'load', 'resume', 'fork'] as const)(
@@ -551,6 +597,28 @@ describe('AgentClient session preparation gate', () => {
     });
   });
 
+  it('resumes builtin Pi sessions without replaying them through loadSession', async () => {
+    connectionMocks.initialize.mockResolvedValue({
+      agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
+    });
+    connectionMocks.resumeSession.mockResolvedValue({});
+    const client = new AgentClient({
+      logger: createLogger(),
+      sessionId: 'session-pi-resume' as SessionId,
+      terminalManager: {} as never,
+      agentConfig: { cliType: 'builtin', agentType: 'pi' },
+      onUpdateMessage: vi.fn(),
+      onRequestPermission: vi.fn(),
+    });
+
+    await client.startSession({} as never, '/workdir', '/pi/session.jsonl' as never);
+
+    expect(connectionMocks.resumeSession).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: '/pi/session.jsonl', cwd: '/workdir' })
+    );
+    expect(connectionMocks.loadSession).not.toHaveBeenCalled();
+  });
+
   it('injects Lody MCP into DeepSeek Harness sessions', async () => {
     const client = new AgentClient({
       logger: createLogger(),
@@ -559,7 +627,6 @@ describe('AgentClient session preparation gate', () => {
       machineId: 'machine-1' as MachineId,
       terminalManager: {} as never,
       agentConfig: { cliType: 'builtin', agentType: 'deepseek' },
-      taskToolsEnabled: true,
       onUpdateMessage: vi.fn(),
       onRequestPermission: vi.fn(),
     });
@@ -578,7 +645,6 @@ describe('AgentClient session preparation gate', () => {
             { name: 'LODY_MCP_WORKSPACE_ID', value: 'workspace-1' },
             { name: 'LODY_MCP_MACHINE_ID', value: 'machine-1' },
             { name: 'LODY_MCP_WORKDIR', value: '/workdir' },
-            { name: 'LODY_MCP_TASK_TOOLS_ENABLED', value: '1' },
           ]),
         }),
       ],
