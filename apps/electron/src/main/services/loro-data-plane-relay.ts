@@ -1,5 +1,5 @@
 import net from 'node:net'
-import { type WebContents } from 'electron'
+import type { WebContents } from 'electron'
 import {
   createJsonLineSplitter,
   LocalLoroDataPlaneServerMessageSchema,
@@ -30,6 +30,16 @@ const PENDING_DAEMON_WRITES_MAX_BYTES = 64 * 1024 * 1024
 
 type PendingDaemonWrite = {
   line: string
+}
+
+type RendererChannel = 'loro.status' | 'loro.event'
+
+function isRendererDisposalError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === 'Object has been destroyed' ||
+      error.message === 'Render frame was disposed before WebFrameMain could be accessed')
+  )
 }
 
 /**
@@ -100,8 +110,7 @@ export class LoroDataPlaneRelay {
       this.senders.add(sender)
       const releasePeers = (): void => this.releaseSenderPeers(sender)
       sender.once('destroyed', () => {
-        this.senders.delete(sender)
-        releasePeers()
+        this.releaseSender(sender)
       })
       // A main-frame navigation (incl. reload) tears down the JS context: its
       // adapters are gone and will rejoin with fresh peerIds, so detach the old
@@ -109,7 +118,7 @@ export class LoroDataPlaneRelay {
       sender.on('did-navigate', releasePeers)
       // Seed the newly-attached renderer with the current connection state so its
       // transport can join immediately when the daemon is already reachable.
-      sender.send('loro.status', this.connected)
+      this.sendToRenderer(sender, 'loro.status', this.connected)
     }
     if (this.enabled) {
       void this.ensureConnected().catch(() => this.scheduleRedial())
@@ -176,6 +185,28 @@ export class LoroDataPlaneRelay {
         // Socket already gone — the daemon drops these peers on disconnect.
         return
       }
+    }
+  }
+
+  private releaseSender(sender: WebContents): void {
+    this.senders.delete(sender)
+    this.releaseSenderPeers(sender)
+  }
+
+  private sendToRenderer(
+    sender: WebContents,
+    channel: RendererChannel,
+    payload: LocalLoroDataPlaneServerMessage | boolean
+  ): void {
+    if (sender.isDestroyed()) {
+      this.releaseSender(sender)
+      return
+    }
+    try {
+      sender.send(channel, payload)
+    } catch (error) {
+      if (!isRendererDisposalError(error)) throw error
+      this.releaseSender(sender)
     }
   }
 
@@ -362,9 +393,7 @@ export class LoroDataPlaneRelay {
 
   private publish(message: LocalLoroDataPlaneServerMessage): void {
     for (const sender of this.senders) {
-      if (!sender.isDestroyed()) {
-        sender.send('loro.event', message)
-      }
+      this.sendToRenderer(sender, 'loro.event', message)
     }
   }
 
@@ -372,9 +401,7 @@ export class LoroDataPlaneRelay {
     if (this.connected === next) return
     this.connected = next
     for (const sender of this.senders) {
-      if (!sender.isDestroyed()) {
-        sender.send('loro.status', next)
-      }
+      this.sendToRenderer(sender, 'loro.status', next)
     }
   }
 }
