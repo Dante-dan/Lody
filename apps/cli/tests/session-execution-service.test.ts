@@ -2232,7 +2232,7 @@ describe('SessionExecutionService', () => {
           });
         }),
       },
-      observePromptOutputForTurn: vi.fn(() => options.hasPromptOutputForTurn),
+      observePromptContentForTurn: vi.fn(() => options.hasPromptOutputForTurn),
     });
 
     const service = new SessionExecutionService(deps);

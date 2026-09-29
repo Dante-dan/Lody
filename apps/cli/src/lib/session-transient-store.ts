@@ -46,6 +46,7 @@ import {
 } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 import type { TurnHistoryGate } from '@/session/turn-history-gate';
+import { isContentBearingACPUpdate } from './acp-turn-output';
 
 type AssistantTurnACPUpdateTargetSource = 'active_turn' | 'finalized_turn';
 
@@ -118,6 +119,7 @@ export interface SessionState {
   acpFlushInFlight: Promise<void> | null;
   acpFlushTimer: NodeJS.Timeout | null;
   acpFlushCountInTurn: number;
+  acpContentUpdateSeenInTurn: boolean;
   acpFlushConsecutiveFailures: number;
 
   // ── Context window usage (throttled) ────────────────────────────────────
@@ -170,6 +172,7 @@ function createSessionState(): SessionState {
     acpFlushInFlight: null,
     acpFlushTimer: null,
     acpFlushCountInTurn: 0,
+    acpContentUpdateSeenInTurn: false,
     acpFlushConsecutiveFailures: 0,
     contextWindowUsageBuffer: null,
     contextWindowUsageTimer: null,
@@ -243,6 +246,7 @@ export class SessionTransientStore {
       ownsACPUpdates,
       ...(args.userTurnId ? { userTurnId: args.userTurnId } : {}),
     };
+    state.acpContentUpdateSeenInTurn = false;
     if (ownsACPUpdates) {
       state.lateACPUpdateTarget = undefined;
     }
@@ -278,6 +282,23 @@ export class SessionTransientStore {
     const state = this.sessions.get(sessionId);
     if (!state) return undefined;
     return state.turn.phase === 'idle' ? undefined : state.turn.turnId;
+  }
+
+  recordACPContentForTurn(
+    sessionId: SessionId,
+    notification: AcpSessionNotification,
+    target: ACPUpdateTarget
+  ): void {
+    const state = this.get(sessionId);
+    if (target.turnId === this.getTurnId(sessionId) && isContentBearingACPUpdate(notification)) {
+      state.acpContentUpdateSeenInTurn = true;
+    }
+  }
+
+  observeACPContentForTurn(sessionId: SessionId, turnId: string): boolean | undefined {
+    const state = this.sessions.get(sessionId);
+    if (!state) return undefined;
+    return this.getTurnId(sessionId) === turnId && state.acpContentUpdateSeenInTurn;
   }
 
   getTurnPhase(sessionId: SessionId): TurnPhase['phase'] {
@@ -431,6 +452,7 @@ export class SessionTransientStore {
       state.acpFlushTimer = null;
     }
     state.acpFlushCountInTurn = 0;
+    state.acpContentUpdateSeenInTurn = false;
     if (state.acpUpdateBuffer.length === 0) {
       state.acpFlushConsecutiveFailures = 0;
     }

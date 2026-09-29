@@ -626,7 +626,7 @@ export type SessionExecutionServiceDeps = {
    * and the answer is unknowable. The no-output guard needs that distinction:
    * "emitted nothing" fails the turn, "cannot tell" must not.
    */
-  observePromptOutputForTurn?: (sessionId: SessionId, turnId: string) => boolean | undefined;
+  observePromptContentForTurn?: (sessionId: SessionId, turnId: string) => boolean | undefined;
   fetchAcpCapabilities: (
     cliType: AgentConfigCliType,
     agentType: string,
@@ -4128,7 +4128,7 @@ export class SessionExecutionService {
   private turnProducedVisibleOutput(sessionId: SessionId, turnId: string): boolean {
     // No observer wired, or transient state already gone: we cannot tell, and a
     // guess here would fail a turn that actually answered. Fail open.
-    return this.deps.observePromptOutputForTurn?.(sessionId, turnId) ?? true;
+    return this.deps.observePromptContentForTurn?.(sessionId, turnId) ?? true;
   }
 
   /**

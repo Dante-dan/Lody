@@ -179,7 +179,8 @@ Renderer side: [packages/components/src/components/ai-gui/AGENTS.md](../../../..
 Nothing reads `PromptResponse.stopReason`, and an adapter may swallow an upstream failure and
 resolve normally — observed: an over-context request answered with HTTP 400, kept only in the
 agent's own session file — so `handleTurnError` never sees it. The no-output guard is the
-backstop.
+backstop. It counts agent content updates, not run-config or session metadata updates; the
+prompt replay guard remains stricter and refuses to retry after any ACP update.
 
 ### Why output capture is mandatory for result-bearing spawns
 

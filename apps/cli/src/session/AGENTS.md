@@ -64,11 +64,10 @@ Contract: specs/session-orchestration.md.
   `finished`/`endedAt`/`permissionWaitMs` there only; never write `finished=false` from teardown.
 - Keep JSON-RPC/transport matching in `acp-error-classification.ts`: disposed/stale `-32603` is
   `agent_disconnected`, Harness compression mismatch is `acp_session_storage_incompatible`.
-- Continue-session recovery may restore the ACP session and retry the same prompt once, only
-  while that turn has no ACP output.
-- A turn with no ACP updates takes `recordSilentTurnFailure`, not `setDispatchHandled`.
-  Read `turnProducedVisibleOutput` before `finalizeTurn` clears it; still finalize, advance
-  the pointer, and fail open.
+- Continue-session recovery retries a prompt once only if it has no ACP updates.
+- No agent content update: `recordSilentTurnFailure`, not `setDispatchHandled`.
+  Config updates still block replay. Read `turnProducedVisibleOutput` before `finalizeTurn`;
+  still finalize, advance the pointer, and fail open.
 - Diff content comes only from the CLI-local ACP evidence store; GitHub `diffStats` use PR compare
   semantics, and `session-diff-stats-target.ts` skips rather than overwrites a good total.
 

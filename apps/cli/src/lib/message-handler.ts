@@ -3041,8 +3041,8 @@ export class MessageHandler {
       getActiveTurnId: (sessionId) => this.store.getActiveTurnId(sessionId),
       clearActiveTurnId: (sessionId, turnId) => this.clearActiveTurnIdIfMatches(sessionId, turnId),
       hasPromptOutputForTurn: (sessionId, turnId) => this.hasPromptOutputForTurn(sessionId, turnId),
-      observePromptOutputForTurn: (sessionId, turnId) =>
-        this.observePromptOutputForTurn(sessionId, turnId),
+      observePromptContentForTurn: (sessionId, turnId) =>
+        this.observePromptContentForTurn(sessionId, turnId),
       buildAcpPromptBlocks: async (args) => await this.buildAcpPromptBlocks(args),
       applyAcpModeAndModel: async (session, acpConfig, context) =>
         await this.applyAcpModeAndModel(
@@ -4416,6 +4416,7 @@ export class MessageHandler {
       );
     }
     this.store.get(sessionId).acpUpdateBuffer.push({ notification: update, target });
+    this.store.recordACPContentForTurn(sessionId, update, target);
     this.scheduleFlushACPUpdates(sessionId);
   }
 
@@ -9722,17 +9723,12 @@ export class MessageHandler {
   }
 
   /**
-   * Same observation as `hasPromptOutputForTurn`, but it distinguishes "this turn
-   * emitted nothing" from "we cannot tell". The two callers need opposite
-   * conservative answers on a missing session: prompt replay must refuse to
-   * retry, while the no-output guard must not accuse a turn it could not observe.
-   * `undefined` means unobservable — the transient state is gone.
+   * Only agent content satisfies the no-output guard. Run-config and other
+   * session metadata still block prompt replay through hasPromptOutputForTurn.
+   * `undefined` means the transient state is gone and the answer is unknowable.
    */
-  observePromptOutputForTurn(sessionId: SessionId, turnId: string): boolean | undefined {
-    if (!this.store.has(sessionId)) {
-      return undefined;
-    }
-    return this.hasPromptOutputForTurn(sessionId, turnId);
+  observePromptContentForTurn(sessionId: SessionId, turnId: string): boolean | undefined {
+    return this.store.observeACPContentForTurn(sessionId, turnId);
   }
 
   /**

@@ -1,10 +1,46 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SessionTransientStore } from './session-transient-store';
-import type { SessionId } from '@lody/shared';
+import type { AcpSessionNotification, SessionId } from '@lody/shared';
+import type { ACPUpdateTarget } from './session-transient-store';
 
 const sid = (id: string) => id as SessionId;
 
 describe('SessionTransientStore', () => {
+  it('does not treat warm-turn run config updates as agent content', () => {
+    const store = new SessionTransientStore();
+    const id = sid('warm-session');
+    expect(store.observeACPContentForTurn(id, 'turn-1')).toBeUndefined();
+    store.beginTurn(id, { turnId: 'turn-1' });
+    const target = {
+      kind: 'assistant_entry',
+      assistantEntryId: 'turn-1',
+      turnId: 'turn-1',
+      turnEpoch: 1,
+      source: 'active_turn',
+    } satisfies ACPUpdateTarget;
+    const update = (sessionUpdate: string) =>
+      ({ update: { sessionUpdate } }) as AcpSessionNotification;
+
+    for (const kind of [
+      'available_commands_update',
+      'current_mode_update',
+      'config_option_update',
+      'session_info_update',
+    ]) {
+      store.recordACPContentForTurn(id, update(kind), target);
+    }
+    store.get(id).acpFlushCountInTurn = 1;
+    expect(store.observeACPContentForTurn(id, 'turn-1')).toBe(false);
+
+    store.recordACPContentForTurn(id, update('agent_message_chunk'), target);
+    expect(store.observeACPContentForTurn(id, 'turn-1')).toBe(true);
+    store.clearTurnState(id);
+    store.beginTurn(id, { turnId: 'turn-2' });
+    expect(store.observeACPContentForTurn(id, 'turn-2')).toBe(false);
+    store.recordACPContentForTurn(id, update('tool_call'), target);
+    expect(store.observeACPContentForTurn(id, 'turn-2')).toBe(false);
+  });
+
   describe('get / has', () => {
     it('creates state lazily on first access', () => {
       const store = new SessionTransientStore();
