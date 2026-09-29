@@ -117,7 +117,7 @@ describe('WorkspacePresenceTransport', () => {
     }
   });
 
-  it('emits parsed snapshots from the ephemeral store and clears them on stop', async () => {
+  it('keeps the last machine snapshot through stop and an empty reconnect store', async () => {
     const stores: FakePresenceStore[] = [];
     const transports: FakePresenceTransport[] = [];
     const snapshots: unknown[] = [];
@@ -166,9 +166,30 @@ describe('WorkspacePresenceTransport', () => {
 
     await presence.stop();
 
-    expect(snapshots.at(-1)).toEqual({});
+    expect(snapshots.at(-1)).toEqual({
+      [key]: { kind: 'machine', machineId, instanceId, updatedAt: 100 },
+    });
+    expect(presence.getSyncState()).toBe('idle');
     expect(transports[0]?.close).toHaveBeenCalledTimes(1);
     expect(stores[0]?.destroy).toHaveBeenCalledTimes(1);
+
+    presence.start({ baseUrl: 'https://streams.example.test', auth: async () => 'token' });
+    stores[1]?.setStates({});
+    expect(snapshots.at(-1)).toEqual({
+      [key]: { kind: 'machine', machineId, instanceId, updatedAt: 100 },
+    });
+
+    stores[1]?.setStates({
+      [key]: { kind: 'machine', machineId, instanceId, updatedAt: 200 },
+    });
+    expect(snapshots.at(-1)).toEqual({
+      [key]: { kind: 'machine', machineId, instanceId, updatedAt: 200 },
+    });
+    // Once this room has received machine presence, its later empty snapshot
+    // is real data and must clear the machine instead of waiting for the TTL.
+    stores[1]?.setStates({});
+    expect(snapshots.at(-1)).toEqual({});
+    await presence.stop();
   });
 
   it('exposes the current ephemeral store on window for debugging', async () => {

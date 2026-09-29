@@ -63,6 +63,7 @@ export class WorkspacePresenceTransport extends EphemeralRoomTransport<
   protected readonly warnPrefix = 'createWorkspaceRuntime';
   protected readonly roomLabel = 'presence room';
   private lastSnapshotAtMs: number | null = null;
+  private hasSeenMachineSnapshot = false;
   private readonly viewingInstanceId = createViewingInstanceId();
   private viewing: { sessionId: SessionId; userId: string; since: number } | null = null;
   private viewingHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -129,10 +130,17 @@ export class WorkspacePresenceTransport extends EphemeralRoomTransport<
 
   protected onStoreChange(store: PresenceStoreLike): void {
     this.lastSnapshotAtMs = Date.now();
-    this.options.onSnapshot?.(parseLodyPresenceStates(store.getAllStates()));
+    const states = parseLodyPresenceStates(store.getAllStates());
+    if (Object.values(states).some((state) => state.kind === 'machine')) {
+      this.hasSeenMachineSnapshot = true;
+    }
+    // A new room starts with an empty store. Do not turn that transient state
+    // into an authoritative empty snapshot during a renderer reconnect.
+    if (this.hasSeenMachineSnapshot) this.options.onSnapshot?.(states);
   }
 
   protected override onRoomStarted(store: PresenceStoreLike): void {
+    this.hasSeenMachineSnapshot = false;
     this.exposeDebugGlobal();
     // Fresh store per start: re-assert local state and restart its heartbeat.
     this.writeViewingEntry();
@@ -157,7 +165,6 @@ export class WorkspacePresenceTransport extends EphemeralRoomTransport<
 
   protected override onBeforeStop(): void {
     this.lastSnapshotAtMs = null;
-    this.options.onSnapshot?.({});
   }
 
   private startViewingHeartbeat(): void {
