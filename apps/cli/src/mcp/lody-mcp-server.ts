@@ -8,6 +8,7 @@ import { Effect } from 'effect';
 import { z } from 'zod';
 import { requestSessionShare } from '@/lib/session-share-delivery';
 import {
+  ACP_CAPABILITY_ROW_FAMILIES,
   getAcpCapabilityCacheKey,
   getMachineFlockAcpCapabilities,
   getMachineFlockDocId,
@@ -2259,7 +2260,9 @@ const readMachineAcpCapabilities = async (
 ): Promise<Record<string, AcpCapabilityCacheEntry>> => {
   const handle = await manager.repo.openFlockDoc(getMachineFlockDocId(workspaceId, machineId));
   return getMachineFlockAcpCapabilities(
-    readMachineFlockRowsFromFlock(handle.flock, { families: ['acpCapability'] })
+    readMachineFlockRowsFromFlock(handle.flock, {
+      families: ACP_CAPABILITY_ROW_FAMILIES,
+    })
   );
 };
 

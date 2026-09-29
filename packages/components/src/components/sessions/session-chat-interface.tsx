@@ -2226,11 +2226,10 @@ export const SessionChatInterface = memo(
       capabilityAuthority,
       configOptionSelectors,
       defaultModeId,
-      defaultModelId,
       machineFlockRows,
       modeOptions,
       modelOptions,
-      modelReasoningEfforts,
+      selectorOptions,
       sessionMachine,
     } = useSessionAcpSelectorContext({
       machineId: session.machineId,
@@ -2248,28 +2247,8 @@ export const SessionChatInterface = memo(
       capabilityAuthority,
       steerCapability
     );
-    const sessionSelectorOptions = useMemo(
-      () => ({
-        capabilityAuthority,
-        configOptionSelectors,
-        defaultModeId,
-        defaultModelId,
-        modeOptions,
-        modelOptions,
-        modelReasoningEfforts,
-      }),
-      [
-        capabilityAuthority,
-        configOptionSelectors,
-        defaultModeId,
-        defaultModelId,
-        modeOptions,
-        modelOptions,
-        modelReasoningEfforts,
-      ]
-    );
     const { selectedModeId, selectedModelId, configOptionValues } =
-      useResolvedAcpSessionConfigSelection(sessionConfigSelection, sessionSelectorOptions, {
+      useResolvedAcpSessionConfigSelection(sessionConfigSelection, selectorOptions, {
         cliType: session.cliType,
         agentType: session.agentType,
       });
