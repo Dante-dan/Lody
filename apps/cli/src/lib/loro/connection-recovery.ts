@@ -497,8 +497,8 @@ export class LoroConnectionRecoveryController {
         }
         this.markReconnectCompletionActive(event.completion);
         try {
-          await this.runReconnect(event.reason, event.options);
-          this.updateBackoffAfterReconnect(event.reason, event.options);
+          const skipped = await this.runReconnect(event.reason, event.options);
+          this.updateBackoffAfterReconnect(event.reason, event.options, skipped);
           this.resolveReconnectCompletion(event.completion);
         } catch (error) {
           this.rejectReconnectCompletion(event.completion, error);
@@ -796,7 +796,23 @@ export class LoroConnectionRecoveryController {
     }
   }
 
-  private updateBackoffAfterReconnect(reason: string, options: ReconnectOptions): void {
+  /**
+   * The Streams adapter's reconnect() rejoins a meta room in `reconnecting`.
+   * Leave that in-flight room join alone while the aggregate transport has not
+   * reported a disconnect; the room's own retry loop remains its recovery owner.
+   */
+  private hasInFlightMetaJoin(): boolean {
+    return (
+      this.transportStatus !== 'disconnected' &&
+      (this.metaRoomStatus === 'connecting' || this.metaRoomStatus === 'reconnecting')
+    );
+  }
+
+  private updateBackoffAfterReconnect(
+    reason: string,
+    options: ReconnectOptions,
+    skipped: boolean
+  ): void {
     if (this.isCleanedUp) {
       return;
     }
@@ -813,13 +829,19 @@ export class LoroConnectionRecoveryController {
       return;
     }
 
+    // A skipped transport reconnect is not a failed recovery attempt. The
+    // periodic watchdog will still check for a later real room/transport fault.
+    if (skipped) {
+      return;
+    }
+
     this.reconnectAttempt += 1;
     this.scheduleReconnect(reason);
   }
 
-  private async runReconnect(reason: string, options: ReconnectOptions): Promise<void> {
+  private async runReconnect(reason: string, options: ReconnectOptions): Promise<boolean> {
     if (this.isCleanedUp) {
-      return;
+      return true;
     }
 
     if (!options.force && this.isStreamsHealthy()) {
@@ -830,7 +852,14 @@ export class LoroConnectionRecoveryController {
       // supervises it, so CLI-authored ops for the room never reach the cloud
       // until a daemon restart. Sweep instead of returning early.
       await this.sweepRooms(reason);
-      return;
+      return false;
+    }
+
+    if (!options.force && this.hasInFlightMetaJoin()) {
+      this.logger.debug(
+        `[${this.workspaceId}] Leaving in-flight Loro meta room join alone (reason=${reason}, transport=${this.transportStatus}, metaRoom=${this.metaRoomStatus})`
+      );
+      return true;
     }
 
     const shouldLog =
@@ -867,6 +896,7 @@ export class LoroConnectionRecoveryController {
         )}`
       );
     }
+    return false;
   }
 
   /**

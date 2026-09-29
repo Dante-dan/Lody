@@ -154,6 +154,35 @@ describe('LoroConnectionRecoveryController watchdog room sweep', () => {
     expect(instance.isRecovering()).toBe(false);
   });
 
+  it('lets an in-flight meta join finish without a watchdog transport reconnect', async () => {
+    const reconnect = vi.fn(async () => {});
+    const metaSub = createMetaSub('joined');
+    const instance = createController({ reconnect, joinMetaRoom: vi.fn() }, metaSub);
+
+    metaSub.emitStatus('reconnecting');
+    expect(instance.isRecovering()).toBe(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(reconnect).not.toHaveBeenCalled();
+
+    // The skipped watchdog must not start a short transport backoff that can
+    // interrupt the same room join before it settles.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reconnect).not.toHaveBeenCalled();
+    metaSub.emitStatus('joined');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(instance.getStreamsHealth()).toBe('connected');
+  });
+
+  it('still retries a failed meta room when the transport is connected', async () => {
+    const reconnect = vi.fn(async () => {});
+    const metaSub = createMetaSub('joined');
+    createController({ reconnect, joinMetaRoom: vi.fn() }, metaSub);
+
+    metaSub.emitStatus('disconnected');
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(reconnect).toHaveBeenCalled();
+  });
+
   it('treats an aggregate "connecting" caused by joining rooms as healthy', async () => {
     // `TransportConnectionStatus` aggregates every joined room, so lazily
     // joining a session room flips it to 'connecting' and back. In a workspace
