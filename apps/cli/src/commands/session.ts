@@ -1,4 +1,9 @@
-import { machineSupportsPreparedSessionInputProtocol } from '@lody/shared';
+import {
+  ACP_CAPABILITY_ROW_FAMILIES,
+  getDeclaredModelControls,
+  getModelEffortChoices,
+  machineSupportsPreparedSessionInputProtocol,
+} from '@lody/shared';
 import {
   materializePreparedSessionInput,
   commitPreparedSessionDispatch,
@@ -7,6 +12,11 @@ import {
 } from '@/lib/prepared-session-input';
 import { readSessionHistory } from '@lody/shared/session-data';
 import { Command } from 'commander';
+import {
+  SessionDiscoveryFilterShape,
+  matchesSessionDiscovery,
+  type SessionDiscoveryFilters,
+} from '@/lib/discovery-query';
 import { promises as fs } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -51,6 +61,8 @@ import {
   isMachineDocRoomId,
   isSessionDocRoomId,
   hasAgentRunConfigSelection,
+  ACP_CONFIG_OPTION_OFF_VALUE,
+  ACP_CONFIG_OPTION_ON_VALUE,
   isAcpFastModeConfigId,
   isAcpThoughtLevelConfigOption,
   resolveAgentRunConfigSelection,
@@ -74,6 +86,7 @@ import {
   type SessionMeta,
   type SessionOperation,
   type WorkspaceId,
+  deriveDraftSessionTitle,
 } from '@lody/shared';
 import type { SessionTurn } from '@lody/shared/session-data';
 import { prepareCliStreamsGatewayBaseUrl } from '@/lib/loro/streams-access';
@@ -99,6 +112,7 @@ import {
 import { LoroDocumentManager, type SessionDocument } from '@/lib/loro/doc';
 import { renderTerminalTable } from '@/lib/terminal-table';
 import {
+  canDelegateMachineUseForCliToken,
   canRequestMachineForCliToken,
   canUseMachineForCliToken,
   type WorkspaceBillingEntitlement,
@@ -108,6 +122,7 @@ import {
   type WorkspaceSummary,
 } from '@/lib/workspace';
 import { readMachineLocalProjects } from '@/lib/local-project-meta';
+import { getSessionCommandEnvironment } from '@/lib/session-command-environment';
 import { listMergedAgentConfigs } from '@/lib/agent-config-machine-flock';
 import { getLogger, rootLogger } from '@/utils/logger';
 import { parseEnvAssignments } from './agent-config';
@@ -206,13 +221,14 @@ export async function ensureSessionCreateWorkspaceMetaFresh(args: {
   await syncWorkspaceMetaForRead(args.manager, `session.create:${args.workspaceId}:prewrite`);
 }
 
-type ListOptions = CommonOptions & {
-  archived?: boolean;
-  all?: boolean;
-  limit?: number;
-  openedBy?: string;
-  openedByCurrent?: boolean;
-};
+type ListOptions = CommonOptions &
+  SessionDiscoveryFilters & {
+    archived?: boolean;
+    all?: boolean;
+    limit?: number;
+    openedBy?: string;
+    openedByCurrent?: boolean;
+  };
 
 type RenameOptions = CommonOptions & {
   title?: string;
@@ -346,7 +362,11 @@ export function sortSessionMetas(sessions: SessionMeta[]): SessionMeta[] {
 
 export function filterSessionMetas(
   sessions: SessionMeta[],
-  options: { archivedOnly?: boolean; includeAll?: boolean; openedBySessionId?: SessionId }
+  options: {
+    archivedOnly?: boolean;
+    includeAll?: boolean;
+    openedBySessionId?: SessionId;
+  } & SessionDiscoveryFilters
 ): SessionMeta[] {
   let result: SessionMeta[];
   if (options.includeAll) {
@@ -359,7 +379,7 @@ export function filterSessionMetas(
   if (options.openedBySessionId) {
     result = result.filter((session) => session.openedBySessionId === options.openedBySessionId);
   }
-  return result;
+  return result.filter((session) => matchesSessionDiscovery(session, options));
 }
 
 function formatAgentConfigCandidates(configs: AgentConfigMeta[]): string {
@@ -1569,11 +1589,10 @@ function validateModelDependentTurnConfigOptionValues(
   const optionsById = new Map(
     (capability.configOptions ?? []).map((option) => [option.id, option])
   );
+  const efforts = getModelEffortChoices(capability, targetModelId);
+  const declaredFast = getDeclaredModelControls(capability, targetModelId)?.fastMode;
   for (const [id, value] of Object.entries(values)) {
-    const option = optionsById.get(id);
-    const isEffort = isAcpThoughtLevelConfigOption(option ?? { id }) || id === 'effort';
-    if (isEffort) {
-      const efforts = capability.modelReasoningEfforts?.[targetModelId];
+    if (isTurnEffortEntry(optionsById, id)) {
       if (efforts !== undefined) {
         if (typeof value !== 'string' || !efforts.includes(value)) {
           throw new Error(
@@ -1584,11 +1603,26 @@ function validateModelDependentTurnConfigOptionValues(
       } else if (targetModelId !== probedModelId) {
         validatedIds.add(id);
       }
-    } else if (isAcpFastModeConfigId(id) && targetModelId !== probedModelId) {
-      validatedIds.add(id);
+    } else if (isAcpFastModeConfigId(id)) {
+      // Off on a model without Fast is already the case; on cannot happen.
+      if (declaredFast === false && (value === true || value === ACP_CONFIG_OPTION_ON_VALUE)) {
+        throw new Error(`Model ${targetModelId} does not offer fast mode.`);
+      }
+      // The probe's snapshot says nothing about the target model's Fast; a
+      // declared Fast, or an unknown one, is left to the agent at dispatch.
+      if (declaredFast !== undefined || targetModelId !== probedModelId) {
+        validatedIds.add(id);
+      }
     }
   }
   return validatedIds;
+}
+
+function isTurnEffortEntry(
+  optionsById: ReadonlyMap<string, AcpConfigOptionSummary>,
+  id: string
+): boolean {
+  return isAcpThoughtLevelConfigOption(optionsById.get(id) ?? { id }) || id === 'effort';
 }
 
 export function filterCompatibleTurnConfigOptionValues(
@@ -1602,26 +1636,31 @@ export function filterCompatibleTurnConfigOptionValues(
   const optionsById = new Map(
     (capability.configOptions ?? []).map((option) => [option.id, option])
   );
-  const probedModelId = capability.configOptions?.find(
-    (option) => option.category === 'model'
-  )?.currentValue;
+  const probedModelId = findTurnConfigOptionByCategory(capability, 'model')?.currentValue;
+  const efforts = getModelEffortChoices(capability, targetModelId);
+  const declared = getDeclaredModelControls(capability, targetModelId);
+  // A different (or unknown) probe model cannot invalidate the target's
+  // recorded controls. Without per-model data, preserve them for runtime.
+  const keepUnverified = targetModelId !== probedModelId || declared !== undefined;
   const compatible = Object.fromEntries(
     Object.entries(values).filter(([id, value]) => {
-      const option = optionsById.get(id);
       if (targetModelId) {
-        const isEffort = isAcpThoughtLevelConfigOption(option ?? { id }) || id === 'effort';
-        if (isEffort) {
-          const efforts = capability.modelReasoningEfforts?.[targetModelId];
+        if (isTurnEffortEntry(optionsById, id)) {
           if (efforts !== undefined) return typeof value === 'string' && efforts.includes(value);
-        }
-        // A different (or unknown) probe model cannot invalidate the target's
-        // recorded controls. Without per-model data, preserve them for runtime.
-        if (targetModelId !== probedModelId) {
-          if (isEffort) return typeof value === 'string';
-          if (isAcpFastModeConfigId(id))
-            return typeof value === 'boolean' || value === 'on' || value === 'off';
+          if (keepUnverified) return typeof value === 'string';
+        } else if (isAcpFastModeConfigId(id)) {
+          // A model declared without Fast has nothing to carry a Fast value to.
+          if (declared?.fastMode === false) return false;
+          if (keepUnverified) {
+            return (
+              typeof value === 'boolean' ||
+              value === ACP_CONFIG_OPTION_ON_VALUE ||
+              value === ACP_CONFIG_OPTION_OFF_VALUE
+            );
+          }
         }
       }
+      const option = optionsById.get(id);
       return option !== undefined && validateConfigOptionValue(option, value) === undefined;
     })
   );
@@ -1703,7 +1742,9 @@ export async function readAgentAcpCapability(args: {
     getMachineFlockDocId(args.workspaceId, args.machineId)
   );
   const capabilities = getMachineFlockAcpCapabilities(
-    readMachineFlockRowsFromFlock(handle.flock, { families: ['acpCapability'] })
+    readMachineFlockRowsFromFlock(handle.flock, {
+      families: ACP_CAPABILITY_ROW_FAMILIES,
+    })
   );
   return capabilities[getAcpCapabilityCacheKey(args.agentConfigId)];
 }
@@ -2040,6 +2081,15 @@ async function ensureTargetMachineOnline(args: {
   workspaceId: WorkspaceId;
   machineId: MachineId;
 }): Promise<void> {
+  const environment = getSessionCommandEnvironment();
+  if (environment) {
+    if (
+      args.workspaceId !== environment.workspace.id ||
+      args.machineId !== environment.auth.machineId
+    )
+      throw new Error('Target machine is unavailable in this workspace');
+    return;
+  }
   if (args.machineId === args.auth.machineId) {
     await ensureLocalRuntimeAvailable(args.machineId, args.workspaceId);
     return;
@@ -2097,6 +2147,57 @@ export async function readSessionMachineAccess(args: {
   });
 }
 
+export type MachineAccessReaders = {
+  /** Hosted check of both users; `null` while the backend predates it. */
+  delegated: typeof canDelegateMachineUseForCliToken;
+  /** Access of the CLI token's user: owned, or shared with the team (and project shared). */
+  asTokenUser: typeof canRequestMachineForCliToken;
+  /** A requester served by the token user's machines; the target must be one of them. */
+  asServedRequester: typeof canUseMachineForCliToken;
+};
+
+const defaultMachineAccessReaders: MachineAccessReaders = {
+  delegated: canDelegateMachineUseForCliToken,
+  asTokenUser: canRequestMachineForCliToken,
+  asServedRequester: canUseMachineForCliToken,
+};
+
+/**
+ * A delegated caller acts through the machine it runs on, so the target must
+ * be usable by that machine's owner (the token user) and by the human driving
+ * the Turn, each on their own: delegation never widens either one's reach.
+ *
+ * Older backends lack the combined query. Their fallback cannot check a
+ * different human on a machine the owner does not own, so it denies that case.
+ */
+export async function readDelegatedMachineAccess(
+  input: {
+    token: string;
+    tokenUserId: string;
+    workspaceId: string;
+    machineId: string;
+    requesterUserId: string;
+    localProjectId?: string;
+  },
+  readers: MachineAccessReaders = defaultMachineAccessReaders
+): Promise<MachineAccessCheckResult> {
+  const target = {
+    token: input.token,
+    workspaceId: input.workspaceId,
+    machineId: input.machineId,
+    ...(input.localProjectId ? { localProjectId: input.localProjectId } : {}),
+  };
+  const verdict = await readers.delegated({ ...target, requesterUserId: input.requesterUserId });
+  if (verdict) {
+    return verdict;
+  }
+  const owner = await readers.asTokenUser({ ...target, requesterUserId: input.tokenUserId });
+  if (!owner.allowed || input.requesterUserId === input.tokenUserId) {
+    return owner;
+  }
+  return await readers.asServedRequester({ ...target, requesterUserId: input.requesterUserId });
+}
+
 async function readResolvedSessionMachineAccess(args: {
   auth: AuthContext;
   workspaceId: WorkspaceId;
@@ -2104,18 +2205,28 @@ async function readResolvedSessionMachineAccess(args: {
   requester: ResolvedSessionRequester;
   localProjectId?: string;
 }): Promise<MachineAccessCheckResult> {
-  const readAccess = args.requester.isDelegated
-    ? canUseMachineForCliToken
-    : canRequestMachineForCliToken;
+  const environment = getSessionCommandEnvironment();
+  if (environment) {
+    if (args.auth !== environment.auth) throw new Error('Session command identity mismatch');
+    return environment.checkMachineAccess({
+      workspaceId: args.workspaceId,
+      machineId: args.machineId,
+      requesterUserId: args.requester.userId,
+      localProjectId: args.localProjectId,
+    });
+  }
+  const target = {
+    token: args.auth.token,
+    workspaceId: args.workspaceId,
+    machineId: args.machineId,
+    requesterUserId: args.requester.userId,
+    ...(args.localProjectId ? { localProjectId: args.localProjectId } : {}),
+  };
   return await readMachineAccessWithBoundedRetry({
     verify: async () =>
-      await readAccess({
-        token: args.auth.token,
-        workspaceId: args.workspaceId,
-        machineId: args.machineId,
-        requesterUserId: args.requester.userId,
-        ...(args.localProjectId ? { localProjectId: args.localProjectId } : {}),
-      }),
+      args.requester.isDelegated
+        ? await readDelegatedMachineAccess({ ...target, tokenUserId: args.auth.userId })
+        : await canRequestMachineForCliToken(target),
     onRetry: ({ attempt, maxAttempts, delayMs, error }) => {
       getLogger('session').warn(
         `Machine access verification unavailable; retrying ` +
@@ -2148,6 +2259,11 @@ async function dispatchTurnFastPath(args: {
   timestamp: string;
   inputConfig: SessionTurnInputConfig | undefined;
 }): Promise<void> {
+  const environment = getSessionCommandEnvironment();
+  if (environment) {
+    await environment.host.dispatchSession(args.sessionId);
+    return;
+  }
   if (!args.inputConfig) {
     return;
   }
@@ -2494,6 +2610,8 @@ async function assertGitHubRepoAccess(args: {
   repoFullName: string;
   requesterUserId: string;
 }): Promise<void> {
+  if (getSessionCommandEnvironment())
+    throw new Error('Hosted repository contexts are unavailable; use a registered local project.');
   const repos = await listWorkspaceGitHubRepositoriesForCliToken({
     token: args.auth.token,
     workspaceId: args.workspaceId,
@@ -3069,7 +3187,11 @@ export async function prepareSessionInput(
   const sessionId = options.sessionId ?? (uuidV4() as SessionId);
   const repoFullName = resolveProjectGitHubRepo(project);
   const baseBranch = project?.kind === 'local' ? undefined : project?.branch?.trim();
+  // An explicit title is final: `user` blocks both the agent-pushed and the
+  // locally generated title. Otherwise a replaceable draft covers the gap until
+  // the generated title lands, which for ACP-owned titles is after the first turn.
   const title = normalizeCliValue(options.title);
+  const draftTitle = title ? undefined : deriveDraftSessionTitle(prompt);
   const meta = {
     id: sessionId,
     machineId: targetMachine.id,
@@ -3080,7 +3202,8 @@ export async function prepareSessionInput(
     cliType: agentConfig.cliType,
     agentType: agentConfig.agentType,
     agentConfigId: agentConfig.id,
-    ...(title ? { title } : {}),
+    ...(title ? { title, titleSource: 'user' as const } : {}),
+    ...(draftTitle ? { title: draftTitle, titleSource: 'draft' as const } : {}),
     ...(project ? { project } : {}),
     ...(repoFullName ? { repoFullName } : {}),
     ...(baseBranch ? { baseBranch } : {}),
@@ -3557,6 +3680,24 @@ export async function readSessionLiveStatusesMany(args: {
   workspaceId: WorkspaceId;
   sessions: ReadonlyArray<Pick<SessionMeta, 'id' | 'machineId'>>;
 }): Promise<Map<SessionId, SessionLiveStatusBatchItem>> {
+  const environment = getSessionCommandEnvironment();
+  if (environment) {
+    const output = new Map<SessionId, SessionLiveStatusBatchItem>();
+    for (const session of args.sessions) {
+      output.set(
+        session.id,
+        session.machineId === environment.auth.machineId
+          ? await environment.host.readLiveStatus(session.id)
+          : {
+              sessionId: session.id,
+              machineOnline: false,
+              fresh: false,
+              reason: 'Machine unavailable in local workspace',
+            }
+      );
+    }
+    return output;
+  }
   const groups = new Map<MachineId, Array<Pick<SessionMeta, 'id' | 'machineId'>>>();
   for (const session of args.sessions) {
     const group = groups.get(session.machineId) ?? [];
@@ -3814,7 +3955,7 @@ const sessionCreateCommand = new Command('create')
   .option('--agent-config <idOrName>', 'Agent config id or name')
   .option('--parent <sessionId>', 'Parent session whose work context should be reused')
   .option('--use-current-session-as-parent', 'Use LODY_SESSION_ID as the parent session')
-  .option('--title <title>', 'Session title')
+  .option('--title <title>', 'Fixed session title (default: generated from the prompt)')
   .option('--repo <owner/repo>', 'GitHub repository to attach')
   .option('--local-project <id|name|path>', 'Local project id, name, or root path')
   .option('--worktree', 'Create an isolated git worktree for --local-project')
@@ -4245,6 +4386,10 @@ const sessionListCommand = new Command('list')
   .option('--all', 'Include active and archived sessions')
   .option('--opened-by <sessionId>', 'Only include sessions opened by this session id')
   .option('--opened-by-current', 'Only include sessions opened by LODY_SESSION_ID')
+  .option('--query <text>', 'Filter session titles or ids')
+  .option('--machine-id <id>', 'Filter by machine id')
+  .option('--agent-config-id <id>', 'Filter by Agent configuration id')
+  .option('--agent-role-id <id>', 'Filter by Agent Role creation provenance')
   .option('--limit <count>', 'Maximum number of sessions to print', parsePositiveIntOption)
   .option('--offline', 'Read the local cache without syncing first')
   .option('--json', 'Print JSON output')
@@ -4273,6 +4418,12 @@ const sessionListCommand = new Command('list')
             archivedOnly: options.archived,
             includeAll: options.all,
             openedBySessionId,
+            ...z.object(SessionDiscoveryFilterShape).parse({
+              query: options.query,
+              machineId: options.machineId,
+              agentConfigId: options.agentConfigId,
+              agentRoleId: options.agentRoleId,
+            }),
           })
         );
         const limited =

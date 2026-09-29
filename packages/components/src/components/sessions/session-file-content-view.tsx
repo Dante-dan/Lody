@@ -60,8 +60,10 @@ import {
 } from '@/lib/session-file-content-snapshot';
 import { normalizePinnedProviderOpenResult } from '@/lib/session-file-provider-open-result';
 import { SessionFileBinaryPreview } from './session-file-binary-preview';
+import { SessionFileCsvPreview } from './session-file-csv-preview';
 import { SessionFileImagePreview } from './session-file-image-preview';
 import { MarkdownRenderer } from '../ai-gui/markdown-renderer';
+import { MarkdownFileResources } from '../ai-gui/markdown-file-image';
 import { isSvgPath } from '@/lib/image-file-preview';
 import { logCodeCollabDebug } from '@/lib/code-collab-debug';
 import {
@@ -69,6 +71,7 @@ import {
   RecentLocalTextEchoTracker,
 } from '@/lib/code-collab-live-text-update';
 import { getSessionFileMonacoLanguageId, isSessionMarkdownPath } from '@/lib/session-file-language';
+import { getOfficePreviewKind } from '@/lib/session-file-office-source';
 import { downloadBytesAsFile } from '@/lib/download-file';
 import { usePostHog } from '@posthog/react';
 import { capturePostHogEvent, getAnalyticsFileKind } from '@/lib/posthog-analytics';
@@ -313,6 +316,7 @@ function SessionFileContentViewImpl({
   // Markdown opens as a rendered document by default, matching SVG previews.
   // The source remains one toggle away in the editable source surface.
   const [markdownRenderMode, setMarkdownRenderMode] = useState<'rendered' | 'code'>('rendered');
+  const [csvRenderMode, setCsvRenderMode] = useState<'rendered' | 'code'>('rendered');
   // HTML starts as source because entering preview executes its inline scripts.
   const [htmlRenderMode, setHtmlRenderMode] = useState<'rendered' | 'code'>('code');
   const handledHtmlPreviewRequestSeqRef = useRef<number | undefined>(undefined);
@@ -1120,6 +1124,12 @@ function SessionFileContentViewImpl({
     isSessionMarkdownPath(normalizedPath) &&
     data.snapshot.truncated !== true;
   const showMarkdownRendered = isMarkdownTextFile && markdownRenderMode === 'rendered';
+  const isCsvTextFile =
+    data.status === 'ready' &&
+    data.snapshot.kind === 'text' &&
+    data.snapshot.truncated !== true &&
+    /\.(csv|tsv)$/i.test(normalizedPath);
+  const showCsvRendered = isCsvTextFile && csvRenderMode === 'rendered';
   // Source text for the rendered Markdown preview. Prefer the latest text the
   // editor has committed (local edits + applied live syncs) over the opened
   // snapshot, so toggling to `rendered` after editing shows the current
@@ -1139,7 +1149,19 @@ function SessionFileContentViewImpl({
       className="mx-auto w-full max-w-3xl px-3 py-3 select-text sm:px-4 sm:py-4"
       data-native-selection-allow
     >
-      <MarkdownRenderer text={markdownPreviewText} size={conversationFontSize} />
+      {fileProvider ? (
+        <MarkdownFileResources
+          key={`${session.machineId}:${sessionId}`}
+          provider={fileProvider}
+          documentPath={providerEntry?.path ?? normalizedPath}
+          automatic={Boolean(sessionFileActions.localHost)}
+          active={isActiveSurface && showMarkdownRendered}
+        >
+          <MarkdownRenderer text={markdownPreviewText} size={conversationFontSize} />
+        </MarkdownFileResources>
+      ) : (
+        <MarkdownRenderer text={markdownPreviewText} size={conversationFontSize} />
+      )}
     </div>
   ) : isSvgTextFile && data.status === 'ready' && data.snapshot.kind === 'text' ? (
     <SessionFileImagePreview path={normalizedPath} svgText={data.snapshot.text} />
@@ -1235,6 +1257,7 @@ function SessionFileContentViewImpl({
         path={normalizedPath}
         bytes={data.snapshot.bytes}
         url={data.snapshot.url}
+        active={isActiveSurface}
         fileActions={sessionFileActions.buildErrorActions(normalizedPath, data.snapshot)}
       />
     );
@@ -1280,6 +1303,14 @@ function SessionFileContentViewImpl({
           </div>
         ) : null}
       </div>
+    );
+  } else if (showCsvRendered && data.snapshot.kind === 'text') {
+    body = (
+      <SessionFileCsvPreview
+        text={latestEditorTextRef.current ?? data.snapshot.text}
+        path={normalizedPath}
+        active={isActiveSurface}
+      />
     );
   } else if (showSvgRendered || showMarkdownRendered) {
     body = previewSurface;
@@ -1381,26 +1412,37 @@ function SessionFileContentViewImpl({
     }
   }
 
-  const bodyUsesNativeScrolling = isTextFileReady && !showSvgRendered && !showMarkdownRendered;
+  const bodyUsesNativeScrolling =
+    (isTextFileReady && !showSvgRendered && !showMarkdownRendered) ||
+    (data.status === 'ready' &&
+      data.snapshot.kind === 'binary' &&
+      getOfficePreviewKind(normalizedPath) !== null);
   const showRealtimeStatusBar = shouldUseProviderFileContent || showProviderConnecting;
   // Top toolbar controls. The render-mode toggle moved here from the bottom
   // status bar (which now only carries save/live/offline state). The search
   // button only appears when a Monaco editor is mounted — a rendered SVG/Markdown
   // preview has no editor to search.
-  const showPreviewToggle = isSvgTextFile || isMarkdownTextFile || isHtmlTextFile;
+  const showPreviewToggle = isSvgTextFile || isMarkdownTextFile || isHtmlTextFile || isCsvTextFile;
   const filePreviewActive = isSvgTextFile
     ? svgRenderMode === 'rendered'
     : isMarkdownTextFile
       ? markdownRenderMode === 'rendered'
-      : htmlRenderMode === 'rendered';
+      : isCsvTextFile
+        ? csvRenderMode === 'rendered'
+        : htmlRenderMode === 'rendered';
   const showSearchButton =
     isTextFileReady &&
     !showSvgRendered &&
     !showMarkdownRendered &&
+    !showCsvRendered &&
     !showHtmlRendered &&
     !(isMarkdownTextFile && preferNativeMarkdownSelection);
   const showWordWrapButton =
-    isTextFileReady && !showSvgRendered && !showMarkdownRendered && !showHtmlRendered;
+    isTextFileReady &&
+    !showSvgRendered &&
+    !showMarkdownRendered &&
+    !showCsvRendered &&
+    !showHtmlRendered;
   const showSaveButton = isProviderFileEditable && isTextFileReady;
   const showRefreshButton = shouldUseProviderFileContent && isTextFileReady && !showHtmlRendered;
   const showViewerTopBar =
@@ -1430,6 +1472,8 @@ function SessionFileContentViewImpl({
                     setSvgRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));
                   } else if (isMarkdownTextFile) {
                     setMarkdownRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));
+                  } else if (isCsvTextFile) {
+                    setCsvRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));
                   } else {
                     setHtmlAnnotationEnabled(false);
                     setHtmlRenderMode((mode) => (mode === 'rendered' ? 'code' : 'rendered'));

@@ -192,6 +192,14 @@ const tryDeriveGitHubRepoFromUrl = (rawUrl?: string): string | null => {
 };
 
 const SESSION_PREPARATION_HARD_TTL_MS = 120_000;
+/**
+ * How long teardown waits for an in-flight create to reach a terminable state
+ * before detaching it. Generous enough for a cold ACP start (the slowest healthy
+ * one observed was 249s), while keeping a wedged create from hanging shutdown.
+ */
+const PENDING_CREATE_TERMINATE_TIMEOUT_MS = 300_000;
+const PENDING_CREATE_TERMINATE_TIMED_OUT = Symbol('pending-create-terminate-timed-out');
+
 const MAX_CONCURRENT_SESSION_PREPARATIONS = 1;
 
 function getSessionPreparationSandboxId(sessionId: SessionId, preparationId: string): SessionId {
@@ -258,6 +266,7 @@ function buildSessionPreparationCompatibility(
 ) {
   return {
     launch: buildSessionLaunchConfig({
+      codexAuth: launchSource?.codexAuth,
       customAcp: launchSource?.customAcp,
       runtimeOverrides: launchSource?.runtimeOverrides,
       env: launchSource?.env,
@@ -353,6 +362,8 @@ export interface CreateAgentConfig {
   args?: string[];
   env?: Record<string, string>;
   capabilitySourceVersion?: string;
+  /** A retry must confirm the managed Codex provider still authorizes this process. */
+  revalidateManagedCodexProfile?: () => Promise<void>;
   /**
    * Optional ACP session id to attempt to resume. This is a per-agent-start hint and is intentionally
    * not stored on the session instance because sessions can be reused, and persisting
@@ -446,7 +457,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
   private gitCredentialBroker: GitCredentialBroker | null = null;
   private readonly sessions = new Map<SessionId, Session>();
   /** Per-instance listener teardown for `detachSession`; see `registerSessionEvents`. */
-  private readonly sessionEventDetachers = new WeakMap<Session, () => void>();
+  private readonly sessionEventDetachers = new WeakMap<ISession, () => void>();
   private readonly pendingSessionCreates = new Map<SessionId, Promise<ISession>>();
   private readonly pendingTerminationPromises = new Map<SessionId, Promise<void>>();
   private readonly preparationSessions = new Map<SessionId, Session>();
@@ -517,6 +528,59 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
    */
   getPendingSession(sessionId: SessionId): Promise<ISession> | null {
     return this.pendingSessionCreates.get(sessionId) ?? null;
+  }
+
+  /**
+   * Detach a create that will never be awaited again, so the deduplication map
+   * stops handing the same promise to every retry.
+   *
+   * `createSession` returns the cached in-flight promise for a session id, and
+   * that entry is only removed by the promise's own `finally`. A create wedged
+   * inside a managed-runtime install or ACP startup therefore never settles,
+   * never clears its entry, and turns every subsequent attempt into the same
+   * stall. Callers that have given up (the initialization stall watchdog) must
+   * detach it here instead.
+   *
+   * The underlying work cannot be cancelled — there is no abort signal through
+   * `createSessionFromPreparationOrCold` — so it is reaped instead: if the
+   * abandoned create ever produces a Session, that Session is terminated rather
+   * than left as an orphan process. Returns whether an entry was detached.
+   */
+  abandonPendingSessionCreate(sessionId: SessionId, reason: string): boolean {
+    const pending = this.pendingSessionCreates.get(sessionId);
+    if (!pending) {
+      return false;
+    }
+    this.pendingSessionCreates.delete(sessionId);
+    this.logger.warn(
+      `[${sessionId}] Abandoning in-flight session create (${reason}); a retry will start a new one`
+    );
+    void pending.then(
+      async (session) => {
+        // The create finished after all. Its Session was never handed to a
+        // caller, so it is an orphan: terminate it — but DETACH it first, for
+        // the same reason as the `createAgent` failure path. `createSessionInner`
+        // already registered the manager's listeners on it, and `onTerminated`
+        // deletes `sessions[event.sessionId]` by ID and forwards `terminated` to
+        // MessageHandler. Left attached, the orphan's death would unregister a
+        // retry's healthy replacement under the same id and finalize its live
+        // turn as "the agent died". `detachSession` is keyed by instance, so the
+        // replacement's registration survives.
+        this.detachSession(session);
+        try {
+          await session.terminate(true);
+          this.logger.debug(
+            `[${sessionId}] Terminated orphaned session from abandoned create (${reason})`
+          );
+        } catch (error) {
+          this.logger.debug(
+            `[${sessionId}] Failed to terminate orphaned session from abandoned create: ${formatErrorMessage(error)}`
+          );
+        }
+      },
+      () => undefined
+    );
+    return true;
   }
 
   requestSessionPreparation(spec: SessionPreparationSpec): SessionPrepareResponse {
@@ -646,6 +710,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     config: SessionConfig,
     agentStart?: AgentStartConfig
   ): Promise<ISession> {
+    await this.freezeCodexProfile(config);
     const sessionId = config.sessionId!;
     const preparationIdentity = config.agentConfigId
       ? {
@@ -734,7 +799,32 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
         }
       };
       void termination.then(clearTermination, clearTermination);
-      await termination;
+      // A create wedged in a managed-runtime install or ACP startup never
+      // settles, so awaiting it outright makes teardown hang with it. Wait only
+      // as long as a create plausibly needs to reach a terminable state, then
+      // detach: `abandonPendingSessionCreate` keeps reaping it, so a Session
+      // that materializes later is still terminated rather than orphaned. The
+      // deadline is raced through a sentinel rather than a rejection so a
+      // genuine terminate failure still propagates to the caller.
+      let deadlineTimer: NodeJS.Timeout | undefined;
+      const deadline = new Promise<typeof PENDING_CREATE_TERMINATE_TIMED_OUT>((resolve) => {
+        deadlineTimer = setTimeout(
+          () => resolve(PENDING_CREATE_TERMINATE_TIMED_OUT),
+          PENDING_CREATE_TERMINATE_TIMEOUT_MS
+        );
+        deadlineTimer.unref?.();
+      });
+      try {
+        const outcome = await Promise.race([termination, deadline]);
+        if (outcome === PENDING_CREATE_TERMINATE_TIMED_OUT) {
+          clearTermination();
+          this.abandonPendingSessionCreate(sessionId, 'terminate-timeout');
+        }
+      } finally {
+        if (deadlineTimer) {
+          clearTimeout(deadlineTimer);
+        }
+      }
       return 'terminated';
     }
     const pendingPreparationCleanup = this.preparationService.discard(sessionId);
@@ -901,6 +991,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     }
 
     const config: SessionConfig = {
+      codexAuth: agentConfig.codexAuth,
       sessionId,
       workspaceId: this.workspaceId,
       requesterUserId: spec.requestedByUserId,
@@ -924,6 +1015,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       userName: user.name,
       userEmail: user.email,
     };
+    await this.freezeCodexProfile(config);
     const compatibility = buildSessionPreparationCompatibility(
       config,
       config.mcpServerIds,
@@ -1236,6 +1328,10 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
           }
         : undefined,
       capabilitySourceVersion: launch.capabilitySourceVersion,
+      revalidateManagedCodexProfile:
+        config.codexProfile?.profile.mode === 'chatgpt'
+          ? async () => await this.freezeCodexProfile(config)
+          : undefined,
       resumeSessionId: options?.resumeSessionId,
       forkSessionId: options?.forkSessionId,
       forkSessionTurnId: options?.forkSessionTurnId,
@@ -1317,6 +1413,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     config: SessionConfig,
     agentStart?: AgentStartConfig
   ): Promise<ISession> {
+    await this.freezeCodexProfile(config);
     await this.prepareGitHubRepoSessionConfig(config);
     const requestedResumeSessionId = agentStart?.resumeSessionId;
     const requestedForkSessionId = agentStart?.forkSessionId;
@@ -1484,7 +1581,59 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     return session;
   }
 
+  private async freezeCodexProfile(config: SessionConfig): Promise<void> {
+    if (config.agentCliType !== 'builtin' || config.agentType !== 'codex') return;
+    const store = getCodexProfileStore();
+    if (config.agentConfigId) {
+      const provider = await this.workspaceDocument.getAgentConfigById(
+        config.agentConfigId,
+        this.machineId
+      );
+      if (config.codexAuth && !provider?.codexAuth) {
+        throw new Error('This Codex provider account is no longer available');
+      }
+      if (provider?.codexAuth) {
+        if (
+          config.codexAuth &&
+          JSON.stringify(config.codexAuth) !== JSON.stringify(provider.codexAuth)
+        )
+          throw new Error('Codex account changed before session launch');
+        config.codexAuth = provider.codexAuth;
+      }
+    }
+    if (!config.codexAuth) {
+      if (
+        config.agentConfigId &&
+        (await store.list(this.workspaceId)).some(
+          (item) => item.configId === config.agentConfigId && item.machineId === this.machineId
+        )
+      ) {
+        throw new Error(
+          'This Codex provider account reference is missing; restore its configuration'
+        );
+      }
+      return;
+    }
+    if (!config.agentConfigId) throw new Error('A managed Codex account requires a provider');
+    config.codexProfile = await store.resolve(this.workspaceId, {
+      id: config.agentConfigId,
+      machineId: this.machineId,
+      name: 'Codex',
+      description: undefined,
+      cliType: config.agentCliType,
+      agentType: config.agentType,
+      codexAuth: config.codexAuth,
+      env: config.env ?? {},
+      customAcp: config.customAcp,
+      runtimeOverrides: config.runtimeOverrides,
+    });
+  }
+
   private async prepareGitHubRepoSessionConfig(config: SessionConfig): Promise<void> {
+    // A GitHub remote does not make a local project a managed GitHub checkout.
+    // Direct local sessions and their worktrees keep the user's native auth.
+    if (config.project?.kind === 'local') return;
+
     const githubRepo = config.githubRepo ?? tryDeriveGitHubRepoFromUrl(config.githubRepoUrl);
     if (githubRepo) {
       config.githubRepo = githubRepo;
@@ -1573,7 +1722,7 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     _githubRepo: string | undefined,
     requesterUserId: string
   ): Promise<void> {
-    const contextToken = this.gitCredentialBroker?.activateSessionContext({
+    const contextToken = this.gitCredentialBroker?.refreshSessionContext({
       sessionId: session.sessionId,
       requesterUserId,
       machineId: this.machineId,
@@ -1650,11 +1799,17 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     if (!brokerEnv) {
       return undefined;
     }
+    const contextToken = config.env?.[LODY_GIT_CRED_CONTEXT_TOKEN_ENV];
+    if (!contextToken) {
+      throw new Error(
+        'GitHub worktree preparation is missing its requester credential context; no GitHub operation was attempted.'
+      );
+    }
     return {
       workspaceId: this.workspaceId,
       url: brokerEnv.url,
       token: brokerEnv.token,
-      contextToken: config.env?.[LODY_GIT_CRED_CONTEXT_TOKEN_ENV],
+      contextToken,
       stateFilePath: this.gitCredentialBroker?.getStateFilePath(),
       transportEnv: Object.fromEntries(
         Object.entries(config.env ?? {}).filter(
@@ -1768,19 +1923,15 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       this.logger.debug(
         `[${config.sessionId}] Shared parent worktree missing for ${config.parentSessionId}; creating it now`
       );
-      await worktreeManager.ensureRepo({
-        brokerAuth: await this.resolveHostGitBrokerAuth(
-          {
-            kind: 'github',
-            repoUrl: config.githubRepoUrl,
-          },
-          config
-        ),
-      });
       const sharedWorktree = await worktreeManager.createWorktree(
         config.parentSessionId,
         parentMeta?.baseBranch?.trim() || config.branch,
-        parentMeta?.branchName?.trim() || undefined
+        parentMeta?.branchName?.trim() || undefined,
+        undefined,
+        await this.resolveHostGitBrokerAuth(
+          { kind: 'github', repoUrl: config.githubRepoUrl },
+          config
+        )
       );
       await parentSessionDoc.setBranchName(sharedWorktree.branch);
       await parentSessionDoc.setIsWorktree(true);
@@ -1937,17 +2088,13 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
       }
       const worktreeInfo =
         preparedWorktreeUsable ??
-        (await (async () => {
-          await worktreeManager.ensureRepo({
-            brokerAuth: await this.resolveHostGitBrokerAuth(worktreeTarget.target.source, config),
-          });
-          return await worktreeManager.createWorktree(
-            config.sessionId!,
-            config.branch,
-            config.restoreBranchName,
-            config.worktreeStartPoint
-          );
-        })());
+        (await worktreeManager.createWorktree(
+          config.sessionId!,
+          config.branch,
+          config.restoreBranchName,
+          config.worktreeStartPoint,
+          await this.resolveHostGitBrokerAuth(worktreeTarget.target.source, config)
+        ));
       if (!config.deferWorktreeMetaPersistence) {
         await sessionDoc.setBranchName(worktreeInfo.branch);
         await sessionDoc.setIsWorktree(true);
@@ -2235,11 +2382,11 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
   /**
    * Stop publishing a Session instance's lifecycle events and drop it from the
    * live map. Only for an instance that was registered by `createSessionInner`
-   * but whose creation then failed: it was never returned to a caller, so from
-   * the outside it never existed. Keyed by instance, not session id, because a
+   * but never reached a caller — its creation failed, or its create was
+   * abandoned — so from the outside it never existed. Keyed by instance, not session id, because a
    * recovery path may already be creating the replacement under the same id.
    */
-  private detachSession(session: Session): void {
+  private detachSession(session: ISession): void {
     this.sessionEventDetachers.get(session)?.();
     this.sessionEventDetachers.delete(session);
     if (this.sessions.get(session.sessionId) === session) {
@@ -2289,3 +2436,4 @@ export class SessionManager extends EventEmitter<SessionManagerEvents> {
     await next;
   }
 }
+import { getCodexProfileStore } from '../agent/codex-profile-store';

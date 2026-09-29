@@ -47,6 +47,9 @@ end-to-end map. The WS/DO control-plane path is DEPRECATED; do not add to it.
   Local dispatch triggers off the renderer-authored `latestUserMsgId` doc-meta write
   plus the local Machine RPC fast path.
 
+- INVARIANT: agent PATH merges keep the session's `gh` shim dir first
+  ([note](../../../../.agents/notes/implemented/bug-fix/2026-09-26-gh-shim-broker-and-path.md)).
+
 ## Local Loro data plane
 
 Read [loro/AGENTS.md](loro/AGENTS.md) before enumerating rooms, publishing presence,
@@ -93,12 +96,12 @@ never pushed to renderers as local room health.
   Bind the baseline to the doc cursor, not metadata; compare existing content exactly,
   never sanitize it to hide edits. Write history and capture its baseline without an
   async gap, before publishing meta. Legacy history without a baseline is not migrated.
-- History import lists and imports through the machine's only same-type Provider
-  (`agentConfigId`), binding new imports and earlier unbound ones it lists; with none
-  or several they stay unbound. Never replace a binding. Refresh loads an existing
-  import through its own binding, else the default launch, exactly as continuation does.
-  Every import write also records the load-reported selection as the runtime config of
-  the last imported user turn through `applyAcpRuntimeConfigPatch`.
+- History import validates the selected Provider machine/id/type; never fall back
+  from a missing selection. Legacy requests use the sole same-type Provider. Catalogs
+  are Provider-scoped; replay/import keys stay stable. Bind an earlier unbound import only when the selected Provider
+  lists its source; never replace a binding or merge another account's native ID.
+  Refresh loads through the import's own binding. Every import write records the
+  load-reported selection on the last imported user turn via `applyAcpRuntimeConfigPatch`.
 - Removing a local project archives every unarchived Session for that machine/project
   before deleting the project row, found through the existence and metadata indexes
   rather than by opening every Session document; a failed archive keeps the delete

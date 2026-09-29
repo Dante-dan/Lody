@@ -5,6 +5,11 @@ Translation: current
 
 [English](github-command-credentials.md)
 
+本地项目及其 worktree 使用本机 Git 和 GitHub 认证，即使其 remote 指向 GitHub。
+这些会话不安装 Lody 凭据 helper、命令包装器、传输重写、broker 上下文或托管 token；
+保留用户环境、凭据 helper、SSH 配置及 `gh` 登录。后续请求者刷新也不能把本地会话
+加入托管认证。下文托管命令策略适用于本地项目以外的会话。
+
 Agent 切换目录、使用 `gh -R` 指定其他仓库或访问子模块时，凭据应属于本次命令的目标仓库，
 而不是会话启动时的项目。Installation token 仍只授权单个仓库。
 
@@ -40,6 +45,12 @@ GitHub HTTPS 和标准 GitHub SSH 地址统一按实际 remote 选择凭据，�
 长期运行的 Agent 每次启动 helper 时读取会话上下文文件；切换请求者会轮换 token，
 无需重启 Agent。单个 helper 固定使用一次上下文，不能混合两个请求者的权限。
 切换后才启动的后台命令使用当时的请求者，而不是最初安排该命令的 turn 身份。
+
+Agent 尚未启动时，宿主机 worktree 准备也遵循相同的请求者策略。克隆、拉取、checkout
+及其重试必须显式传递同一份凭据上下文，包括需要认证的 smudge filter。
+Worktree 创建自身负责远端准备，前置 fetch 不能替后续操作完成授权。
+没有 broker 的原生执行不安装托管 helper。调用方漏传上下文属于 Lody 初始化错误，
+不应要求用户重新授权 GitHub。
 
 ## 依据与验证
 
