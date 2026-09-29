@@ -24,6 +24,7 @@ import {
   getMainWindowBackgroundColor,
   getMainWindowTitleBarOverlay
 } from './window-theme'
+import { readStartupThemeSource } from './theme-settings'
 import { formatUnknownError, normalizeExternalHttpUrl } from './utils'
 import { describeDeepLinkForAuthDebug } from './auth-debug'
 import { captureElectronMainException } from './posthog-error-reporting'
@@ -371,7 +372,8 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
   if (options.icon) productWindowIcon = options.icon
   if (!options.auxiliary)
     nativeTheme.themeSource = getInitialMainWindowThemeSource(
-      options.initialPath === '/onboarding' ? '/onboarding' : '/'
+      options.initialPath === '/onboarding' ? '/onboarding' : '/',
+      readStartupThemeSource()
     )
   const resolvedTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
   const window = new BrowserWindow({
