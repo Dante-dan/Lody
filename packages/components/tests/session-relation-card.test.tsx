@@ -217,6 +217,9 @@ describe('Session relation cards', () => {
                 status,
                 label: 'Created child Tab',
                 target: { sessionId: createdSessionId, userTurnId: 'user-turn' },
+                ...(status === 'succeeded'
+                  ? { resultPreview: 'Worker completed the project update.' }
+                  : {}),
               },
             ],
           },
@@ -241,6 +244,9 @@ describe('Session relation cards', () => {
         container.querySelector('[role="status"]')?.getAttribute('data-session-creation-status')
       ).toBe(status);
       expect(container.textContent).toContain('Created child Tab');
+      if (status === 'succeeded') {
+        expect(container.textContent).toContain('Worker completed the project update.');
+      }
       const button = container.querySelector<HTMLButtonElement>('button');
       expect(button?.disabled).toBe(false);
       await act(async () => button?.click());

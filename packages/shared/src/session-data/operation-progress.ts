@@ -8,6 +8,12 @@ import type { SessionId } from '../ids';
 import type { SessionEntry } from './domain';
 export type OperationProgressStatusByTarget = ReadonlyMap<string, OperationProgressStatus>;
 
+export const getOperationResultPreview = (text: string | undefined): string | undefined => {
+  const collapsed = text?.replace(/\s+/g, ' ').trim();
+  if (!collapsed) return undefined;
+  return collapsed.length > 240 ? `${collapsed.slice(0, 240)}…` : collapsed;
+};
+
 export const getOperationProgressTurnId = (
   requesterSessionId: SessionId,
   operationId: string
@@ -54,10 +60,13 @@ export const buildOperationProgressContent = (
   const items = operation.items.reduce<OperationProgressItem[]>((acc, item) => {
     const status = progressStatusForItem(item, statusByTarget, materializedTargets);
     if (!status || !('target' in item) || !item.target) return acc;
+    const resultPreview =
+      item.status === 'succeeded' ? getOperationResultPreview(item.output?.text) : undefined;
     acc.push({
       target: item.target,
       ...(item.label ? { label: item.label } : {}),
       status,
+      ...(resultPreview ? { resultPreview } : {}),
     });
     return acc;
   }, []);
@@ -74,12 +83,15 @@ const mergeProgressItem = (
   existing: OperationProgressItem | undefined,
   next: OperationProgressItem
 ): OperationProgressItem => {
+  if (existing && progressStatusRank(existing.status) === 2) {
+    // Preserve terminal identity/labels, but accept output that arrived after
+    // the observed terminal status. A status-only replay must not erase it.
+    return existing.status === next.status && next.resultPreview !== undefined
+      ? { ...existing, resultPreview: next.resultPreview }
+      : existing;
+  }
   // Terminal snapshots stay fixed; running must not regress to created.
-  if (
-    existing &&
-    (progressStatusRank(existing.status) === 2 ||
-      progressStatusRank(existing.status) > progressStatusRank(next.status))
-  )
+  if (existing && progressStatusRank(existing.status) > progressStatusRank(next.status))
     return existing;
   return { ...existing, ...next };
 };
@@ -180,7 +192,7 @@ export function findProgressMessageId(
     );
   if (progress?.type !== 'operation_progress') return undefined;
   const covered = new Map(
-    progress.items.map((item) => [getOperationProgressTargetKey(item.target), item.status])
+    progress.items.map((item) => [getOperationProgressTargetKey(item.target), item])
   );
   // A partial row is not permission to hide every successful-target fallback.
   // Include the completion payload as well as stored items for recovery snapshots.
@@ -193,7 +205,10 @@ export function findProgressMessageId(
         : [];
   const complete = [...operation.items, ...results].every((item) =>
     item.status === 'succeeded'
-      ? covered.get(getOperationProgressTargetKey(item.target)) === 'succeeded'
+      ? covered.get(getOperationProgressTargetKey(item.target))?.status === 'succeeded' &&
+        (getOperationResultPreview(item.output?.text) === undefined ||
+          covered.get(getOperationProgressTargetKey(item.target))?.resultPreview ===
+            getOperationResultPreview(item.output?.text))
       : item.status === 'active' && item.inputDurable
         ? covered.has(getOperationProgressTargetKey(item.target))
         : true

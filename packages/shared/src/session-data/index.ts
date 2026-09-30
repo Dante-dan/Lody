@@ -26,6 +26,7 @@ export type { HistoryAction } from './history-actions';
 
 export {
   getOperationProgressTurnId,
+  getOperationResultPreview,
   getOperationProgressTargetKey,
   buildOperationProgressContent,
   mergeOperationProgressContent,

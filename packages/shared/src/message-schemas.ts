@@ -3416,6 +3416,7 @@ export const NonSystemNoticeMessageContentSchema = z.discriminatedUnion('type', 
             .strict(),
           label: z.string().optional(),
           status: z.enum(['created', 'running', 'succeeded', 'failed', 'cancelled']),
+          resultPreview: z.string().max(241).optional(),
         })
         .strict()
     ),

@@ -22,6 +22,7 @@ describe('operation_progress message content schema', () => {
           {
             target: { sessionId: 'session-3', userTurnId: 'turn-3' },
             status: 'succeeded',
+            resultPreview: 'Worker result',
           },
           {
             target: { sessionId: 'session-4', userTurnId: 'turn-4' },

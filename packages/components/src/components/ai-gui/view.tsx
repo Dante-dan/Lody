@@ -2621,6 +2621,7 @@ const SystemMessageRowView = ({
                 sessionId={target.target.sessionId}
                 fallbackTitle={target.label}
                 status={target.status}
+                detail={target.resultPreview}
                 onNavigateSession={onNavigateSession}
               />
             ))}

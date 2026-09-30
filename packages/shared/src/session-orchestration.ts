@@ -117,6 +117,7 @@ export type OperationProgressItem = {
   target: LodyOperationItemTarget;
   label?: string;
   status: OperationProgressStatus;
+  resultPreview?: string;
 };
 
 export type OperationProgressContent = {

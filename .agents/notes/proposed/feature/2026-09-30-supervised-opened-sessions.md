@@ -11,9 +11,10 @@ MCP-created Sessions currently keep independent workspace documents but also app
 as independent conversations demanding attention. This proposal keeps isolated
 execution and moves the worker's status, result, unread, and permission attention
 to its opener, reserving a peer conversation for explicit handoff. It requires a
-durable supervision choice and cross-client routing work, so this change only
-prepares the bilingual [draft Spec](../../../../specs/supervised-opened-sessions.md)
-for human review; it does not change runtime behavior.
+durable supervision choice and cross-client routing work, so this change prepares a bounded
+reference projection and the bilingual [draft Spec](../../../../specs/supervised-opened-sessions.md)
+for human review. The existing creation-progress card now retains the worker
+result preview; production supervision and permission ownership remain unchanged.
 
 ## Decision and evidence
 
@@ -46,5 +47,30 @@ The existing [Session relations Spec](../../../../specs/session-relations.md)
 still owns archive, restore, and deletion target sets. The
 [subagent events Spec](../../../../specs/subagent-events.md) concerns native
 provider runs inside one Lody Session; it is not a substitute for MCP-created
-Sessions with independent documents. No implementation tests, live desktop or
-mobile checks, maintainer approval, or human Spec approval are claimed here.
+Sessions with independent documents. The reference projection is deliberately not exported from the shared package
+entry point or connected to production consumers. Its explicit relationship
+input preserves legacy and handoff behavior; unavailable or unknown opener
+routes keep the worker inbox visible. Settlement only hides finished supervised
+work with no permission wait and never changes document lifecycle.
+
+The owning behavioral suite covers root routing from a Tab, result previews,
+permission fallback, pending consent after completion, settlement and resumed
+work, unknown observations, legacy peers, and malformed self-opening relations.
+It does not verify durable schema migration, permission transport, live desktop
+or mobile behavior. No maintainer or human Spec approval is claimed.
+
+## Result preview implementation slice
+
+Creation progress previously recorded only a terminal status. Completion cards
+are suppressed when that progress row exists, so a successful worker result
+was absent from the initiating conversation. The shared history planner now
+projects Operation output into an optional, whitespace-collapsed preview capped
+at 240 characters plus an ellipsis. Terminal rows can acquire this output without
+regressing status. The coordinator retains completion fallback when published
+progress lacks the expected preview, and the renderer passes it to the existing
+creation card's detail field. Full output remains in the Operation/worker, not
+in another transcript copy.
+
+This slice extends the existing real-Loro snapshot/reload suite and coordinator
+fallback suite. It is independent of the proposed supervision relationship and
+does not change archive, permission, notification, or inbox ownership.

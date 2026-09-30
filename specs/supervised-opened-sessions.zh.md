@@ -41,10 +41,17 @@ worker 的 Operation `output` 为发起对话提供结果预览。worker 有结�
 展示状态，不改变这些目标。另一个 [Spec](subagent-events.zh.md) 中的原生 provider
 subagent 事件与通过 MCP 创建的 Lody Session 是两类对象。
 
-实现前需要审定持久化的监督／交接字段、发起者消失或不可用时的权限路由，以及本地、
+接入生产路径前需要审定持久化的监督／交接字段、发起者消失或不可用时的权限路由，以及本地、
 云端、桌面和移动端的通知汇总范围。验收应覆盖并发隔离的工作目录、发起者为 Tab、
 重连、权限等待、Operation 完成和失败、结清但不删除、显式交接，以及旧 Session 兼容。
-本文档提案没有声称已完成这些运行时测试。
+有限参考实现
+[`supervised-opened-session.ts`](../packages/shared/src/supervised-opened-session.ts)
+接收显式关系和观察状态，不改变持久化 Session 元数据。只有发起根对话的路由可达时，
+才汇总 Tab 发起的 worker；否则保留 worker 的收件箱。权限等待优先于完成和结清，
+运行中或状态未知的工作不能结清。行为测试覆盖这些决策；生产监督关系创建、权限传输、
+通知汇总和 worker 列表仍未实现。现有创建进度卡独立携带创建 Operation 的有界结果
+预览；只有进度卡保留该预览时，完成卡才去重隐藏。这一部分不隐藏 worker，
+也不改变权限归属。
 
 ## 证据与边界
 

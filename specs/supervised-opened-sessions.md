@@ -57,13 +57,23 @@ state and must not change those target sets. Native provider subagent events in
 [their separate Spec](subagent-events.md) remain distinct from Lody Sessions
 created through MCP.
 
-Before implementation, reviewers need to decide the persisted supervision and
+Before production integration, reviewers need to decide the persisted supervision and
 handoff field, permission routing when the opener is gone or unavailable, and the
 scope of notification roll-up across local, cloud, desktop, and mobile clients.
 Acceptance should cover isolated concurrent work contexts, opener Tabs, reconnect,
 permission waits, completed and failed Operations, settle without deletion,
-explicit handoff, and existing Session compatibility. No such runtime tests are
-claimed by this document-only proposal.
+explicit handoff, and existing Session compatibility. The bounded reference projection in
+[`supervised-opened-session.ts`](../packages/shared/src/supervised-opened-session.ts)
+accepts an explicit relationship and observed state without changing persisted
+Session metadata. It routes Tab-opened workers to the root only when that route
+is addressable; otherwise the worker keeps its inbox. Permission waits override
+completion and settlement, and running or unknown work cannot be settled. Its
+behavioral suite exercises these decisions; production supervision creation, permission
+transport, notification roll-up, and the worker roster remain unimplemented.
+The existing creation-progress card now independently carries a bounded result
+preview from the creating Operation. A completion can suppress its duplicate
+card only when progress preserves that preview; this slice does not hide workers
+or change their permission ownership.
 
 ## Evidence and limits
 

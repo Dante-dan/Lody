@@ -389,7 +389,12 @@ it.each(['succeeded', 'failed', 'cancelled'] as const)(
       for (const status of ['created', 'running', terminalStatus] as const) {
         const item: LodyOperationItemResult =
           status === 'succeeded'
-            ? { status, target, assistantTurnId: 'child-answer' }
+            ? {
+                status,
+                target,
+                assistantTurnId: 'child-answer',
+                output: { text: '  Worker\nresult  ' },
+              }
             : status === 'failed'
               ? {
                   status,
@@ -424,7 +429,13 @@ it.each(['succeeded', 'failed', 'cancelled'] as const)(
                 type: 'operation_progress',
                 operationId: operation.operationId,
                 operationKind: 'session_create_many',
-                items: [{ target, status }],
+                items: [
+                  {
+                    target,
+                    status,
+                    ...(status === 'succeeded' ? { resultPreview: 'Worker result' } : {}),
+                  },
+                ],
               },
             ],
           });
@@ -697,4 +708,25 @@ it('does not notify real Mirror subscribers when progress is unchanged or absent
     unsubscribe();
     mirror.dispose();
   }
+});
+
+it('enriches an already terminal progress card with bounded output and preserves it on replay', () => {
+  const target = { sessionId: 'result-worker' as SessionId, userTurnId: 'result-turn' };
+  const previous: OperationProgressContent = {
+    type: 'operation_progress',
+    operationId: 'result-op',
+    operationKind: 'session_create',
+    items: [{ target, status: 'succeeded' }],
+  };
+  const content = buildOperationProgressContent(
+    baseOperation([
+      { status: 'succeeded', target, assistantTurnId: 'answer', output: { text: 'a'.repeat(300) } },
+    ])
+  );
+  if (!content) throw new Error('Missing progress');
+  const enriched = mergeOperationProgressContent(previous, content);
+  expect(enriched.items[0]?.resultPreview).toBe('a'.repeat(240) + '…');
+  expect(mergeOperationProgressContent(enriched, previous).items[0]?.resultPreview).toBe(
+    'a'.repeat(240) + '…'
+  );
 });

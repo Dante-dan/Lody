@@ -1514,9 +1514,15 @@ describe('LodyOperationCoordinator', () => {
     { completeCoverage: true, progressStatus: 'created' as const, shouldLink: false },
     { completeCoverage: true, progressStatus: 'running' as const, shouldLink: false },
     { completeCoverage: true, progressStatus: 'succeeded' as const, shouldLink: true },
+    {
+      completeCoverage: true,
+      progressStatus: 'succeeded' as const,
+      hasOutput: true,
+      shouldLink: false,
+    },
   ])(
     'only suppresses current complete batch cards ($completeCoverage, $progressStatus)',
-    async ({ completeCoverage, progressStatus, shouldLink }) => {
+    async ({ completeCoverage, progressStatus, shouldLink, hasOutput = false }) => {
       const harness = await makeHarness({
         operationKind: 'session_create_many',
         failProgressHistoryWrites: true,
@@ -1529,6 +1535,7 @@ describe('LodyOperationCoordinator', () => {
         status: 'succeeded' as const,
         target,
         assistantTurnId: `assistant:${target.userTurnId}`,
+        ...(hasOutput ? { output: { text: 'worker output' } } : {}),
       }));
       const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
       try {

@@ -1,4 +1,4 @@
-import { readSessionHistory } from '@lody/shared/session-data';
+import { getOperationResultPreview, readSessionHistory } from '@lody/shared/session-data';
 import { randomUUID } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
@@ -507,6 +507,13 @@ export class LodyOperationCoordinator {
     for (const item of operation.items) {
       if (!('target' in item) || !item.target) continue;
       const key = getOperationProgressTargetKey(item.target);
+      if (item.status === 'succeeded') {
+        const expectedPreview = getOperationResultPreview(item.output?.text);
+        const publishedPreview = content?.items.find(
+          (entry) => getOperationProgressTargetKey(entry.target) === key
+        )?.resultPreview;
+        if (expectedPreview !== undefined && publishedPreview !== expectedPreview) return false;
+      }
       if (expected.has(key)) continue;
       if (
         item.status === 'succeeded' ||
