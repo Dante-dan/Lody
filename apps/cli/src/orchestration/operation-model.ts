@@ -24,6 +24,7 @@ export type OrchestrationModelState = {
   targetTerminal: boolean;
   activeTurn: 'none' | 'user' | 'delivery';
   queuedUsers: number;
+  deliveryReleaseWakeArmed: boolean;
   archived: boolean;
   configurationAvailable: boolean;
   completionTurnWrites: number;
@@ -41,6 +42,7 @@ export type OrchestrationModelAction =
   | 'flush_progress'
   | 'enqueue_user'
   | 'schedule'
+  | 'turn_release_wake'
   | 'prepare_turn'
   | 'start_turn'
   | 'history_write_fail'
@@ -65,6 +67,7 @@ export const initialOrchestrationModelState = (): OrchestrationModelState => ({
   targetTerminal: false,
   activeTurn: 'none',
   queuedUsers: 0,
+  deliveryReleaseWakeArmed: false,
   archived: false,
   configurationAvailable: true,
   completionTurnWrites: 0,
@@ -126,8 +129,17 @@ export const stepOrchestrationModel = (
     case 'enqueue_user':
       next.queuedUsers = Math.min(2, next.queuedUsers + 1);
       break;
+    case 'turn_release_wake':
+      if (!next.deliveryReleaseWakeArmed || next.activeTurn !== 'none') break;
+      next.deliveryReleaseWakeArmed = false;
+      return stepOrchestrationModel(next, 'schedule');
     case 'schedule':
-      if (next.archived || next.activeTurn !== 'none') break;
+      if (next.archived) break;
+      if (next.activeTurn !== 'none') {
+        if (next.delivery === 'pending') next.deliveryReleaseWakeArmed = true;
+        break;
+      }
+      next.deliveryReleaseWakeArmed = false;
       if (next.queuedUsers > 0) {
         next.queuedUsers -= 1;
         next.activeTurn = 'user';
@@ -232,6 +244,7 @@ export const stepOrchestrationModel = (
       }
       break;
     case 'restart':
+      next.deliveryReleaseWakeArmed = false;
       if (
         (next.delivery === 'claimed' ||
           next.delivery === 'prepared' ||
@@ -330,6 +343,7 @@ export const enumerateOrchestrationModel = (maxDepth: number): OrchestrationMode
     'flush_progress',
     'enqueue_user',
     'schedule',
+    'turn_release_wake',
     'prepare_turn',
     'start_turn',
     'history_write_fail',

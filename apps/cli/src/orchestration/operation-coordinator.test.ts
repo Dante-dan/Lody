@@ -213,6 +213,7 @@ const makeHarness = async (options?: {
   };
   let pendingUser = options?.pendingUser ?? false;
   let busy = options?.busy ?? false;
+  const releaseWaiters = new Set<() => void>();
   const continueSession = vi.fn(async (message: unknown, dispatchOptions: unknown) => {
     const typedMessage = message as { sessionId: SessionId; userTurnId: string };
     const typedOptions = dispatchOptions as DeliveryDispatchOptions;
@@ -315,6 +316,10 @@ const makeHarness = async (options?: {
         hasActiveTurn: busy,
         ...(busy && options?.activeTurnId ? { activeTurnId: options.activeTurnId } : {}),
       }),
+      waitForTurnRelease: () => {
+        if (!busy) return Promise.resolve();
+        return new Promise<void>((resolve) => releaseWaiters.add(resolve));
+      },
       continueSession,
     } as never,
     dispatchWatcher: { hasPendingDispatch: () => pendingUser } as never,
@@ -387,6 +392,10 @@ const makeHarness = async (options?: {
     },
     setBusy: (value: boolean) => {
       busy = value;
+      if (!busy) {
+        for (const resolve of releaseWaiters) resolve();
+        releaseWaiters.clear();
+      }
     },
   };
 };
@@ -2449,6 +2458,63 @@ describe('LodyOperationCoordinator', () => {
     const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
     try {
       expect(store.listPendingDeliveries('workspace-1' as WorkspaceId)).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it.each([false, true])(
+    'wakes pending Delivery at requester release with queued user priority=%s',
+    async (pendingUser) => {
+      const harness = await makeHarness({
+        deadlineAt: '2026-07-19T23:59:59.000Z',
+        busy: true,
+        activeTurnId: 'requester-turn',
+        pendingUser,
+      });
+      harness.coordinator.start();
+      try {
+        await harness.coordinator.idle();
+        await harness.coordinator.wake('coalesced-hint');
+        expect(harness.histories.get(harness.requesterSessionId)).toEqual([]);
+        harness.setBusy(false);
+        // Flush the explicit release callback, then the coordinator's owned chains.
+        await Promise.resolve();
+        await harness.coordinator.idle();
+        const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
+        try {
+          expect(store.getDelivery(harness.requesterSessionId, 'review-round-1').state).toBe(
+            pendingUser ? 'pending' : 'consumed'
+          );
+        } finally {
+          store.close();
+        }
+        const completion = harness.histories
+          .get(harness.requesterSessionId)
+          ?.filter((entry) => entry.id === 'operation-completion:requester-1:review-round-1');
+        expect(completion).toHaveLength(pendingUser ? 0 : 1);
+      } finally {
+        harness.coordinator.stop();
+      }
+    }
+  );
+
+  it('ignores a requester release callback after coordinator stop', async () => {
+    const harness = await makeHarness({
+      deadlineAt: '2026-07-19T23:59:59.000Z',
+      busy: true,
+      activeTurnId: 'requester-turn',
+    });
+    harness.coordinator.start();
+    await harness.coordinator.idle();
+    harness.coordinator.stop();
+    harness.setBusy(false);
+    await Promise.resolve();
+    await harness.coordinator.idle();
+    expect(harness.histories.get(harness.requesterSessionId)).toEqual([]);
+    const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
+    try {
+      expect(store.getDelivery(harness.requesterSessionId, 'review-round-1').state).toBe('pending');
     } finally {
       store.close();
     }

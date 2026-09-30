@@ -181,6 +181,7 @@ export class LodyOperationCoordinator {
   private readonly deadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly materializationTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly materializationRetryAttempts = new Map<string, number>();
+  private readonly deliveryReleaseWaits = new Map<SessionId, { turnId: string }>();
   private readonly configurationTimers = new Map<SessionId, ReturnType<typeof setTimeout>>();
   private readonly reconcileChains = new Map<string, Promise<void>>();
   private readonly deliveryChains = new Map<SessionId, Promise<void>>();
@@ -305,6 +306,7 @@ export class LodyOperationCoordinator {
     this.materializationRetryAttempts.clear();
     for (const timer of this.configurationTimers.values()) clearTimeout(timer);
     this.configurationTimers.clear();
+    this.deliveryReleaseWaits.clear();
     this.reconcileChains.clear();
     this.deliveryChains.clear();
     this.queuedDeliveryIds.clear();
@@ -1072,6 +1074,27 @@ export class LodyOperationCoordinator {
     return current;
   }
 
+  private armDeliveryTurnRelease(sessionId: SessionId, turnId: string): void {
+    if (this.deliveryReleaseWaits.get(sessionId)?.turnId === turnId) return;
+    const wait = { turnId };
+    this.deliveryReleaseWaits.set(sessionId, wait);
+    void this.options.executionService.waitForTurnRelease(sessionId, turnId).then(
+      () => {
+        // stop/restart or a newer requester Turn invalidates this callback.
+        if (!this.started || this.deliveryReleaseWaits.get(sessionId) !== wait) return;
+        this.deliveryReleaseWaits.delete(sessionId);
+        void this.wake('requester-turn-released');
+      },
+      (error: unknown) => {
+        if (this.deliveryReleaseWaits.get(sessionId) !== wait) return;
+        this.deliveryReleaseWaits.delete(sessionId);
+        this.options.logger.warn(
+          `[orchestration] Requester turn release failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    );
+  }
+
   private async deliverIfRunnable(delivery: StoredLodyDelivery, reason: string): Promise<void> {
     if (!this.started) return;
     delivery = this.withStore((store) =>
@@ -1131,7 +1154,12 @@ export class LodyOperationCoordinator {
       await this.failUncertainDelivery(sessionDoc, operation, delivery, reason);
       return;
     }
-    if (execution.hasActiveTurn) return;
+    if (execution.hasActiveTurn) {
+      if (execution.activeTurnId) {
+        this.armDeliveryTurnRelease(delivery.requesterSessionId, execution.activeTurnId);
+      }
+      return;
+    }
     if (this.options.dispatchWatcher.hasPendingDispatch(delivery.requesterSessionId)) return;
     if (delivery.attemptCount >= DELIVERY_MAX_ATTEMPTS) {
       await this.failExhaustedDelivery(sessionDoc, operation, delivery, reason);

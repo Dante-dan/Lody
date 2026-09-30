@@ -34,6 +34,34 @@ describe('Operation delivery executable model', () => {
     expect(stepOrchestrationModel(started, 'complete_turn').delivery).toBe('consumed');
   });
 
+  it('owns a release wake while busy and keeps queued users ahead of completion', () => {
+    const waiting = trace(
+      'accept',
+      'materialize_success',
+      'enqueue_user',
+      'schedule',
+      'finish',
+      'schedule'
+    );
+    expect(waiting).toMatchObject({
+      activeTurn: 'user',
+      delivery: 'pending',
+      deliveryReleaseWakeArmed: true,
+    });
+    const released = stepOrchestrationModel(waiting, 'complete_turn');
+    expect(stepOrchestrationModel(released, 'turn_release_wake')).toMatchObject({
+      activeTurn: 'delivery',
+      delivery: 'claimed',
+      deliveryReleaseWakeArmed: false,
+    });
+    const queued = stepOrchestrationModel(released, 'enqueue_user');
+    expect(stepOrchestrationModel(queued, 'turn_release_wake')).toMatchObject({
+      activeTurn: 'user',
+      delivery: 'pending',
+      deliveryReleaseWakeArmed: false,
+    });
+  });
+
   it('keeps archived delivery pending until restore', () => {
     const archived = trace('accept', 'materialize_success', 'archive', 'finish', 'schedule');
     expect(archived).toMatchObject({ delivery: 'pending', completionTurnWrites: 0 });
