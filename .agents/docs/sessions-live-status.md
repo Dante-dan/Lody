@@ -12,7 +12,7 @@ this page is the full text of the rules summarised there.
   `notification-permission-prompt.tsx` and the inner content of `session-pin.tsx`
   use the same `ConversationColumn` as the stream and composer; keep full-bleed
   bands outside that column, but never let their interactive content span the pane.
-- Live working/waiting UI (spinners, permission badges, Stop visibility, tab/dock
+- Working UI (spinners, Stop visibility, tab/dock
   status) must use presence (`sessionLiveStatusAtomFamily` or an explicit
   `liveSessionStatuses` map), not `SessionMeta.status` / `lastRunningSeen`.
   Session meta status is durable/historical state and can be stale until a write
@@ -61,3 +61,7 @@ null`: browser offline, machine removed or offline) — the chip owns that story
   (Stop visibility, busy-send queue routing) shares the SAME time-bounded
   pre-start signal, so a stalled dispatch no longer holds the composer in a busy
   state either.
+
+Supervised independent workers additionally project `awaitingUserSince` into their
+own and opener attention summaries without presence. It represents durable unanswered
+consent, not active execution; it never activates a Working spinner or Stop action.

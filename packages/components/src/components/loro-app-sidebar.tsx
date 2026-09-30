@@ -142,7 +142,7 @@ import {
   type SessionListRepoState,
 } from '@/components/session-list';
 import {
-  buildChildSessionsByParent,
+  buildSessionAttentionByRoot,
   buildSessionListRows,
   buildSidebarOpenerRowResolver,
   getEffectiveSessionActivitySummary,
@@ -2272,7 +2272,7 @@ export function LoroAppSidebar({
   // Sub-session times roll up into the parent — opening or messaging in a child
   // tab keeps the parent fresh in the sidebar order.
   const childSessionsByParent = useMemo(
-    () => buildChildSessionsByParent(allActiveSessions),
+    () => buildSessionAttentionByRoot(allActiveSessions),
     [allActiveSessions]
   );
   const localProjectSessionsByKey = useMemo(() => {

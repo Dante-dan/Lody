@@ -48,8 +48,8 @@ subagent 事件与通过 MCP 创建的 Lody Session 是两类对象。
 [`supervised-opened-session.ts`](../packages/shared/src/supervised-opened-session.ts)
 接收显式关系和观察状态，不改变持久化 Session 元数据。只有发起根对话的路由可达时，
 才汇总 Tab 发起的 worker；否则保留 worker 的收件箱。权限等待优先于完成和结清，
-运行中或状态未知的工作不能结清。行为测试覆盖这些决策；生产监督关系创建、权限传输、
-通知汇总和 worker 列表仍未实现。现有创建进度卡独立携带创建 Operation 的有界结果
+运行中或状态未知的工作不能结清。行为测试覆盖这些决策。生产创建意图、parent 结果与许可展示、
+完成通知路由和未读关注已在下文实现；worker 列表结清与许可推送分组仍未实现。现有创建进度卡独立携带创建 Operation 的有界结果
 预览；只有进度卡保留该预览时，完成卡才去重隐藏。这一部分不隐藏 worker，
 也不改变权限归属。
 
@@ -72,8 +72,8 @@ worktree 同时使用。当前 [`notification-service.ts`](../apps/cli/src/lib/n
 此选择。普通 CLI 创建和缺少该字段的旧 Operation 仍保持历史 peer 行为；恢复不会
 从来源指针推断监督关系。显式 handoff 保留独立会话身份。
 
-本切片只持久化选择，不隐藏 worker inbox、不重定向通知，也不改变权限请求归属。
-这些消费者在改变呈现前，需要已验证的 parent attention 路由及 worker 后备。现有
+本切片不隐藏 worker inbox，也不改变权限请求归属。关注与完成通知路由
+需要已验证的 parent attention 路由及 worker 后备。现有
 Operation 结果预览仍是唯一生产 parent 结果展示。本改动不宣称桌面或移动端实机
 验证，也不宣称人类批准了 Spec。
 
@@ -85,4 +85,13 @@ worker 行。
 普通完成通知在 opener root 元数据确定、未归档且属于通知接收者时指向 root；
 元数据缺失、归档、其他用户或 root 实为子 Tab 时回退 worker。权限请求身份仍
 在 worker。现有相关会话树保留计数和导航，在无机器实时 presence 时也显示监督
-权限等待。专用 roster settlement、未读汇总和权限推送分组仍未完成。
+权限等待。专用 roster settlement 和权限推送分组仍未完成。
+
+## 发起会话未读汇总
+
+侧栏与会话首页使用仅供呈现的关注映射，把明确受监督的独立 worker 及其子 Tab
+汇总到已知、活跃且同属一个用户的根会话。worker 行与独立工作目录保持不变。
+未读仍由各会话自己的阅读回执决定；查看根会话不会把未查看的 worker 输出标为已读。
+持久化许可等待在没有在线状态时仍可见，Working 仍仅依赖在线状态。Dock 对已汇总
+关注只计数一次；根会话缺失、关闭、归档或属于其他用户时保留 worker 回退。此映射
+不选择归档、恢复或删除对象。收起已完成 worker 与许可推送分组仍未完成，Spec 仍是草案。

@@ -13,6 +13,7 @@ import {
   getSessionPullRequestLegacyFields,
   parseGitHubPrNumber,
   resolveProjectGitHubRepo,
+  resolveOpenedSessionNotificationTarget,
 } from '@lody/shared';
 import type { SessionListRow, SessionListRowOwner } from '@/components/session-list';
 import { getLineChangeDeltaForScope, type LineChangeScope } from '@/lib/file-change-category';
@@ -82,6 +83,30 @@ export function buildChildSessionsByParent(
       if (existing) existing.push(s);
       else map.set(s.parentSessionId, [s]);
     }
+  }
+  return map;
+}
+
+/** Presentation-only attention grouping; never use this map for lifecycle targets.
+ * A supervised worker retains its own row and read receipt. Only an addressable,
+ * same-owner root receives its unread/permission summary, including child Tabs.
+ */
+export function buildSessionAttentionByRoot(
+  allSessions: SessionMeta[] | undefined
+): Map<string, SessionMeta[]> {
+  const children = buildChildSessionsByParent(allSessions);
+  const map = new Map([...children].map(([id, rows]) => [id, [...rows]]));
+  const byId = buildSessionMetaById(allSessions);
+  for (const worker of allSessions ?? []) {
+    if (worker.isArchived || worker.isTabClosed) continue;
+    const openerId = worker.openedByRootSessionId ?? worker.openedBySessionId;
+    const opener = openerId ? byId.get(openerId) : undefined;
+    const rootId = resolveOpenedSessionNotificationTarget(worker, opener, worker.userId);
+    if (rootId === worker.id || opener?.isTabClosed) continue;
+    const attention = [worker, ...(children.get(worker.id) ?? [])];
+    const existing = map.get(rootId);
+    if (existing) existing.push(...attention);
+    else map.set(rootId, attention);
   }
   return map;
 }
@@ -190,7 +215,9 @@ export function getEffectiveSessionActivitySummary(
   // quiescent, and meta dispatch pointers can be stale in this client — deriving
   // a spinner from either shows sessions as working long after the prompt finished.
   let isWorking = liveStatus != null;
-  let isWaitingPermission = liveStatus?.type === 'requestPermission';
+  let isWaitingPermission =
+    liveStatus?.type === 'requestPermission' ||
+    (session.openedSessionMode === 'supervised' && session.awaitingUserSince != null);
   let hasUnreadMessages = sessionHasUnreadMessages(session);
   let latestMessageAt =
     parseTimestamp(session.lastMessageAt) ?? parseTimestamp(session.createdAt) ?? 0;
@@ -202,7 +229,11 @@ export function getEffectiveSessionActivitySummary(
       if (!isWorking && childLiveStatus != null) {
         isWorking = true;
       }
-      if (!isWaitingPermission && childLiveStatus?.type === 'requestPermission') {
+      if (
+        !isWaitingPermission &&
+        (childLiveStatus?.type === 'requestPermission' ||
+          (child.openedSessionMode === 'supervised' && child.awaitingUserSince != null))
+      ) {
         isWaitingPermission = true;
       }
       if (!hasUnreadMessages && sessionHasUnreadMessages(child)) {
@@ -406,7 +437,7 @@ export function buildSessionListRows(
   } = options;
 
   // Build child session lookup for status aggregation
-  const childSessionsByParent = buildChildSessionsByParent(allSessions);
+  const childSessionsByParent = buildSessionAttentionByRoot(allSessions ?? sessions);
   // `allSessions` is the only place child Tabs are visible, so it is also the
   // only place the opener→row mapping can be resolved.
   const resolveOpenerRowId =

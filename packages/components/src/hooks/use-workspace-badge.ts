@@ -1,3 +1,4 @@
+import { resolveOpenedSessionNotificationTarget } from '@lody/shared';
 import { useCallback, useEffect } from 'react';
 import { atom, useAtomValue, useStore } from 'jotai';
 import { allActiveSessionsAtom } from '@/atoms/doc-meta';
@@ -7,7 +8,8 @@ import { isElectronRenderer } from '@/lib/electron';
 import { getIpcServices } from '@/lib/electron-ipc-client';
 import { useResolvedWorkspaceScope } from '@/hooks/use-resolved-workspace-scope';
 import {
-  buildChildSessionsByParent,
+  buildSessionAttentionByRoot,
+  buildSessionMetaById,
   getEffectiveSessionActivitySummary,
 } from '@/components/sessions/session-list-rows';
 
@@ -21,7 +23,8 @@ export const workspaceBadgeAtom = atom<WindowBadge>((get) => {
   const userId = get(userAtom)?.id;
   if (!userId) return ZERO;
   const sessions = get(allActiveSessionsAtom);
-  const children = buildChildSessionsByParent(sessions);
+  const children = buildSessionAttentionByRoot(sessions);
+  const byId = buildSessionMetaById(sessions);
   const statuses = new Map(
     sessions.flatMap((session) => {
       const status = get(sessionLiveStatusAtomFamily(session.id));
@@ -32,6 +35,14 @@ export const workspaceBadgeAtom = atom<WindowBadge>((get) => {
   let waiting = 0;
   for (const session of sessions) {
     if (session.parentSessionId || session.userId !== userId) continue;
+    const openerId = session.openedByRootSessionId ?? session.openedBySessionId;
+    const opener = openerId ? byId.get(openerId) : undefined;
+    if (
+      !session.isTabClosed &&
+      !opener?.isTabClosed &&
+      resolveOpenedSessionNotificationTarget(session, opener, userId) !== session.id
+    )
+      continue;
     const activity = getEffectiveSessionActivitySummary(session, children, statuses);
     if (activity.isWaitingPermission) waiting += 1;
     else if (activity.hasUnreadMessages) unread += 1;

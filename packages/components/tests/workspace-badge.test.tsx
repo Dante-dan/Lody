@@ -173,6 +173,26 @@ describe('workspace badge reconciliation', () => {
     expect(dock).toBe('');
   });
 
+  it('counts supervised unread and durable consent once, retaining unsafe-root fallback', async () => {
+    const parent = session('root', { lastReadAt: 200 });
+    const worker = session('worker', {
+      openedSessionMode: 'supervised',
+      openedByRootSessionId: parent.id,
+    });
+    const other = session('worker-two', { ...worker, id: 'worker-two' as SessionId });
+    setSessions(parent, worker, other);
+    await mount();
+    expect(store.get(workspaceBadgeAtom)).toEqual({ unread: 1, waiting: 0 });
+    await act(async () => setSessions(parent, { ...worker, awaitingUserSince: 150 }, other));
+    expect(store.get(workspaceBadgeAtom)).toEqual({ unread: 0, waiting: 1 });
+    await act(async () => setSessions({ ...parent, userId: 'other' }, worker, other));
+    expect(store.get(workspaceBadgeAtom)).toEqual({ unread: 2, waiting: 0 });
+    await act(async () => setSessions({ ...worker, awaitingUserSince: 150 }));
+    expect(store.get(workspaceBadgeAtom)).toEqual({ unread: 0, waiting: 1 });
+    await act(async () => setSessions(parent, { ...worker, openedSessionMode: 'handoff' }, other));
+    expect(store.get(workspaceBadgeAtom)).toEqual({ unread: 2, waiting: 0 });
+  });
+
   it('reasserts an unchanged zero and retries a failed clear within 30 seconds', async () => {
     setSessions(session('root'));
     await mount();

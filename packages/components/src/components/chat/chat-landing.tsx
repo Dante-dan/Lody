@@ -337,7 +337,7 @@ import {
   type MobileInlinePickerOption,
 } from '@/components/mobile/mobile-inline-picker';
 import {
-  buildChildSessionsByParent,
+  buildSessionAttentionByRoot,
   buildSidebarOpenerRowResolver,
   getEffectiveSessionActivitySummary,
   getLatestPullRequestInfo,
@@ -4739,7 +4739,7 @@ function WorkspaceChatLanding({
     return map;
   }, [activeOrganization?.members, chatScope]);
   const mobileChildSessionsByParent = useMemo(
-    () => buildChildSessionsByParent(visibleAllActiveSessions),
+    () => buildSessionAttentionByRoot(visibleAllActiveSessions),
     [visibleAllActiveSessions]
   );
   /* Precise opener id -> the LIST ROW to nest under. Needs the full active list

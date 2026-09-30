@@ -5,6 +5,7 @@ import type { MachineId, SessionId, SessionMeta, SessionStatus } from '@lody/sha
 
 import {
   buildChildSessionsByParent,
+  buildSessionAttentionByRoot,
   buildSessionListRows,
   getEffectiveLatestMessageAt,
   getEffectiveSessionActivitySummary,
@@ -454,6 +455,74 @@ describe.each([getEffectiveSessionActivitySummary, getTaskActivitySummary])(
       expect(summarize(parent, children, presence).hasUnreadMessages).toBe(true);
       child.lastReadAt = 200;
       expect(summarize(parent, children, presence).hasUnreadMessages).toBe(false);
+    });
+  }
+);
+
+describe.each([getEffectiveSessionActivitySummary, getTaskActivitySummary])(
+  'supervised attention roll-up',
+  (summarize) => {
+    test('rolls unread and durable consent to the owned root without marking a worker read', () => {
+      const root = makeSession({ id: 'root', lastMessageAt: 1, lastReadAt: 1 });
+      const worker = makeSession({
+        id: 'worker',
+        openedSessionMode: 'supervised',
+        openedBySessionId: 'tab' as SessionId,
+        openedByRootSessionId: root.id,
+        lastMessageAt: 20,
+        lastReadAt: 10,
+        awaitingUserSince: 15,
+      });
+      const tab = makeSession({
+        id: 'worker-tab',
+        parentSessionId: worker.id,
+        lastMessageAt: 30,
+        lastReadAt: 30,
+      });
+      const sessions = [root, worker, tab];
+      const children = buildSessionAttentionByRoot(sessions);
+      expect(summarize(root, children)).toEqual({
+        isWorking: false,
+        isWaitingPermission: true,
+        hasUnreadMessages: true,
+        latestMessageAt: 30,
+      });
+      expect(worker.lastReadAt).toBe(10);
+      worker.awaitingUserSince = undefined;
+      worker.lastReadAt = 20;
+      expect(summarize(root, children)).toMatchObject({
+        isWaitingPermission: false,
+        hasUnreadMessages: false,
+      });
+      tab.lastMessageAt = 40;
+      expect(summarize(root, children).hasUnreadMessages).toBe(true);
+    });
+    test.each([
+      'legacy',
+      'handoff',
+      'archived-root',
+      'foreign-root',
+      'missing-root',
+      'closed-root',
+    ])('keeps %s worker attention independent', (mode) => {
+      const root = makeSession({
+        id: 'root',
+        lastMessageAt: 1,
+        lastReadAt: 1,
+        isArchived: mode === 'archived-root',
+        isTabClosed: mode === 'closed-root',
+        userId: mode === 'foreign-root' ? 'someone-else' : 'user-1',
+      });
+      const worker = makeSession({
+        id: 'worker',
+        lastMessageAt: 20,
+        openedSessionMode:
+          mode === 'legacy' ? undefined : mode === 'handoff' ? 'handoff' : 'supervised',
+        openedByRootSessionId: root.id,
+      });
+      const map = buildSessionAttentionByRoot(mode === 'missing-root' ? [worker] : [root, worker]);
+      expect(summarize(root, map).hasUnreadMessages).toBe(false);
+      expect(summarize(worker, map).hasUnreadMessages).toBe(true);
     });
   }
 );

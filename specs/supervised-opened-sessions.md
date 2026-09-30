@@ -68,8 +68,9 @@ accepts an explicit relationship and observed state without changing persisted
 Session metadata. It routes Tab-opened workers to the root only when that route
 is addressable; otherwise the worker keeps its inbox. Permission waits override
 completion and settlement, and running or unknown work cannot be settled. Its
-behavioral suite exercises these decisions; production supervision creation, permission
-transport, notification roll-up, and the worker roster remain unimplemented.
+behavioral suite exercises these decisions. Production creation intent, parent result/consent,
+completion routing and unread attention are implemented below; worker roster settlement
+and permission-push grouping remain unimplemented.
 The existing creation-progress card now independently carries a bounded result
 preview from the creating Operation. A completion can suppress its duplicate
 card only when progress preserves that preview; this slice does not hide workers
@@ -95,8 +96,8 @@ to `supervised`. Single/batch Commands freeze it; recovery preserves it in metad
 with exact opener/root pointers. Child Tabs omit it. Ordinary CLI creates and old
 Operations without intent stay legacy peers; provenance never implies supervision.
 
-The choice does not suppress worker inboxes, reroute notifications, or move consent
-ownership. Those consumers need a verified parent route with worker fallback.
+The choice does not suppress worker inboxes or move consent ownership. Attention
+and completion routing require a verified parent route with worker fallback.
 Operation result previews remain the production parent result surface. There is
 no live desktop/mobile observation or human Spec approval.
 
@@ -111,4 +112,16 @@ owner is the notification recipient; missing, archived, foreign-user or child-ro
 metadata falls back to the worker. Exact permission request identities remain on
 the worker. The existing related-Sessions tree preserves its count/navigation and
 shows durable supervised consent waits even without live machine presence.
-Dedicated roster settlement, unread roll-up and permission-push grouping remain open.
+Dedicated roster settlement and permission-push grouping remain open.
+
+## Opener unread attention slice
+
+The sidebar and conversation landing use a presentation-only attention map that
+includes supervised independent workers and their child Tabs under a known active,
+same-owner root. Worker rows and independent work contexts remain intact. Unread
+uses each conversation's own read receipt; viewing the root never marks unseen
+worker output read. Durable worker permission waits remain visible without live
+presence, while Working still depends on presence. The dock counts that routed
+attention once; missing, closed, archived or foreign-owner roots retain worker
+fallback. This map never selects archive, restore or deletion targets. Settlement
+and permission-push grouping remain unfinished, and the Spec is still draft.

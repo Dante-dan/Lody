@@ -1,3 +1,4 @@
+import { buildSessionAttentionByRoot } from './session-list-rows';
 import { sessionHasUnreadMessages } from '@/lib/session-read-receipt';
 import type {
   LocalProjectHistoryProvider,
@@ -119,7 +120,9 @@ export function getEffectiveSessionActivitySummary(
   // quiescent, and meta dispatch pointers can be stale in this client — deriving
   // a spinner from either shows sessions as working long after the prompt finished.
   let isWorking = liveStatus != null;
-  let isWaitingPermission = liveStatus?.type === 'requestPermission';
+  let isWaitingPermission =
+    liveStatus?.type === 'requestPermission' ||
+    (session.openedSessionMode === 'supervised' && session.awaitingUserSince != null);
   let hasUnreadMessages = sessionHasUnreadMessages(session);
   let latestMessageAt =
     parseTimestamp(session.lastMessageAt) ?? parseTimestamp(session.createdAt) ?? 0;
@@ -131,7 +134,11 @@ export function getEffectiveSessionActivitySummary(
       if (!isWorking && childLiveStatus != null) {
         isWorking = true;
       }
-      if (!isWaitingPermission && childLiveStatus?.type === 'requestPermission') {
+      if (
+        !isWaitingPermission &&
+        (childLiveStatus?.type === 'requestPermission' ||
+          (child.openedSessionMode === 'supervised' && child.awaitingUserSince != null))
+      ) {
         isWaitingPermission = true;
       }
       if (!hasUnreadMessages && sessionHasUnreadMessages(child)) {
@@ -300,7 +307,7 @@ export function buildSessionTaskListTasks(
   } = options;
 
   // Build child session lookup for status aggregation
-  const childSessionsByParent = buildChildSessionsByParent(allSessions);
+  const childSessionsByParent = buildSessionAttentionByRoot(allSessions ?? sessions);
 
   // Build a map of userId to owner info for efficient lookup
   const membersByUserId = new Map<string, TaskListTaskOwner>();

@@ -28,9 +28,8 @@ Read parent rules and each heading's linked context before edits.
 - A Side Chat is a durable child Session (`childSessionPlacement: 'side-panel'`):
   no top tab, no sidebar row, but it still rolls up into the parent row. Only explicit
   tab close deletes it; mount it lazily.
-- `SessionMeta.openedBySessionId` is presentation-only provenance: never
-  `parentSessionId`, never rolled into the opener, never filtered out of the
-  list. Navigation carries root + exact tab ids.
+- `openedBySessionId` is provenance, never containment. Only supervised mode rolls
+  attention to an owned root. Keep worker rows and root + exact Tab navigation.
 - The collapsed side panel stays mounted: anything polling or connected in it
   must take an on-screen prop and pause itself.
 - Panel mount is not preview ownership — never release an endpoint or revoke a
@@ -85,8 +84,8 @@ Read parent rules and each heading's linked context before edits.
 
 ## [Live status and dispatch](../../../../../.agents/docs/sessions-live-status.md)
 
-- Presence owns Working/Waiting UI, never `SessionMeta.status`,
-  `lastRunningSeen`, or CLI dispatch pointers.
+- Working uses presence; supervised consent uses `awaitingUserSince`. Never derive
+  activity from meta status, `lastRunningSeen` or dispatch pointers.
 - Only derived activity: dispatched-but-not-started; anchor on the durable turn
   timestamp and stop at 30s.
 - No presence: queue behind unfinished turns; never relight Working UI.

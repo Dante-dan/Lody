@@ -93,4 +93,16 @@ owner is the notification recipient; missing, archived, foreign-user or child-ro
 metadata falls back to the worker. Exact permission request identities remain on
 the worker. The existing related-Sessions tree preserves its count/navigation and
 shows durable supervised consent waits even without live machine presence.
-Dedicated roster settlement, unread roll-up and permission-push grouping remain open.
+Dedicated roster settlement and permission-push grouping remain open.
+
+## Opener unread attention slice
+
+The sidebar and conversation landing use a presentation-only attention map that
+includes supervised independent workers and their child Tabs under a known active,
+same-owner root. Worker rows and independent work contexts remain intact. Unread
+uses each conversation's own read receipt; viewing the root never marks unseen
+worker output read. Durable worker permission waits remain visible without live
+presence, while Working still depends on presence. The dock counts that routed
+attention once; missing, closed, archived or foreign-owner roots retain worker
+fallback. This map never selects archive, restore or deletion targets. Settlement
+and permission-push grouping remain unfinished, and the Spec is still draft.
