@@ -1,6 +1,9 @@
+import type { SessionMeta } from '../src/schema';
+import type { SessionId } from '../src/ids';
 import { describe, expect, it } from 'vitest';
 import {
   projectOpenedSession,
+  resolveOpenedSessionNotificationTarget,
   type OpenedSessionObservation,
 } from '../src/supervised-opened-session';
 
@@ -14,6 +17,38 @@ const worker: OpenedSessionObservation = {
 };
 
 describe('draft supervised opened Session projection', () => {
+  it('rolls completion up only to an addressable owned root and retains worker fallback', () => {
+    const meta: SessionMeta = {
+      id: 'worker' as SessionId,
+      machineId: 'machine',
+      userId: 'user',
+      createdAt: '2026-09-30T00:00:00Z',
+      cliType: 'builtin',
+      agentType: 'codex',
+      openedSessionMode: 'supervised',
+      openedBySessionId: 'tab' as SessionId,
+      openedByRootSessionId: 'root' as SessionId,
+    };
+    const opener: SessionMeta = { ...meta, id: 'root' as SessionId, openedSessionMode: undefined };
+    expect(resolveOpenedSessionNotificationTarget(meta, opener, 'user')).toBe('root');
+    for (const target of [
+      undefined,
+      { ...opener, isArchived: true },
+      { ...opener, userId: 'another' },
+      { ...opener, id: 'other' as SessionId },
+      { ...opener, parentSessionId: 'top' as SessionId },
+    ]) {
+      expect(resolveOpenedSessionNotificationTarget(meta, target, 'user')).toBe('worker');
+    }
+    for (const worker of [
+      { ...meta, openedSessionMode: 'handoff' as const },
+      { ...meta, openedSessionMode: undefined },
+      { ...meta, parentSessionId: 'root' as SessionId },
+    ]) {
+      expect(resolveOpenedSessionNotificationTarget(worker, opener, 'user')).toBe('worker');
+    }
+  });
+
   it('routes Tab-created workers to the root while preserving precise provenance and result', () => {
     const projection = projectOpenedSession(
       { ...worker, phase: 'completed', resultPreview: 'Updated the isolated project.' },

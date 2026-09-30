@@ -175,6 +175,7 @@ function RelationPill({
       title={title}
       aria-current={isCurrent ? 'page' : undefined}
       data-session-relation-row={session.id}
+      data-supervised-worker={session.openedSessionMode === 'supervised' ? '' : undefined}
       onClick={() => onOpenSession(target)}
       className={cn(
         'flex h-7 min-w-0 flex-1 basis-0 items-center gap-2 rounded-md border px-2 text-left text-xs transition-colors',
@@ -192,7 +193,11 @@ function RelationPill({
       <span className="min-w-0 flex-1 truncate text-foreground">{title}</span>
       {/* `waiting > working > unread`, tested in that order. */}
       <SessionRowStatusIndicator
-        isWaitingPermission={liveStatus?.type === 'requestPermission'}
+        isWaitingPermission={
+          liveStatus?.type === 'requestPermission' ||
+          (session.openedSessionMode === 'supervised' &&
+            typeof session.awaitingUserSince === 'number')
+        }
         isWorking={working}
         hasUnreadMessages={unread}
       />

@@ -81,3 +81,8 @@ Operation 结果预览仍是唯一生产 parent 结果展示。本改动不宣�
 处理原始请求。等待解除时标记消失，旧 Operation 完成状态不能清除权限等待。
 历史 peer、handoff 和子 Tab 卡保持原行为；本注意力展示不重定向云通知、不隐藏
 worker 行。
+
+普通完成通知在 opener root 元数据确定、未归档且属于通知接收者时指向 root；
+元数据缺失、归档、其他用户或 root 实为子 Tab 时回退 worker。权限请求身份仍
+在 worker。现有相关会话树保留计数和导航，在无机器实时 presence 时也显示监督
+权限等待。专用 roster settlement、未读汇总和权限推送分组仍未完成。

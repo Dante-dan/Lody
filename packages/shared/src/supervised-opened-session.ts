@@ -1,3 +1,6 @@
+import type { SessionMeta } from './schema';
+import type { SessionId } from './ids';
+
 /** Reference projection for the draft supervised-opened-sessions contract.
  * Deliberately not wired into persisted SessionMeta or production consumers.
  */
@@ -63,4 +66,25 @@ export function projectOpenedSession(
     resultPreview: worker.resultPreview,
     canSettle,
   };
+}
+
+/** Routine completion may roll up only to a known, active root owned by its recipient.
+ * Permission request/response identities remain on the worker, independently of this route.
+ */
+export function resolveOpenedSessionNotificationTarget(
+  worker: SessionMeta,
+  opener: SessionMeta | undefined,
+  recipientUserId: string
+): SessionId {
+  const rootId = worker.openedByRootSessionId ?? worker.openedBySessionId;
+  return worker.openedSessionMode === 'supervised' &&
+    !worker.parentSessionId &&
+    rootId &&
+    rootId !== worker.id &&
+    opener?.id === rootId &&
+    !opener.parentSessionId &&
+    !opener.isArchived &&
+    opener.userId === recipientUserId
+    ? opener.id
+    : worker.id;
 }

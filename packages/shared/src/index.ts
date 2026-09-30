@@ -492,3 +492,5 @@ export * from './schedule-control';
 export * from './codex-auth-profile';
 
 export * from './session-acp-identity';
+
+export { resolveOpenedSessionNotificationTarget } from './supervised-opened-session';

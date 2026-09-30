@@ -54,6 +54,7 @@ import {
   getMachineRoomId,
   getSessionIdFromRoomId,
   getSessionRoomId,
+  resolveOpenedSessionNotificationTarget,
   type IssuePRMention,
   type SessionImageGroupContent,
   type SessionInputBlock,
@@ -9590,11 +9591,27 @@ export class MessageHandler {
     await this.runTurnCloudSideEffect(sessionId, 'completion notification', async () => {
       const sessionDoc = await this.workspaceDocument.getOrCreateSessionDoc(sessionId);
       const meta = await sessionDoc.getMetaState();
+      let notificationTarget = meta;
+      const openerId = meta?.openedByRootSessionId ?? meta?.openedBySessionId;
+      if (meta?.openedSessionMode === 'supervised' && openerId) {
+        try {
+          const record = await this.workspaceDocument.repo.getDocMeta(getSessionRoomId(openerId));
+          const opener =
+            record?.meta && !isLoroRepoDocDeleted(record)
+              ? (record.meta as SessionMeta)
+              : undefined;
+          if (resolveOpenedSessionNotificationTarget(meta, opener, userId) !== sessionId) {
+            notificationTarget = opener;
+          }
+        } catch {
+          // Unknown parent metadata keeps a routable worker notification.
+        }
+      }
       const workspaceSlug = this.workspaceSlug?.trim() || this.workspaceId;
       await notificationService.notifySessionCompleted({
-        sessionId,
+        sessionId: notificationTarget?.id ?? sessionId,
         occurrenceId,
-        sessionTitle: meta?.title,
+        sessionTitle: notificationTarget?.title,
         pullRequests: meta?.pullRequests,
         workspaceId: this.workspaceId,
         workspaceSlug,

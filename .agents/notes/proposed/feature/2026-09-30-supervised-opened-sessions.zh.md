@@ -65,3 +65,8 @@ LoroRepo 和 MCP 所属测试覆盖这些边界。
 监督 parent 卡现展示持久化权限等待，不改变精确 Operation 状态。点击打开
 worker 处理原请求；等待解除时标记消失。handoff/历史 peer/子 Tab 卡保持原样。
 云通知汇总、inbox 隐藏、roster 和 settlement 尚未完成。
+
+普通完成通知在 opener root 元数据确定、未归档且属于通知接收者时指向 root；
+元数据缺失、归档、其他用户或 root 实为子 Tab 时回退 worker。权限请求身份仍
+在 worker。现有相关会话树保留计数和导航，在无机器实时 presence 时也显示监督
+权限等待。专用 roster settlement、未读汇总和权限推送分组仍未完成。

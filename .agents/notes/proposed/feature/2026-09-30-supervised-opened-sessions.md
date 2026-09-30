@@ -87,3 +87,10 @@ Supervised parent cards now expose durable permission waits without changing exa
 Operation status. Clicking opens the worker to answer its original request; clearing
 the wait removes the badge. Handoff/legacy/child cards stay unchanged. Cloud
 notification roll-up, inbox suppression, roster and settlement remain unfinished.
+
+Routine completion notifications now target a known active opener root when its
+owner is the notification recipient; missing, archived, foreign-user or child-root
+metadata falls back to the worker. Exact permission request identities remain on
+the worker. The existing related-Sessions tree preserves its count/navigation and
+shows durable supervised consent waits even without live machine presence.
+Dedicated roster settlement, unread roll-up and permission-push grouping remain open.

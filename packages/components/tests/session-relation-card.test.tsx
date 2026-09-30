@@ -436,6 +436,8 @@ describe('Session relation cards', () => {
     meta(createdSessionId, 'Created', {
       openedBySessionId: 'opener-tab',
       openedByRootSessionId: openerSessionId,
+      openedSessionMode: 'supervised',
+      awaitingUserSince: 1,
     });
     const opened: unknown[] = [];
 
@@ -461,6 +463,11 @@ describe('Session relation cards', () => {
 
     const rows = Array.from(document.querySelectorAll('[data-session-relation-row]'));
     expect(rows.map((row) => row.textContent)).toEqual(['Top', 'Opener', 'Opener tab', 'Created']);
+    expect(
+      document.querySelector(
+        `[data-session-relation-row="${createdSessionId}"][data-supervised-worker] [data-session-row-indicator]`
+      )
+    ).not.toBeNull();
     expect(
       document
         .querySelector(`[data-session-relation-row="${createdSessionId}"]`)
