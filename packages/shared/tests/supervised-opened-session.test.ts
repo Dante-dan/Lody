@@ -34,6 +34,7 @@ describe('draft supervised opened Session projection', () => {
     for (const target of [
       undefined,
       { ...opener, isArchived: true },
+      { ...opener, isTabClosed: true },
       { ...opener, userId: 'another' },
       { ...opener, id: 'other' as SessionId },
       { ...opener, parentSessionId: 'top' as SessionId },

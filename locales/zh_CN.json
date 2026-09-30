@@ -4600,5 +4600,10 @@
   "sessions.prTab.verdictChecksFailed": "{{count}} 项检查失败",
   "sessions.prTab.verdictCheckRunningOne": "1 项检查运行中",
   "sessions.prTab.verdictChecksRunning": "{{count}} 项检查运行中",
-  "sessions.prTab.checksFailedOf": "{{total}} 项检查中 {{failed}} 项失败"
+  "sessions.prTab.checksFailedOf": "{{total}} 项检查中 {{failed}} 项失败",
+  "sessions.openedBy.settledWorker": "已收起的 worker",
+  "sessions.openedBy.settleWorker": "收起已结束的 worker",
+  "sessions.openedBy.settleAll": "收起已结束的 worker",
+  "sessions.openedBy.settleFailed": "无法收起 worker",
+  "sessions.openedBy.workers": "打开的 worker"
 }

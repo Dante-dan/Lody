@@ -24,10 +24,11 @@ Edit `AGENTS.md`, not its `CLAUDE.md` symlink. Ownership: [README.md](README.md)
 - Empty-state presentation stays outside the list, even with an empty leading Fragment:
   zero-height caches can hide the first user row. Preserve live activity labels/tones.
   Apply the header inset once to the whole scroller.
-- Create `operation_progress` cards update in place per materialized target; bind
-  status to its exact Turn; use primitive title/consent selectors. `progressMessageId`
-  suppresses duplicate completion cards; legacy completions keep successful-target
-  cards. Rationale: [README.md](README.md#creation-progress).
+- Creation progress binds status to the exact Turn and de-duplicates completion.
+  Terminal supervised workers may settle by Operation id only; new work/consent
+  restores them. Re-read owner/consent before a writer metadata patch; never
+  archive/delete or change read receipts. Keep title/consent selectors primitive.
+  [Creation progress](README.md#creation-progress).
 
 ## Turn Folding And Layout
 

@@ -85,15 +85,14 @@ The real LoroRepo and MCP suites cover these boundaries.
 
 Supervised parent cards now expose durable permission waits without changing exact
 Operation status. Clicking opens the worker to answer its original request; clearing
-the wait removes the badge. Handoff/legacy/child cards stay unchanged. Cloud
-notification roll-up, inbox suppression, roster and settlement remain unfinished.
+the wait removes the badge. Handoff/legacy/child cards stay unchanged. Worker inbox suppression and permission push grouping remain unfinished.
 
 Routine completion notifications now target a known active opener root when its
-owner is the notification recipient; missing, archived, foreign-user or child-root
+owner is the notification recipient; missing, closed, archived, foreign-user or child-root
 metadata falls back to the worker. Exact permission request identities remain on
 the worker. The existing related-Sessions tree preserves its count/navigation and
 shows durable supervised consent waits even without live machine presence.
-Dedicated roster settlement and permission-push grouping remain open.
+Permission-push grouping remains open.
 
 ## Opener unread attention slice
 
@@ -104,5 +103,10 @@ uses each conversation's own read receipt; viewing the root never marks unseen
 worker output read. Durable worker permission waits remain visible without live
 presence, while Working still depends on presence. The dock counts that routed
 attention once; missing, closed, archived or foreign-owner roots retain worker
-fallback. This map never selects archive, restore or deletion targets. Settlement
-and permission-push grouping remain unfinished, and the Spec is still draft.
+fallback. This map never selects archive, restore or deletion targets. Permission-push grouping remains unfinished, and the Spec is still draft.
+
+## Production creation roster settlement
+
+Creation progress now groups workers with an active count. Finished supervised workers may be settled individually or together. Settlement writes only the creating Operation id to a dedicated Session metadata field; documents, lifecycle targets, read receipts and consent identities remain unchanged. Running, nonterminal, handoff and permission-waiting workers are ineligible. The writer re-reads ownership and durable consent and checks current presence before writing. A resumed worker or a new durable permission wait restores its card and active count. Settled workers retain a compact navigation link. This is a creation-Operation roster, not a cross-Operation supervisor dashboard.
+
+Permission push grouping remains outside this slice: the public notification and resolution contract has only the worker `sessionId` with its request identity. A separate attention target and compatible hosted consumer are required before grouping it at the opener; replacing the existing session id would misroute consent.

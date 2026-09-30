@@ -83,7 +83,8 @@ export function resolveOpenedSessionNotificationTarget(
     rootId !== worker.id &&
     opener?.id === rootId &&
     !opener.parentSessionId &&
-    !opener.isArchived &&
+    opener.isArchived !== true &&
+    opener.isTabClosed !== true &&
     opener.userId === recipientUserId
     ? opener.id
     : worker.id;

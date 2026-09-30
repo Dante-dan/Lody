@@ -220,7 +220,10 @@ import { cn } from '@/lib/utils';
 import { ConversationColumn } from '@/components/shared/conversation-column';
 import type { TurnIndexRow } from '@/lib/conversation-view';
 import { TurnPlaceholderRow, estimatePlaceholderHeight } from './turn-placeholder-row';
-import { CreatedSessionOperationCard } from './created-session-operation-card';
+import {
+  CreatedSessionOperationCard,
+  CreatedSessionWorkersRoster,
+} from './created-session-operation-card';
 import { OperationReplyCard } from './operation-reply-card';
 import type { SessionNavigationTarget } from '@/lib/session-navigation';
 import { AcpAuthenticationPanel } from '@/components/settings/acp-authentication-panel';
@@ -2610,22 +2613,12 @@ const SystemMessageRowView = ({
             script={item}
           />
         ) : item.type === 'operation_progress' ? (
-          <div
+          <CreatedSessionWorkersRoster
             key={item.operationId}
-            className="flex flex-col gap-2"
-            data-session-create-progress=""
-          >
-            {item.items.map((target) => (
-              <CreatedSessionOperationCard
-                key={target.target.sessionId}
-                sessionId={target.target.sessionId}
-                fallbackTitle={target.label}
-                status={target.status}
-                detail={target.resultPreview}
-                onNavigateSession={onNavigateSession}
-              />
-            ))}
-          </div>
+            operationId={item.operationId}
+            items={item.items}
+            onNavigateSession={onNavigateSession}
+          />
         ) : (
           <OperationCompletionView
             key={`${item.deliveryId}-${itemIndex}`}
@@ -2726,6 +2719,7 @@ const OperationCompletionView = ({
             fallbackTitle={card.fallbackTitle}
             status={card.status}
             detail={card.detail}
+            operationId={completion.operationId}
             onNavigateSession={onNavigateSession}
           />
         ) : (

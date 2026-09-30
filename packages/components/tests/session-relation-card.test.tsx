@@ -4,10 +4,19 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createStore, Provider } from 'jotai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { getSessionRoomId, type SessionHistoryParsed, type SessionId } from '@lody/shared';
+import {
+  getSessionRoomId,
+  type SessionHistoryParsed,
+  type SessionId,
+  type SessionMeta,
+} from '@lody/shared';
 
 import { setDocMetaByRoomIdAtom } from '../src/atoms/doc-meta';
-import { CreatedSessionOperationCard } from '../src/components/ai-gui/created-session-operation-card';
+import { runtimeAtom, type WorkspaceRuntime } from '../src/atoms/runtime';
+import {
+  CreatedSessionOperationCard,
+  CreatedSessionWorkersRoster,
+} from '../src/components/ai-gui/created-session-operation-card';
 import { MessageRowView } from '../src/components/ai-gui/view';
 import { SessionRelationCard } from '../src/components/shared/session-relation-card';
 import { SessionInfoBar } from '../src/components/sessions/session-info-bar';
@@ -61,6 +70,82 @@ describe('Session relation cards', () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+  });
+
+  it('persists finished worker settlement and restores consent visibility without deleting its document', async () => {
+    const store = createStore();
+    let meta: SessionMeta = {
+      id: createdSessionId,
+      machineId: 'machine',
+      userId: 'user-1',
+      createdAt: '2026-09-30T00:00:00Z',
+      cliType: 'builtin',
+      agentType: 'codex',
+      openedBySessionId: openerSessionId,
+      openedSessionMode: 'supervised',
+      title: 'Worker',
+    };
+    const room = getSessionRoomId(createdSessionId);
+    store.set(setDocMetaByRoomIdAtom, room, meta);
+    store.set(runtimeAtom, {
+      accountId: 'user-1',
+      repo: { getDocMeta: async () => ({ meta }) },
+      writer: {
+        upsertDocMeta: async (_room: string, patch: Partial<SessionMeta>) => {
+          meta = { ...meta, ...patch };
+          store.set(setDocMetaByRoomIdAtom, room, meta);
+        },
+      },
+    } as unknown as WorkspaceRuntime);
+    const runningId = 'running-worker' as SessionId;
+    const permissionId = 'permission-worker' as SessionId;
+    const handoffId = 'handoff-worker' as SessionId;
+    store.set(setDocMetaByRoomIdAtom, getSessionRoomId(runningId), { ...meta, id: runningId });
+    store.set(setDocMetaByRoomIdAtom, getSessionRoomId(permissionId), {
+      ...meta,
+      id: permissionId,
+      awaitingUserSince: 1,
+    });
+    store.set(setDocMetaByRoomIdAtom, getSessionRoomId(handoffId), {
+      ...meta,
+      id: handoffId,
+      openedSessionMode: 'handoff',
+    });
+    const render = () =>
+      root.render(
+        <Provider store={store}>
+          <CreatedSessionWorkersRoster
+            operationId="create-worker"
+            items={[
+              { target: { sessionId: createdSessionId }, status: 'succeeded' },
+              { target: { sessionId: runningId }, status: 'running' },
+              { target: { sessionId: permissionId }, status: 'failed' },
+              { target: { sessionId: handoffId }, status: 'succeeded' },
+            ]}
+          />
+        </Provider>
+      );
+    await act(async () => render());
+    expect(container.querySelector('[data-worker-roster-count="3"]')).not.toBeNull();
+    const button = Array.from(container.querySelectorAll('button')).find(
+      (b) => b.textContent === 'Settle finished workers'
+    );
+    expect(button).toBeDefined();
+    await act(async () => button?.click());
+    expect(meta.settledOpenedOperationId).toBe('create-worker');
+    expect(meta.isArchived).toBeUndefined();
+    expect(meta.isTabClosed).toBeUndefined();
+    expect(container.querySelector('[data-supervised-worker-settled]')).not.toBeNull();
+    expect(container.querySelectorAll('[data-session-creation-status]').length).toBe(3);
+    expect(container.querySelector('[data-worker-roster-count="2"]')).not.toBeNull();
+    await act(async () => {
+      meta = { ...meta, awaitingUserSince: 1 };
+      store.set(setDocMetaByRoomIdAtom, room, meta);
+    });
+    expect(container.querySelector('[data-supervised-worker-settled]')).toBeNull();
+    expect(container.querySelector('[data-worker-awaiting-user]')).not.toBeNull();
+    expect(container.querySelector('[data-worker-roster-count="3"]')).not.toBeNull();
+    expect(container.textContent).not.toContain('Settle finished worker');
   });
 
   it('navigates back to the precise opener from the provenance card', async () => {

@@ -4600,5 +4600,10 @@
   "sessions.prTab.verdictChecksFailed": "{{count}} checks failed",
   "sessions.prTab.verdictCheckRunningOne": "1 check running",
   "sessions.prTab.verdictChecksRunning": "{{count}} checks running",
-  "sessions.prTab.checksFailedOf": "{{failed}} of {{total}} checks failed"
+  "sessions.prTab.checksFailedOf": "{{failed}} of {{total}} checks failed",
+  "sessions.openedBy.settledWorker": "Settled worker",
+  "sessions.openedBy.settleWorker": "Settle finished worker",
+  "sessions.openedBy.settleAll": "Settle finished workers",
+  "sessions.openedBy.settleFailed": "Could not settle worker",
+  "sessions.openedBy.workers": "Opened workers"
 }

@@ -917,6 +917,8 @@ export type SessionMeta = {
   isArchived?: boolean;
   /** Shared tab visibility only; closing never changes the session lifecycle. */
   isTabClosed?: boolean;
+  /** Presentation-only settlement of the creating Operation; never lifecycle state. */
+  settledOpenedOperationId?: string;
   origin?: 'lody' | 'external-acp';
   /** When true, this session is pinned to the top of the sidebar list. */
   isPinned?: boolean;
