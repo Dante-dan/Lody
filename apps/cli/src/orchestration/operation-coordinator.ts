@@ -81,10 +81,7 @@ const targetFailureError = (history: SessionHistoryInput[], userTurnId: string) 
         reason === 'acp_upstream_api_error' ||
         reason === 'acp_provider_overloaded';
       // Provider text may include private paths; export the stable reason only.
-      return {
-        ...makeLodyError('TARGET_FAILED', `Target Turn failed (${reason}).`, retryable),
-        reason,
-      };
+      return makeLodyError('TARGET_FAILED', `Target Turn failed (${reason}).`, retryable);
     }
   }
   return makeLodyError('TARGET_FAILED', 'Target Turn failed.', false);

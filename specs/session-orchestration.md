@@ -49,8 +49,9 @@ acceptance remain to be verified after dependencies are installed.
 
 ## Target failure reasons (proposed)
 
-A failed target result retains `TARGET_FAILED` and adds an optional known
-`chat_failed` reason from that target user-turn interval. Transient memory
+A failed target result retains `TARGET_FAILED` and names the known
+`chat_failed` reason from that target user-turn interval in its message. The
+strict error object shape remains unchanged for older peers. Transient memory
 pressure, upstream API failures and provider overload are retryable; other
 reasons and missing notices retain a non-retryable result. Lody does not retry
 automatically. Arbitrary provider notice text is not exported to the requester;

@@ -1132,7 +1132,6 @@ describe('LodyOperationCoordinator', () => {
                 status: 'failed',
                 error: {
                   code: 'TARGET_FAILED',
-                  reason,
                   retryable,
                   message: `Target Turn failed (${reason}).`,
                 },
