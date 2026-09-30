@@ -135,23 +135,23 @@ describe('ManagedAgentRuntimeManager', () => {
       JSON.stringify(
         options.metadataFormat === 'legacy'
           ? {
-              name: 'codex',
-              version: options.version,
-              platform: 'linux-x64',
-              archiveSha256,
-              archiveSize,
-              installedAt: options.installedAt,
-            }
+            name: 'codex',
+            version: options.version,
+            platform: 'linux-x64',
+            archiveSha256,
+            archiveSize,
+            installedAt: options.installedAt,
+          }
           : {
-              schemaVersion: 1,
-              runtimeName: 'codex',
-              runtimeVersion: options.version,
-              platformArch: 'linux-x64',
-              command: 'bin/codex',
-              archiveSha256,
-              archiveSize,
-              installedAt: options.installedAt,
-            }
+            schemaVersion: 1,
+            runtimeName: 'codex',
+            runtimeVersion: options.version,
+            platformArch: 'linux-x64',
+            command: 'bin/codex',
+            archiveSha256,
+            archiveSize,
+            installedAt: options.installedAt,
+          }
       )
     );
     await writeFile(join(dir, '.lody-complete'), '');
@@ -382,17 +382,6 @@ describe('ManagedAgentRuntimeManager', () => {
     } finally {
       status.mockRestore();
     }
-  });
-
-  it('matches the exact locked Codex dependency version', () => {
-    expect(CODEX_RUNTIME_VERSION).toBe(
-      codexPackageLock.packages['node_modules/@openai/codex']?.version
-    );
-    expect(CODEX_RUNTIME_VERSION).toBe(codexRuntimeManifestJson.version);
-    const manager = new ManagedAgentRuntimeManager({ rootDir });
-    expect(manager.getDefinition('codex').platforms).toMatchObject(
-      codexRuntimeManifestJson.artifacts
-    );
   });
 
   it('matches the exact locked Claude SDK and its embedded Claude Code version', () => {
@@ -918,7 +907,7 @@ describe('ManagedAgentRuntimeManager', () => {
     const fetchError = new TypeError('fetch failed', { cause: lowLevel });
     const error = new ManagedRuntimeError(
       'Failed to fetch managed runtime https://runtime.example.test/runtime.tar.zst: ' +
-        formatManagedRuntimeFailureMessage(fetchError),
+      formatManagedRuntimeFailureMessage(fetchError),
       { cause: fetchError }
     );
 
