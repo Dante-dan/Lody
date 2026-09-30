@@ -581,7 +581,6 @@ describe('session MCP input schemas', () => {
         agentConfigId: 'manual-agent',
         modelId: 'manual-model',
         modeId: 'unoffered-mode',
-        configOptionValues: { _permission: 'unoffered-permission' },
         reasoningEffort: 'high',
         useCurrentSessionAsParent: false,
       },
@@ -605,6 +604,7 @@ describe('session MCP input schemas', () => {
         branch: 'feature/roles',
       },
     });
+    expect(resolved.input).not.toHaveProperty('modeId');
     expect(resolved.input).not.toHaveProperty('modelId');
     expect(resolved.input).not.toHaveProperty('reasoningEffort');
     expect(resolved.dispatchConfig).toEqual({
@@ -742,7 +742,7 @@ describe('session MCP input schemas', () => {
   });
 
   it('preserves explicit ACP permissions in single and batch dispatch and command identity', () => {
-    const selection = { modeId: 'ask', configOptionValues: { _permission: 'read-only' } };
+    const selection = { modeId: 'ask' };
     const single = SessionCreateToolInputSchema.parse({
       operationId: 'explicit-mode',
       prompt: 'work',
@@ -761,7 +761,19 @@ describe('session MCP input schemas', () => {
       defaults: { modeId: 'ask' },
       items: [{ prompt: 'one' }, { prompt: 'two', modeId: 'read-only' }],
     });
-    expect(batch.items).toHaveLength(2);
+    expect(
+      batch.items.map((item) => buildMcpTurnDispatchConfig({ ...batch.defaults, ...item }).modeId)
+    ).toEqual(['ask', 'read-only']);
+    expect(
+      buildResolvedMcpCreateCanonicalCommand(
+        resolveMcpSessionCreate(
+          { ...single, modeId: 'read-only' },
+          undefined,
+          { machineId: 'current-machine' },
+          undefined
+        )
+      )
+    ).not.toEqual(buildResolvedMcpCreateCanonicalCommand(resolved));
     expect(
       SessionCreateToolInputSchema.safeParse({
         operationId: 'bad-options',

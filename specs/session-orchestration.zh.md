@@ -43,8 +43,8 @@ Cloud 确认远端文档追平；OSS 确认权威 daemon repo，并在已有创�
 
 ## 显式 create 配置
 
-非 Role 的 MCP create 可为目标 Agent 请求显式 ACP `modeId` 与 `configOptionValues`。single 和 batch create 从目标公开 capability catalog 发现可选 mode id 与 option choices；acceptance 通过既有 CLI create 的目标 capability 与 machine access 检查验证，不支持或不可用的 selector 不允许替换成其他 mode。省略 selector 时保留既有默认值。
+非 Role 的 MCP create 可为目标 Agent 请求显式 ACP `modeId`。single 和 batch create 从目标公开 capability catalog 发现可选 mode id；acceptance 通过既有 CLI create 的目标 capability 与 machine access 检查验证，不支持或不可用的 selector 不允许替换成其他 mode。省略 selector 时保留既有默认值。
 
-选择参与 Operation command identity，并冻结在已接受目标的 execution config 中，retry/recovery 不能静默改权限。显式 Agent Role 始终权威：manual mode/option 字段在验证、identity 和 dispatch 之前移除。这些 selector 不授予 machine/project access，也不改变 active requester identity。
+选择参与 Operation command identity，并冻结在已接受目标的 execution config 中，retry/recovery 不能静默改权限。显式 Agent Role 始终权威：manual mode 字段在验证、identity 和 dispatch 之前移除。这些 selector 不授予 machine/project access，也不改变 active requester identity。
 
 本节为 #1172 的 draft intent，不声称本 revision 有人工批准。
