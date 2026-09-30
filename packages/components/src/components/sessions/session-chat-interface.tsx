@@ -4013,6 +4013,7 @@ export const SessionChatInterface = memo(
             agentRoleRevision: inputConfig.agentRoleRevision,
             resume: inputConfig.resume ?? undefined,
             chainDepth: 0,
+            sessionChatOrigin: undefined,
           };
 
           if (!guardNewBillableTurn()) {
