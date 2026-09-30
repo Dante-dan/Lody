@@ -25,9 +25,8 @@ Edit `AGENTS.md`, not its `CLAUDE.md` symlink. Ownership: [README.md](README.md)
   zero-height caches can hide the first user row. Preserve live activity labels/tones.
   Apply the header inset once to the whole scroller.
 - Creation progress binds status to the exact Turn and de-duplicates completion.
-  Terminal supervised workers may settle by Operation id only; new work/consent
-  restores them. Re-read owner/consent before a writer metadata patch; never
-  archive/delete or change read receipts. Keep title/consent selectors primitive.
+  Settle terminal supervised work by Operation id; new work/consent restores it.
+  Re-read owner/consent before writing; no archive/delete/read-receipt changes.
   [Creation progress](README.md#creation-progress).
 
 ## Turn Folding And Layout
