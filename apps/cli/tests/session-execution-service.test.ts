@@ -2516,101 +2516,116 @@ describe('SessionExecutionService', () => {
     expect(getHistory()[0]?.status).toBe('pending');
   });
 
-  it('rejects a chat turn before prompt when memory pressure persists', async () => {
-    let history: Array<Record<string, unknown>> = [
-      {
-        id: 'turn-user-1',
-        role: 'user',
-        status: 'pending',
-        read: false,
-      },
-    ];
-    const agentClient = {
-      isCreated: vi.fn(() => true),
-      cancel: vi.fn(async () => {}),
-      prompt: vi.fn(async () => ({})),
-      currentModel: undefined,
-    };
-    const activeSession = {
-      sessionId: 'session-1' as SessionId,
-      acpSessionId: 'acp-1' as ACPSessionId,
-      agentClient,
-      terminalManager: {} as unknown,
-      getWorkdir: () => '/tmp',
-      getHostWorkdir: () => '/tmp',
-      getParentSessionId: () => undefined,
-      exec: vi.fn(async () => ''),
-      terminate: vi.fn(async () => {}),
-      updateGitIdentity: vi.fn(),
-      createAgent: vi.fn(async () => 'acp-1'),
-      applyExecutionPlaneLimits: vi.fn(async () => {}),
-    };
-    const sessionDoc = withHistoryPort({
-      getMetaState: vi.fn(async () => ({ isArchived: false })),
-      setStatus: vi.fn(async () => {}),
-      getHistory: vi.fn(() => history),
-      updateHistory: vi.fn(async (updater: (prev: typeof history) => typeof history) => {
-        history = updater(history);
-      }),
-    });
-    const upsertDocMeta = vi.fn(async () => {});
-    const deps = createBaseDeps({
-      sessionManager: {
-        getSession: vi.fn(() => activeSession),
-        getPendingSession: vi.fn(() => null),
-        createSession: vi.fn(),
-        setSessionError: vi.fn(),
-        terminateSession: vi.fn(),
-        refreshGhTokenForSession: vi.fn(async () => {}),
-      } as unknown as SessionManager,
-      workspaceDocument: {
-        repo: {
-          upsertDocMeta,
-          getDocMeta: vi.fn(async () => undefined),
+  it.each(['user', 'delivery'] as const)(
+    'rejects a %s turn before prompt when memory pressure persists',
+    async (dispatchSource) => {
+      let history: Array<Record<string, unknown>> = [
+        {
+          id: 'turn-user-1',
+          role: 'user',
+          status: 'pending',
+          read: false,
         },
-        getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
-        updateAcpCapabilities: vi.fn(async () => {}),
-      } as unknown as LoroDocumentManager,
-      evictForMemoryPressure: vi.fn(async () => ({
-        availableMemoryBytes: 64 * 1024 * 1024,
-        thresholdBytes: 1024 * 1024 * 1024,
-        hadMemoryPressure: true,
-        stillUnderPressure: true,
-        evictedSessionIds: [],
-        pressureReason: 'physical',
-      })),
-    });
+      ];
+      const agentClient = {
+        isCreated: vi.fn(() => true),
+        cancel: vi.fn(async () => {}),
+        prompt: vi.fn(async () => ({})),
+        currentModel: undefined,
+      };
+      const activeSession = {
+        sessionId: 'session-1' as SessionId,
+        acpSessionId: 'acp-1' as ACPSessionId,
+        agentClient,
+        terminalManager: {} as unknown,
+        getWorkdir: () => '/tmp',
+        getHostWorkdir: () => '/tmp',
+        getParentSessionId: () => undefined,
+        exec: vi.fn(async () => ''),
+        terminate: vi.fn(async () => {}),
+        updateGitIdentity: vi.fn(),
+        createAgent: vi.fn(async () => 'acp-1'),
+        applyExecutionPlaneLimits: vi.fn(async () => {}),
+      };
+      const sessionDoc = withHistoryPort({
+        getMetaState: vi.fn(async () => ({ isArchived: false })),
+        setStatus: vi.fn(async () => {}),
+        getHistory: vi.fn(() => history),
+        updateHistory: vi.fn(async (updater: (prev: typeof history) => typeof history) => {
+          history = updater(history);
+        }),
+      });
+      const upsertDocMeta = vi.fn(async () => {});
+      const deps = createBaseDeps({
+        sessionManager: {
+          getSession: vi.fn(() => activeSession),
+          getPendingSession: vi.fn(() => null),
+          createSession: vi.fn(),
+          setSessionError: vi.fn(),
+          terminateSession: vi.fn(),
+          refreshGhTokenForSession: vi.fn(async () => {}),
+        } as unknown as SessionManager,
+        workspaceDocument: {
+          repo: {
+            upsertDocMeta,
+            getDocMeta: vi.fn(async () => undefined),
+          },
+          getOrCreateSessionDoc: vi.fn(async () => sessionDoc),
+          updateAcpCapabilities: vi.fn(async () => {}),
+        } as unknown as LoroDocumentManager,
+        evictForMemoryPressure: vi.fn(async () => ({
+          availableMemoryBytes: 64 * 1024 * 1024,
+          thresholdBytes: 1024 * 1024 * 1024,
+          hadMemoryPressure: true,
+          stillUnderPressure: true,
+          evictedSessionIds: [],
+          pressureReason: 'physical',
+        })),
+      });
 
-    const service = new SessionExecutionService(deps);
-    await service.continueSession({
-      type: 'session/chat',
-      sessionId: 'session-1' as SessionId,
-      machineId: 'machine-1',
-      workspaceId: 'workspace-1' as WorkspaceId,
-      project: undefined,
-      acpSessionConfig: { prompt: 'hi', cliType: 'builtin', agentType: 'codex' },
-      userTurnId: 'turn-user-1',
-      userId: 'user-1',
-      userName: 'User',
-      userEmail: 'user@example.com',
-    });
+      const service = new SessionExecutionService(deps);
+      const settlements: string[] = [];
+      await service.continueSession(
+        {
+          type: 'session/chat',
+          sessionId: 'session-1' as SessionId,
+          machineId: 'machine-1',
+          workspaceId: 'workspace-1' as WorkspaceId,
+          project: undefined,
+          acpSessionConfig: { prompt: 'hi', cliType: 'builtin', agentType: 'codex' },
+          userTurnId: 'turn-user-1',
+          userId: 'user-1',
+          userName: 'User',
+          userEmail: 'user@example.com',
+        },
+        {
+          dispatchSource,
+          onTurnSettled: async (outcome) => {
+            settlements.push(outcome);
+          },
+        }
+      );
 
-    expect(deps.recordChatFailure).toHaveBeenCalledWith(
-      sessionDoc,
-      'memory_pressure',
-      expect.stringContaining('The turn was not started')
-    );
-    expect(history[0]?.status).toBe('failed');
-    expect(agentClient.prompt).not.toHaveBeenCalled();
-    expect(deps.touchSession).toHaveBeenCalled();
-    expect(upsertDocMeta).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        lastHandledUserMsgId: 'turn-user-1',
-        processingUserMsgId: undefined,
-      })
-    );
-  });
+      expect(deps.recordChatFailure).toHaveBeenCalledWith(
+        sessionDoc,
+        'memory_pressure',
+        expect.stringContaining('The turn was not started')
+      );
+      expect(settlements).toEqual([dispatchSource === 'delivery' ? 'not_started' : 'handled']);
+      expect(history[0]?.status).toBe(dispatchSource === 'delivery' ? 'pending' : 'failed');
+      expect(agentClient.prompt).not.toHaveBeenCalled();
+      expect(deps.touchSession).toHaveBeenCalled();
+      if (dispatchSource === 'user') {
+        expect(upsertDocMeta).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({
+            lastHandledUserMsgId: 'turn-user-1',
+            processingUserMsgId: undefined,
+          })
+        );
+      }
+    }
+  );
 
   it('exposes RPC invocation identity before prepared dispatch awaits machine access', async () => {
     let resolveAccess!: (value: {
@@ -9210,8 +9225,10 @@ describe('SessionExecutionService initialization deadline', () => {
         refreshGhTokenForSession: vi.fn(async () => {}),
       } as unknown as SessionManager,
       workspaceDocument,
-      startSessionActivePresence: (sessionId: SessionId, phase?: SessionActivePresencePhase | null) =>
-        presence.start(sessionId, phase),
+      startSessionActivePresence: (
+        sessionId: SessionId,
+        phase?: SessionActivePresencePhase | null
+      ) => presence.start(sessionId, phase),
       setSessionActivePresencePhase: (
         sessionId: SessionId,
         phase: SessionActivePresencePhase | null,
@@ -9298,9 +9315,9 @@ describe('SessionExecutionService initialization deadline', () => {
 
       // The turn runtime is released, so the session stops counting as active
       // and becomes collectable again.
-      expect(harness.service.getExecutionSnapshot('session-stalled-init' as SessionId).hasActiveTurn).toBe(
-        false
-      );
+      expect(
+        harness.service.getExecutionSnapshot('session-stalled-init' as SessionId).hasActiveTurn
+      ).toBe(false);
     } finally {
       vi.useRealTimers();
     }

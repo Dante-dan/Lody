@@ -3691,7 +3691,12 @@ export class SessionExecutionService {
           turnId: runtime.turnId,
           reason: error.reason,
         });
-        settlement = 'handled';
+        // A pre-provider halt cannot acknowledge an Operation completion:
+        // its durable system Turn exists, but the agent never received it.
+        settlement =
+          options.dispatchSource === 'delivery' && !runtime.promptStarted
+            ? 'not_started'
+            : 'handled';
       } else if (
         isSessionTurnCancelled(error) ||
         runtime.cancelFinalized ||
