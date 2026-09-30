@@ -1,3 +1,5 @@
+import { formatSessionChatPrompt } from '@/session/session-execution-helpers';
+import type { SessionChatOrigin } from '@lody/shared';
 import {
   ACP_CAPABILITY_ROW_FAMILIES,
   getDeclaredModelControls,
@@ -1339,6 +1341,7 @@ async function appendUserPromptHistory(args: {
 
 function buildCliHistoryInputConfig(args: {
   prompt: string;
+  sessionChatOrigin?: SessionChatOrigin;
   cliType: SessionMeta['cliType'];
   agentType: SessionMeta['agentType'];
   modeId?: string;
@@ -1359,6 +1362,7 @@ function buildCliHistoryInputConfig(args: {
         : undefined,
     resume: args.resume,
     chainDepth: args.chainDepth,
+    ...(args.sessionChatOrigin ? { sessionChatOrigin: args.sessionChatOrigin } : {}),
   };
 }
 
@@ -3416,7 +3420,8 @@ export async function sendSessionChatResult(
     chainDepth: number;
     bypassSessionQuota?: boolean;
   },
-  delegatedRequester?: DelegatedSessionRequester
+  delegatedRequester?: DelegatedSessionRequester,
+  sessionChatOrigin?: SessionChatOrigin
 ): Promise<{
   sessionId: SessionId;
   machineId: MachineId;
@@ -3424,6 +3429,7 @@ export async function sendSessionChatResult(
   userTurnId: string;
   completionPromise?: Promise<Awaited<ReturnType<typeof waitForTurnCompletion>>>;
 }> {
+  const deliveredPrompt = formatSessionChatPrompt(prompt, sessionChatOrigin);
   const requester = resolveSessionRequester(auth, requesterUserIdOverride, delegatedRequester);
   const requesterUserId = requester.userId;
   const session = await validateSessionChatTargetForRequester({
@@ -3483,10 +3489,11 @@ export async function sendSessionChatResult(
   });
   const userTurn = await appendUserPromptHistory({
     sessionDoc,
-    prompt,
+    prompt: deliveredPrompt,
     userId: requesterUserId,
     inputConfig: buildCliHistoryInputConfig({
-      prompt,
+      prompt: deliveredPrompt,
+      sessionChatOrigin,
       cliType: session.cliType,
       agentType: session.agentType,
       modeId: effectiveDispatchConfig.modeId,

@@ -944,6 +944,26 @@ describe('message-schemas acpSessionConfig', () => {
 });
 
 describe('normalizeSessionTurnInputConfig', () => {
+  it('preserves bounded session-chat provenance through history parsing and normalization', () => {
+    const origin = {
+      kind: 'session',
+      sessionId: 'sender',
+      operationId: 'op-1',
+      sourceTurnId: 'source-turn',
+    };
+    expect(normalizeSessionTurnInputConfig({ sessionChatOrigin: origin })).toEqual({
+      sessionChatOrigin: origin,
+    });
+    expect(SessionHistoryInputConfigSchema.parse({ sessionChatOrigin: origin })).toEqual({
+      sessionChatOrigin: origin,
+    });
+    expect(
+      normalizeSessionTurnInputConfig({
+        prompt: 'hello',
+        sessionChatOrigin: { ...origin, kind: 'human' },
+      })
+    ).toEqual({ prompt: 'hello' });
+  });
   it('keeps valid fields and drops invalid ones', () => {
     const normalized = normalizeSessionTurnInputConfig({
       prompt: '  hello  ',

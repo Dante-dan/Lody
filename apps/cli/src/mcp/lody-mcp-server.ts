@@ -2791,7 +2791,13 @@ const startSessionChatOperation = async (args: SessionChatToolInput): Promise<un
           userTurnId: pendingItem.target.userTurnId,
           chainDepth: invoking.chainDepth + 1,
         },
-        toDelegatedSessionRequester(invoking.identity)
+        toDelegatedSessionRequester(invoking.identity),
+        {
+          kind: 'session',
+          sessionId: ctx.sessionId,
+          sourceTurnId: invoking.identity.sourceTurnId,
+          operationId: args.operationId,
+        }
       );
       if (result.userTurnId !== pendingItem.target.userTurnId) {
         throw new Error('Chat result did not preserve the preallocated target turn id.');
@@ -3401,7 +3407,13 @@ const startSessionChatManyOperation = async (args: SessionChatManyToolInput): Pr
               chainDepth: invoking.chainDepth + 1,
               bypassSessionQuota: shouldBypassSessionQuota('session_chat_many'),
             },
-            toDelegatedSessionRequester(invoking.identity)
+            toDelegatedSessionRequester(invoking.identity),
+            {
+              kind: 'session',
+              sessionId: ctx.sessionId,
+              sourceTurnId: invoking.identity.sourceTurnId,
+              operationId: args.operationId,
+            }
           );
           await withOperationStore((store) =>
             store.markItemInputDurable(
@@ -4028,7 +4040,13 @@ export function buildSessionToolServer(handlers?: SessionToolHandlers): McpServe
             buildStructuredOutputOptions(args),
             undefined,
             undefined,
-            toDelegatedSessionRequester(invoking.identity)
+            toDelegatedSessionRequester(invoking.identity),
+            {
+              kind: 'session',
+              sessionId: ctx.sessionId,
+              sourceTurnId: invoking.identity.sourceTurnId,
+              operationId: args.operationId,
+            }
           );
           const response = {
             ok: true,

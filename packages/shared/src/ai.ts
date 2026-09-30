@@ -1911,6 +1911,8 @@ export type ACPTurnConfig = {
   resume?: ACPSessionId;
   /** Lody-originated execution-chain depth. Human input omits this or uses zero. */
   chainDepth?: number;
+  /** Lody-owned sender provenance; never inferred from prompt text. */
+  sessionChatOrigin?: SessionChatOrigin;
 };
 
 /** Provider launch fields belong only to the durable session config, never per-turn input. */
@@ -1919,6 +1921,13 @@ export type ACPSessionConfig = ACPTurnConfig & {
   customAcp?: CustomAcpLaunchSpec;
   /** Advanced runtime binary override for builtin Claude/Codex agents. */
   runtimeOverrides?: BuiltinRuntimeOverrides;
+};
+
+export type SessionChatOrigin = {
+  kind: 'session';
+  sessionId: string;
+  sourceTurnId?: string;
+  operationId?: string;
 };
 
 /**

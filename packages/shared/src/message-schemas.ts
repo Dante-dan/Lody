@@ -370,6 +370,15 @@ export const SessionInputBlocksSchema = z
     }
   });
 
+export const SessionChatOriginSchema = z
+  .object({
+    kind: z.literal('session'),
+    sessionId: z.string().trim().min(1).max(256),
+    sourceTurnId: z.string().trim().min(1).max(256).optional(),
+    operationId: z.string().trim().min(1).max(256).optional(),
+  })
+  .strict();
+
 export const ACPTurnConfigSchema = z
   .object({
     prompt: z.string(),
@@ -385,6 +394,7 @@ export const ACPTurnConfigSchema = z
     issuePRMentions: z.array(IssuePRMentionSchema).optional(),
     resume: ACPSessionIdSchema.optional(),
     chainDepth: z.number().int().nonnegative().optional(),
+    sessionChatOrigin: SessionChatOriginSchema.optional(),
   })
   .passthrough();
 
@@ -514,6 +524,9 @@ export const normalizeSessionTurnInputConfig = (
   if (chainDepth !== undefined) {
     normalized.chainDepth = chainDepth;
   }
+
+  const sessionChatOrigin = maybeParseField(SessionChatOriginSchema, record.sessionChatOrigin);
+  if (sessionChatOrigin) normalized.sessionChatOrigin = sessionChatOrigin;
 
   const deliveryKind = maybeParseField(SessionHistoryDeliveryKindSchema, record._lodyDeliveryKind);
   if (deliveryKind !== undefined) {

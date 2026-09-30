@@ -2871,7 +2871,13 @@ export class MessageHandler {
         chainDepth: operation.initiatorChainDepth + 1,
         bypassSessionQuota: shouldBypassSessionQuota(operation.kind),
       },
-      delegatedRequester
+      delegatedRequester,
+      {
+        kind: 'session',
+        sessionId: operation.requesterSessionId,
+        operationId: operation.operationId,
+        sourceTurnId: operation.frozenContinuationConfig.sourceTurnId,
+      }
     );
   }
 
