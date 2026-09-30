@@ -25,8 +25,7 @@ Edit `AGENTS.md`, not its `CLAUDE.md` symlink. Ownership: [README.md](README.md)
   zero-height caches can hide the first user row. Preserve live activity labels/tones.
   Apply the header inset once to the whole scroller.
 - Create `operation_progress` cards update in place per materialized target; bind
-  status to its exact Turn; subscribe only to its title and a primitive supervised
-  permission-wait summary. The live wait badge never rewrites Operation status. `progressMessageId`
+  status to its exact Turn; use primitive title/consent selectors. `progressMessageId`
   suppresses duplicate completion cards; legacy completions keep successful-target
   cards. Rationale: [README.md](README.md#creation-progress).
 
