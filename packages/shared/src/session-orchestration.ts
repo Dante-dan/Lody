@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { ChatFailedReasonSchema } from './chat-failure-schemas';
+
 import type { MachineId, SessionId, WorkspaceId } from './ids';
 import type { SessionTurnInputConfig } from './ai';
 
@@ -23,6 +25,7 @@ export const LodyErrorSchema = z
     code: z.string().trim().min(1),
     message: z.string(),
     retryable: z.boolean(),
+    reason: ChatFailedReasonSchema.optional(),
   })
   .strict();
 

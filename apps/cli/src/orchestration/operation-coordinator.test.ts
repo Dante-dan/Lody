@@ -1097,6 +1097,94 @@ describe('LodyOperationCoordinator', () => {
   });
 
   it.each([
+    { reason: 'acp_auth_required' as const, retryable: false },
+    { reason: 'memory_pressure' as const, retryable: true },
+    { reason: 'acp_upstream_api_error' as const, retryable: true },
+    { reason: 'acp_provider_overloaded' as const, retryable: true },
+  ])(
+    'persists target failure reason $reason without provider text',
+    async ({ reason, retryable }) => {
+      const harness = await makeHarness();
+      const history = harness.histories.get(harness.targetSessionId)!;
+      history[0] = { ...history[0]!, status: 'failed' };
+      history.push({
+        id: 'failure-notice',
+        role: 'system',
+        timestamp: '2026-07-20T00:00:00.500Z',
+        items: [
+          {
+            type: 'system_notice',
+            name: 'chat_failed',
+            meta: { reason, message: '/private/provider-details' },
+          },
+        ],
+      });
+      harness.coordinator.start();
+      await harness.coordinator.idle();
+      harness.coordinator.stop();
+      const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
+      try {
+        expect(store.get(harness.requesterSessionId, 'review-round-1')?.completion).toMatchObject({
+          type: 'result',
+          value: {
+            items: [
+              {
+                status: 'failed',
+                error: {
+                  code: 'TARGET_FAILED',
+                  reason,
+                  retryable,
+                  message: `Target Turn failed (${reason}).`,
+                },
+              },
+            ],
+          },
+        });
+      } finally {
+        store.close();
+      }
+    }
+  );
+
+  it('does not borrow a failure notice from a later user turn', async () => {
+    const harness = await makeHarness();
+    const history = harness.histories.get(harness.targetSessionId)!;
+    history[0] = { ...history[0]!, status: 'failed' };
+    history.push({ id: 'later-turn', role: 'user', timestamp: '2026-07-20T00:00:01Z', items: [] });
+    history.push({
+      id: 'later-notice',
+      role: 'system',
+      timestamp: '2026-07-20T00:00:02Z',
+      items: [{ type: 'system_notice', name: 'chat_failed', meta: { reason: 'memory_pressure' } }],
+    });
+    harness.coordinator.start();
+    await harness.coordinator.idle();
+    harness.coordinator.stop();
+    const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
+    try {
+      expect(store.get(harness.requesterSessionId, 'review-round-1')?.completion).toMatchObject({
+        type: 'result',
+        value: {
+          items: [
+            {
+              status: 'failed',
+              error: {
+                code: 'TARGET_FAILED',
+                retryable: false,
+                message: 'Target Turn failed.',
+              },
+            },
+          ],
+        },
+      });
+      const completion = store.get(harness.requesterSessionId, 'review-round-1')?.completion;
+      expect(JSON.stringify(completion)).not.toContain('memory_pressure');
+    } finally {
+      store.close();
+    }
+  });
+
+  it.each([
     {
       status: 'failed' as const,
       expected: { status: 'failed', error: { code: 'TARGET_FAILED' } },

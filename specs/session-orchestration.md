@@ -46,3 +46,12 @@ Operation model is `apps/cli/src/orchestration/operation-model.ts`.
 
 This draft records the requested limit of 32. Runtime and deployed-client
 acceptance remain to be verified after dependencies are installed.
+
+## Target failure reasons (proposed)
+
+A failed target result retains `TARGET_FAILED` and adds an optional known
+`chat_failed` reason from that target user-turn interval. Transient memory
+pressure, upstream API failures and provider overload are retryable; other
+reasons and missing notices retain a non-retryable result. Lody does not retry
+automatically. Arbitrary provider notice text is not exported to the requester;
+the short message names the stable reason instead. This intent remains draft.

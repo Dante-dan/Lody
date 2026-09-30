@@ -8,6 +8,7 @@ import type { RepoWatchHandle } from 'loro-repo';
 
 import {
   buildMissingEmail,
+  ChatFailedMetaSchema,
   getServerNow,
   getSessionRoomId,
   isLoroRepoDocDeleted,
@@ -63,6 +64,32 @@ type ObservedDeliverySettlement = {
 );
 
 const TARGET_OUTPUT_PREVIEW_MAX_BYTES = 8 * 1024;
+// Reuse notices only in this user-turn interval, never another target turn.
+const targetFailureError = (history: SessionHistoryInput[], userTurnId: string) => {
+  const start = history.findIndex((entry) => entry.role === 'user' && entry.id === userTurnId);
+  for (let index = start + 1; start >= 0 && index < history.length; index += 1) {
+    const entry = history[index];
+    if (entry?.role === 'user') break;
+    if (entry?.role !== 'system') continue;
+    for (const item of entry.items ?? []) {
+      if (item.type !== 'system_notice' || item.name !== 'chat_failed') continue;
+      const parsed = ChatFailedMetaSchema.safeParse(item.meta);
+      if (!parsed.success) continue;
+      const reason = parsed.data.reason;
+      const retryable =
+        reason === 'memory_pressure' ||
+        reason === 'acp_upstream_api_error' ||
+        reason === 'acp_provider_overloaded';
+      // Provider text may include private paths; export the stable reason only.
+      return {
+        ...makeLodyError('TARGET_FAILED', `Target Turn failed (${reason}).`, retryable),
+        reason,
+      };
+    }
+  }
+  return makeLodyError('TARGET_FAILED', 'Target Turn failed.', false);
+};
+
 const MATERIALIZATION_RETRY_MIN_MS = 1_000;
 const MATERIALIZATION_RETRY_MAX_MS = 30_000;
 // A Delivery that could not run within this grace window after its Operation's
@@ -713,7 +740,7 @@ export class LodyOperationCoordinator {
         status: 'failed',
         ...(item.label ? { label: item.label } : {}),
         target: item.target,
-        error: makeLodyError('TARGET_FAILED', 'Target Turn failed.', false),
+        error: targetFailureError(history, item.target.userTurnId),
       };
     }
     if (userTurn?.status === 'canceled') {
