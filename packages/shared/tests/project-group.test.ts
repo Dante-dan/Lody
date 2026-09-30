@@ -32,8 +32,12 @@ describe('project grouping reference model', () => {
     const a = local('a');
     const b = local('b');
     const group = { ...empty, members: [a, b] };
-    expect(resolveProjectGroupMembers(group, (member) => member === a ? 'Available' : undefined))
-      .toEqual([{ member: a, value: 'Available' }, { member: b, value: undefined }]);
+    expect(
+      resolveProjectGroupMembers(group, (member) => (member === a ? 'Available' : undefined))
+    ).toEqual([
+      { member: a, value: 'Available' },
+      { member: b, value: undefined },
+    ]);
     expect(group.members).toEqual([a, b]);
   });
 

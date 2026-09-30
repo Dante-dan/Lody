@@ -34,3 +34,11 @@ Repository Vitest tests exercise machine-qualified identity, immutable add/remov
 idempotency, unresolved-member retention and unbound conversation references.
 No UI, CLI or offline-machine end-to-end behavior is claimed. The code is an
 unexported reference proposal; no human Spec approval or PR is claimed.
+
+The focused Vitest 3.2.4 suite passed all three tests on 2026-09-30.
+The reference source and test were formatted with the repository Oxfmt version.
+The full workspace install could not restore current-head dependencies: the
+Codex submodule manifest requires a newer version than the root lockfile, and
+the declared minimum-release-age policy rejects that newly published version.
+Full repository check/format therefore did not pass; no integration validation
+is inferred from the focused result. Documentation check passed.
