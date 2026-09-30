@@ -7,7 +7,7 @@ Translation: current
 
 ## 摘要
 
-Lody 已读取 Harness 设置，但当前锁定的 ACP 适配器只展示一个 DeepSeek 供应商，因此现有 agent 无法使用自定义 `llm-pi-ai.providers` 路由。提案要求在选择和执行时保留供应商/模型身份，使用 Harness 支持的凭据引用，并在路由不可用时明确失败。适配器 PR #15 的 fork 分支已合并当前主线代码；Lody 宿主仍锁定旧适配器，也尚未验证桌面端或真实供应商请求。设置 Spec 仍为需要人工审阅意图的草案。
+Lody 已读取 Harness 设置，但当前锁定的 ACP 适配器只展示一个 DeepSeek 供应商，因此现有 agent 无法使用自定义 `llm-pi-ai.providers` 路由。提案要求在选择和执行时保留供应商/模型身份，使用 Harness 支持的凭据引用，并在路由不可用时明确失败。适配器 PR #15 已合并上游；宿主改为锁定合并提交 `fbc5449`。现有启动器直接使用支持供应商路由的 profile 和固定包闭包，不另建宿主模型列表，也不复制凭据。桌面端和真实供应商请求尚未验证。设置 Spec 仍为需要人工审阅意图的草案。
 
 ## 边界与顺序
 
@@ -18,6 +18,6 @@ Lody 已读取 Harness 设置，但当前锁定的 ACP 适配器只展示一个 
 
 ## 证据与限制
 
-[Lody #602](https://github.com/LodyAI/Lody/issues/602) 说明使用场景，并明确区分源码检查与端到端验证。Lody main `1cf6928` 锁定子模块 `c5a9d4d`；其中 `profile.ts` 的包闭包包含 `dsh-llm-pi-ai` 但未挂载，`adapter.ts` 只列出一个供应商。[适配器 PR #15](https://github.com/LodyAI/acp-extension-dsh/pull/15) 现有 fork head `1e63b0b` 已合并适配器当前 main `c5a9d4d`：build、37 项单测、格式和 diff 检查通过。当前 head 尚未运行固定版本的完整 profile smoke、Lody 桌面 UI 或真实供应商请求。适配器上游合并及宿主 pin 和集成检查完成前，不能声称运行时已经交付。
+[Lody #602](https://github.com/LodyAI/Lody/issues/602) 说明使用场景，并明确区分源码检查与端到端验证。Lody main `1cf6928` 锁定子模块 `c5a9d4d`；其中 `profile.ts` 的包闭包包含 `dsh-llm-pi-ai` 但未挂载，`adapter.ts` 只列出一个供应商。[适配器 PR #15](https://github.com/LodyAI/acp-extension-dsh/pull/15) 现有 fork head `1e63b0b` 已合并适配器当前 main `c5a9d4d`：build、37 项单测、格式和 diff 检查通过。9 月 30 日上游以 `fbc5449` 合并 PR #15，宿主 pin 已选择该提交。宿主启动测试检查 npx 闭包中独立版本的 Pi AI 与 Schemastery peer 包。固定版本完整 profile smoke、Lody 桌面 UI 和真实供应商请求仍未验证；单测不能证明这些运行时路径。
 
 既有[设置 Spec](../../../../specs/deepseek-harness-settings.zh.md) 仍以草案记录预期行为；未发现本版本的人工批准。Lody fork PR 的 Context handoff 还要求作者对公开分享创作会话作出真实答复，不能编造。

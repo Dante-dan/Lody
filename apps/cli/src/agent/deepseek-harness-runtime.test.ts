@@ -153,6 +153,9 @@ describe('resolveDeepSeekHarnessProcessLaunch', () => {
     // a `DEEPSEEK_HARNESS_VERSION` specifier for it fails the cold install.
     expect(launch.args).toContain('@deepseek-ai/cordis@4.0.2');
     expect(launch.args).toContain('@deepseek-ai/cordis-plugin-hmr@1.0.17');
+    // Provider routes need the adapter's independently pinned peer closure.
+    expect(launch.args).toContain('@earendil-works/pi-ai@0.85.1');
+    expect(launch.args).toContain('@deepseek-ai/schemastery@3.18.2');
     expect(launch.args).not.toContain(`@deepseek-ai/cordis@${DEEPSEEK_HARNESS_VERSION}`);
     expect(launch.env[DEEPSEEK_HARNESS_HOME_ENV]).toBe(rootDir);
     expect(await readdir(rootDir)).toEqual(expect.arrayContaining(['profiles', 'sessions']));
