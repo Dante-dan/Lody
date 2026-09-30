@@ -17,4 +17,4 @@ The separate requester-idle wake defect (#1170) still needs a release-bound wake
 
 ## Verification limits
 
-The first targeted test could not collect because the Devin adapter submodule was absent. The declared submodule was initialized; the targeted memory-pressure checks passed (3 tests). The full owning suite and repository checks remain to be recorded. Formatting and docs check passed. No upstream approval is claimed.
+The first targeted test could not collect because the Devin adapter submodule was absent. The declared submodule was initialized; the targeted memory-pressure checks passed (3 tests). The full execution owning suite passed (146 tests); the coordinator owning suite passed (77 tests), including prepared-claim release, bounded retry and post-start uncertainty. Root `pnpm check` stopped in the Devin adapter build because its dependency installation is missing (`@types/node` / `acp-extension-core`); later root checks did not run. Formatting and docs check passed. No upstream approval is claimed.

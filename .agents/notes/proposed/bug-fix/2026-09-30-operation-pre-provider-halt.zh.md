@@ -17,4 +17,4 @@ Operation completion 在内存压力中止后可能被记为 handled，尽管 ag
 
 ## 验证边界
 
-首次定向测试因 Devin adapter submodule 缺失无法收集。初始化声明的 submodule 后，3 个定向内存压力测试通过。完整所属套件和仓库检查仍需记录。格式和 docs check 通过，不声称上游批准。
+首次定向测试因 Devin adapter submodule 缺失无法收集。初始化声明的 submodule 后，3 个定向内存压力测试通过。完整 execution 所属套件通过（146 个测试）；coordinator 所属套件通过（77 个测试），覆盖 prepared claim 释放、有界重试与启动后的不确定性。根目录 `pnpm check` 因 Devin adapter 缺少依赖（`@types/node` / `acp-extension-core`）在构建阶段停止，后续根目录检查未运行。根目录 `pnpm format` 和 docs check 通过，不声称上游批准。
