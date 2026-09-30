@@ -28,7 +28,7 @@ describe('daemon upgrade command execution', () => {
       { mode: 0o755 }
     );
     lifecycle = await import('./machine-lifecycle');
-  });
+  }, 60_000);
 
   beforeEach(() => vi.stubEnv('LODY_DATA_DIR', path.join(fixture.home, 'data')));
 

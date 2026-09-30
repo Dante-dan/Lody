@@ -23,4 +23,4 @@ Issue 提供实际事故日志，并非干净环境复现。现有 `pendingProce
 
 ## 验证
 
-扩展原有安装器测试，跨模块重载检查真实文件记录，覆盖 npm shim 成功与失败、目标已运行、`latest` 重投拒绝、新请求明确重试及过期。未运行原 Linux host、真实全局 npm 安装、cloud RPC 或 watchdog 重启；生命周期 13 项测试通过（原有 npm shim，冷启动模块导入钩子预算 60 秒）。`pnpm format` 与 `pnpm run docs check` 通过，后者仍有已有警告。对齐当前提交的 ACP 子模块并按 frozen lockfile 重装依赖后，CLI 类型检查通过；此前缺失 Devin manifests 和 MCP client 类型源于复用 checkout 的旧依赖。已启动完整 `pnpm check`，其最终结果单独记录。
+扩展原有安装器测试，跨模块重载检查真实文件记录，覆盖 npm shim 成功与失败、目标已运行、`latest` 重投拒绝、新请求明确重试及过期。未运行原 Linux host、真实全局 npm 安装、cloud RPC 或 watchdog 重启；生命周期 13 项测试通过（原有 npm shim，冷启动模块导入钩子明确预算 60 秒，保留原有测试超时和行为断言）。完整并发套件中的默认 10 秒 setup hook 在导入生命周期依赖图时超时，这是 setup 时间失败，不代表安装器行为断言失败。`pnpm format` 与 `pnpm run docs check` 通过，后者仍有已有警告。对齐当前提交的 ACP 子模块并按 frozen lockfile 重装依赖后，CLI 类型检查通过；此前缺失 Devin manifests 和 MCP client 类型源于复用 checkout 的旧依赖。已启动完整 `pnpm check`，其最终结果单独记录。
