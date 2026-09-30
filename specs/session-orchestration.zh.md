@@ -32,6 +32,18 @@ Cloud 确认远端文档追平；OSS 确认权威 daemon repo，并在已有创�
 检查固定 Turn。Cloud workspace 不能把云端断连当成本地权威。完成回传继续
 使用已有的单一所有者 Delivery 协议，不需要持久化 schema 或托管 API 变更。
 
+## 跨会话消息来源
+
+Session 发来的 chat 即使与接收方属于同一人，也仍是 Agent 编写的输入。
+目标 Turn 的 `sessionChatOrigin` 来自发起 Session 和冻结的 source Turn，
+不从发送方可控的正文推断。持久化重试使用 Operation 的 requester Session
+与 source Turn；授权请求所用的人类身份保持原有规则。
+
+接收 Agent 与历史读者看到 Lody 生成的非人类输入提示、发送方来源以及 JSON
+引用的正文。正文中的换行与伪造提示仍留在引用字符串中。普通人类 chat
+保持原样。文本降级方案不承诺 provider harness 会使用原生非人类角色；
+adapter 的带外来源元数据仍是独立扩展。
+
 ## 实现证据
 
 实现检查位于 `apps/cli/src/mcp/lody-mcp-server.ts`，共享上限位于

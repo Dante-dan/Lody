@@ -24,6 +24,36 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it('retains session-chat origin through a real history snapshot and reopen', () => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    const origin = { kind: 'session' as const, sessionId: 'sender', operationId: 'operation' };
+    mirror.historyWriter.append({
+      ...entry('session-chat'),
+      inputConfig: {
+        prompt: 'message',
+        cliType: 'builtin',
+        agentType: 'codex',
+        sessionChatOrigin: origin,
+      },
+    });
+    const before = doc.export({ mode: 'snapshot' });
+    expect(() =>
+      mirror.historyWriter.append({
+        ...entry('forged-origin'),
+        inputConfig: { sessionChatOrigin: { ...origin, kind: 'human' } },
+      } as unknown as SessionHistory)
+    ).toThrow();
+    expect(mirror.historyWriter.read('forged-origin')).toBeUndefined();
+    const restored = new Loro();
+    restored.import(before);
+    const reopened = open(restored);
+    expect(reopened.historyWriter.read('session-chat')?.inputConfig?.sessionChatOrigin).toEqual(
+      origin
+    );
+    mirror.dispose();
+    reopened.dispose();
+  });
   it('retains child message identities and scalar tool output without altering root identity', () => {
     const writer = open(new Loro()).historyWriter;
     writer.append({ ...entry('first'), role: 'assistant', acpTurnId: 'parent', items: [] });

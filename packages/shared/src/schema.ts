@@ -587,6 +587,15 @@ const acpSessionConfigSchema = schema
       agentRoleId: agentRoleIdSchema,
       agentRoleRevision: schema.Number({ required: false }),
       chainDepth: schema.Number({ required: false }),
+      sessionChatOrigin: schema.LoroMap(
+        {
+          kind: schema.String<'session'>(),
+          sessionId: schema.String(),
+          sourceTurnId: schema.String({ required: false }),
+          operationId: schema.String({ required: false }),
+        },
+        { required: false }
+      ),
     },
     { required: false }
   )

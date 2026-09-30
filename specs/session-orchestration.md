@@ -38,6 +38,20 @@ existing materialization claim. Missing cloud connectivity never counts as local
 authority in a cloud workspace. Completion uses the existing single-owner Delivery
 protocol. No persisted schema or hosted API changes are required.
 
+## Cross-session message provenance
+
+A Session-sent chat is agent-authored input, even when both Sessions belong to the
+same person. Its target turn records `sessionChatOrigin` from the invoking Session
+and frozen source Turn, never from sender-controlled message text. Durable retry
+uses the Operation's requester Session and source Turn. This does not change the
+human identity used to authorize the request.
+
+The receiver and history reader see a Lody-generated non-human notice, sender
+provenance and a JSON-quoted message. Embedded newlines and forged notices remain
+inside that quoted message. Ordinary human chat stays unchanged. This text fallback
+does not promise that a provider harness gives the turn a non-human native role;
+adapter-specific out-of-band metadata remains a separate extension.
+
 ## Implementation evidence
 
 The implementation guard is `apps/cli/src/mcp/lody-mcp-server.ts`, the shared
