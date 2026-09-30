@@ -1,7 +1,9 @@
 # Remote daemon lifecycle acknowledgements
 
 Status: draft
-Translation: pending
+Translation: current
+
+[中文](machine-lifecycle-ack.zh.md)
 
 ## Accepted work and response delivery
 
@@ -17,10 +19,34 @@ it must not produce a contradictory operation-failed response. Late completion o
 that attempt must not invoke the callback again.
 
 The existing process boundary retains its one-time exit guard. This contract does
-not add process-wide preparation serialization or cross-restart request deduplication.
+not add process-wide preparation serialization or restart-request deduplication.
 The deadline bounds waiting, not cancellation of the underlying HTTP request.
 A client timeout means the outcome is unconfirmed; it does not cancel accepted work
 or prove that the daemon failed to restart or upgrade. Completion reporting is separate.
+
+## Upgrade replay handling
+
+After authorization, an exact target equal to the running CLI version returns a
+successful response without accepting another process exit. `latest` cannot use
+this comparison because its resolved version is unknown to the Worker.
+
+Before accepting an upgrade, the Worker records the requester and request ID in
+its installation-profile data directory. The installer marks that receipt as
+attempted before starting npm. A prepared receipt admits the installer once; a
+redelivered request never authorizes another process exit. Attempts survive Worker and watchdog
+restarts for 25 hours, covering the Machine RPC stream's 24-hour retention window.
+An interrupted or failed installation counts as an attempt. If that request is
+redelivered while the target is not running (including `latest`), it returns an
+error explaining how to check the daemon path and npm prefix and retry explicitly
+with a new request. Rejected replay never schedules another lifecycle exit.
+Receipt read/write errors fail preparation or installation instead of installing
+without replay protection.
+
+This bounds repeat installation for the same request; it does not correct npm's
+installation prefix, verify watchdog handoff, resolve `latest`, or provide
+permanent exactly-once execution after the retention window. The local clock owns
+receipt expiry. A request with a new ID can retry a failed attempt. The intended
+behavior above remains a draft requiring human review.
 
 ## Implementation evidence
 
@@ -28,3 +54,5 @@ or prove that the daemon failed to restart or upgrade. Completion reporting is s
 - [CLI callback wiring](../apps/cli/src/lib/message-handler.ts)
 - [Process exit boundary](../apps/cli/src/commands/start.ts)
 - [Synthetic transport tests](../packages/loro-streams-rpc/tests/machine-rpc-server.test.ts)
+- [Upgrade attempts and installer](../apps/cli/src/lib/machine-lifecycle.ts)
+- [Installer replay regressions](../apps/cli/src/lib/machine-lifecycle-upgrade.test.ts)

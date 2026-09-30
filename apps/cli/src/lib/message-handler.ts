@@ -203,6 +203,8 @@ import {
   normalizeMachineUpgradeTargetVersion,
   verifyMachineLifecycleRequest,
   writeDaemonUpgradeIntent,
+  resolveDaemonUpgradeReplay,
+  prepareDaemonUpgradeAttempt,
 } from './machine-lifecycle';
 import { formatErrorMessage } from '@/utils/format-error';
 import { startTraceSpan, traceAsync } from '@/utils/trace-span';
@@ -8151,6 +8153,34 @@ export class MessageHandler {
     }
 
     try {
+      const replay = await resolveDaemonUpgradeReplay({
+        ...args,
+        targetVersion,
+        currentVersion: this.cliVersion,
+      });
+      // A verified exact-version request is complete when that version is
+      // running. accepted=false prevents the process exit callback.
+      if (replay === 'complete') {
+        return {
+          type: 'machine/upgrade_response',
+          machineId: this.machineId,
+          requestId: args.requestId,
+          success: true,
+          accepted: false,
+          disposition: 'accepted',
+          currentVersion: this.cliVersion,
+          targetVersion,
+        };
+      }
+      if (replay === 'attempted') {
+        return this.machineUpgradeFailure(
+          args.requestId,
+          'error',
+          `This upgrade request was already attempted, but the running CLI is ${this.cliVersion}. Check the daemon installation path and npm prefix, then send a new upgrade request to retry.`,
+          targetVersion
+        );
+      }
+      await prepareDaemonUpgradeAttempt({ ...args, targetVersion });
       await writeDaemonUpgradeIntent({
         action: 'upgrade',
         requestId: args.requestId,
@@ -8163,7 +8193,7 @@ export class MessageHandler {
       return this.machineUpgradeFailure(
         args.requestId,
         'error',
-        `Could not persist upgrade intent: ${formatErrorMessage(error)}`,
+        `Could not prepare upgrade: ${formatErrorMessage(error)}`,
         targetVersion
       );
     }

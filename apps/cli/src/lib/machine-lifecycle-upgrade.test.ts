@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fixture = vi.hoisted(() => ({ home: '' }));
 
@@ -17,6 +17,7 @@ describe('daemon upgrade command execution', () => {
   beforeAll(async () => {
     fixture.home = await mkdtemp(path.join(tmpdir(), 'lody upgrade test '));
     argsFile = path.join(fixture.home, 'npm-args.txt');
+    vi.stubEnv('LODY_DATA_DIR', path.join(fixture.home, 'data'));
     const windows = process.platform === 'win32';
     // Exercise a real .cmd shim on Windows, without invoking the installed npm.
     await writeFile(
@@ -29,7 +30,15 @@ describe('daemon upgrade command execution', () => {
     lifecycle = await import('./machine-lifecycle');
   });
 
-  afterEach(() => vi.unstubAllEnvs());
+  beforeEach(() => vi.stubEnv('LODY_DATA_DIR', path.join(fixture.home, 'data')));
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await rm(
+      path.join(path.dirname(lifecycle.DAEMON_UPGRADE_INTENT_FILE), 'daemon-upgrade-attempts.json'),
+      { force: true }
+    );
+  });
   afterAll(async () => {
     await rm(fixture.home, { recursive: true, force: true });
   });
@@ -63,5 +72,97 @@ describe('daemon upgrade command execution', () => {
     expect(errors).toEqual(
       exitCode === 0 ? [] : ['[daemon-upgrade] npm install failed with code 1: no output']
     );
+  });
+
+  it.each([0, 1])('retains an attempt across module reload after npm exit %i', async (exitCode) => {
+    vi.stubEnv('PATH', fixture.home);
+    vi.stubEnv('LODY_TEST_NPM_ARGS_FILE', argsFile);
+    vi.stubEnv('LODY_TEST_NPM_EXIT_CODE', String(exitCode));
+    const intent = {
+      action: 'upgrade' as const,
+      requestId: 'replayed-upgrade',
+      requesterUserId: 'synthetic-user',
+      targetVersion: '1.2.3',
+      requestedAtMs: 0,
+    };
+    await lifecycle.prepareDaemonUpgradeAttempt(intent, 1_000);
+    expect(
+      await lifecycle.resolveDaemonUpgradeReplay({ ...intent, currentVersion: '1.2.2' }, 1_000)
+    ).toBe('attempted');
+    await lifecycle.writeDaemonUpgradeIntent(intent);
+    await lifecycle.runDaemonUpgradeFromIntent({ logger: {}, nowMs: 1_000 });
+    expect(await lifecycle.readDaemonUpgradeIntent()).toBeNull();
+    vi.resetModules();
+    const restarted = await import('./machine-lifecycle');
+    expect(
+      await restarted.resolveDaemonUpgradeReplay({ ...intent, currentVersion: '1.2.3' }, 2_000)
+    ).toBe('complete');
+    expect(
+      await restarted.resolveDaemonUpgradeReplay({ ...intent, currentVersion: '1.2.2' }, 2_000)
+    ).toBe('attempted');
+    expect(
+      await restarted.resolveDaemonUpgradeReplay(
+        { ...intent, targetVersion: 'latest', currentVersion: '1.2.3' },
+        2_000
+      )
+    ).toBe('attempted');
+    expect(
+      await restarted.resolveDaemonUpgradeReplay(
+        { ...intent, requestId: 'fresh-request', currentVersion: '1.2.2' },
+        2_000
+      )
+    ).toBe('new');
+    expect(
+      await restarted.resolveDaemonUpgradeReplay(
+        { ...intent, requesterUserId: 'different-user', currentVersion: '1.2.2' },
+        2_000
+      )
+    ).toBe('new');
+    expect(
+      await restarted.resolveDaemonUpgradeReplay(
+        { ...intent, currentVersion: '1.2.2' },
+        1_000 + 25 * 60 * 60 * 1000
+      )
+    ).toBe('new');
+    await rm(argsFile, { force: true });
+    await restarted.writeDaemonUpgradeIntent(intent);
+    const errors: string[] = [];
+    expect(
+      await restarted.runDaemonUpgradeFromIntent({
+        logger: { error: (message) => errors.push(message) },
+        nowMs: 2_000,
+      })
+    ).toBe(false);
+    expect(errors[0]).toMatch(/already attempted/);
+    await expect(readFile(argsFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await restarted.readDaemonUpgradeIntent()).toBeNull();
+  });
+
+  it('does not install when the retained attempt file is corrupt', async () => {
+    vi.stubEnv('PATH', fixture.home);
+    vi.stubEnv('LODY_TEST_NPM_ARGS_FILE', argsFile);
+    vi.stubEnv('LODY_TEST_NPM_EXIT_CODE', '0');
+    await rm(argsFile, { force: true });
+    await lifecycle.writeDaemonUpgradeIntent({
+      action: 'upgrade',
+      requestId: 'new-upgrade',
+      requesterUserId: 'synthetic-user',
+      targetVersion: '1.2.3',
+      requestedAtMs: 0,
+    });
+    await writeFile(
+      path.join(path.dirname(lifecycle.DAEMON_UPGRADE_INTENT_FILE), 'daemon-upgrade-attempts.json'),
+      '{invalid'
+    );
+    const errors: string[] = [];
+    expect(
+      await lifecycle.runDaemonUpgradeFromIntent({
+        logger: { error: (message) => errors.push(message) },
+        nowMs: 1_000,
+      })
+    ).toBe(false);
+    expect(errors[0]).toMatch(/could not retain upgrade attempt/);
+    await expect(readFile(argsFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await lifecycle.readDaemonUpgradeIntent()).toBeNull();
   });
 });

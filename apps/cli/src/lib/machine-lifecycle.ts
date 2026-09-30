@@ -99,6 +99,100 @@ export type DaemonUpgradeIntent = z.infer<typeof DaemonUpgradeIntentSchema>;
 
 export const DAEMON_UPGRADE_INTENT_FILE = path.join(getLodyDataDir(), 'daemon-upgrade-intent.json');
 
+// Machine RPC requests remain replayable for 24 hours. Keep installer attempts
+// beyond that window so a restarted Worker cannot reinstall for the same request.
+const UPGRADE_ATTEMPT_RETENTION_MS = 25 * 60 * 60 * 1000;
+const DAEMON_UPGRADE_ATTEMPTS_FILE = path.join(getLodyDataDir(), 'daemon-upgrade-attempts.json');
+const UpgradeAttemptSchema = z
+  .object({
+    requestId: z.string().min(1),
+    requesterUserId: z.string().min(1),
+    targetVersion: z.string().min(1),
+    attemptedAtMs: z.number().finite().nonnegative(),
+    phase: z.enum(['prepared', 'attempted']),
+  })
+  .strict();
+const UpgradeAttemptsSchema = z
+  .object({
+    version: z.literal(1),
+    attempts: z.array(UpgradeAttemptSchema),
+  })
+  .strict();
+
+const readUpgradeAttempts = async () => {
+  try {
+    return UpgradeAttemptsSchema.parse(
+      JSON.parse(await fs.readFile(DAEMON_UPGRADE_ATTEMPTS_FILE, 'utf8'))
+    ).attempts;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return [];
+    throw error;
+  }
+};
+
+const hasDaemonUpgradeAttempt = async (
+  request: {
+    requestId: string;
+    requesterUserId: string;
+  },
+  nowMs = Date.now(),
+  attemptedOnly = false
+): Promise<boolean> => {
+  const attempts = await readUpgradeAttempts();
+  return attempts.some(
+    (attempt) =>
+      (!attemptedOnly || attempt.phase === 'attempted') &&
+      attempt.requestId === request.requestId &&
+      attempt.requesterUserId === request.requesterUserId &&
+      nowMs - attempt.attemptedAtMs < UPGRADE_ATTEMPT_RETENTION_MS
+  );
+};
+
+export const resolveDaemonUpgradeReplay = async (
+  request: {
+    requestId: string;
+    requesterUserId: string;
+    targetVersion: string;
+    currentVersion: string;
+  },
+  nowMs = Date.now()
+): Promise<'complete' | 'attempted' | 'new'> => {
+  if (request.targetVersion === request.currentVersion) return 'complete';
+  return (await hasDaemonUpgradeAttempt(request, nowMs)) ? 'attempted' : 'new';
+};
+
+const recordDaemonUpgradeAttempt = async (
+  intent: Pick<DaemonUpgradeIntent, 'requestId' | 'requesterUserId' | 'targetVersion'>,
+  nowMs: number,
+  phase: 'prepared' | 'attempted'
+) => {
+  const attempts = (await readUpgradeAttempts()).filter(
+    (attempt) =>
+      nowMs - attempt.attemptedAtMs < UPGRADE_ATTEMPT_RETENTION_MS &&
+      !(
+        attempt.requestId === intent.requestId && attempt.requesterUserId === intent.requesterUserId
+      )
+  );
+  attempts.push({
+    requestId: intent.requestId,
+    requesterUserId: intent.requesterUserId,
+    targetVersion: intent.targetVersion,
+    attemptedAtMs: nowMs,
+    phase,
+  });
+  await fs.mkdir(path.dirname(DAEMON_UPGRADE_ATTEMPTS_FILE), { recursive: true });
+  const tmpPath = `${DAEMON_UPGRADE_ATTEMPTS_FILE}.${process.pid}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify({ version: 1, attempts })}\n`, { mode: 0o600 });
+  await fs.rename(tmpPath, DAEMON_UPGRADE_ATTEMPTS_FILE);
+};
+
+// Persist admission before accepting a destructive operation. If receipt writes
+// fail, the Worker reports an error while it is still online.
+export const prepareDaemonUpgradeAttempt = async (
+  intent: Pick<DaemonUpgradeIntent, 'requestId' | 'requesterUserId' | 'targetVersion'>,
+  nowMs = Date.now()
+) => recordDaemonUpgradeAttempt(intent, nowMs, 'prepared');
+
 const resolveConvexSiteUrl = (): string | null => {
   if (LODY_AUTH_SITE_URL) {
     return normalizeBaseUrl(LODY_AUTH_SITE_URL);
@@ -315,6 +409,7 @@ export const runDaemonUpgradeFromIntent = async (args: {
   timeoutMs?: number;
   spawnImpl?: SpawnLike;
   signal?: AbortSignal;
+  nowMs?: number;
 }): Promise<boolean> => {
   const intent = await readDaemonUpgradeIntent();
   if (!intent) {
@@ -323,6 +418,23 @@ export const runDaemonUpgradeFromIntent = async (args: {
   }
 
   try {
+    const nowMs = args.nowMs ?? Date.now();
+    try {
+      if (await hasDaemonUpgradeAttempt(intent, nowMs, true)) {
+        args.logger.error?.(
+          '[daemon-upgrade] this request was already attempted; send a new upgrade request after checking the installation'
+        );
+        return false;
+      }
+      // Record before npm starts, including attempts interrupted by a crash or a
+      // failed install. A fresh request is required to explicitly retry them.
+      await recordDaemonUpgradeAttempt(intent, nowMs, 'attempted');
+    } catch (error) {
+      args.logger.error?.(
+        `[daemon-upgrade] could not retain upgrade attempt: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return false;
+    }
     const targetVersion = normalizeMachineUpgradeTargetVersion(intent.targetVersion);
     const npmExecutable = resolveNpmExecutable();
     const installArgs = buildLodyUpgradeInstallArgs(targetVersion);
