@@ -38,6 +38,25 @@ existing materialization claim. Missing cloud connectivity never counts as local
 authority in a cloud workspace. Completion uses the existing single-owner Delivery
 protocol. No persisted schema or hosted API changes are required.
 
+## Explicit create configuration
+
+A non-Role MCP create may request an explicit ACP `modeId` and
+`configOptionValues` for its target Agent. Single and batch creates discover the
+available mode ids and option choices from that target's public capability
+catalog. Acceptance validates the requested selectors through the same target
+capability and machine-access checks as CLI creation; an unavailable or
+unsupported selector is not permission to substitute another mode. Omitted
+selectors retain existing defaults.
+
+Selections are part of the Operation command identity and the accepted target's
+frozen execution configuration, so retry/recovery cannot silently change its
+permissions. An explicit Agent Role remains authoritative: manual mode/option
+fields are removed before validation, identity and dispatch. These selectors do
+not grant machine/project access or change the active requester identity.
+
+This section is draft intent for #1172; no human approval of this revision is
+claimed.
+
 ## Implementation evidence
 
 The implementation guard is `apps/cli/src/mcp/lody-mcp-server.ts`, the shared

@@ -299,6 +299,25 @@ const SessionWorkContextInputSchema = z.discriminatedUnion('kind', [
  * `lody_session_create_options` and the CLI maps them at dispatch time.
  */
 const SessionRunConfigInputShape = {
+  modeId: z
+    .string()
+    .trim()
+    .min(1)
+    .max(256)
+    .optional()
+    .describe(
+      'Explicit ACP mode id advertised by the target agent config modes list; no implicit permission override.'
+    ),
+  configOptionValues: z
+    .record(z.string().min(1).max(128), z.union([z.string().max(1024), z.boolean()]))
+    .refine(
+      (values) => Object.keys(values).length <= 64,
+      'At most 64 ACP config options are allowed.'
+    )
+    .optional()
+    .describe(
+      'Explicit ACP option values from the target agent config configOptions list, including its permission selector when advertised. Validated before accepting work.'
+    ),
   modelId: z
     .string()
     .trim()
@@ -1202,6 +1221,8 @@ const buildStructuredOutputOptions = (
  * capabilities inside the shared create path, not here.
  */
 const buildMcpTurnDispatchConfig = (input: {
+  modeId?: string;
+  configOptionValues?: Record<string, string | boolean>;
   modelId?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
@@ -1214,18 +1235,27 @@ const buildMcpTurnDispatchConfig = (input: {
     ...(input.planMode !== undefined ? { planMode: input.planMode } : {}),
   };
   return {
-    ...resolveTurnDispatchConfig({}),
+    ...resolveTurnDispatchConfig({
+      modeId: input.modeId,
+      configOptionValues: input.configOptionValues,
+    }),
     ...(hasAgentRunConfigSelection(runConfig) ? { runConfig } : {}),
   };
 };
 
 /** Run config is part of the Command's identity, so it is fingerprinted too. */
 const buildMcpRunConfigCanonicalCommand = (input: {
+  modeId?: string;
+  configOptionValues?: Record<string, string | boolean>;
   modelId?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
   planMode?: boolean;
-}): Record<string, string | boolean> => ({
+}): Record<string, unknown> => ({
+  ...(input.modeId !== undefined ? { modeId: input.modeId } : {}),
+  ...(input.configOptionValues !== undefined
+    ? { configOptionValues: input.configOptionValues }
+    : {}),
   ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
   ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
   ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -3900,7 +3930,7 @@ export function buildSessionToolServer(handlers?: SessionToolHandlers): McpServe
     {
       title: 'Create a Lody session',
       description:
-        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To use an Agent Role, pass agentRoleId; the current workspace catalog row supplies the exact Machine, Agent config, model, reasoning, and permission mode. If manual machine or run-config fields are also present, the Role takes precedence and those fields are ignored. A Role may run on any Machine the owner of this Machine can use; to work in a project there, pass workContext for a local project on that Machine (find it with lody_session_create_options machineId + localProjectQuery). Without workContext a Role on another Machine starts as a plain chat there. To recover an already accepted create without resending its prompt, send only operationId with resume=true. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
+        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To use an Agent Role, pass agentRoleId; the current workspace catalog row supplies the exact Machine, Agent config, model, reasoning, and permission mode. If manual machine or run-config fields are also present, the Role takes precedence and those fields are ignored. A Role may run on any Machine the owner of this Machine can use; to work in a project there, pass workContext for a local project on that Machine (find it with lody_session_create_options machineId + localProjectQuery). Without workContext a Role on another Machine starts as a plain chat there. To recover an already accepted create without resending its prompt, send only operationId with resume=true. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. Explicit modeId and configOptionValues select only target-advertised ACP permissions/options; defaults are unchanged when omitted. The wait field is temporary legacy compatibility only.',
       inputSchema: SessionCreateToolInputSchema,
     },
     async (input) => {

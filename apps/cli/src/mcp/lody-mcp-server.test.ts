@@ -580,6 +580,8 @@ describe('session MCP input schemas', () => {
         machineId: 'manual-machine',
         agentConfigId: 'manual-agent',
         modelId: 'manual-model',
+        modeId: 'unoffered-mode',
+        configOptionValues: { _permission: 'unoffered-permission' },
         reasoningEffort: 'high',
         useCurrentSessionAsParent: false,
       },
@@ -737,6 +739,36 @@ describe('session MCP input schemas', () => {
       modelId: undefined,
       configOptionValues: undefined,
     });
+  });
+
+  it('preserves explicit ACP permissions in single and batch dispatch and command identity', () => {
+    const selection = { modeId: 'ask', configOptionValues: { _permission: 'read-only' } };
+    const single = SessionCreateToolInputSchema.parse({
+      operationId: 'explicit-mode',
+      prompt: 'work',
+      ...selection,
+    });
+    expect(buildMcpTurnDispatchConfig(single)).toMatchObject(selection);
+    const resolved = resolveMcpSessionCreate(
+      single,
+      { chainDepth: 0, frozenInputConfig: {} },
+      { machineId: 'current-machine', project: undefined },
+      undefined
+    );
+    expect(buildResolvedMcpCreateCanonicalCommand(resolved)).toMatchObject(selection);
+    const batch = SessionCreateManyToolInputSchema.parse({
+      operationId: 'explicit-batch',
+      defaults: { modeId: 'ask' },
+      items: [{ prompt: 'one' }, { prompt: 'two', modeId: 'read-only' }],
+    });
+    expect(batch.items).toHaveLength(2);
+    expect(
+      SessionCreateToolInputSchema.safeParse({
+        operationId: 'bad-options',
+        prompt: 'work',
+        configOptionValues: { _permission: { mode: 'bypass' } },
+      }).success
+    ).toBe(false);
   });
 
   it('reports the run config choices an agent supports next to its stable id', () => {

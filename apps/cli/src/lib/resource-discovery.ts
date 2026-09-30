@@ -60,6 +60,13 @@ export function summarizeDiscoveryAgent(
     cliType: config.cliType,
     agentType: config.agentType,
     runConfig: summarizeAgentRunConfigCapabilities(capability),
+    modes: (capability?.modes ?? []).map(({ id, name }) => ({ id, name })),
+    configOptions: (capability?.configOptions ?? []).map((option) => ({
+      id: option.id,
+      name: option.name,
+      type: option.type,
+      ...(option.type === 'select' ? { options: option.options } : {}),
+    })),
   };
 }
 
