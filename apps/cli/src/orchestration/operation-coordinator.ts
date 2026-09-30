@@ -67,7 +67,8 @@ const TARGET_OUTPUT_PREVIEW_MAX_BYTES = 8 * 1024;
 // Reuse notices only in this user-turn interval, never another target turn.
 const targetFailureError = (history: SessionHistoryInput[], userTurnId: string) => {
   const start = history.findIndex((entry) => entry.role === 'user' && entry.id === userTurnId);
-  for (let index = start + 1; start >= 0 && index < history.length; index += 1) {
+  if (start < 0) return makeLodyError('TARGET_FAILED', 'Target Turn failed.', false);
+  for (let index = start + 1; index < history.length; index += 1) {
     const entry = history[index];
     if (entry?.role === 'user') break;
     if (entry?.role !== 'system') continue;
