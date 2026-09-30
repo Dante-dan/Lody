@@ -1,3 +1,4 @@
+import { listMcpTools } from '@/mcp/list-mcp-tools';
 import { readSessionHistory } from '@lody/shared/session-data';
 import { readLatestTurn } from '@lody/shared/session-data';
 import { TurnTokenUsageLedger, turnTokenUsageFromUpdate } from './usage/turn-token-usage';
@@ -6378,6 +6379,8 @@ export class MessageHandler {
     };
 
     switch (request.method) {
+      case 'mcp/list-tools':
+        return await listMcpTools(request.params.server);
       case 'session/call-tool': {
         if (this.cloudPort.kind !== 'local')
           throw new Error('Daemon Session tools require a local workspace');
