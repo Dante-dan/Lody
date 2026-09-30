@@ -1465,6 +1465,7 @@
   "sessions.openedBy.collapse": "Hide opened sessions",
   "sessions.openedBy.createdAutomaticallyBy": "This session was automatically created by",
   "sessions.openedBy.createdSession": "Session created",
+  "sessions.openedBy.waitingOnYou": "Waiting on you",
   "sessions.operationReply.received": "Reply received",
   "sessions.operationReply.waiting": "Waiting for reply",
   "sessions.operationReply.failed": "Request failed",

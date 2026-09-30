@@ -1,3 +1,6 @@
+import { createStore, Provider } from 'jotai';
+import { getSessionRoomId } from '@lody/shared';
+import { setDocMetaByRoomIdAtom } from '@/atoms/doc-meta';
 import type { Meta, StoryObj } from '@storybook/react';
 import type { SessionHistoryParsed, SessionId } from '@lody/shared';
 import { CornerLeftUp } from 'lucide-react';
@@ -321,4 +324,27 @@ export const AllCreationStates: Story = {
       ))}
     </div>
   ),
+};
+
+export const SupervisedPermissionWait: Story = {
+  args: CreatedConversation.args,
+  render: () => {
+    const store = createStore();
+    store.set(setDocMetaByRoomIdAtom, getSessionRoomId(operationSessionId), {
+      id: operationSessionId,
+      machineId: 'machine',
+      userId: 'user',
+      createdAt: '2026-08-14T12:00:00.000Z',
+      cliType: 'builtin',
+      agentType: 'codex',
+      openedBySessionId: 'storybook-opener' as SessionId,
+      openedSessionMode: 'supervised',
+      awaitingUserSince: 1,
+    });
+    return (
+      <Provider store={store}>
+        <ProgressPreview status="succeeded" />
+      </Provider>
+    );
+  },
 };

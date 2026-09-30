@@ -11,7 +11,7 @@ Session needs a separate document and execution context, while its progress, res
 unread attention, and permission requests should return to the initiating Session.
 An explicit handoff instead makes the new Session a peer conversation that the person
 will own and visit directly. This draft proposes the distinction for [#529]; it has
-no linked human approval and does not authorize a runtime behavior change yet.
+no linked human approval; the implementation remains a draft for review.
 
 ## Relationship and presentation
 
@@ -87,3 +87,21 @@ parent relation with a separate project/worktree. The current completion request
 targets the worker Session id. The created-Session card lives in
 [`created-session-operation-card.tsx`](../packages/components/src/components/ai-gui/created-session-operation-card.tsx).
 These are source observations at the proposal revision, not proof of deployed behavior.
+
+## Durable creation intent slice
+
+Independent MCP creations accept `openedSessionMode: supervised | handoff`, defaulting
+to `supervised`. Single/batch Commands freeze it; recovery preserves it in metadata
+with exact opener/root pointers. Child Tabs omit it. Ordinary CLI creates and old
+Operations without intent stay legacy peers; provenance never implies supervision.
+
+The choice does not suppress worker inboxes, reroute notifications, or move consent
+ownership. Those consumers need a verified parent route with worker fallback.
+Operation result previews remain the production parent result surface. There is
+no live desktop/mobile observation or human Spec approval.
+
+Supervised progress cards now also expose the worker's durable permission-wait
+summary at the opener. A person can open the worker to answer its original request;
+clearing the wait clears the badge, and a stale Operation completion never clears
+consent. Legacy, handoff and child-Tab cards keep their previous behavior. This
+attention surface does not reroute cloud notifications or suppress worker rows.

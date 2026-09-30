@@ -63,3 +63,21 @@ worktree 同时使用。当前 [`notification-service.ts`](../apps/cli/src/lib/n
 的完成通知目标是 worker Session id。“Session created”卡片位于
 [`created-session-operation-card.tsx`](../packages/components/src/components/ai-gui/created-session-operation-card.tsx)。
 这些是提案修订时的源码观察，不代表已验证线上行为。
+
+## 持久化创建意图切片
+
+新的独立 MCP 创建接受 `openedSessionMode: supervised | handoff`，默认值是
+`supervised`。单项和批量 Command 在接受 Operation 前冻结该值；daemon 恢复将其与
+精确 opener 和 root 指针一起写入 Session 元数据。子 Tab 已有 parent 关系，不保存
+此选择。普通 CLI 创建和缺少该字段的旧 Operation 仍保持历史 peer 行为；恢复不会
+从来源指针推断监督关系。显式 handoff 保留独立会话身份。
+
+本切片只持久化选择，不隐藏 worker inbox、不重定向通知，也不改变权限请求归属。
+这些消费者在改变呈现前，需要已验证的 parent attention 路由及 worker 后备。现有
+Operation 结果预览仍是唯一生产 parent 结果展示。本改动不宣称桌面或移动端实机
+验证，也不宣称人类批准了 Spec。
+
+监督进度卡现在也在 opener 展示 worker 的持久化权限等待摘要，用户可打开 worker
+处理原始请求。等待解除时标记消失，旧 Operation 完成状态不能清除权限等待。
+历史 peer、handoff 和子 Tab 卡保持原行为；本注意力展示不重定向云通知、不隐藏
+worker 行。

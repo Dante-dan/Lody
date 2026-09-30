@@ -103,3 +103,6 @@ Command entrypoints, the daemon runner, and session dispatch from the CLI/MCP bo
   one-shot reconciliation in `../lib/loro/doc.ts`, cancel it on local leave or Session activation,
   and unload renderer-only docs after the last peer leaves. Session metadata/RPC activation owns
   persistent CLI cloud joins; Flock room bridging stays paired to local Flock join/leave.
+
+- MCP independent creation freezes `openedSessionMode` into its canonical Operation and Session
+  metadata. Child Tabs omit it; absent legacy intent is never inferred from opener provenance.

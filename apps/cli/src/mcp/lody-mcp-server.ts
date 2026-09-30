@@ -358,7 +358,15 @@ const SessionCreateOptionsToolInputSchema = z
   })
   .strict();
 
+const OpenedSessionModeSchema = z
+  .enum(['supervised', 'handoff'])
+  .optional()
+  .describe(
+    'Opening intent for an independent Session. Defaults to supervised; handoff keeps a peer conversation. Child Tabs keep their existing parent relation.'
+  );
+
 const SessionCreateCommandInputShape = {
+  openedSessionMode: OpenedSessionModeSchema,
   deadlineSeconds: z
     .number()
     .int()
@@ -407,6 +415,7 @@ const sessionCreateCommandSchemas = [
       ...SessionCreateCommandInputShape,
       ...SessionCreateAsyncEnvelopeShape,
       useCurrentSessionAsParent: z.literal(true),
+      openedSessionMode: z.never().optional(),
       workContext: z.never().optional(),
     })
     .strict(),
@@ -423,6 +432,7 @@ const sessionCreateCommandSchemas = [
       ...SessionCreateCommandInputShape,
       ...SessionCreateLegacyEnvelopeShape,
       useCurrentSessionAsParent: z.literal(true),
+      openedSessionMode: z.never().optional(),
       workContext: z.never().optional(),
     })
     .strict(),
@@ -549,6 +559,7 @@ const SessionChatToolInputSchema = z
   });
 
 const SessionCreateBatchItemShape = {
+  openedSessionMode: OpenedSessionModeSchema,
   prompt: z.string().trim().min(1).optional(),
   agentRoleId: z
     .string()
@@ -567,6 +578,7 @@ const SessionCreateBatchItemSchema = z.xor([
     .object({
       ...SessionCreateBatchItemShape,
       useCurrentSessionAsParent: z.literal(true),
+      openedSessionMode: z.never().optional(),
       workContext: z.never().optional(),
     })
     .strict(),
@@ -591,6 +603,7 @@ const SessionCreateBatchItemWithInheritedParentSchema = z.xor([
     .object({
       ...SessionCreateBatchItemShape,
       useCurrentSessionAsParent: z.literal(true).optional(),
+      openedSessionMode: z.never().optional(),
       workContext: z.never().optional(),
     })
     .strict(),
@@ -1302,6 +1315,7 @@ const resolveMcpSessionCreate = (
   } else if (
     project?.kind === 'local' &&
     role.machineId === requester.machineId &&
+    input.openedSessionMode === undefined &&
     useCurrentSessionAsParent === undefined &&
     workContext === undefined
   ) {
@@ -1328,7 +1342,8 @@ const resolveMcpSessionCreate = (
 
 const buildResolvedMcpCreateCanonicalCommand = (
   resolved: ResolvedMcpSessionCreate,
-  deadlineSeconds?: number
+  deadlineSeconds?: number,
+  includeDefaultOpeningMode = true
 ): Record<string, unknown> => ({
   prompt: resolved.prompt,
   ...(resolved.input.machineId ? { machineId: resolved.input.machineId } : {}),
@@ -1344,8 +1359,30 @@ const buildResolvedMcpCreateCanonicalCommand = (
     ? { useCurrentSessionAsParent: resolved.input.useCurrentSessionAsParent }
     : {}),
   ...(resolved.input.workContext ? { workContext: resolved.input.workContext } : {}),
+  ...(resolved.input.useCurrentSessionAsParent !== true &&
+  (includeDefaultOpeningMode || resolved.input.openedSessionMode !== undefined)
+    ? { openedSessionMode: resolved.input.openedSessionMode ?? 'supervised' }
+    : {}),
   ...(deadlineSeconds !== undefined ? { deadlineSeconds } : {}),
 });
+
+/** A pre-upgrade retry may have no opening intent in its frozen Command. */
+const findCreateOperationRetry = (
+  store: LodyOperationStore,
+  args: Parameters<LodyOperationStore['findMatchingRetry']>,
+  legacyCommand: unknown
+): ReturnType<LodyOperationStore['findMatchingRetry']> => {
+  try {
+    return store.findMatchingRetry(...args);
+  } catch (error) {
+    if (!(error instanceof LodyOperationStoreError) || error.code !== 'OPERATION_ID_REUSED')
+      throw error;
+    const legacyArgs = [...args] as Parameters<LodyOperationStore['findMatchingRetry']>;
+    legacyArgs[3] = legacyCommand;
+    // The store still checks exact kind, user, source Turn and every other field.
+    return store.findMatchingRetry(...legacyArgs);
+  }
+};
 
 const bindAgentRoleCreateOptions = (options: CreateOptions, role: AgentRole | undefined): void => {
   if (!role) return;
@@ -1360,6 +1397,9 @@ const buildMcpCreateOptions = (
   const options: CreateOptions = {
     workspace: getMcpWorkspaceId(ctx),
     currentSessionId: ctx.sessionId as SessionId,
+    ...(input.useCurrentSessionAsParent !== true
+      ? { openedSessionMode: input.openedSessionMode ?? 'supervised' }
+      : {}),
   };
 
   if (input.machineId !== undefined) {
@@ -2547,13 +2587,17 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
     );
     const canonicalCommand = buildResolvedMcpCreateCanonicalCommand(resolved, args.deadlineSeconds);
     const retry = await withOperationStore((store) =>
-      store.findMatchingRetry(
-        ctx.sessionId as SessionId,
-        args.operationId!,
-        'session_create',
-        canonicalCommand,
-        invoking.identity.userId,
-        invoking.identity.sourceTurnId
+      findCreateOperationRetry(
+        store,
+        [
+          ctx.sessionId as SessionId,
+          args.operationId!,
+          'session_create',
+          canonicalCommand,
+          invoking.identity.userId,
+          invoking.identity.sourceTurnId,
+        ],
+        buildResolvedMcpCreateCanonicalCommand(resolved, args.deadlineSeconds, false)
       )
     );
     if (retry) {
@@ -2983,6 +3027,7 @@ const startSessionCreateManyOperation = async (
             ? { useCurrentSessionAsParent: item.useCurrentSessionAsParent }
             : {}),
           ...(item.workContext ? { workContext: item.workContext } : {}),
+          ...(item.openedSessionMode ? { openedSessionMode: item.openedSessionMode } : {}),
         } as SessionCreateCommandInput;
         return {
           resolved: resolveMcpSessionCreate(
@@ -3010,13 +3055,28 @@ const startSessionCreateManyOperation = async (
       ...(args.deadlineSeconds !== undefined ? { deadlineSeconds: args.deadlineSeconds } : {}),
     };
     const retry = await withOperationStore((store) =>
-      store.findMatchingRetry(
-        ctx.sessionId as SessionId,
-        args.operationId,
-        'session_create_many',
-        canonicalCommand,
-        invoking.identity.userId,
-        invoking.identity.sourceTurnId
+      findCreateOperationRetry(
+        store,
+        [
+          ctx.sessionId as SessionId,
+          args.operationId,
+          'session_create_many',
+          canonicalCommand,
+          invoking.identity.userId,
+          invoking.identity.sourceTurnId,
+        ],
+        {
+          ...canonicalCommand,
+          items: expanded.map((item, index) => {
+            const resolved = resolvedItems[index]?.resolved;
+            return resolved
+              ? {
+                  ...buildResolvedMcpCreateCanonicalCommand(resolved, undefined, false),
+                  ...(item.label ? { label: item.label } : {}),
+                }
+              : item;
+          }),
+        }
       )
     );
     if (retry) {
@@ -3504,6 +3564,7 @@ export const __lodyMcpServerInternals = {
   loadWorkspaceAgentRoleCatalog,
   resolveMcpSessionCreate,
   buildResolvedMcpCreateCanonicalCommand,
+  findCreateOperationRetry,
   summarizeAgentConfig,
   assertDifferentMcpSession,
   assertBatchSize,

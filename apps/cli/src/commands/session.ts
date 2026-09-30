@@ -174,6 +174,8 @@ export type CreateOptions = CommonOptions &
     sessionOwnerUserId?: string;
     parent?: string;
     useCurrentSessionAsParent?: boolean;
+    /** Frozen opening intent; ordinary CLI creates and legacy recovery omit it. */
+    openedSessionMode?: SessionMeta['openedSessionMode'];
     repo?: string;
     localProject?: string;
     worktree?: boolean;
@@ -320,6 +322,7 @@ type ResolvedCreateContext = {
   parentSessionId?: SessionId;
   openedBySessionId?: SessionId;
   openedByRootSessionId?: SessionId;
+  openedSessionMode?: SessionMeta['openedSessionMode'];
 };
 
 type SessionActivityTimestampManager = {
@@ -2842,11 +2845,19 @@ export function resolveCreateCurrentSessionId(
 }
 
 export function resolveOpenedBySessionRelation(
-  currentSession: Pick<SessionMeta, 'id' | 'parentSessionId'> | undefined
-): { openedBySessionId?: SessionId; openedByRootSessionId?: SessionId } {
+  currentSession: Pick<SessionMeta, 'id' | 'parentSessionId'> | undefined,
+  options: Pick<CreateOptions, 'openedSessionMode'> & { parentSessionId?: SessionId } = {}
+): {
+  openedBySessionId?: SessionId;
+  openedByRootSessionId?: SessionId;
+  openedSessionMode?: SessionMeta['openedSessionMode'];
+} {
   if (!currentSession) return {};
   return {
     openedBySessionId: currentSession.id,
+    ...(!options.parentSessionId && options.openedSessionMode
+      ? { openedSessionMode: options.openedSessionMode }
+      : {}),
     ...(currentSession.parentSessionId
       ? { openedByRootSessionId: currentSession.parentSessionId }
       : {}),
@@ -2996,7 +3007,10 @@ async function resolveCreateContext(args: {
     agentConfig,
     ...(project ? { project } : {}),
     ...(parentSessionId ? { parentSessionId } : {}),
-    ...resolveOpenedBySessionRelation(currentSession),
+    ...resolveOpenedBySessionRelation(currentSession, {
+      openedSessionMode: args.options.openedSessionMode,
+      parentSessionId,
+    }),
   };
 }
 
@@ -3166,6 +3180,7 @@ export async function prepareSessionInput(
     parentSessionId,
     openedBySessionId,
     openedByRootSessionId,
+    openedSessionMode,
   } = resolved;
   const effectiveDispatchConfig = await resolveEffectiveSessionCreateDispatchConfig({
     manager,
@@ -3202,6 +3217,7 @@ export async function prepareSessionInput(
     ...(parentSessionId ? { parentSessionId } : {}),
     ...(openedBySessionId ? { openedBySessionId } : {}),
     ...(openedByRootSessionId ? { openedByRootSessionId } : {}),
+    ...(openedSessionMode ? { openedSessionMode } : {}),
     ...(options.agentRoleId ? { agentRoleId: options.agentRoleId as AgentRoleId } : {}),
     ...(options.agentRoleRevision !== undefined
       ? { agentRoleRevision: options.agentRoleRevision }

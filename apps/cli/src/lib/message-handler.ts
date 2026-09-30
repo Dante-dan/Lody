@@ -2834,6 +2834,10 @@ export class MessageHandler {
       if (typeof command.useCurrentSessionAsParent === 'boolean') {
         options.useCurrentSessionAsParent = command.useCurrentSessionAsParent;
       }
+      // Missing intent is a legacy Operation, not implicit supervision.
+      if (command.openedSessionMode === 'supervised' || command.openedSessionMode === 'handoff') {
+        options.openedSessionMode = command.openedSessionMode;
+      }
       const workContext = command.workContext;
       if (workContext && typeof workContext === 'object' && !Array.isArray(workContext)) {
         const context = workContext as Record<string, unknown>;

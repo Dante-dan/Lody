@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getSessionRoomId, type SessionHistoryParsed, type SessionId } from '@lody/shared';
 
 import { setDocMetaByRoomIdAtom } from '../src/atoms/doc-meta';
+import { CreatedSessionOperationCard } from '../src/components/ai-gui/created-session-operation-card';
 import { MessageRowView } from '../src/components/ai-gui/view';
 import { SessionRelationCard } from '../src/components/shared/session-relation-card';
 import { SessionInfoBar } from '../src/components/sessions/session-info-bar';
@@ -292,6 +293,49 @@ describe('Session relation cards', () => {
     expect(container.querySelectorAll('[data-session-relation-card="opened"]')).toHaveLength(2);
     expect(container.querySelector('[data-session-creation-status="running"]')).not.toBeNull();
     expect(container.querySelector('[data-session-creation-status="succeeded"]')).not.toBeNull();
+  });
+
+  it('shows and clears supervised permission attention at the opener without rewriting completion', async () => {
+    const store = createStore();
+    const onNavigateSession = vi.fn();
+    const meta = {
+      id: createdSessionId,
+      machineId: 'machine-1',
+      userId: 'user-1',
+      createdAt: '2026-08-14T12:00:00.000Z',
+      cliType: 'builtin' as const,
+      agentType: 'codex' as const,
+      openedBySessionId: openerSessionId,
+      openedSessionMode: 'supervised' as const,
+      awaitingUserSince: 1,
+    };
+    store.set(setDocMetaByRoomIdAtom, getSessionRoomId(createdSessionId), meta);
+    await act(async () =>
+      root.render(
+        <Provider store={store}>
+          <CreatedSessionOperationCard
+            sessionId={createdSessionId}
+            status="succeeded"
+            onNavigateSession={onNavigateSession}
+          />
+        </Provider>
+      )
+    );
+    expect(container.querySelector('[data-worker-awaiting-user]')).not.toBeNull();
+    expect(container.querySelector('[data-session-creation-status="succeeded"]')).not.toBeNull();
+    await act(async () => container.querySelector<HTMLButtonElement>('button')?.click());
+    expect(onNavigateSession).toHaveBeenLastCalledWith({ sessionId: createdSessionId });
+    for (const patch of [
+      { ...meta, awaitingUserSince: undefined },
+      { ...meta, openedSessionMode: 'handoff' as const },
+      { ...meta, openedSessionMode: undefined },
+      { ...meta, parentSessionId: openerSessionId },
+    ]) {
+      await act(async () =>
+        store.set(setDocMetaByRoomIdAtom, getSessionRoomId(createdSessionId), patch)
+      );
+      expect(container.querySelector('[data-worker-awaiting-user]')).toBeNull();
+    }
   });
 
   it('does not duplicate target cards on completion when progress was published', async () => {

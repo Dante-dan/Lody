@@ -1,3 +1,5 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
 import { LoroDoc, LoroMap } from 'loro-crdt';
 import { createHistoryWriter } from '@lody/shared';
 import { createLoroSessionData } from '@lody/shared/session-data';
@@ -27,6 +29,7 @@ import {
 import type { LoroDocumentManager } from '@/lib/loro/doc';
 import {
   getLodyOperationStorePath,
+  LodyOperationStore,
   LodyOperationStoreError,
 } from '@/orchestration/operation-store';
 
@@ -64,6 +67,7 @@ const {
   loadWorkspaceAgentRoleCatalog,
   resolveMcpSessionCreate,
   buildResolvedMcpCreateCanonicalCommand,
+  findCreateOperationRetry,
   buildOperationTargetCancelArgs,
   summarizeAgentConfig,
   getSessionContext,
@@ -462,6 +466,138 @@ describe('session MCP input schemas', () => {
       delegatedRequester: { userId: 'collaborator-b' },
       defaultMachineId: 'machine-id',
     });
+  });
+
+  it('freezes independent opening intent in canonical Commands and create options', () => {
+    for (const mode of [undefined, 'supervised', 'handoff'] as const) {
+      const input = SessionCreateToolInputSchema.parse({
+        operationId: 'opened-worker',
+        prompt: 'review',
+        openedSessionMode: mode,
+        workContext: { kind: 'chat' },
+      });
+      const resolved = resolveMcpSessionCreate(
+        input,
+        undefined,
+        { machineId: 'machine-id' },
+        undefined
+      );
+      const canonical = buildResolvedMcpCreateCanonicalCommand(resolved);
+      const options = buildMcpCreateOptions(resolved.input, createMcpContext());
+      expect(canonical.openedSessionMode).toBe(mode ?? 'supervised');
+      expect(options.openedSessionMode).toBe(canonical.openedSessionMode);
+    }
+    const child = SessionCreateToolInputSchema.parse({
+      operationId: 'tab',
+      prompt: 'review',
+      useCurrentSessionAsParent: true,
+    });
+    const resolved = resolveMcpSessionCreate(
+      child,
+      undefined,
+      { machineId: 'machine-id' },
+      undefined
+    );
+    expect(buildResolvedMcpCreateCanonicalCommand(resolved)).not.toHaveProperty(
+      'openedSessionMode'
+    );
+    expect(buildMcpCreateOptions(child, createMcpContext())).not.toHaveProperty(
+      'openedSessionMode'
+    );
+    expect(
+      SessionCreateManyToolInputSchema.safeParse({
+        operationId: 'batch',
+        defaults: { openedSessionMode: 'handoff' },
+        items: [{ prompt: 'review', openedSessionMode: 'supervised' }],
+      }).success
+    ).toBe(true);
+    expect(
+      SessionCreateToolInputSchema.safeParse({
+        operationId: 'bad',
+        prompt: 'review',
+        openedSessionMode: 'peer',
+      }).success
+    ).toBe(false);
+  });
+
+  it('keeps pre-upgrade retries legacy while rejecting changed intent and identity', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'lody-opening-retry-'));
+    const store = new LodyOperationStore(path.join(dir, 'ops.sqlite3'), () =>
+      Date.parse('2026-09-30T00:00:00Z')
+    );
+    const requester = 'requester' as SessionId;
+    const legacy = { prompt: 'review' };
+    try {
+      store.accept({
+        workspaceId: 'workspace' as WorkspaceId,
+        ownerMachineId: 'machine' as MachineId,
+        requesterSessionId: requester,
+        requesterUserId: 'user',
+        operationId: 'legacy',
+        kind: 'session_create',
+        canonicalCommand: legacy,
+        frozenContinuationConfig: { inputConfig: {}, sourceTurnId: 'source' },
+        initiatorChainDepth: 0,
+        createdAt: '2026-09-30T00:00:00Z',
+        deadlineAt: '2026-09-30T00:01:00Z',
+        items: [],
+      });
+      const result = findCreateOperationRetry(
+        store,
+        [
+          requester,
+          'legacy',
+          'session_create',
+          { ...legacy, openedSessionMode: 'supervised' },
+          'user',
+          'source',
+        ],
+        legacy
+      );
+      expect(result?.canonicalCommand).toEqual(legacy);
+      expect(() =>
+        findCreateOperationRetry(
+          store,
+          [
+            requester,
+            'legacy',
+            'session_create',
+            { ...legacy, openedSessionMode: 'handoff' },
+            'user',
+            'source',
+          ],
+          { ...legacy, openedSessionMode: 'handoff' }
+        )
+      ).toThrow();
+      expect(() =>
+        findCreateOperationRetry(
+          store,
+          [
+            requester,
+            'legacy',
+            'session_create',
+            { ...legacy, openedSessionMode: 'supervised' },
+            'other',
+            'source',
+          ],
+          legacy
+        )
+      ).toThrow();
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects explicit handoff on a child Tab', () => {
+    expect(
+      SessionCreateToolInputSchema.safeParse({
+        operationId: 'tab-handoff',
+        prompt: 'review',
+        useCurrentSessionAsParent: true,
+        openedSessionMode: 'handoff',
+      }).success
+    ).toBe(false);
   });
 
   it('accepts semantic run config on single and batch creates and rejects raw ACP ids', () => {

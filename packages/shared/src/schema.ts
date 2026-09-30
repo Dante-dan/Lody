@@ -938,6 +938,8 @@ export type SessionMeta = {
   acpSessionId?: ACPSessionId;
   /** Exact Session or child Tab that created/opened this session, when known. */
   openedBySessionId?: SessionId;
+  /** Explicit MCP opening intent; absent on legacy records and child Tabs. */
+  openedSessionMode?: 'supervised' | 'handoff';
   /**
    * Root Session that owns `openedBySessionId` when the opener is a child Tab.
    * Omitted when the exact opener is already a root Session. Keeping this

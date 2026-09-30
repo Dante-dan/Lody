@@ -54,3 +54,14 @@ worker 的结果。shared 历史规划器现在把 Operation 输出投影为可�
 
 这一部分扩展现有真实 Loro 快照恢复和协调器回退测试，独立于拟议监督关系，
 不改变归档、权限、通知或收件箱归属。
+
+## 持久化创建与权限注意力
+
+独立 MCP 创建在 Operation 身份/恢复和 Session 元数据冻结 `openedSessionMode`
+（默认 `supervised`，显式 `handoff`）。子 Tab、普通 CLI 创建及旧 Command 不保存
+该字段。升级前重试保留原 Command；改变意图或人类身份仍被 store 拒绝。真实
+LoroRepo 和 MCP 所属测试覆盖这些边界。
+
+监督 parent 卡现展示持久化权限等待，不改变精确 Operation 状态。点击打开
+worker 处理原请求；等待解除时标记消失。handoff/历史 peer/子 Tab 卡保持原样。
+云通知汇总、inbox 隐藏、roster 和 settlement 尚未完成。

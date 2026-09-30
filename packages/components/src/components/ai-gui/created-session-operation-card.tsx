@@ -25,6 +25,12 @@ const statusLabels = {
   failed: 'sessions.openedBy.status.failed',
   cancelled: 'sessions.openedBy.status.cancelled',
 } as const;
+const selectSupervisedPermissionWait = (session: SessionMeta | null | undefined): boolean =>
+  session?.openedSessionMode === 'supervised' &&
+  !session.parentSessionId &&
+  !!session.openedBySessionId &&
+  typeof session.awaitingUserSince === 'number';
+
 const selectSessionTitle = (session: SessionMeta | null | undefined): string | null =>
   session?.title?.trim() || null;
 
@@ -55,6 +61,15 @@ export function CreatedSessionOperationCard({
 }) {
   const { t } = useTranslation();
   const title = useOperationTargetTitle(sessionId, fallbackTitle);
+  const waitingAtom = useMemo(
+    () =>
+      selectAtom(
+        sessionMetaAtomFamily(getSessionRoomId(sessionId)),
+        selectSupervisedPermissionWait
+      ),
+    [sessionId]
+  );
+  const awaitingUser = useAtomValue(waitingAtom);
   const StatusIcon =
     status === 'running'
       ? LoaderCircle
@@ -92,6 +107,11 @@ export function CreatedSessionOperationCard({
             aria-hidden="true"
           />
           {t(statusLabels[status])}
+          {awaitingUser && (
+            <span data-worker-awaiting-user="">
+              · {t('sessions.openedBy.waitingOnYou', 'Waiting on you')}
+            </span>
+          )}
         </span>
       }
     />

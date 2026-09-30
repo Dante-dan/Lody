@@ -1465,6 +1465,7 @@
   "sessions.openedBy.collapse": "收起打开的会话",
   "sessions.openedBy.createdAutomaticallyBy": "此对话由以下对话自动创建",
   "sessions.openedBy.createdSession": "已创建对话",
+  "sessions.openedBy.waitingOnYou": "等待你处理",
   "sessions.operationReply.received": "收到回复",
   "sessions.operationReply.waiting": "等待回复",
   "sessions.operationReply.failed": "请求失败",

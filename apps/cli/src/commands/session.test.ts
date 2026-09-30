@@ -191,6 +191,41 @@ describe('session command helpers', () => {
     ).toEqual({ openedBySessionId: 'root-session' });
   });
 
+  it('persists explicit independent intent through real Session metadata without reclassifying peers', async () => {
+    const repo = await LoroRepo.create({});
+    try {
+      const opener = createSessionMeta({
+        id: 'tab' as SessionId,
+        parentSessionId: 'root' as SessionId,
+      });
+      for (const mode of [undefined, 'supervised', 'handoff'] as const) {
+        const meta = createSessionMeta({
+          id: `worker-${mode}` as SessionId,
+          ...resolveOpenedBySessionRelation(opener, { openedSessionMode: mode }),
+        });
+        await repo.upsertDocMeta(getSessionRoomId(meta.id), meta);
+        const persisted = (await repo.getDocMeta(getSessionRoomId(meta.id)))?.meta as SessionMeta;
+        expect(persisted.openedSessionMode).toBe(mode);
+        expect(persisted.openedBySessionId).toBe('tab');
+        expect(persisted.openedByRootSessionId).toBe('root');
+        expect(persisted.parentSessionId).toBeUndefined();
+      }
+      expect(
+        resolveOpenedBySessionRelation(opener, {
+          openedSessionMode: 'supervised',
+          parentSessionId: 'root' as SessionId,
+        })
+      ).not.toHaveProperty('openedSessionMode');
+      expect(
+        resolveOpenedBySessionRelation(undefined, {
+          openedSessionMode: 'supervised',
+        })
+      ).toEqual({});
+    } finally {
+      await repo.destroy();
+    }
+  });
+
   it('materializes automatic approval defaults for builtin agent turns', () => {
     expect(withBuiltinDefaultTurnMode({}, createSessionMeta())).toEqual({
       modeId: 'agent-auto-review',

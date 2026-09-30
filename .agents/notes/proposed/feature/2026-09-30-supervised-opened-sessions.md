@@ -74,3 +74,16 @@ in another transcript copy.
 This slice extends the existing real-Loro snapshot/reload suite and coordinator
 fallback suite. It is independent of the proposed supervision relationship and
 does not change archive, permission, notification, or inbox ownership.
+
+## Durable creation and permission attention
+
+MCP independent creates now freeze `openedSessionMode` (`supervised` by default,
+explicit `handoff`) in Operation identity/recovery and Session metadata. Child Tabs,
+ordinary CLI creates and legacy Commands omit it. Pre-upgrade retries retain their
+original Command; changed intent or human identity still fails the store fence.
+The real LoroRepo and MCP suites cover these boundaries.
+
+Supervised parent cards now expose durable permission waits without changing exact
+Operation status. Clicking opens the worker to answer its original request; clearing
+the wait removes the badge. Handoff/legacy/child cards stay unchanged. Cloud
+notification roll-up, inbox suppression, roster and settlement remain unfinished.
