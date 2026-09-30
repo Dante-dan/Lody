@@ -1,7 +1,7 @@
 # Realign Desktop Daily journeys with the current UI and ACP sessions
 
 Status: implemented
-Translation: current
+Translation: pending
 
 English | [中文](2026-09-29-daily-e2e-journey-drift.zh.md)
 
@@ -29,4 +29,8 @@ A [subsequent full run](https://github.com/LodyAI/Lody/actions/runs/36572327622)
 
 ## Verification and limits
 
-The changed files pass Oxfmt and `git diff --check`. `pnpm e2e:check` cannot start in this nested worktree because the E2E package has no installed `@cucumber/cucumber`; `pnpm e2e:build` stops at the CLI clean step because `rimraf` is absent. Root `pnpm check` and `pnpm format` likewise stop on missing tools. Repository guidance skips `pnpm install` in nested checkouts, so the built-Electron smoke could not start locally. `pnpm run docs check` reports 62 broken links to unpopulated ACP submodule paths, with no finding in this note pair. The settings fixes passed in a hosted full run; the explicit-scroll adjustment and the Windows and Linux legs are not yet verified by a new hosted run.
+The [September 30 full Daily run](https://github.com/LodyAI/Lody/actions/runs/36687531414) passed all macOS journeys, but Ubuntu failed `LODY-SESSION-003` and Windows failed `LODY-FORK-001`. Ubuntu's trace shows the read-state menu still offering `Mark as unread` after the page object returned early on a visible row indicator. That indicator also represents working, sending and permission state, so its presence does not establish an unread receipt. The page object now opens the menu and uses the action's presence to decide whether marking unread is needed; the existing unread and reopen assertions remain intact.
+
+Windows completed the fork and deletion UI, then the cleanup observation rejected `terminal.list` with `daemon_unavailable:connect ENOENT` for its terminal pipe. Fork cleanup now uses the same transport-error observation as the work-session journey: an error is a nonmatching value, never an empty terminal list, and persistent unavailability still fails at the existing timeout. This fixes premature observation failure without claiming to repair or explain the daemon outage. The E2E package check, formatting and documentation checks pass locally; native Windows verification remains outstanding.
+
+At the September 29 authoring revision, the changed files passed Oxfmt and `git diff --check`. `pnpm e2e:check` could not start in this nested worktree because the E2E package has no installed `@cucumber/cucumber`; `pnpm e2e:build` stops at the CLI clean step because `rimraf` is absent. Root `pnpm check` and `pnpm format` likewise stop on missing tools. Repository guidance skips `pnpm install` in nested checkouts, so the built-Electron smoke could not start locally. `pnpm run docs check` reports 62 broken links to unpopulated ACP submodule paths, with no finding in this note pair. The settings fixes passed in a hosted full run; the explicit-scroll adjustment and the Windows and Linux legs are not yet verified by a new hosted run.
