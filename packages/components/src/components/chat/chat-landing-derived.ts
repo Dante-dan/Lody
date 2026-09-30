@@ -388,11 +388,13 @@ export function getChatLandingInitialDataLoading({
   localMachineStateAttempted,
   hasSelectableMachine,
 }: ChatLandingInitialDataLoadingArgs): boolean {
-  if (isRuntimeInitializing || !isDocMetaCacheReady || !localMachineStateAttempted) {
+  if (isRuntimeInitializing || !localMachineStateAttempted) {
     return true;
   }
 
-  return isVisibleMachinesLoading && !hasSelectableMachine;
+  // A reachable machine with an agent config is enough to use the picker.
+  // Defaults restoration keeps its own doc-meta readiness guard.
+  return !hasSelectableMachine && (isVisibleMachinesLoading || !isDocMetaCacheReady);
 }
 
 export function getChatLandingLocalProjectAvailability({

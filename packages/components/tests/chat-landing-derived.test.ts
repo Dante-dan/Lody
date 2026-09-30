@@ -398,7 +398,7 @@ describe('getChatLandingHintType', () => {
 });
 
 describe('getChatLandingInitialDataLoading', () => {
-  it('waits for local runtime and doc metadata prerequisites', () => {
+  it('waits for local runtime and the local machine probe even with a selectable machine', () => {
     expect(
       getChatLandingInitialDataLoading({
         isRuntimeInitializing: true,
@@ -413,9 +413,36 @@ describe('getChatLandingInitialDataLoading', () => {
       getChatLandingInitialDataLoading({
         isRuntimeInitializing: false,
         isVisibleMachinesLoading: false,
+        isDocMetaCacheReady: true,
+        localMachineStateAttempted: false,
+        hasSelectableMachine: true,
+      })
+    ).toBe(true);
+  });
+
+  it.each([false, true])(
+    'enables a selectable machine before doc-meta is ready with visibility loading=%s',
+    (isVisibleMachinesLoading) => {
+      expect(
+        getChatLandingInitialDataLoading({
+          isRuntimeInitializing: false,
+          isVisibleMachinesLoading,
+          isDocMetaCacheReady: false,
+          localMachineStateAttempted: true,
+          hasSelectableMachine: true,
+        })
+      ).toBe(false);
+    }
+  );
+
+  it('suppresses empty states until doc-meta is ready when no selectable machine exists', () => {
+    expect(
+      getChatLandingInitialDataLoading({
+        isRuntimeInitializing: false,
+        isVisibleMachinesLoading: false,
         isDocMetaCacheReady: false,
         localMachineStateAttempted: true,
-        hasSelectableMachine: true,
+        hasSelectableMachine: false,
       })
     ).toBe(true);
 
@@ -424,10 +451,10 @@ describe('getChatLandingInitialDataLoading', () => {
         isRuntimeInitializing: false,
         isVisibleMachinesLoading: false,
         isDocMetaCacheReady: true,
-        localMachineStateAttempted: false,
-        hasSelectableMachine: true,
+        localMachineStateAttempted: true,
+        hasSelectableMachine: false,
       })
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it('continues initial loading while machine visibility is pending and no local option exists', () => {
