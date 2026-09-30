@@ -13,8 +13,9 @@ execution and moves the worker's status, result, unread, and permission attentio
 to its opener, reserving a peer conversation for explicit handoff. It requires a
 durable supervision choice and cross-client routing work, so this change prepares a bounded
 reference projection and the bilingual [draft Spec](../../../../specs/supervised-opened-sessions.md)
-for human review. The existing creation-progress card now retains the worker
-result preview; production supervision and permission ownership remain unchanged.
+for human review. The implementation now persists opening intent, isolates local
+Role worktrees and presents worker results, attention and settlement at the opener.
+Permission request ownership stays on the worker; push grouping still needs a hosted rollout.
 
 ## Decision and evidence
 
@@ -22,7 +23,7 @@ result preview; production supervision and permission ownership remain unchanged
 opened worker is a sidebar chat with its own unread and notifications, while the
 parent sees a creation card rather than the result. Source inspection confirms
 the separation between an independent `workContext` Session and a contained Tab:
-`lody-mcp-server.ts` defaults same-machine local Roles without `workContext` to
+At the initial proposal revision, `lody-mcp-server.ts` defaulted same-machine local Roles without `workContext` to
 `useCurrentSessionAsParent`; `session.ts` rejects a project/worktree on that Tab
 path. The current completion notification passes the worker Session id. These
 facts support the need for attention routing without collapsing storage identity.
@@ -110,3 +111,7 @@ fallback. This map never selects archive, restore or deletion targets. Permissio
 Creation progress now groups workers with an active count. Finished supervised workers may be settled individually or together. Settlement writes only the creating Operation id to a dedicated Session metadata field; documents, lifecycle targets, read receipts and consent identities remain unchanged. Running, nonterminal, handoff and permission-waiting workers are ineligible. The writer re-reads ownership and durable consent and checks current presence before writing. A resumed worker or a new durable permission wait restores its card and active count. Settled workers retain a compact navigation link. This is a creation-Operation roster, not a cross-Operation supervisor dashboard.
 
 Permission push grouping remains outside this slice: the public notification and resolution contract has only the worker `sessionId` with its request identity. A separate attention target and compatible hosted consumer are required before grouping it at the opener; replacing the existing session id would misroute consent.
+
+## Local Role workspace default
+
+A same-machine Local Project Role without explicit work context now creates an independent worktree in that project. Explicit child requests retain directory sharing, and remote Roles do not inherit a local filesystem binding. Canonical Commands freeze this choice. Retry reconciliation recognizes the old default only for an already accepted Operation; it cannot change human identity, Role revision, or explicit work context. The existing real Operation-store suite covers the old child retry and new isolated default.

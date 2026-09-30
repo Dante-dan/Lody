@@ -11,14 +11,15 @@ MCP 创建的 Session 当前拥有独立工作区文档，但也作为需要单�
 本提案保留隔离执行，把 worker 的状态、结果、未读和权限提醒汇总到发起对话，
 只在显式交接时创建用户接管的同级对话。方案需要持久保存监督选择，并修改跨客户端
 的路由；本次准备有限参考实现及供人类审阅的双语 [Spec 草案](../../../../specs/supervised-opened-sessions.zh.md)，
-现有创建进度卡现在保留 worker 的结果预览；生产监督关系和权限归属不变。
+实现现已持久保存创建意图，隔离本地 Role worktree，并在发起对话展示结果、关注与结清。
+权限请求归属仍属于 worker；许可推送分组仍需 hosted 消费端上线。
 
 ## 决策与证据
 
 [#529](https://github.com/LodyAI/Lody/issues/529) 描述的负担是每个 worker 都成为
 侧栏对话，拥有自己的未读和通知，而父对话只看到创建卡片，未看到结果。源码检查也证实
-独立 `workContext` Session 和子 Tab 的区别：`lody-mcp-server.ts` 对没有
-`workContext` 的同机本地 Agent Role 默认采用 `useCurrentSessionAsParent`；
+独立 `workContext` Session 和子 Tab 的区别：初始提案修订中，
+`lody-mcp-server.ts` 对缺少 `workContext` 的同机本地 Agent Role 默认采用 `useCurrentSessionAsParent`；
 `session.ts` 禁止该子 Tab 路径附带项目／worktree；当前完成通知发送的是 worker 的
 Session id。这些事实说明需要修改注意力路由，同时保留独立存储身份。
 
@@ -87,3 +88,7 @@ worker inbox 隐藏与权限 push 分组尚未完成。
 创建进度按 worker 分组并显示活跃数量。已结束且没有权限等待的监督 worker 可单项或批量收起。收起只向独立 Session 元数据字段写入创建 Operation 的标识，不改变文档、生命周期目标、已读标记或权限请求身份。运行中、未结束、handoff 或待权限的 worker 不符合条件。写入前重新核对归属、持久化权限等待和当前 presence；worker 恢复运行或出现新权限等待时重新显示卡片和数量。已收起 worker 保留紧凑导航链接。此列表属于创建 Operation，不是跨 Operation 的监督控制台。
 
 权限 push 分组仍需独立协议支持：公开通知和回应 API 只有属于原 worker 的 `sessionId` 和请求身份。需要另加注意力目标及兼容的托管消费者，不能直接替换原会话标识来分组。
+
+## 本地 Role 的默认工作目录
+
+同机器 Local Project Role 未显式选择工作上下文时，现在创建项目的独立 worktree。显式子 Tab 仍共享目录，远端 Role 不继承本机文件系统。Canonical Command 固定该选择；仅已受理旧 Operation 的重试可匹配旧默认，不改变用户身份、Role 修订或显式上下文。现有真实 Operation store 测试覆盖旧子 Tab 重试与新的隔离默认。

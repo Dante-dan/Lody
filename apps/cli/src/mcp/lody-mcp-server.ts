@@ -1247,6 +1247,8 @@ const buildMcpRunConfigCanonicalCommand = (input: {
 
 type ResolvedMcpSessionCreate = {
   input: SessionCreateCommandInput;
+  /** Pre-upgrade defaults, used only to reconcile an already accepted Operation. */
+  legacyInput?: SessionCreateCommandInput;
   prompt: string;
   dispatchConfig: ResolvedTurnDispatchConfig;
   role?: AgentRole;
@@ -1302,6 +1304,11 @@ const resolveMcpSessionCreate = (
   const project = requester.project;
   let useCurrentSessionAsParent = input.useCurrentSessionAsParent;
   let workContext = input.workContext;
+  const inheritLocalProject =
+    project?.kind === 'local' &&
+    role.machineId === requester.machineId &&
+    useCurrentSessionAsParent !== true &&
+    workContext === undefined;
   if (
     project?.kind === 'github' &&
     useCurrentSessionAsParent !== true &&
@@ -1312,14 +1319,9 @@ const resolveMcpSessionCreate = (
       repo: project.repoFullName,
       ...(project.branch ? { branch: project.branch } : {}),
     };
-  } else if (
-    project?.kind === 'local' &&
-    role.machineId === requester.machineId &&
-    input.openedSessionMode === undefined &&
-    useCurrentSessionAsParent === undefined &&
-    workContext === undefined
-  ) {
-    useCurrentSessionAsParent = true;
+  } else if (inheritLocalProject && project?.kind === 'local') {
+    // Independent workers must not silently share their opener's directory.
+    workContext = { kind: 'local', projectId: project.localProjectId, worktree: true };
   }
 
   const resolvedInput = {
@@ -1329,8 +1331,23 @@ const resolveMcpSessionCreate = (
     ...(useCurrentSessionAsParent !== undefined ? { useCurrentSessionAsParent } : {}),
     ...(workContext !== undefined ? { workContext } : {}),
   } as SessionCreateCommandInput;
+  const legacyInput: SessionCreateCommandInput | undefined = !inheritLocalProject
+    ? undefined
+    : input.openedSessionMode === undefined && input.useCurrentSessionAsParent === undefined
+      ? {
+          ...resolvedInput,
+          workContext: undefined,
+          openedSessionMode: undefined,
+          useCurrentSessionAsParent: true,
+        }
+      : {
+          ...resolvedInput,
+          workContext: undefined,
+          useCurrentSessionAsParent: input.useCurrentSessionAsParent === false ? false : undefined,
+        };
   return {
     input: resolvedInput,
+    ...(legacyInput ? { legacyInput } : {}),
     prompt: composeAgentRolePrompt(role.promptPrefix, input.prompt),
     dispatchConfig: {
       ...role.runConfig,
@@ -1344,33 +1361,43 @@ const buildResolvedMcpCreateCanonicalCommand = (
   resolved: ResolvedMcpSessionCreate,
   deadlineSeconds?: number,
   includeDefaultOpeningMode = true
-): Record<string, unknown> => ({
-  prompt: resolved.prompt,
-  ...(resolved.input.machineId ? { machineId: resolved.input.machineId } : {}),
-  ...(resolved.input.agentConfigId ? { agentConfigId: resolved.input.agentConfigId } : {}),
-  ...(resolved.role
-    ? {
-        agentRoleId: resolved.role.id,
-        agentRoleRevision: resolved.role.revision,
-        agentRoleRunConfig: resolved.role.runConfig,
-      }
-    : buildMcpRunConfigCanonicalCommand(resolved.input)),
-  ...(resolved.input.useCurrentSessionAsParent !== undefined
-    ? { useCurrentSessionAsParent: resolved.input.useCurrentSessionAsParent }
-    : {}),
-  ...(resolved.input.workContext ? { workContext: resolved.input.workContext } : {}),
-  ...(resolved.input.useCurrentSessionAsParent !== true &&
-  (includeDefaultOpeningMode || resolved.input.openedSessionMode !== undefined)
-    ? { openedSessionMode: resolved.input.openedSessionMode ?? 'supervised' }
-    : {}),
-  ...(deadlineSeconds !== undefined ? { deadlineSeconds } : {}),
-});
+): Record<string, unknown> => {
+  if (!includeDefaultOpeningMode && resolved.legacyInput) {
+    return buildResolvedMcpCreateCanonicalCommand(
+      { ...resolved, input: resolved.legacyInput, legacyInput: undefined },
+      deadlineSeconds,
+      false
+    );
+  }
+  return {
+    prompt: resolved.prompt,
+    ...(resolved.input.machineId ? { machineId: resolved.input.machineId } : {}),
+    ...(resolved.input.agentConfigId ? { agentConfigId: resolved.input.agentConfigId } : {}),
+    ...(resolved.role
+      ? {
+          agentRoleId: resolved.role.id,
+          agentRoleRevision: resolved.role.revision,
+          agentRoleRunConfig: resolved.role.runConfig,
+        }
+      : buildMcpRunConfigCanonicalCommand(resolved.input)),
+    ...(resolved.input.useCurrentSessionAsParent !== undefined
+      ? { useCurrentSessionAsParent: resolved.input.useCurrentSessionAsParent }
+      : {}),
+    ...(resolved.input.workContext ? { workContext: resolved.input.workContext } : {}),
+    ...(resolved.input.useCurrentSessionAsParent !== true &&
+    (includeDefaultOpeningMode || resolved.input.openedSessionMode !== undefined)
+      ? { openedSessionMode: resolved.input.openedSessionMode ?? 'supervised' }
+      : {}),
+    ...(deadlineSeconds !== undefined ? { deadlineSeconds } : {}),
+  };
+};
 
 /** A pre-upgrade retry may have no opening intent in its frozen Command. */
 const findCreateOperationRetry = (
   store: LodyOperationStore,
   args: Parameters<LodyOperationStore['findMatchingRetry']>,
-  legacyCommand: unknown
+  legacyCommand: unknown,
+  previousCommand?: unknown
 ): ReturnType<LodyOperationStore['findMatchingRetry']> => {
   try {
     return store.findMatchingRetry(...args);
@@ -1378,9 +1405,21 @@ const findCreateOperationRetry = (
     if (!(error instanceof LodyOperationStoreError) || error.code !== 'OPERATION_ID_REUSED')
       throw error;
     const legacyArgs = [...args] as Parameters<LodyOperationStore['findMatchingRetry']>;
-    legacyArgs[3] = legacyCommand;
-    // The store still checks exact kind, user, source Turn and every other field.
-    return store.findMatchingRetry(...legacyArgs);
+    for (const command of [legacyCommand, previousCommand]) {
+      if (command === undefined) continue;
+      legacyArgs[3] = command;
+      try {
+        // The store still checks exact kind, user, source Turn and every other field.
+        return store.findMatchingRetry(...legacyArgs);
+      } catch (legacyError) {
+        if (
+          !(legacyError instanceof LodyOperationStoreError) ||
+          legacyError.code !== 'OPERATION_ID_REUSED'
+        )
+          throw legacyError;
+      }
+    }
+    throw error;
   }
 };
 
@@ -2597,7 +2636,13 @@ const startSessionCreateOperation = async (args: SessionCreateCommandInput): Pro
           invoking.identity.userId,
           invoking.identity.sourceTurnId,
         ],
-        buildResolvedMcpCreateCanonicalCommand(resolved, args.deadlineSeconds, false)
+        buildResolvedMcpCreateCanonicalCommand(resolved, args.deadlineSeconds, false),
+        resolved.legacyInput
+          ? buildResolvedMcpCreateCanonicalCommand(
+              { ...resolved, input: resolved.legacyInput, legacyInput: undefined },
+              args.deadlineSeconds
+            )
+          : undefined
       )
     );
     if (retry) {
@@ -3072,6 +3117,22 @@ const startSessionCreateManyOperation = async (
             return resolved
               ? {
                   ...buildResolvedMcpCreateCanonicalCommand(resolved, undefined, false),
+                  ...(item.label ? { label: item.label } : {}),
+                }
+              : item;
+          }),
+        },
+        {
+          ...canonicalCommand,
+          items: expanded.map((item, index) => {
+            const resolved = resolvedItems[index]?.resolved;
+            return resolved
+              ? {
+                  ...buildResolvedMcpCreateCanonicalCommand(
+                    resolved.legacyInput
+                      ? { ...resolved, input: resolved.legacyInput, legacyInput: undefined }
+                      : resolved
+                  ),
                   ...(item.label ? { label: item.label } : {}),
                 }
               : item;

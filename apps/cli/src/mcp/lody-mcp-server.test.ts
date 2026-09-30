@@ -798,7 +798,7 @@ describe('session MCP input schemas', () => {
     expect(resolved.role?.id).toBe('reviewer');
   });
 
-  it('defaults a same-Machine Local Project Role to a child Session and a remote one to its own Machine', () => {
+  it('isolates a same-Machine Local Project Role and leaves a remote one on its own Machine', () => {
     const frozenInputConfig = {} as SessionTurnInputConfig;
     const role = agentRole({
       id: 'implementer' as AgentRoleId,
@@ -812,17 +812,125 @@ describe('session MCP input schemas', () => {
       prompt: 'Implement this.',
       agentRoleId: 'implementer',
     } as const;
-    expect(
-      resolveMcpSessionCreate(
-        input,
+    const local = resolveMcpSessionCreate(
+      input,
+      { chainDepth: 0, frozenInputConfig },
+      {
+        machineId: 'local-machine',
+        project: { kind: 'local', localProjectId: 'project-id', useWorktree: true },
+      },
+      role
+    );
+    expect(local.input).not.toHaveProperty('useCurrentSessionAsParent');
+    expect(local.input.workContext).toEqual({
+      kind: 'local',
+      projectId: 'project-id',
+      worktree: true,
+    });
+    expect(buildResolvedMcpCreateCanonicalCommand(local)).toMatchObject({
+      openedSessionMode: 'supervised',
+      workContext: { kind: 'local', projectId: 'project-id', worktree: true },
+    });
+    // A retry of a pre-upgrade accepted Role must keep its original child.
+    expect(buildResolvedMcpCreateCanonicalCommand(local, undefined, false)).toMatchObject({
+      useCurrentSessionAsParent: true,
+    });
+    expect(buildResolvedMcpCreateCanonicalCommand(local, undefined, false)).not.toHaveProperty(
+      'workContext'
+    );
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'lody-role-opening-retry-'));
+    const store = new LodyOperationStore(path.join(dir, 'ops.sqlite3'));
+    try {
+      const legacy = buildResolvedMcpCreateCanonicalCommand(local, undefined, false);
+      store.accept({
+        workspaceId: 'workspace' as WorkspaceId,
+        ownerMachineId: 'local-machine' as MachineId,
+        requesterSessionId: 'requester' as SessionId,
+        requesterUserId: 'user',
+        operationId: input.operationId,
+        kind: 'session_create',
+        canonicalCommand: legacy,
+        frozenContinuationConfig: { inputConfig: {}, sourceTurnId: 'source' },
+        initiatorChainDepth: 0,
+        createdAt: '2026-09-30T00:00:00Z',
+        deadlineAt: '2026-09-30T00:01:00Z',
+        items: [],
+      });
+      const retry = findCreateOperationRetry(
+        store,
+        [
+          'requester' as SessionId,
+          input.operationId,
+          'session_create',
+          buildResolvedMcpCreateCanonicalCommand(local),
+          'user',
+          'source',
+        ],
+        legacy
+      );
+      expect(retry?.canonicalCommand).toEqual(legacy);
+      const peer = resolveMcpSessionCreate(
+        { ...input, useCurrentSessionAsParent: false },
         { chainDepth: 0, frozenInputConfig },
-        {
-          machineId: 'local-machine',
-          project: { kind: 'local', localProjectId: 'project-id', useWorktree: true },
-        },
+        { machineId: 'local-machine', project: { kind: 'local', localProjectId: 'project-id' } },
         role
-      ).input.useCurrentSessionAsParent
-    ).toBe(true);
+      );
+      const previous = buildResolvedMcpCreateCanonicalCommand({
+        ...peer,
+        input: peer.legacyInput!,
+        legacyInput: undefined,
+      });
+      store.accept({
+        workspaceId: 'workspace' as WorkspaceId,
+        ownerMachineId: 'local-machine' as MachineId,
+        requesterSessionId: 'requester' as SessionId,
+        requesterUserId: 'user',
+        operationId: 'legacy-peer',
+        kind: 'session_create',
+        canonicalCommand: previous,
+        frozenContinuationConfig: { inputConfig: {}, sourceTurnId: 'source' },
+        initiatorChainDepth: 0,
+        createdAt: '2026-09-30T00:00:00Z',
+        deadlineAt: '2026-09-30T00:01:00Z',
+        items: [],
+      });
+      expect(
+        findCreateOperationRetry(
+          store,
+          [
+            'requester' as SessionId,
+            'legacy-peer',
+            'session_create',
+            buildResolvedMcpCreateCanonicalCommand(peer),
+            'user',
+            'source',
+          ],
+          buildResolvedMcpCreateCanonicalCommand(peer, undefined, false),
+          previous
+        )?.canonicalCommand
+      ).toEqual(previous);
+    } finally {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+    const explicitChild = resolveMcpSessionCreate(
+      { ...input, useCurrentSessionAsParent: true },
+      { chainDepth: 0, frozenInputConfig },
+      { machineId: 'local-machine', project: { kind: 'local', localProjectId: 'project-id' } },
+      role
+    );
+    expect(explicitChild.input.useCurrentSessionAsParent).toBe(true);
+    expect(explicitChild.input).not.toHaveProperty('workContext');
+    const handoff = resolveMcpSessionCreate(
+      { ...input, openedSessionMode: 'handoff' },
+      { chainDepth: 0, frozenInputConfig },
+      { machineId: 'local-machine', project: { kind: 'local', localProjectId: 'project-id' } },
+      role
+    );
+    expect(buildResolvedMcpCreateCanonicalCommand(handoff)).toMatchObject({
+      openedSessionMode: 'handoff',
+      workContext: { kind: 'local', projectId: 'project-id', worktree: true },
+    });
     // The Local Project's filesystem is not on the Role's Machine, so the
     // Role cannot be its child; it starts independently where it is bound.
     const remote = resolveMcpSessionCreate(

@@ -49,7 +49,7 @@ subagent 事件与通过 MCP 创建的 Lody Session 是两类对象。
 接收显式关系和观察状态，不改变持久化 Session 元数据。只有发起根对话的路由可达时，
 才汇总 Tab 发起的 worker；否则保留 worker 的收件箱。权限等待优先于完成和结清，
 运行中或状态未知的工作不能结清。行为测试覆盖这些决策。生产创建意图、parent 结果与许可展示、
-完成通知路由和未读关注已在下文实现；worker 列表结清与许可推送分组仍未实现。现有创建进度卡独立携带创建 Operation 的有界结果
+完成通知路由和未读关注已在下文实现；许可推送分组仍未实现。现有创建进度卡独立携带创建 Operation 的有界结果
 预览；只有进度卡保留该预览时，完成卡才去重隐藏。这一部分不隐藏 worker，
 也不改变权限归属。
 
@@ -57,7 +57,9 @@ subagent 事件与通过 MCP 创建的 Lody Session 是两类对象。
 
 场景和目标来自 [#529](https://github.com/LodyAI/Lody/issues/529)。已检查的 MCP
 创建路径是 [`lody-mcp-server.ts`](../apps/cli/src/mcp/lody-mcp-server.ts)：本地 Agent
-Role 在没有 `workContext` 时，当前默认选择 `useCurrentSessionAsParent`。
+Role 在没有 `workContext` 时，原先默认选择 `useCurrentSessionAsParent`；
+现在默认创建同机器 Local Project 的独立 worktree。显式子 Tab 请求与旧版已受理
+Operation 的重试保留原作用域。
 [`session.ts`](../apps/cli/src/commands/session.ts) 禁止把该父级关系与独立项目／
 worktree 同时使用。当前 [`notification-service.ts`](../apps/cli/src/lib/notifications/notification-service.ts)
 的完成通知目标是 worker Session id。“Session created”卡片位于
@@ -103,3 +105,5 @@ worker 行。
 创建进度按 worker 分组并显示活跃数量。已结束且没有权限等待的监督 worker 可单项或批量收起。收起只向独立 Session 元数据字段写入创建 Operation 的标识，不改变文档、生命周期目标、已读标记或权限请求身份。运行中、未结束、handoff 或待权限的 worker 不符合条件。写入前重新核对归属、持久化权限等待和当前 presence；worker 恢复运行或出现新权限等待时重新显示卡片和数量。已收起 worker 保留紧凑导航链接。此列表属于创建 Operation，不是跨 Operation 的监督控制台。
 
 权限 push 分组仍需独立协议支持：公开通知和回应 API 只有属于原 worker 的 `sessionId` 和请求身份。需要另加注意力目标及兼容的托管消费者，不能直接替换原会话标识来分组。
+
+同机器 Local Project Role 未指定工作上下文时，默认创建独立 worktree，不再隐式创建共享目录的子 Tab。显式子 Tab 与旧版已受理 Operation 的重试保留原作用域。

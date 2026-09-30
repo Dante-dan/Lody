@@ -80,8 +80,9 @@ or change their permission ownership.
 The scenario and requested behavior come from [#529](https://github.com/LodyAI/Lody/issues/529).
 The inspected MCP creation path is
 [`lody-mcp-server.ts`](../apps/cli/src/mcp/lody-mcp-server.ts); its local Agent Role
-default currently chooses `useCurrentSessionAsParent` when no `workContext` is
-given. [`session.ts`](../apps/cli/src/commands/session.ts) rejects combining that
+default previously chose `useCurrentSessionAsParent` when no `workContext` was
+given; it now creates a separate same-machine Local Project worktree. Explicit
+child requests and already accepted legacy Operations retain their original scope. [`session.ts`](../apps/cli/src/commands/session.ts) rejects combining that
 parent relation with a separate project/worktree. The current completion request in
 [`notification-service.ts`](../apps/cli/src/lib/notifications/notification-service.ts)
 targets the worker Session id. The created-Session card lives in
