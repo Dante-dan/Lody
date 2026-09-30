@@ -30,7 +30,23 @@ ids when checking a capability snapshot taken with another model. A rejected
 selector is a terminal `COMMAND_REJECTED` item failure; transport and remote
 durability uncertainty remain retryable.
 
-## Evidence
+## Local and cloud execution
+
+An OSS Agent Role mention must create work without a Lody account or authenticated
+product-cloud requests. Session/catalog MCP calls enter the daemon holding the
+local workspace. It derives identity from the active Turn, checks the exact local
+machine and project, and executes the same Role resolution and durable Operation
+state machine used by cloud. Hosted repository contexts remain unavailable;
+registered local projects and plain chat are supported.
+
+Recovery uses the frozen prompt, Role revision and dispatch configuration. Before
+replaying a missing target input, cloud confirms remote document catch-up; OSS
+confirms the authoritative daemon repo and rechecks the fixed Turn under the
+existing materialization claim. Missing cloud connectivity never counts as local
+authority in a cloud workspace. Completion uses the existing single-owner Delivery
+protocol. No persisted schema or hosted API changes are required.
+
+## Implementation evidence
 
 The implementation guard is `apps/cli/src/mcp/lody-mcp-server.ts`, the shared
 limit is `packages/shared/src/session-orchestration.ts`, and the executable

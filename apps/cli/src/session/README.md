@@ -33,6 +33,8 @@ CLI/MCP orchestration contract is specs/session-orchestration.md.
 - `acp-error-classification.ts` — JSON-RPC/transport error string matching for the above.
 - `session-manager.ts` / `session.ts` / `session-sandbox.ts` / `terminal-manager.ts` —
   session and process lifecycle, workdirs, worktrees, sandboxed spawning, ACP terminals.
+  Managed GitHub credential preparation excludes local projects and their worktrees;
+  context refresh only rotates sessions already enrolled during preparation.
 - `session-preparation-service.ts` — process-local speculative ACP lease/state owner.
 - `session-fork-service.ts` / `session-fork-operation-store.ts` — the fork saga and its
   machine-local marker store.
@@ -203,6 +205,15 @@ space is still spawned directly. The shell is non-interactive and non-login (`sh
 `bash -lc`): the agent asked for one command, not for the user's login profile to run and
 change its environment. A spawn that still fails answers with a JSON-RPC code instead of a bare
 errno, and its error is recorded as an exit status so no waiter is left pending.
+
+### Imported ACP identity
+
+Continuation and fork use the shared `resolveSessionAcpTargetId` projection: a
+Lody-owned runtime supersedes the immutable imported source; an unresolved source
+history conflict cannot authorize native fork. Import does not fabricate a live
+runtime id. Fork copies an ACP runtime configuration baseline only when it belongs
+to the copied last user turn and source ACP identity, rebasing it to the new native
+session id. Ordinary and worktree forks use the same projection and fence.
 
 ### Fork saga recovery
 
