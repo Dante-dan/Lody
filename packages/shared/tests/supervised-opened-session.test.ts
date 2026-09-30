@@ -40,12 +40,12 @@ describe('draft supervised opened Session projection', () => {
     ]) {
       expect(resolveOpenedSessionNotificationTarget(meta, target, 'user')).toBe('worker');
     }
-    for (const worker of [
+    for (const candidate of [
       { ...meta, openedSessionMode: 'handoff' as const },
       { ...meta, openedSessionMode: undefined },
       { ...meta, parentSessionId: 'root' as SessionId },
     ]) {
-      expect(resolveOpenedSessionNotificationTarget(worker, opener, 'user')).toBe('worker');
+      expect(resolveOpenedSessionNotificationTarget(candidate, opener, 'user')).toBe('worker');
     }
   });
 
