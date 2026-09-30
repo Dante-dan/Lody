@@ -1,7 +1,7 @@
 import type { MachineId, SessionId } from './ids';
 import type { LocalProjectId } from './project';
 
-/** Reference proposal for #1144; not yet persisted or wired to clients. */
+/** Organization references for #1144; execution ownership stays with existing objects. */
 export type ProjectGroupMember =
   | { kind: 'localProject'; machineId: MachineId; localProjectId: LocalProjectId }
   | { kind: 'session'; sessionId: SessionId };

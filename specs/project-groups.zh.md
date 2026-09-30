@@ -31,22 +31,26 @@ flowchart LR
   Session --> Existing[现有会话读取器]
 ```
 
-## 最小切片与开放决定
+## 首次存储实现与开放决策
 
-参考实现提供身份标识、幂等添加与移除，以及保留不可用成员的解析投影。
-它不新增持久化格式、迁移、协议、界面、CLI 命令或同步通道。
-在有实际消费者前，不导出产品 API。
+首步实现提供成员标识、幂等增删和保留不可用成员的解析视图。既有 workspace
+Flock 文档的 `projectGroup` 行保存版本化 ID/名称；独立 `projectGroupMember` 行保存
+包含机器标识的本地项目引用或会话引用。导出的 Repo 调用先 flush 本地持久化，
+再尝试可选上传；上传失败保留本地修改并返回 `synced: false`。
 
-后续集成切片可通过现有 workspace Flock 文档存放组织元数据，使用独立成员行，
-避免并发编辑时替换整个列表。维护者仍需决定会话能否属于多个分组、悬空成员的
-显式清理行为，以及无访问权限的读取者可见哪些成员。这些决定先于持久化和界面
-实现；此草案不声称已获得人工批准。
+分组是工作区可读的组织元数据，不是私密存储。调用方展示成员元数据前必须检查既有访问权限，
+创建全新的组 ID，不重用已删除组的 ID，并显式移除失效成员。允许一个成员加入多个分组；
+成员关系变更不把会话搬到其他项目。这与 #1064 的工作目录迁移、#1048 的项目名称/身份
+以及 #137 的折叠项目未读标记分开。
+
+尚未实现 UI 导航、CLI 命令、未读汇总或新同步通道。既有 MCP/Role 行解析保持独立；
+客户端选择使用分组存储，而不把分组行当作目录条目。本草案不声称上述语义已获人类批准。
 
 ## 证据与验证
 
 - 当前机器与项目归属：`packages/shared/src/machine-flock.ts`、
   `packages/shared/src/project.ts`、`packages/shared/src/schema.ts`。
 - 现有工作区目录：`packages/shared/src/workspace-flock.ts`。
-- 参考实现：`packages/shared/src/project-group.ts`。
+- 参考实现：`packages/shared/src/project-group.ts`、`packages/shared/src/project-group-store.ts`。
 - 确定性行为测试：`packages/shared/tests/project-group.test.ts`。
 - 端到端分组与离线机器界面行为尚未实现或验证。

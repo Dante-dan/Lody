@@ -1,15 +1,8 @@
 import { normalizeAgentRole, type AgentRole } from './agent-role';
-import type { AgentRoleId, McpServerId, WorkspaceId } from './ids';
-import {
-  isWorkspaceMcpServerMeta,
-  type WorkspaceMcpServerMeta,
-} from './workspace-mcp';
+import type { AgentRoleId, McpServerId } from './ids';
+import { isWorkspaceMcpServerMeta, type WorkspaceMcpServerMeta } from './workspace-mcp';
 
-export const WORKSPACE_FLOCK_DOC_STREAM_SEGMENT = 'wf';
-const WORKSPACE_FLOCK_DOC_NAME = 'workspace';
-
-export const getWorkspaceFlockDocId = (workspaceId: WorkspaceId): string =>
-  `${workspaceId}:${WORKSPACE_FLOCK_DOC_STREAM_SEGMENT}:${WORKSPACE_FLOCK_DOC_NAME}`;
+export { WORKSPACE_FLOCK_DOC_STREAM_SEGMENT, getWorkspaceFlockDocId } from './workspace-flock-id';
 
 export type WorkspaceFlockMcpServerKey = ['mcpServer', McpServerId];
 export type WorkspaceFlockAgentRoleKey = ['agentRole', AgentRoleId];

@@ -492,3 +492,6 @@ export * from './schedule-control';
 export * from './codex-auth-profile';
 
 export * from './session-acp-identity';
+
+export * from './project-group';
+export * from './project-group-store';

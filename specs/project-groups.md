@@ -37,23 +37,31 @@ flowchart LR
 
 ## Bounded first slice and open decisions
 
-The reference implementation provides identity, idempotent add/remove and a
-resolution projection retaining unavailable members. It introduces no stored
-schema, migration, protocol, UI, CLI command or new synchronization channel.
-It deliberately does not export a product API until the owning consumer exists.
+The first storage slice provides identity, idempotent add/remove and a resolution
+projection retaining unavailable members. In the existing workspace Flock document,
+`projectGroup` rows contain versioned ID/name metadata; independent
+`projectGroupMember` rows contain machine-qualified project or session references.
+An exported Repo-facing operation flushes local durability before optional upload;
+upload failure preserves the local mutation and reports `synced: false`.
 
-A later integrated slice should use the existing workspace Flock document for
-organization metadata, with independent membership rows rather than replacing a
-whole list during concurrent edits. Maintainers still need to choose whether
-sessions can belong to several groups, explicit dangling-member removal behavior,
-and membership visibility for readers lacking access. Those decisions precede
-persistence/UI implementation; this draft does not assert human approval.
+A group is workspace-readable organization metadata, not private storage. Callers
+must check existing access before resolving or displaying member metadata. They
+create fresh group IDs, never reuse a deleted group's ID, and explicitly remove
+dangling members. Several-group membership is allowed; membership changes do not
+move sessions between projects. This is separate from workdir migration in #1064,
+project display/identity in #1048 and collapsed-project badges in #137.
+
+No UI navigation, CLI command, unread rollup or new synchronization channel is
+implemented. The existing MCP/Role row parser remains separate from group parsing;
+clients opt into the group store instead of treating group rows as catalog entries.
+The draft records these proposed semantics without asserting human approval.
 
 ## Evidence and validation
 
 - Current machine/project ownership: `packages/shared/src/machine-flock.ts`,
   `packages/shared/src/project.ts`, `packages/shared/src/schema.ts`.
 - Existing workspace catalog: `packages/shared/src/workspace-flock.ts`.
-- Reference implementation: `packages/shared/src/project-group.ts`.
+- Model/storage call boundary: `packages/shared/src/project-group.ts`,
+  `packages/shared/src/project-group-store.ts`.
 - Deterministic behavior tests: `packages/shared/tests/project-group.test.ts`.
 - End-to-end grouping and offline-machine UI behavior are not implemented or tested.
