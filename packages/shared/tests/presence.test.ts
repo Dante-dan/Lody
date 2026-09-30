@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   LODY_PRESENCE_TTL_MS,
+  hasFreshDesktopAttendanceForUser,
+  getLodyDesktopAttendancePresenceKey,
   collectOnlineMachineIdsFromPresence,
   findFreshMachinePresenceState,
   findFreshSessionPresenceState,
@@ -146,5 +148,31 @@ describe('presence helpers', () => {
     // Session presence alone must not mark a machine online; machine liveness
     // is only asserted by machine heartbeats.
     expect(online.size).toBe(1);
+  });
+});
+
+
+describe('desktop attendance presence', () => {
+  it('suppresses only for the attending user within both freshness windows', () => {
+    const states = parseLodyPresenceStates({
+      attended: { kind: 'desktop-attendance', userId: 'user-1', instanceId: 'desktop-1', attendedAt: 1000, updatedAt: 1000 },
+      online: { kind: 'machine', machineId: 'machine-1', instanceId: 'daemon-1', updatedAt: 1000 },
+    });
+    expect(hasFreshDesktopAttendanceForUser(states, 'user-1', 60999)).toBe(true);
+    expect(hasFreshDesktopAttendanceForUser(states, 'user-1', 61000)).toBe(false);
+    expect(hasFreshDesktopAttendanceForUser(states, 'user-2', 2000)).toBe(false);
+    expect(hasFreshDesktopAttendanceForUser(states, 'user-1', 999)).toBe(false);
+    expect(hasFreshDesktopAttendanceForUser(states, 'user-1', Number.NaN)).toBe(false);
+  });
+
+  it('fails open for malformed presence and preserves valid peers', () => {
+    const states = parseLodyPresenceStates({
+      bad: { kind: 'desktop-attendance', userId: 'user-1', instanceId: 'desktop-1', attendedAt: Infinity, updatedAt: 1000 },
+      good: { kind: 'desktop-attendance', userId: 'user-1', instanceId: 'desktop-2', attendedAt: 1000, updatedAt: 1000 },
+    });
+    expect(Object.keys(states)).toEqual(['good']);
+    expect(hasFreshDesktopAttendanceForUser(states, 'user-1', 2000)).toBe(true);
+    expect(hasFreshDesktopAttendanceForUser({}, 'user-1', 2000)).toBe(false);
+    expect(getLodyDesktopAttendancePresenceKey('user/1', 'desktop:1' as LodyPresenceInstanceId)).toBe('attendance:user%2F1:desktop%3A1');
   });
 });

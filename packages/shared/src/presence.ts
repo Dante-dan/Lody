@@ -58,10 +58,22 @@ export type LodySessionViewingPresenceState = {
   updatedAt: number;
 };
 
+/** Minimal ephemeral signal; machine liveness and session viewing never imply attendance. */
+export const LODY_DESKTOP_ATTENDANCE_WINDOW_MS = 60_000;
+
+export type LodyDesktopAttendancePresenceState = {
+  kind: 'desktop-attendance';
+  userId: string;
+  instanceId: LodyPresenceInstanceId;
+  attendedAt: number;
+  updatedAt: number;
+};
+
 export type LodyPresenceState =
   | LodyMachinePresenceState
   | LodySessionPresenceState
-  | LodySessionViewingPresenceState;
+  | LodySessionViewingPresenceState
+  | LodyDesktopAttendancePresenceState;
 export type LodyPresenceStateMap = Record<string, LodyPresenceState>;
 
 // Loro values (docs and the ephemeral store) cannot represent `undefined`:
@@ -144,10 +156,19 @@ const PresenceSessionViewingStateSchema = z.object({
   updatedAt: z.number().finite(),
 });
 
+const PresenceDesktopAttendanceStateSchema = z.object({
+  kind: z.literal('desktop-attendance'),
+  userId: z.string().min(1),
+  instanceId: PresenceInstanceIdSchema,
+  attendedAt: z.number().finite(),
+  updatedAt: z.number().finite(),
+});
+
 export const LodyPresenceStateSchema = z.discriminatedUnion('kind', [
   PresenceMachineStateSchema,
   PresenceSessionStateSchema,
   PresenceSessionViewingStateSchema,
+  PresenceDesktopAttendanceStateSchema,
 ]);
 
 export const getLodyMachinePresenceKey = (
@@ -259,4 +280,33 @@ export const collectOnlineMachineIdsFromPresence = (
     online.add(state.machineId);
   }
   return online;
+};
+
+/** One replaceable, workspace-local entry per authenticated user and app instance. */
+export const getLodyDesktopAttendancePresenceKey = (
+  userId: string,
+  instanceId: LodyPresenceInstanceId
+): string => `attendance:${encodeURIComponent(userId)}:${encodeURIComponent(instanceId)}`;
+
+/** Fail open for absent, expired, future-dated or mismatched attendance. */
+export const hasFreshDesktopAttendanceForUser = (
+  states: LodyPresenceStateMap,
+  userId: string,
+  nowMs: number
+): boolean => {
+  if (!Number.isFinite(nowMs)) return false;
+  return Object.values(states).some((state) => {
+    if (state.kind !== 'desktop-attendance' || state.userId !== userId) return false;
+    const interactionAge = nowMs - state.attendedAt;
+    const publicationAge = nowMs - state.updatedAt;
+    return (
+      Number.isFinite(interactionAge) &&
+      Number.isFinite(publicationAge) &&
+      interactionAge >= 0 &&
+      interactionAge < LODY_DESKTOP_ATTENDANCE_WINDOW_MS &&
+      publicationAge >= 0 &&
+      publicationAge < LODY_PRESENCE_TTL_MS &&
+      state.attendedAt <= state.updatedAt
+    );
+  });
 };
