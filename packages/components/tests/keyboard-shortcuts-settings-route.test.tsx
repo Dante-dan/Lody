@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, createElement } from 'react';
+import { act, createElement, Suspense } from 'react';
 import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -12,7 +12,8 @@ const routerState = vi.hoisted(() => ({
 const originalUserAgent = window.navigator.userAgent;
 const originalInnerWidth = window.innerWidth;
 
-vi.mock('@tanstack/react-router', () => ({
+vi.mock('@tanstack/react-router', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@tanstack/react-router')>()),
   createFileRoute: () => (options: { component: () => ReactNode }) => ({
     ...options,
     useParams: () => routerState,
@@ -68,8 +69,13 @@ describe('KeyboardShortcutsSettingsRoute', () => {
     });
   });
 
-  it('redirects the mobile settings route back to the category list', () => {
-    act(() => root.render(createElement(KeyboardShortcutsSettingsRoute)));
+  it('redirects the mobile settings route back to the category list', async () => {
+    await act(async () => {
+      root.render(
+        createElement(Suspense, { fallback: null }, createElement(KeyboardShortcutsSettingsRoute))
+      );
+      await vi.dynamicImportSettled();
+    });
 
     expect(container.textContent).toBe('redirect:/$workspaceName/settings');
     expect(routerState.navigateProps).toEqual({
@@ -80,13 +86,18 @@ describe('KeyboardShortcutsSettingsRoute', () => {
     });
   });
 
-  it('renders the shortcut editor on a narrow desktop-class window', () => {
+  it('renders the shortcut editor on a narrow desktop-class window', async () => {
     Object.defineProperty(window.navigator, 'userAgent', {
       configurable: true,
       value: originalUserAgent,
     });
 
-    act(() => root.render(createElement(KeyboardShortcutsSettingsRoute)));
+    await act(async () => {
+      root.render(
+        createElement(Suspense, { fallback: null }, createElement(KeyboardShortcutsSettingsRoute))
+      );
+      await vi.dynamicImportSettled();
+    });
 
     expect(container.textContent).toBe('keyboard-shortcuts-setting');
     expect(routerState.navigateProps).toBeNull();

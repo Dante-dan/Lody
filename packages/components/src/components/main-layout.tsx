@@ -2,7 +2,7 @@ import { useWorkspaceBadge } from '@/hooks/use-workspace-badge';
 import { useAgentRoleSchemaReconciliation } from '@/hooks/use-agent-role-schema-reconciliation';
 import { currentWorkspaceSlugAtom } from '@/atoms/workspace-context';
 import { useWorkspaceWindowOwner, WorkspaceWindowOwnerContext } from '@/lib/desktop-window';
-import { type ReactNode, useLayoutEffect } from 'react';
+import { lazy, type ReactNode, useLayoutEffect } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useScheduleRegistrySync } from '@/hooks/use-schedules';
 import { useIsCompactDesktop, useIsMobile } from '../hooks/use-mobile';
@@ -12,8 +12,25 @@ import { WebWorkspaceLayout } from './web-workspace-layout';
 import { BugReportDialogContainer } from './bug-report/bug-report-dialog-container';
 import { JoinCommunityDialogContainer } from './settings/join-community-dialog-container';
 import { StuckConnectionBannerContainer } from './stuck-connection-banner';
-import { DesktopSettingsModal } from './settings/desktop-settings-modal';
+import { settingsDialogOpenAtom } from '@/atoms';
+import { RouteSuspense } from './route-suspense';
 import { PromptShortcutProvider } from '../providers/prompt-shortcut-provider';
+
+const LazyDesktopSettingsModal = lazy(async () => {
+  const module = await import('./settings/desktop-settings-modal');
+  return { default: module.DesktopSettingsModal };
+});
+
+function DesktopSettingsModalContainer() {
+  const open = useAtomValue(settingsDialogOpenAtom);
+  const isMobile = useIsMobile();
+  if (!open || isMobile) return null;
+  return (
+    <RouteSuspense>
+      <LazyDesktopSettingsModal />
+    </RouteSuspense>
+  );
+}
 export {
   getMobileMainLayoutContentClassName,
   getMobileMainLayoutRootClassName,
@@ -92,7 +109,7 @@ export function MainLayout({
           {workspaceReady ? <BugReportDialogContainer /> : null}
           <JoinCommunityDialogContainer />
           <StuckConnectionBannerContainer />
-          {workspaceReady ? <DesktopSettingsModal /> : null}
+          {workspaceReady ? <DesktopSettingsModalContainer /> : null}
         </WorkspaceRuntimeShell>
       </PromptShortcutProvider>
     </WorkspaceWindowOwnerContext>

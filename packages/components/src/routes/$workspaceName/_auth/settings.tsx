@@ -9,6 +9,7 @@ import {
   settingsSelectedProjectKeyAtom,
 } from '@/atoms';
 import type { MachineId } from '@lody/shared';
+import { RouteSuspense } from '@/components/route-suspense';
 import { AppThemeShell } from '@/components/app-theme-shell';
 import { isNativeAppShell } from '@/lib/native-platform';
 import { getSettingsBackDestination, resolveSettingsCloseTo } from '@/lib/settings-navigation';
@@ -218,7 +219,9 @@ export function SettingsLayoutComponent() {
             chatTab: t('chat.contextSwitch.chat', 'Chat'),
           }}
         >
-          <Outlet />
+          <RouteSuspense>
+            <Outlet />
+          </RouteSuspense>
         </MobileSettingsLayout>
       </SettingsDataCacheProvider>
     </AppThemeShell>

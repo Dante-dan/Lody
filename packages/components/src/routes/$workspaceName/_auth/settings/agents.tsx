@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import type { MachineId } from '@lody/shared';
-import { MachineAgentSettings } from '@/components/settings/machine-agent-settings';
+import { MachineAgentSettings } from '@/components/settings/lazy-settings-components';
 
 type AgentsSearch = { machine?: string };
 

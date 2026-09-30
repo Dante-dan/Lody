@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import type { MachineId } from '@lody/shared';
-import { ProjectSettingsComponent } from '@/components/settings/project-settings';
+import { ProjectSettingsComponent } from '@/components/settings/lazy-settings-components';
 
 export const Route = createFileRoute('/$workspaceName/_auth/settings/projects')({
   component: ProjectSettingsRoute,

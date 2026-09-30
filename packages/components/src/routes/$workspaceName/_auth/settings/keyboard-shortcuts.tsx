@@ -1,5 +1,5 @@
 import { Navigate, createFileRoute } from '@tanstack/react-router';
-import { KeyboardShortcutsSetting } from '@/components/settings/keyboard-shortcuts-setting';
+import { KeyboardShortcutsSetting } from '@/components/settings/lazy-settings-components';
 import { useIsMobile } from '@/hooks/use-mobile';
 
 export const Route = createFileRoute('/$workspaceName/_auth/settings/keyboard-shortcuts')({

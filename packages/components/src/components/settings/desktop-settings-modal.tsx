@@ -14,6 +14,23 @@ import {
   settingsSelectedProjectKeyAtom,
 } from '@/atoms';
 import { ScrollArea } from '@/ui';
+import { RouteSuspense } from '@/components/route-suspense';
+import {
+  GeneralSettingsComponent,
+  AppearanceSettingsComponent,
+  AccountSettingsComponent,
+  BillingSettingsComponent,
+  StatsSettingsComponent,
+  ProjectSettingsComponent,
+  MachineAgentSettings,
+  IntegrationsSettingsComponent,
+  KeyboardShortcutsSetting,
+  AboutSettingsComponent,
+  AgentRolesSetting,
+  PromptShortcutsSetting,
+  McpSetting,
+  ShareManagementSetting,
+} from './lazy-settings-components';
 import { Dialog } from '@/ui/dialog';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { isNativeAppShell } from '@/lib/native-platform';
@@ -27,20 +44,6 @@ import {
   type SettingsTabId,
 } from './settings-tabs';
 import { SettingsAccountEntry } from './settings-account-entry';
-import { GeneralSettingsComponent } from './general-setting';
-import { AppearanceSettingsComponent } from './appearance-setting';
-import { AccountSettingsComponent } from './account-setting';
-import { BillingSettingsComponent } from './billing-setting';
-import { StatsSettingsComponent } from './stats-setting';
-import { ProjectSettingsComponent } from './project-settings';
-import { MachineAgentSettings } from './machine-agent-settings';
-import { IntegrationsSettingsComponent } from './integrations-setting';
-import { KeyboardShortcutsSetting } from './keyboard-shortcuts-setting';
-import { AboutSettingsComponent } from './about-setting';
-import { AgentRolesSetting } from './agent-roles-setting';
-import { PromptShortcutsSetting } from './prompt-shortcuts-setting';
-import { McpSetting } from './mcp-setting';
-import { ShareManagementSetting } from './share-management-setting';
 import { FocusScope, useListKeyboardNavigation } from '@/ui/focus-scope';
 import { productDarkPalette, productLightPalette } from '@/lib/vscode-theme/lody-ui-palette.stylex';
 import { useResolvedTheme } from '@/theme-provider';
@@ -398,14 +401,18 @@ function SettingsModalBody() {
                 {usesInternalScrolling ? (
                   <div {...stylex.props(styles.fill, styles.paneInset)}>
                     <div {...stylex.props(styles.fill, styles.paneColumn)}>
-                      <SettingsTabContent tabId={resolvedActiveTab} />
+                      <RouteSuspense>
+                        <SettingsTabContent tabId={resolvedActiveTab} />
+                      </RouteSuspense>
                     </div>
                   </div>
                 ) : (
                   <ScrollArea {...stylex.props(styles.fill)}>
                     <div {...stylex.props(styles.paneInset)}>
                       <div {...stylex.props(styles.paneColumn)}>
-                        <SettingsTabContent tabId={resolvedActiveTab} />
+                        <RouteSuspense>
+                          <SettingsTabContent tabId={resolvedActiveTab} />
+                        </RouteSuspense>
                       </div>
                     </div>
                   </ScrollArea>
