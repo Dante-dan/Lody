@@ -30,3 +30,7 @@ The daemon would check the current grant on each remote preview, resolve the tar
 Binding a new session directly to the worktree uses the existing workspace boundary but does not serve links in the original session. The environment allowlist serves the original remote session but has wider machine-wide scope. Automatically trusting repository membership or importing Electron's arbitrary-file capability widens access without an explicit grant and is not proposed.
 
 This investigation is static code/contract review. No remote UI replay, new implementation, grant lifecycle test or approval is claimed. The next step is maintainer feedback on the supported per-session association and authorization owner before introducing a storage or protocol contract.
+
+## Draft contract follow-up
+
+The [draft Spec](../../../../specs/remote-worktree-preview.md) now records session/owner binding, canonical containment, revocation/replacement/restart outcomes and an acceptance-to-test mapping. Storage, host confirmation and protocol representation remain explicit review questions. This completes the missing draft stage; neither this proposed note nor the translated draft is human approval. Runtime implementation remains unstarted.
