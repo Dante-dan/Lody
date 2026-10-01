@@ -622,7 +622,8 @@ export type SessionExecutionServiceDeps = {
    */
   hasPromptOutputForTurn?: (sessionId: SessionId, turnId: string) => boolean;
   /**
-   * Same observation, but `undefined` when the session's transient state is gone
+   * Agent content only (excluding run-config/session metadata), with `undefined`
+   * when the session's transient state is gone
    * and the answer is unknowable. The no-output guard needs that distinction:
    * "emitted nothing" fails the turn, "cannot tell" must not.
    */

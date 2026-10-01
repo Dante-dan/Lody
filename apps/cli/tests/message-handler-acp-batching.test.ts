@@ -146,6 +146,65 @@ const createHandlerHarness = async (sessionIds: SessionId[]) => {
 };
 
 describe('MessageHandler ACP batching', () => {
+  it('does not count warm-session run-config metadata as prompt content', async () => {
+    const sessionId = 'metadata-only-turn' as SessionId;
+    const { repo, handler } = await createHandlerHarness([sessionId]);
+    const host = handler as unknown as {
+      beginConversationTurn(id: SessionId): string;
+      enqueueACPUpdate(id: SessionId, update: AcpSessionNotification): void;
+      flushACPUpdatesNow(id: SessionId): Promise<void>;
+      hasPromptOutputForTurn(id: SessionId, turnId: string): boolean;
+    };
+    try {
+      const turnId = host.beginConversationTurn(sessionId);
+      for (const update of [
+        { sessionUpdate: 'current_mode_update', currentModeId: 'default' },
+        { sessionUpdate: 'config_option_update', configOptions: [] },
+        { sessionUpdate: 'available_commands_update', availableCommands: [] },
+      ] as AcpSessionNotification['update'][]) {
+        host.enqueueACPUpdate(sessionId, { sessionId, update });
+      }
+      expect(handler.observePromptOutputForTurn(sessionId, turnId)).toBe(false);
+      // Metadata remains evidence of possible delivery, so recovery must not replay.
+      expect(host.hasPromptOutputForTurn(sessionId, turnId)).toBe(true);
+      await host.flushACPUpdatesNow(sessionId);
+      expect(handler.observePromptOutputForTurn(sessionId, turnId)).toBe(false);
+      expect(host.hasPromptOutputForTurn(sessionId, turnId)).toBe(true);
+    } finally {
+      await destroyRepoOnRealTimers(repo);
+    }
+  });
+
+  it.each(['agent_message_chunk', 'agent_thought_chunk'] as const)(
+    'retains %s content observation after flush and resets it for the next turn',
+    async (sessionUpdate) => {
+      const sessionId = 'content-observation-turn' as SessionId;
+      const { repo, handler } = await createHandlerHarness([sessionId]);
+      const host = handler as unknown as {
+        beginConversationTurn(id: SessionId): string;
+        enqueueACPUpdate(id: SessionId, update: AcpSessionNotification): void;
+        flushACPUpdatesNow(id: SessionId): Promise<void>;
+      };
+      try {
+        const turnId = host.beginConversationTurn(sessionId);
+        host.enqueueACPUpdate(sessionId, {
+          sessionId,
+          update: { sessionUpdate, content: { type: 'text', text: 'Synthetic output' } },
+        });
+        expect(handler.observePromptOutputForTurn(sessionId, turnId)).toBe(true);
+        await host.flushACPUpdatesNow(sessionId);
+        expect(handler.observePromptOutputForTurn(sessionId, turnId)).toBe(true);
+        const nextTurnId = host.beginConversationTurn(sessionId);
+        expect(handler.observePromptOutputForTurn(sessionId, nextTurnId)).toBe(false);
+        expect(
+          handler.observePromptOutputForTurn('missing-session' as SessionId, turnId)
+        ).toBeUndefined();
+      } finally {
+        await destroyRepoOnRealTimers(repo);
+      }
+    }
+  );
+
   it('isolates a malformed tool notification and continues flushing valid output', async () => {
     const sessionId = 'poison-session' as SessionId;
     const { repo, docs, handler } = await createHandlerHarness([sessionId]);

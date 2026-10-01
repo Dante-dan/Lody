@@ -4421,7 +4421,11 @@ export class MessageHandler {
         }
       );
     }
-    this.store.get(sessionId).acpUpdateBuffer.push({ notification: update, target });
+    const state = this.store.get(sessionId);
+    if (target.source === 'active_turn' && this.isPromptContentUpdate(update)) {
+      state.acpContentObservedInTurn = true;
+    }
+    state.acpUpdateBuffer.push({ notification: update, target });
     this.scheduleFlushACPUpdates(sessionId);
   }
 
@@ -9729,18 +9733,38 @@ export class MessageHandler {
     return hasBufferedOutput || hasFlushedOutput;
   }
 
+  private isPromptContentUpdate(notification: AcpSessionNotification): boolean {
+    switch (notification.update.sessionUpdate) {
+      case 'agent_message_chunk':
+      case 'agent_thought_chunk':
+      case 'tool_call':
+      case 'tool_call_update':
+      case 'plan':
+      case 'plan_update':
+      case 'plan_removed':
+      case 'subagent_event':
+        return true;
+      default:
+        return false;
+    }
+  }
+
   /**
-   * Same observation as `hasPromptOutputForTurn`, but it distinguishes "this turn
-   * emitted nothing" from "we cannot tell". The two callers need opposite
-   * conservative answers on a missing session: prompt replay must refuse to
-   * retry, while the no-output guard must not accuse a turn it could not observe.
-   * `undefined` means unobservable — the transient state is gone.
+   * Content observation for the no-output guard. Run-config, usage and session
+   * metadata are not prompt output; replay protection deliberately still uses
+   * any ACP update. `undefined` means the transient state is gone.
    */
   observePromptOutputForTurn(sessionId: SessionId, turnId: string): boolean | undefined {
     if (!this.store.has(sessionId)) {
       return undefined;
     }
-    return this.hasPromptOutputForTurn(sessionId, turnId);
+    const state = this.store.get(sessionId);
+    return (
+      (this.store.getTurnId(sessionId) === turnId && state.acpContentObservedInTurn) ||
+      state.acpUpdateBuffer.some(
+        (item) => item.target.turnId === turnId && this.isPromptContentUpdate(item.notification)
+      )
+    );
   }
 
   /**

@@ -118,6 +118,8 @@ export interface SessionState {
   acpFlushInFlight: Promise<void> | null;
   acpFlushTimer: NodeJS.Timeout | null;
   acpFlushCountInTurn: number;
+  /** Agent content observed for the active turn, independent of flush progress. */
+  acpContentObservedInTurn: boolean;
   acpFlushConsecutiveFailures: number;
 
   // ── Context window usage (throttled) ────────────────────────────────────
@@ -170,6 +172,7 @@ function createSessionState(): SessionState {
     acpFlushInFlight: null,
     acpFlushTimer: null,
     acpFlushCountInTurn: 0,
+    acpContentObservedInTurn: false,
     acpFlushConsecutiveFailures: 0,
     contextWindowUsageBuffer: null,
     contextWindowUsageTimer: null,
@@ -235,6 +238,7 @@ export class SessionTransientStore {
     const turnEpoch = state.nextTurnEpoch;
     const ownsACPUpdates = args.ownsACPUpdates ?? true;
     state.nextTurnEpoch += 1;
+    state.acpContentObservedInTurn = false;
     state.turn = {
       phase: 'prompting',
       turnId: args.turnId,
@@ -431,6 +435,7 @@ export class SessionTransientStore {
       state.acpFlushTimer = null;
     }
     state.acpFlushCountInTurn = 0;
+    state.acpContentObservedInTurn = false;
     if (state.acpUpdateBuffer.length === 0) {
       state.acpFlushConsecutiveFailures = 0;
     }

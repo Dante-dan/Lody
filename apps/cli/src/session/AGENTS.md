@@ -66,7 +66,7 @@ Contract: specs/session-orchestration.md.
   `agent_disconnected`, Harness compression mismatch is `acp_session_storage_incompatible`.
 - Continue-session recovery may restore the ACP session and retry the same prompt once, only
   while that turn has no ACP output.
-- A turn with no ACP updates takes `recordSilentTurnFailure`, not `setDispatchHandled`.
+- A turn with no ACP content updates takes `recordSilentTurnFailure`, not `setDispatchHandled`.
   Read `turnProducedVisibleOutput` before `finalizeTurn` clears it; still finalize, advance
   the pointer, and fail open.
 - Diff content comes only from the CLI-local ACP evidence store; GitHub `diffStats` use PR compare

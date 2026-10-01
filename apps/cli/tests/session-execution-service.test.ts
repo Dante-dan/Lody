@@ -2142,6 +2142,7 @@ describe('SessionExecutionService', () => {
     sessionId: string;
     attempts?: number;
     hasPromptOutputForTurn: boolean;
+    hasPromptContent?: boolean;
     dispatchSource?: 'delivery';
     onTurnClaimed?: () => Promise<boolean>;
     onTurnStarted?: () => Promise<boolean>;
@@ -2232,7 +2233,9 @@ describe('SessionExecutionService', () => {
           });
         }),
       },
-      observePromptOutputForTurn: vi.fn(() => options.hasPromptOutputForTurn),
+      observePromptOutputForTurn: vi.fn(
+        () => options.hasPromptContent ?? options.hasPromptOutputForTurn
+      ),
     });
 
     const service = new SessionExecutionService(deps);
@@ -2300,6 +2303,16 @@ describe('SessionExecutionService', () => {
         processingUserMsgId: undefined,
       })
     );
+  });
+
+  it('fails a metadata-only warm turn while still treating it as delivered', async () => {
+    const { getHistory, notifySessionCompleted } = await runSilentPromptTurn({
+      sessionId: 'session-metadata-only-turn',
+      hasPromptOutputForTurn: true,
+      hasPromptContent: false,
+    });
+    expect(getHistory()[0]?.status).toBe('failed');
+    expect(notifySessionCompleted).not.toHaveBeenCalled();
   });
 
   it('leaves a turn that emitted agent output on the normal completion path', async () => {
