@@ -97,8 +97,8 @@ function relayEntryStream(
   };
   const handleAbort = (): void => {
     source.unpipe(relay);
-    // yauzl's deflated-entry destroy() releases its reader ref but does not
-    // settle the endpoint itself. The relay is the stream our consumer awaits.
+    // Keep cancellation coupled to both the ZIP reader and the consumer
+    // boundary, including an entry whose pipeline is still being installed.
     source.destroy();
     relay.destroy();
   };

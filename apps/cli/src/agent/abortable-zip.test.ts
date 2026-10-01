@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { existsSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -25,37 +26,50 @@ function crc32(bytes: Uint8Array): number {
 }
 
 function deflatedZip(fileName: string, contents: Buffer): Buffer {
-  const name = Buffer.from(fileName);
-  const compressed = deflateRawSync(contents);
-  const checksum = crc32(contents);
-  const localHeader = Buffer.alloc(30);
-  localHeader.writeUInt32LE(0x04034b50, 0);
-  localHeader.writeUInt16LE(20, 4);
-  localHeader.writeUInt16LE(8, 8);
-  localHeader.writeUInt32LE(checksum, 14);
-  localHeader.writeUInt32LE(compressed.byteLength, 18);
-  localHeader.writeUInt32LE(contents.byteLength, 22);
-  localHeader.writeUInt16LE(name.byteLength, 26);
+  return deflatedEntries([{ fileName, contents }]);
+}
 
-  const centralHeader = Buffer.alloc(46);
-  centralHeader.writeUInt32LE(0x02014b50, 0);
-  centralHeader.writeUInt16LE(0x0314, 4);
-  centralHeader.writeUInt16LE(20, 6);
-  centralHeader.writeUInt16LE(8, 10);
-  centralHeader.writeUInt32LE(checksum, 16);
-  centralHeader.writeUInt32LE(compressed.byteLength, 20);
-  centralHeader.writeUInt32LE(contents.byteLength, 24);
-  centralHeader.writeUInt16LE(name.byteLength, 28);
-  centralHeader.writeUInt32LE((0o100644 << 16) >>> 0, 38);
+function deflatedEntries(entries: { fileName: string; contents: Buffer }[]): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let centralOffset = 0;
+  for (const { fileName, contents } of entries) {
+    const name = Buffer.from(fileName);
+    const compressed = deflateRawSync(contents);
+    const checksum = crc32(contents);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(8, 8);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(compressed.byteLength, 18);
+    localHeader.writeUInt32LE(contents.byteLength, 22);
+    localHeader.writeUInt16LE(name.byteLength, 26);
 
-  const centralOffset = localHeader.byteLength + name.byteLength + compressed.byteLength;
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(0x0314, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(8, 10);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(compressed.byteLength, 20);
+    centralHeader.writeUInt32LE(contents.byteLength, 24);
+    centralHeader.writeUInt16LE(name.byteLength, 28);
+    centralHeader.writeUInt32LE((0o100644 << 16) >>> 0, 38);
+
+    centralHeader.writeUInt32LE(centralOffset, 42);
+    localParts.push(localHeader, name, compressed);
+    centralParts.push(centralHeader, name);
+    centralOffset += localHeader.byteLength + name.byteLength + compressed.byteLength;
+  }
+  const central = Buffer.concat(centralParts);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(1, 8);
-  end.writeUInt16LE(1, 10);
-  end.writeUInt32LE(centralHeader.byteLength + name.byteLength, 12);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(central.byteLength, 12);
   end.writeUInt32LE(centralOffset, 16);
-  return Buffer.concat([localHeader, name, compressed, centralHeader, name, end]);
+  return Buffer.concat([...localParts, central, end]);
 }
 
 function entry(fileName: string): Entry {
@@ -192,6 +206,35 @@ describe('extractAbortableZip', () => {
     await expect(extraction).rejects.toMatchObject({ name: 'AbortError' });
     expect(extractionSettled).toBe(true);
     expect(zipFile.isOpen).toBe(false);
+  });
+
+  it('drains a large deflated entry before extracting the final entry', async () => {
+    const archivePath = join(rootDir, 'complete.zip');
+    // Deterministic, poorly compressible blocks keep the real reader active
+    // while zlib drains the final chunk (the Node 24 regression in #1185).
+    const contents = Buffer.alloc(8 * 1024 * 1024);
+    let state = 1;
+    for (let offset = 0; offset < contents.byteLength; offset += 4) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      contents.writeUInt32LE(state >>> 0, offset);
+    }
+    await writeFile(
+      archivePath,
+      deflatedEntries([
+        { fileName: 'payload.bin', contents },
+        { fileName: 'last.txt', contents: Buffer.from('end-of-archive\n') },
+      ])
+    );
+    const destination = join(rootDir, 'output');
+    await extractAbortableZip(archivePath, destination, new AbortController().signal);
+    const extracted = await readFile(join(destination, 'payload.bin'));
+    expect(extracted.byteLength).toBe(contents.byteLength);
+    expect(createHash('sha256').update(extracted).digest('hex')).toBe(
+      createHash('sha256').update(contents).digest('hex')
+    );
+    expect(await readFile(join(destination, 'last.txt'), 'utf8')).toBe('end-of-archive\n');
   });
 
   it('settles after aborting an active real deflated entry', async () => {

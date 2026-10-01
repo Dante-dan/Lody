@@ -71,8 +71,8 @@ context/acp-agent-edit-evidence.md; adapter repos: [apps/cli/AGENTS.md](../../AG
   only the last aborts fetch, checksum, and extraction. An immediate retry waits for an aborted
   generation's scratch cleanup and never reuses it meanwhile. Tar and ZIP extraction must attach
   to the shared abort signal; ZIP cancellation destroys the yauzl endpoint, awaits the
-  relay/output pipeline, and fences cleanup on the reader's real close/error event — never await
-  the yauzl endpoint, whose `destroy()` does not settle.
+  relay/output pipeline, and fences cleanup on the reader's real close/error event — never use
+  endpoint settlement as proof that the underlying reader has closed.
 - `npx-cache.ts`: ACP `npx` spawns force `npm_config_cache`/`NPM_CONFIG_CACHE` to the active
   profile's `npm-cache`. Automatic `_npx`/`_cacache` cleanup is allowed ONLY for that Lody-owned
   cache.
