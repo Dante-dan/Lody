@@ -220,6 +220,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/ui/t
 import { Popover, PopoverContent, PopoverTrigger } from '@/ui/popover';
 import { UserAvatar } from '../user-avatar';
 import { useTranslation } from 'react-i18next';
+import { EngineTurnOriginLabel } from './engine-turn-origin-label';
 import { toast } from 'sonner';
 import { SessionPlanBar } from '@/components/sessions/session-plan-bar';
 import { ContainerQueryProvider } from './container-query-provider';
@@ -384,6 +385,7 @@ type AssistantChatVirtualRow = {
   item: SessionMessageItem;
   content: AssistantVirtualContent;
   isWorkedDetail?: boolean;
+  isFirstRowForMessage?: boolean;
   isLastRowForMessage: boolean;
 };
 
@@ -1214,6 +1216,9 @@ export const buildChatVirtualRows = ({
       });
     }
 
+    // Attach metadata to an existing row, never insert a new scroll item.
+    const firstRow = assistantRows[0];
+    if (firstRow) firstRow.isFirstRowForMessage = true;
     const lastRow = assistantRows[assistantRows.length - 1];
     if (lastRow) lastRow.isLastRowForMessage = true;
     assistantTurnRowsCache.set(item, {
@@ -4194,6 +4199,7 @@ export const areAssistantChatVirtualRowsEqual = (
     a.messageIndex === b.messageIndex &&
     a.itemIndex === b.itemIndex &&
     a.isWorkedDetail === b.isWorkedDetail &&
+    a.isFirstRowForMessage === b.isFirstRowForMessage &&
     a.isLastRowForMessage === b.isLastRowForMessage &&
     areAssistantVirtualContentsEqual(a.content, b.content));
 
@@ -4413,6 +4419,9 @@ const AssistantChatItem = memo(function AssistantChatItem({
           style={conversationTextFontSizeStyle(conversationFontSize)}
           data-native-selection-allow
         >
+          {row.isFirstRowForMessage ? (
+            <EngineTurnOriginLabel origin={message.acpTurnOrigin} />
+          ) : null}
           {rowBody}
         </div>
       </div>

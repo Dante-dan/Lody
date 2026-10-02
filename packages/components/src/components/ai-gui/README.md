@@ -91,3 +91,10 @@ Coverage: `SessionRelationCard.stories.tsx`, `tests/session-relation-card.test.t
 and CLI `tests/operation-progress-history.test.ts`. The latter uses real Loro Mirror
 validation and snapshot reloads, because schema-free document fakes cannot detect
 a missing persisted-history message variant.
+
+## Engine turn origin
+
+On the proposed #654 history contract, `EngineTurnOriginLabel` reads only persisted
+`acpTurnOrigin` and sits inside the first existing assistant row. Known `cron_job`
+and `task` values receive translated labels; absent/unknown values do not. It adds
+no stream item or virtual row. See the [draft Spec](../../../../../specs/engine-turn-origin-affordance.md).

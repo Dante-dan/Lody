@@ -60,3 +60,5 @@ contract before implementing the cue.
   `packages/components/src/components/sessions/session-chat-interface.tsx`, and
   `packages/components/src/components/ai-gui/AGENTS.md`. These were inspected
   statically; no engine-turn UI behavior was run for this draft.
+
+Reference implementation: the dependency branch based on #654 `0a98b773` now carries the row-local cue; see the [proposed note](../.agents/notes/proposed/feature/2026-10-03-engine-turn-origin-cue.md). Main `5a0729be` still lacks the field. This does not approve the Spec or establish desktop validation.

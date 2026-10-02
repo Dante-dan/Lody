@@ -63,6 +63,7 @@ function canReuseCachedMessageItem(
     cached.item.turnIndex === turnIndex &&
     cached.rawEntry === entry &&
     cached.rawAcpTurnId === entry.acpTurnId &&
+    cached.item.message.acpTurnOrigin === entry.acpTurnOrigin &&
     cached.rawItems === entry.items &&
     cached.item.message.id === entry.id &&
     cached.item.message.role === entry.role &&

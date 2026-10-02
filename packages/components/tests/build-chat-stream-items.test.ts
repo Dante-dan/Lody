@@ -1,3 +1,8 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { createInstance } from 'i18next';
+import { I18nextProvider } from 'react-i18next';
+import { EngineTurnOriginLabel } from '../src/components/ai-gui/engine-turn-origin-label';
 import { describe, expect, it } from 'vitest';
 import type { SessionHistory, SessionId } from '@lody/shared';
 import { buildChatStreamItems as buildChatStreamItemsFromView } from '../src/components/ai-gui/build-chat-stream-items';
@@ -13,7 +18,11 @@ const buildChatStreamItems = (
   previousCache?: Parameters<typeof buildChatStreamItemsFromView>[2]
 ) =>
   buildChatStreamItemsFromView(
-    createConversationViewFromHistory({ sessionId: id, getHistory: () => history, subscribe: () => () => {} }),
+    createConversationViewFromHistory({
+      sessionId: id,
+      getHistory: () => history,
+      subscribe: () => () => {},
+    }),
     id,
     previousCache
   );
@@ -368,4 +377,70 @@ describe('live create progress in the stream', () => {
     expect(next.items[0]).toMatchObject({ message: { items: [running] } });
     expect(next.lastAssistantMessageId).toBeNull();
   });
+});
+
+describe('persisted engine origins', () => {
+  it('keeps engine turns and a later user at their history indexes after reload', () => {
+    const history = [
+      {
+        ...entry({ id: 'cron', role: 'assistant', items: [text('scheduled result')] }),
+        acpTurnOrigin: 'cron_job',
+      },
+      {
+        ...entry({ id: 'task', role: 'assistant', items: [text('background result')] }),
+        acpTurnOrigin: 'task',
+      },
+      entry({ id: 'later-user', role: 'user', items: [text('next question')] }),
+    ];
+    for (const snapshot of [history, structuredClone(history)]) {
+      const result = buildChatStreamItems(snapshot, sessionId);
+      expect(result.items).toHaveLength(3);
+      expect(
+        result.items.map((item) =>
+          item.type === 'message'
+            ? [item.message.id, item.turnIndex, item.message.acpTurnOrigin]
+            : null
+        )
+      ).toEqual([
+        ['cron', 0, 'cron_job'],
+        ['task', 1, 'task'],
+        ['later-user', 2, undefined],
+      ]);
+    }
+  });
+
+  it('invalidates a cached message when persisted origin changes in place', () => {
+    const message = {
+      ...entry({ id: 'engine', role: 'assistant', items: [text('result')] }),
+      acpTurnOrigin: undefined as string | undefined,
+    };
+    const first = buildChatStreamItems([message], sessionId);
+    message.acpTurnOrigin = 'cron_job';
+    const changed = buildChatStreamItems([message], sessionId, first.cache);
+    expect(changed.items[0]).not.toBe(first.items[0]);
+    expect(changed.items[0]).toMatchObject({
+      message: { acpTurnOrigin: 'cron_job' },
+      turnIndex: 0,
+    });
+    const unchanged = buildChatStreamItems([message], sessionId, changed.cache);
+    expect(unchanged.items[0]).toBe(changed.items[0]);
+  });
+});
+
+it('renders translated known origins and hides missing or unknown values', async () => {
+  const i18n = createInstance();
+  await i18n.init({
+    lng: 'zh',
+    resources: {
+      zh: { translation: { 'Scheduled task': '定时任务', 'Background task': '后台任务' } },
+    },
+  });
+  const render = (origin?: string) =>
+    renderToStaticMarkup(
+      createElement(I18nextProvider, { i18n }, createElement(EngineTurnOriginLabel, { origin }))
+    );
+  expect(render('cron_job')).toContain('定时任务');
+  expect(render('task')).toContain('后台任务');
+  expect(render()).toBe('');
+  expect(render('future_private_trigger')).toBe('');
 });

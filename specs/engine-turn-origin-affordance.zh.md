@@ -48,3 +48,5 @@ Translation: current
   `packages/components/src/components/sessions/session-chat-interface.tsx` 和
   `packages/components/src/components/ai-gui/AGENTS.md`。本草案仅静态检查了这些文件，
   未运行引擎轮次 UI 行为。
+
+参考实现：基于 #654 `0a98b773` 的依赖分支已加入行内标签，详见[提案记录](../.agents/notes/proposed/feature/2026-10-03-engine-turn-origin-cue.zh.md)。main `5a0729be` 仍没有该字段；此实现不代表 Spec 批准或桌面验证完成。

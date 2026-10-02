@@ -212,3 +212,19 @@ it('reports a displaced turn footer as changed when it stops being the live one'
   expect(afterDisplaced).toBeDefined();
   expect(areAssistantChatVirtualRowsEqual(whileLive!, afterDisplaced!)).toBe(false);
 });
+
+describe('engine origin metadata inside existing rows', () => {
+  it('marks one existing first row without changing row keys or jump indexes', () => {
+    const ordinary = makeMessage('engine-origin', 'assistant', [text('result'), toolCall()], true);
+    const before = build([{ type: 'message', sessionId, message: ordinary, turnIndex: 0 }]);
+    const engine = { ...ordinary, acpTurnOrigin: 'cron_job' };
+    const after = build([{ type: 'message', sessionId, message: engine, turnIndex: 0 }]);
+    expect(after.map((row) => [row.key, row.messageIndex])).toEqual(
+      before.map((row) => [row.key, row.messageIndex])
+    );
+    const assistantRows = after.filter((row) => row.type === 'assistant');
+    expect(assistantRows.filter((row) => row.isFirstRowForMessage)).toHaveLength(1);
+    expect(assistantRows[0].isFirstRowForMessage).toBe(true);
+    expect(assistantRows.every((row) => row.item.message.acpTurnOrigin === 'cron_job')).toBe(true);
+  });
+});
