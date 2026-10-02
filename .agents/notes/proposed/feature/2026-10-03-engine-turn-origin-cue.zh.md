@@ -17,4 +17,4 @@ Translation: current
 
 ## 证据与验证
 
-main `5a0729be9d728dc6a1be34e9b20f975a453e3e23` 的历史 schema、历史应用、会话领域和流构造器均没有 `acpTurnOrigin`。参考基线 #654 为 `0a98b773b2be35ef5f529fa8c8e6d4d65de25e37`；其写入 schema 接受可选字符串，流构造器将字段传给消息。现有流和行测试扩展覆盖两个引擎轮次后的用户索引、重载来源、原地修改时缓存失效，以及不变的行 key/索引。两套现有测试共 32 项通过，包含本地化标签渲染。相关 lint 无错误，i18n 与 docs 检查通过。恢复参考基线的子模块版本后，全库 format 通过。没有运行桌面应用或实际 provider 产生的引擎历史；测试使用仓库 fixture。全库 check 与 components typecheck 另行尝试，不声称已通过。Storybook 展示已知、缺失和未知来源。
+main `5a0729be9d728dc6a1be34e9b20f975a453e3e23` 的历史 schema、历史应用、会话领域和流构造器均没有 `acpTurnOrigin`。参考基线 #654 为 `0a98b773b2be35ef5f529fa8c8e6d4d65de25e37`；其写入 schema 接受可选字符串，流构造器将字段传给消息。现有流和行测试扩展覆盖两个引擎轮次后的用户索引、重载来源、原地修改时缓存失效，以及不变的行 key/索引。两套现有测试共 32 项通过，包含本地化标签渲染。相关 lint 无错误，i18n 与 docs 检查通过。恢复参考基线的子模块版本后，全库 format 通过。没有运行桌面应用或实际 provider 产生的引擎历史；测试使用仓库 fixture。components typecheck（`tsgo --noEmit`）也通过。全库 `pnpm check` 已尝试，但 adapter 准备未完成并取消；不声称全套检查通过。Storybook 展示已知、缺失和未知来源。
