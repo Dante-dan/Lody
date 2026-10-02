@@ -1,3 +1,4 @@
+import { IosSimulatorService } from '@/ios-simulator/service';
 import { listMcpTools } from '@/mcp/list-mcp-tools';
 import { TurnTokenUsageLedger, turnTokenUsageFromUpdate } from './usage/turn-token-usage';
 import os from 'os';
@@ -821,6 +822,7 @@ export class MessageHandler {
   private executionService: SessionExecutionService;
   private providerSetupManager: ProviderSetupManager;
   private previewService: PreviewService;
+  private iosSimulatorService: IosSimulatorService;
   private sessionDispatchWatcher: SessionDispatchWatcher;
   private sessionUserResolver: SessionUserResolver;
   private sessionForkService: SessionForkService;
@@ -3187,6 +3189,30 @@ export class MessageHandler {
       runtimeBaseUrl: this.cloudPort.runtimeArtifacts.baseUrl,
       remotePreview: this.cloudPort.remotePreview,
     });
+    this.iosSimulatorService = new IosSimulatorService({
+      onAgentPreviewStarted: async (sessionId, operationId) => {
+        await this.workspaceDocument.repo.upsertDocMeta(getSessionRoomId(sessionId as SessionId), {
+          iosSimulatorPreviewRequestId: operationId,
+        } satisfies Partial<SessionMeta>);
+      },
+      workspaceId: this.workspaceId,
+      logger: this.logger,
+      runtimeBaseUrl: this.cloudPort.runtimeArtifacts.baseUrl ?? '',
+      authorize: async (request) => {
+        const record = await this.workspaceDocument.repo.getDocMeta(
+          getSessionRoomId(request.sessionId as SessionId)
+        );
+        if (
+          !record?.meta ||
+          isLoroRepoDocDeleted(record) ||
+          record.meta.isArchived ||
+          record.meta.machineId !== this.machineId ||
+          record.meta.userId !== request.requestedByUserId
+        ) {
+          throw new Error('Simulator session access denied.');
+        }
+      },
+    });
     const streamsTokens = this.cloudPort.streamsTokens;
     if (streamsTokens) {
       const cliHttpFetch = getCliHttpFetch({ logger: this.logger });
@@ -3418,6 +3444,15 @@ export class MessageHandler {
           await this.codeCollabV2Service.initDirectory(request),
         getCodeCollabLspDefinition: async () => await this.codeCollabV2Service.lspDefinition(),
         getCodeCollabLspReferences: async () => await this.codeCollabV2Service.lspReferences(),
+        controlIosSimulator: async ({ proof, responseKey, ...request }) =>
+          this.iosSimulatorService.control(request, true, () =>
+            this.previewService.authorizeRemoteControl(
+              request.sessionId as SessionId,
+              request.requestedByUserId,
+              { action: 'ios-simulator', command: request.command, responseKey },
+              proof
+            )
+          ),
         getSessionPreviewStatus: async ({ proof, ...request }) => {
           await this.previewService.authorizeRemoteControl(
             request.sessionId,
@@ -3944,9 +3979,19 @@ export class MessageHandler {
           const sessionId = getSessionIdFromRoomId(event.docId);
           if (!sessionId) return;
           if ((event.patch as Partial<SessionMeta>).isArchived !== true) return;
+          // Revoke media before unrelated ACP/Browser cleanup can fail.
+          void this.iosSimulatorService.closeSession(sessionId);
           void this.handleSessionArchived(sessionId);
         },
         { kinds: ['doc-metadata'], metadataFields: ['isArchived'] }
+      ),
+      repo.watch(
+        (event) => {
+          if (event.kind !== 'doc-metadata') return;
+          const sessionId = getSessionIdFromRoomId(event.docId);
+          if (sessionId) void this.iosSimulatorService.closeSession(sessionId);
+        },
+        { kinds: ['doc-metadata'], metadataFields: ['userId', 'machineId'] }
       ),
       repo.watch(
         (event) => {
@@ -3954,6 +3999,7 @@ export class MessageHandler {
           if (event.to !== 'deleted') return;
           const sessionId = getSessionIdFromRoomId(event.docId);
           if (!sessionId) return;
+          void this.iosSimulatorService.closeSession(sessionId);
           void this.handleSessionDeleted(sessionId);
         },
         { kinds: ['doc-existence-changed'] }
@@ -4097,6 +4143,7 @@ export class MessageHandler {
     this.clearSessionActivePresence(sessionId);
     this.closeSessionTerminals?.(sessionId);
 
+    await this.iosSimulatorService.closeSession(sessionId);
     await this.finalizeACPState(sessionId);
     await this.previewService.closeSessionPreviewForCleanup(sessionId, 'Session archived');
     await this.terminateActiveChildSessions(sessionId, 'Parent session archived');
@@ -4400,6 +4447,7 @@ export class MessageHandler {
       childSessionIds.map(async (childSessionId) => {
         this.clearSessionActivePresence(childSessionId);
         this.closeSessionTerminals?.(childSessionId);
+        await this.iosSimulatorService.closeSession(childSessionId);
         await this.finalizeACPState(childSessionId);
         await this.previewService.closeSessionPreviewForCleanup(childSessionId, reason);
         await this.sessionManager.terminateSession(childSessionId, true);
@@ -6549,6 +6597,25 @@ export class MessageHandler {
         return await this.prepareSessionWithAccessCheck(request.params);
       case 'session/prepare-cancel':
         return await this.cancelSessionPreparationWithAccessCheck(request.params);
+      case 'ios-simulator/agent-control': {
+        const sessionId = request.params.sessionId as SessionId;
+        const invocation = this.executionService.getActiveInvocationContext(sessionId);
+        if (!invocation?.requesterUserId) {
+          return {
+            type: 'ios-simulator/control_response' as const,
+            sessionId,
+            success: false,
+            error: 'denied' as const,
+          };
+        }
+        return this.iosSimulatorService.controlFromAgent({
+          sessionId,
+          requestedByUserId: invocation.requesterUserId,
+          command: request.params.command,
+        });
+      }
+      case 'ios-simulator/control':
+        return this.iosSimulatorService.control(request.params, false);
       case 'session/preview-endpoint-acquire':
         return await this.previewService.acquireEndpoint({
           machineId: request.machineId as MachineId,
@@ -7870,10 +7937,12 @@ export class MessageHandler {
     this.remoteBackfillGeneration += 1;
     this.remoteBackfillAbort?.abort();
     this.remoteBackfillAbort = new AbortController();
+    this.iosSimulatorService.enableRemote();
     await this.scanAndBackfillLocalSessionFiles();
   }
 
   disableRemoteBackfill(): void {
+    this.iosSimulatorService?.revokeRemote();
     // Close the window: abort in-flight uploads and supersede every started
     // task so a resumed backfill cannot commit post-revoke (S5/D10).
     this.remoteBackfillGeneration += 1;
@@ -9639,6 +9708,7 @@ export class MessageHandler {
    * Flush pending ACP updates and tear down session resources.
    */
   async cleanup(): Promise<void> {
+    await this.iosSimulatorService.closeAll();
     this.logger.debug('Cleaning up message handler resources');
     this.cleanedUp = true;
     this.cancelAllCodeCollabTurnRetryTimers();
@@ -9976,6 +10046,7 @@ export class MessageHandler {
     // 1. Clear active presence
     this.clearSessionActivePresence(sessionId);
 
+    await this.iosSimulatorService.closeSession(sessionId);
     await this.previewService.closeSessionPreviewForCleanup(sessionId, 'Session cleaned by GC');
 
     // 2. Terminate session process first — if later steps throw, the process
