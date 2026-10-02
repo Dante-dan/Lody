@@ -27,6 +27,6 @@ Daemon 将其租约与普通 prompt 执行合并为显示状态：根轮次结�
 
 ## 验证及下一步
 
-当前 Lody live-status 和 transient-store 共 29 个测试通过。直接执行当前 Kimi 排空函数的合成状态实验验证了四条分支：agent 子任务、唤醒宽限期、根轮次阻止提前结束；全部排空后才返回 `end_turn`。Docs check 没有错误。未执行隔离 Kimi 的集成测试，也未复现 Kimi 0.39.1/macOS 原始环境。
+当前 Lody live-status 和 transient-store 共 29 个测试通过。直接执行当前 Kimi 排空函数的合成状态实验验证了四条分支：agent 子任务、唤醒宽限期、根轮次阻止提前结束；全部排空后才返回 `end_turn`。Docs check 没有错误。当前固定版本 Kimi 的原有 `lody-session-updates.test.ts` 也已在 Node 24.15.0 下通过全部 14 个测试，包括保持子任务 prompt 和 prompt 已结束之后根轮次输出。这是合成原生事件的集成测试，未复现 Kimi 0.39.1/macOS 原始环境。
 
 下一可执行动作是定义最小 Core 快照协议，连接 Kimi 事件发布与 daemon 显示租约，并在原有行为测试中覆盖自主开始结束、乱序快照、断连、新真人轮次重叠及权限等待。改变保证时应新增 draft Spec；本文没有声称真人批准，也没有增加实现前审批门槛。

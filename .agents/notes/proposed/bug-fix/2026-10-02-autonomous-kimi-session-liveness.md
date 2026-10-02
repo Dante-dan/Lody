@@ -27,6 +27,6 @@ A quiet-period timer or setting durable status to running for each text chunk is
 
 ## Validation and remaining work
 
-The current Lody live-status and transient-store suites passed 29 tests. An exact-method synthetic state experiment of the pinned Kimi drain function passed four branches: active agent task, wake grace and root turn hold settlement; fully drained state resolves `end_turn`. Docs check reported no errors. These checks did not execute the isolated Kimi integration suite or reproduce Kimi 0.39.1 on macOS.
+The current Lody live-status and transient-store suites passed 29 tests. An exact-method synthetic state experiment of the pinned Kimi drain function passed four branches: active agent task, wake grace and root turn hold settlement; fully drained state resolves `end_turn`. Docs check reported no errors. The pinned Kimi owning `lody-session-updates.test.ts` suite also passed all 14 tests under Node 24.15.0, including held detached-subagent prompts and engine-started output after an already settled prompt. These are synthetic native-event integration tests, not Kimi 0.39.1/macOS original reproduction.
 
 Next executable work is to define the smallest negotiated Core snapshot contract, wire the Kimi event publisher and daemon display lease, and extend the owning behavior suites for autonomous start/end, out-of-order snapshots, detach, overlap with a new human turn, and permission waiting. A changed guarantee needs a draft Spec; this note does not assert human approval or create an implementation-before approval gate.
