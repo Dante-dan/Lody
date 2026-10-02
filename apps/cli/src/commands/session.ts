@@ -3080,10 +3080,20 @@ async function resolveEffectiveSessionCreateDispatchConfig(args: {
     : undefined;
   const requested = applyAgentRunConfigSelection(dispatchConfig, capability);
   validateTurnModeAndModel(requested.config, capability);
+  // Durable Operations and Role creates carry concrete options without runConfig.
+  // Recompute target-model validation rather than using the probe's option list.
+  const targetModelId =
+    requested.config.modelId ??
+    getTurnSelectorConfigOptionValue(requested.config.configOptionValues, capability, 'model');
+  const modelValidatedIds = validateModelDependentTurnConfigOptionValues(
+    requested.config.configOptionValues,
+    capability,
+    targetModelId
+  );
   validateTurnConfigOptionValues(
     requested.config.configOptionValues,
     capability,
-    requested.validatedConfigIds
+    new Set([...requested.validatedConfigIds, ...modelValidatedIds])
   );
   return {
     ...withBuiltinDefaultTurnMode(
