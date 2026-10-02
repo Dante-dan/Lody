@@ -600,7 +600,7 @@ export class WorktreeManager {
   }): Promise<{ exitCode: number | null; returnedCredentials: boolean; stderrNonEmpty: boolean }> {
     const input = `protocol=https\nhost=${options.host}\npath=/${options.repoFullName}.git\n\n`;
     return await new Promise((resolve, reject) => {
-      const child = spawn('node', [options.helperPath, 'get'], {
+      const child = spawn(process.execPath, [options.helperPath, 'get'], {
         env: options.env,
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,

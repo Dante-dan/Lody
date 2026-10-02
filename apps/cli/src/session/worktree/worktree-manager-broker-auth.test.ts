@@ -410,6 +410,49 @@ process.exit(result.status ?? 1);
     });
   }
 
+  it('diagnoses failed Git auth without a Node executable on PATH', async () => {
+    const fixture = nativeFixture();
+    fixture.seed();
+    const logger = createLogger();
+    const { WorktreeManager } = await import('./worktree-manager');
+    const manager = new WorktreeManager({
+      repoId: REPO_ID,
+      source: { kind: 'github', repoUrl: REPO_URL },
+      logger,
+    });
+    vi.stubEnv('PATH', path.join(dataDir, 'empty-bin'));
+    vi.stubEnv('ELECTRON_RUN_AS_NODE', '1');
+    const preload = path.join(dataDir, 'broker-fixture.cjs');
+    writeFileSync(
+      preload,
+      readFileSync(preload, 'utf8') +
+        '\nif (process.env.ELECTRON_RUN_AS_NODE !== "1") throw new Error("Missing inherited Node mode");\n'
+    );
+    vi.stubEnv('NODE_OPTIONS', `--require ${JSON.stringify(preload)}`);
+    vi.stubGlobal('fetch', async () => new Response(null, { status: 204 }));
+    spawnMock.mockImplementation((command: string, args: string[], options) => {
+      if (command === 'git') {
+        if (args.includes('fetch'))
+          return makeChild('', 'fatal: could not read Username: terminal prompts disabled', 1);
+        return makeChild('+refs/heads/*:refs/remotes/origin/*\n');
+      }
+      return spawn(command, args, options);
+    });
+    try {
+      await manager.ensureRepo({ brokerAuth: fixture.auth('requester-a') });
+      const diagnostic = vi
+        .mocked(logger.debug)
+        .mock.calls.find(([message]) => message.includes('GitHub HTTPS auth diagnostics'))?.[1];
+      expect(diagnostic).toMatchObject({
+        brokerWorkspaceId: 'requester-a',
+        helperProbe: { exitCode: 0, returnedCredentials: true },
+      });
+      expect(fixture.contexts()).toEqual(['requester-a', 'requester-a']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('fetches with the caller-supplied broker, not the process-global pointer', async () => {
     // Another workspace in the same fleet process started its broker last and
     // therefore owns the global pointer.
