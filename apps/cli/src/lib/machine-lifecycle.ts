@@ -410,6 +410,7 @@ export const runDaemonUpgradeFromIntent = async (args: {
   spawnImpl?: SpawnLike;
   signal?: AbortSignal;
   nowMs?: number;
+  cliEntryPath?: string;
 }): Promise<boolean> => {
   const intent = await readDaemonUpgradeIntent();
   if (!intent) {
@@ -437,7 +438,35 @@ export const runDaemonUpgradeFromIntent = async (args: {
     }
     const targetVersion = normalizeMachineUpgradeTargetVersion(intent.targetVersion);
     const npmExecutable = resolveNpmExecutable();
+    const cliEntryPath = args.cliEntryPath ?? process.argv[1];
+    if (!cliEntryPath) {
+      args.logger.error?.('[daemon-upgrade] cannot verify the daemon CLI entry point');
+      return false;
+    }
+    let launchEntry: string;
+    try {
+      launchEntry = await fs.realpath(cliEntryPath);
+    } catch (error) {
+      args.logger.error?.(
+        `[daemon-upgrade] cannot resolve daemon entry point: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return false;
+    }
     const installArgs = buildLodyUpgradeInstallArgs(targetVersion);
+    // Only conventional npm global layouts prove which prefix owns this entry.
+    // Do not infer a prefix for npx caches, source trees, or custom layouts.
+    const packageRoot = path.dirname(path.dirname(launchEntry));
+    const modulesDir = path.dirname(packageRoot);
+    const parentDir = path.dirname(modulesDir);
+    if (
+      path.basename(packageRoot) === LODY_NPM_PACKAGE_NAME &&
+      path.basename(modulesDir) === 'node_modules' &&
+      path.basename(path.dirname(launchEntry)) === 'dist' &&
+      (process.platform === 'win32' || path.basename(parentDir) === 'lib')
+    ) {
+      const prefix = process.platform === 'win32' ? parentDir : path.dirname(parentDir);
+      installArgs.push('--prefix', prefix);
+    }
     args.logger.info?.(
       `[daemon-upgrade] installing ${LODY_NPM_PACKAGE_NAME}@${targetVersion} for request ${intent.requestId}`
     );
@@ -464,8 +493,38 @@ export const runDaemonUpgradeFromIntent = async (args: {
       );
       return false;
     }
+    const launchVersion = await runCommand({
+      command: process.execPath,
+      commandArgs: [launchEntry, '--version'],
+      timeoutMs: args.timeoutMs ?? MACHINE_UPGRADE_TIMEOUT_MS,
+      spawnImpl: args.spawnImpl ?? spawn,
+      signal: args.signal,
+    }).catch((error: unknown) => {
+      if (args.signal?.aborted) throw error;
+      args.logger.error?.(
+        `[daemon-upgrade] could not verify daemon entry point: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    });
+    if (!launchVersion) return false;
+    if (launchVersion.aborted) {
+      throw new DOMException('Daemon upgrade canceled', 'AbortError');
+    }
+    const installedVersion = launchVersion.stdout.trim();
+    if (
+      launchVersion.timedOut ||
+      launchVersion.code !== 0 ||
+      !SEMVER_TARGET_RE.test(installedVersion) ||
+      (targetVersion !== DEFAULT_MACHINE_UPGRADE_TARGET_VERSION &&
+        installedVersion !== targetVersion)
+    ) {
+      args.logger.error?.(
+        `[daemon-upgrade] npm succeeded but the daemon entry point did not verify target ${targetVersion} (reported ${installedVersion || 'no version'}). Check the daemon installation path and npm prefix before sending a new upgrade request.`
+      );
+      return false;
+    }
     args.logger.info?.(
-      `[daemon-upgrade] npm install completed for ${LODY_NPM_PACKAGE_NAME}@${targetVersion}`
+      `[daemon-upgrade] npm install completed; daemon entry point verified ${installedVersion}`
     );
     return true;
   } finally {

@@ -42,8 +42,17 @@ with a new request. Rejected replay never schedules another lifecycle exit.
 Receipt read/write errors fail preparation or installation instead of installing
 without replay protection.
 
-This bounds repeat installation for the same request; it does not correct npm's
-installation prefix, verify watchdog handoff, resolve `latest`, or provide
+For a conventional npm global installation, the installer derives the prefix
+from the real daemon launch entry instead of trusting a different ambient npm
+prefix. Other layouts keep npm's existing prefix selection. After npm succeeds,
+a bounded `--version` probe of that same launch entry must return the exact target
+before the installer permits watchdog handoff. An invalid, failed, or mismatched
+probe reports an actionable installation-path error and leaves the receipt intact
+so the same request cannot install again. For `latest`, the probe validates a
+version but cannot establish the unresolved registry target.
+
+This verifies the entry before handoff, not the newly running Worker. It does not
+resolve `latest`, repair custom/npx installation layouts, or provide
 permanent exactly-once execution after the retention window. The local clock owns
 receipt expiry. A request with a new ID can retry a failed attempt. The intended
 behavior above remains a draft requiring human review.

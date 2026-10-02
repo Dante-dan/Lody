@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,10 +13,16 @@ vi.mock('node:os', async (importOriginal) => ({
 describe('daemon upgrade command execution', () => {
   let lifecycle: typeof import('./machine-lifecycle');
   let argsFile: string;
+  let cliEntryPath: string;
 
   beforeAll(async () => {
     fixture.home = await mkdtemp(path.join(tmpdir(), 'lody upgrade test '));
     argsFile = path.join(fixture.home, 'npm-args.txt');
+    cliEntryPath = path.join(fixture.home, 'cli.cjs');
+    await writeFile(
+      cliEntryPath,
+      "process.stdout.write(process.env.LODY_TEST_CLI_VERSION ?? '1.2.3')"
+    );
     vi.stubEnv('LODY_DATA_DIR', path.join(fixture.home, 'data'));
     const windows = process.platform === 'win32';
     // Exercise a real .cmd shim on Windows, without invoking the installed npm.
@@ -59,6 +65,7 @@ describe('daemon upgrade command execution', () => {
 
     const upgraded = await lifecycle.runDaemonUpgradeFromIntent({
       logger: { error: (message) => errors.push(message) },
+      cliEntryPath,
     });
 
     expect(upgraded).toBe(exitCode === 0);
@@ -90,7 +97,7 @@ describe('daemon upgrade command execution', () => {
       await lifecycle.resolveDaemonUpgradeReplay({ ...intent, currentVersion: '1.2.2' }, 1_000)
     ).toBe('attempted');
     await lifecycle.writeDaemonUpgradeIntent(intent);
-    await lifecycle.runDaemonUpgradeFromIntent({ logger: {}, nowMs: 1_000 });
+    await lifecycle.runDaemonUpgradeFromIntent({ logger: {}, cliEntryPath, nowMs: 1_000 });
     expect(await lifecycle.readDaemonUpgradeIntent()).toBeNull();
     vi.resetModules();
     const restarted = await import('./machine-lifecycle');
@@ -130,12 +137,81 @@ describe('daemon upgrade command execution', () => {
     expect(
       await restarted.runDaemonUpgradeFromIntent({
         logger: { error: (message) => errors.push(message) },
+        cliEntryPath,
         nowMs: 2_000,
       })
     ).toBe(false);
     expect(errors[0]).toMatch(/already attempted/);
     await expect(readFile(argsFile, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await restarted.readDaemonUpgradeIntent()).toBeNull();
+  });
+
+  it('updates the npm global prefix owning the launch entry', async () => {
+    const prefix = path.join(fixture.home, 'actual-prefix');
+    const entry = path.join(
+      prefix,
+      ...(process.platform === 'win32' ? [] : ['lib']),
+      'node_modules',
+      'lody',
+      'dist',
+      'index.cjs'
+    );
+    await mkdir(path.dirname(entry), { recursive: true });
+    await writeFile(entry, "process.stdout.write('1.2.3')");
+    vi.stubEnv('PATH', fixture.home);
+    vi.stubEnv('NPM_CONFIG_PREFIX', path.join(fixture.home, 'wrong-prefix'));
+    vi.stubEnv('LODY_TEST_NPM_ARGS_FILE', argsFile);
+    vi.stubEnv('LODY_TEST_NPM_EXIT_CODE', '0');
+    await lifecycle.writeDaemonUpgradeIntent({
+      action: 'upgrade',
+      requestId: 'actual-prefix',
+      requesterUserId: 'synthetic-user',
+      targetVersion: '1.2.3',
+      requestedAtMs: 0,
+    });
+    expect(await lifecycle.runDaemonUpgradeFromIntent({ logger: {}, cliEntryPath: entry })).toBe(
+      true
+    );
+    expect((await readFile(argsFile, 'utf8')).trim().split(/\r?\n/)).toEqual([
+      'install',
+      '-g',
+      'lody@1.2.3',
+      '--registry=https://registry.npmjs.org',
+      '--prefix',
+      await realpath(prefix),
+    ]);
+    expect(await lifecycle.readDaemonUpgradeIntent()).toBeNull();
+  });
+
+  it('does not hand off when npm succeeds but the launch entry is still old', async () => {
+    vi.stubEnv('PATH', fixture.home);
+    vi.stubEnv('LODY_TEST_NPM_ARGS_FILE', argsFile);
+    vi.stubEnv('LODY_TEST_NPM_EXIT_CODE', '0');
+    vi.stubEnv('LODY_TEST_CLI_VERSION', '1.2.2');
+    await lifecycle.writeDaemonUpgradeIntent({
+      action: 'upgrade',
+      requestId: 'wrong-prefix',
+      requesterUserId: 'synthetic-user',
+      targetVersion: '1.2.3',
+      requestedAtMs: 0,
+    });
+    const errors: string[] = [];
+    expect(
+      await lifecycle.runDaemonUpgradeFromIntent({
+        logger: { error: (message) => errors.push(message) },
+        cliEntryPath,
+      })
+    ).toBe(false);
+    expect(errors[0]).toContain('daemon entry point did not verify target 1.2.3 (reported 1.2.2)');
+    expect(await lifecycle.readDaemonUpgradeIntent()).toBeNull();
+    expect(
+      await lifecycle.resolveDaemonUpgradeReplay({
+        requestId: 'wrong-prefix',
+        requesterUserId: 'synthetic-user',
+        targetVersion: '1.2.3',
+        currentVersion: '1.2.2',
+      })
+    ).toBe('attempted');
   });
 
   it('does not install when the retained attempt file is corrupt', async () => {
@@ -158,6 +234,7 @@ describe('daemon upgrade command execution', () => {
     expect(
       await lifecycle.runDaemonUpgradeFromIntent({
         logger: { error: (message) => errors.push(message) },
+        cliEntryPath,
         nowMs: 1_000,
       })
     ).toBe(false);
