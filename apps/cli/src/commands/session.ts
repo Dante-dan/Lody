@@ -1022,12 +1022,20 @@ async function syncMachineFlockDocsForRead(
   reason: string
 ): Promise<void> {
   await Promise.all(
-    Array.from(new Set(machineIds)).map(
-      async (machineId) =>
+    Array.from(new Set(machineIds)).map(async (machineId) => {
+      try {
         await manager.syncFlockDocOrThrow(getMachineFlockDocId(workspaceId, machineId), {
           reason: `${reason}:${machineId}`,
-        })
-    )
+        });
+      } catch (error) {
+        // This is a freshness read, not confirmation of a durable write.
+        // Let the caller validate the data available in the local replica.
+        getLogger('session').warn(
+          `Machine Flock freshness sync failed (${reason}:${machineId}); reading local replica`,
+          error
+        );
+      }
+    })
   );
 }
 

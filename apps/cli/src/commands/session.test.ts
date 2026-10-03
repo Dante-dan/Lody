@@ -59,6 +59,7 @@ import {
   resolveLocalProjectBranchForCreate,
   resolveLocalProjectCreateGitContext,
   resolveLocalProjectRefOrThrow,
+  readAgentAcpCapability,
   selectLocalProjectsBySelector,
   selectTargetMachineForCreate,
   shouldReadStdinForChatArgResolution,
@@ -1565,7 +1566,7 @@ describe('session command helpers', () => {
     ).toEqual([authorizedProject]);
   });
 
-  it('marks local project refs for worktree session creation', async () => {
+  it.each([false, true])('resolves local projects with syncFails=%s', async (syncFails) => {
     const rootPath = mkdtempSync(path.join(os.tmpdir(), 'lody-session-git-project-'));
     try {
       execFileSync('git', ['init'], { cwd: rootPath, stdio: 'ignore' });
@@ -1583,7 +1584,9 @@ describe('session command helpers', () => {
         ],
         { cwd: rootPath, stdio: 'ignore' }
       );
-      const syncFlockDocOrThrow = vi.fn(async () => undefined);
+      const syncFlockDocOrThrow = vi.fn(async () => {
+        if (syncFails) throw new Error('Flock document sync timed out');
+      });
       const manager = {
         syncFlockDocOrThrow,
         repo: {
@@ -1640,6 +1643,31 @@ describe('session command helpers', () => {
     } finally {
       rmSync(rootPath, { recursive: true, force: true });
     }
+  });
+
+  it('reads cached ACP capabilities after a failed freshness sync', async () => {
+    const capability = createAcpCapability();
+    const manager = {
+      syncFlockDocOrThrow: async () => {
+        throw new Error('Flock document sync timed out');
+      },
+      repo: {
+        openFlockDoc: async () => ({
+          flock: {
+            scan: () => [{ key: ['acpCapability', 'agent-config-1'], value: capability }],
+          },
+        }),
+      },
+    } as unknown as Parameters<typeof readAgentAcpCapability>[0]['manager'];
+
+    await expect(
+      readAgentAcpCapability({
+        manager,
+        workspaceId: 'workspace-1' as WorkspaceId,
+        machineId: 'machine-id' as MachineId,
+        agentConfigId: 'agent-config-1' as AgentConfigMeta['id'],
+      })
+    ).resolves.toEqual(capability);
   });
 
   it('does not synthesize a branch for non-git local projects', async () => {
