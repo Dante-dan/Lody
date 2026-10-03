@@ -134,11 +134,15 @@ export class FilePreviewSessionGrants {
   private async isCurrent(sessionId: SessionId, grant: Grant): Promise<boolean> {
     const session = await this.resolveSession(sessionId);
     // Recheck after the async host boundary: revoke/regrant can race authentication.
-    return (
+    const current =
       this.grants.get(sessionId) === grant &&
       session !== null &&
       sameSession(grant.session, session) &&
-      sameIdentity(grant.identity)
-    );
+      sameIdentity(grant.identity);
+    // Once observed invalid, a grant cannot revive if ownership, authorization
+    // or a removed directory later returns to its previous identity. Do not
+    // remove a newer grant installed while authentication was in flight.
+    if (!current && this.grants.get(sessionId) === grant) this.revoke(sessionId);
+    return current;
   }
 }

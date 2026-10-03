@@ -647,6 +647,11 @@ describe('session worktree grant reference seam', () => {
       ownerUserId: 'host-owner',
       authorizationGeneration: '1',
     });
+    expect(await f.service.previewFile(f.request)).toMatchObject({
+      status: 'error',
+      code: 'path_not_allowed',
+    });
+    await f.grants.grant(SESSION_ID, f.worktree);
     f.setSession({
       ownerSessionId: SESSION_ID,
       ownerUserId: 'host-owner',
@@ -661,6 +666,11 @@ describe('session worktree grant reference seam', () => {
       ownerUserId: 'host-owner',
       authorizationGeneration: '1',
     });
+    expect(await f.service.previewFile(f.request)).toMatchObject({
+      status: 'error',
+      code: 'path_not_allowed',
+    });
+    await f.grants.grant(SESSION_ID, f.worktree);
     const restarted = new FilePreviewSessionGrants(f.host);
     expect(await restarted.resolve(SESSION_ID)).toBeNull();
     await rename(f.worktree, path.join(f.root, 'old-topic'));
