@@ -84,3 +84,11 @@ runtime tests of this documentation change. Extend the existing owning suites.
 ## Reference validation
 
 The optional service seam in `file-preview-session-grants.ts` now has executable lifecycle coverage in the existing service suite. No production daemon, authenticated host confirmation UI, grant RPC or remote UI replay is delivered. The draft remains unapproved.
+
+## Bounded host adapter (Electron-owned root sessions)
+
+Production preview now receives the registry, but grants remain empty until explicit host confirmation. The local-only `file/grant-worktree` request accepts a session and root; it does not accept approval, principal or authorization generation. It requires a live root session owned by the daemon user on this machine, the same canonical Git common directory, and a registered exact worktree. Child sessions are unsupported in this slice.
+
+Only an Electron instance actually supervising this CLI child can approve: the daemon sends a fresh challenge over the inherited private Node IPC pipe, and Electron main displays a native dialog naming the session, owner and canonical root. Cancel is the default. The matching result must return over that same private peer before the 30-second deadline. Duplicate, stale, concurrent and disconnected requests fail closed. The registry rechecks generation and root identity after the dialog. Supervisor capabilities remain in main/worker memory and are not logged, persisted or exposed to the renderer. Standalone daemons and Electron attached to an existing runtime lack this peer and deny grants.
+
+Archive, deletion, owner/machine/parent/project metadata changes and local `file/revoke-worktree` advance daemon-owned session generations and revoke access. Restart starts empty. The existing remote `file/preview` response remains bounded and readonly; no remote grant RPC, save capability or Code Collab activation is added. A local control caller can request a native confirmation, but cannot directly approve. This is an adapter/API slice; there is no new remote viewer grant button. Native desktop UI and cross-machine end-to-end QA have not been performed. The draft is not approved intent and this does not claim every #472 deployment is supported.

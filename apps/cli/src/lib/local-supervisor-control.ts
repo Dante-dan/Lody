@@ -9,6 +9,7 @@ import {
 } from '@lody/shared/node/local-cli-supervisor';
 import type { CliRuntimeState } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
+import { registerFilePreviewHostConfirmation } from './file-preview/file-preview-host-confirmation';
 
 const SupervisorIdentitySchema = z
   .object({
@@ -98,6 +99,24 @@ export function registerLocalSupervisorControl(options: {
 }): () => void {
   const identity = options.identity;
   if (!identity) return () => {};
+  const releasePreviewHost =
+    !options.messageSource && process.send
+      ? registerFilePreviewHostConfirmation(identity, {
+          get connected() {
+            return process.connected === true;
+          },
+          send: (message, callback) => {
+            if (process.send) process.send(message, callback);
+            else callback(new Error('Host disconnected'));
+          },
+          on: (event, listener) => {
+            process.on(event, listener);
+          },
+          off: (event, listener) => {
+            process.off(event, listener);
+          },
+        })
+      : () => {};
   const messageSource =
     options.messageSource ??
     ({
@@ -136,6 +155,7 @@ export function registerLocalSupervisorControl(options: {
   }
 
   return () => {
+    releasePreviewHost();
     messageSource.off('message', onMessage);
     messageSource.off('disconnect', onDisconnect);
   };

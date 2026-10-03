@@ -65,3 +65,7 @@ real per-append ceiling is not asserted anywhere in this repo.
 The generic `permission-denied` copy ("Access denied") misdescribes a policy
 rejection as a filesystem one, so the web surface keys a dedicated presentation off
 the phrase "File is outside the workspace".
+
+## Host-confirmed worktree grants
+
+The production adapter supports daemon-user-owned root sessions only when Electron owns the CLI private child IPC peer. Local `file/grant-worktree` asks the host native dialog to confirm an exact registered Git worktree; `file/revoke-worktree` revokes it. Caller approval or user identities are rejected. Standalone/attached runtimes deny grants. Archive/deletion/ownership/project changes revoke daemon generation bindings. Remote preview stays readonly; see the draft remote-worktree-preview Spec for scope and unperformed native UI QA.

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { totalmem } from 'node:os'
 import { basename, join, resolve as resolvePath } from 'node:path'
-import { app, powerSaveBlocker, type WebContents } from 'electron'
+import { app, dialog, powerSaveBlocker, type WebContents } from 'electron'
 import { Effect } from 'effect'
 import { isLocalSessionControlRequest } from '@lody/shared/node/local-session-control'
 import { isLocalProjectControlRequest } from '@lody/shared/node/local-project-control'
@@ -15,7 +15,8 @@ import {
   LODY_SUPERVISOR_CONTRACT_ENV,
   LODY_SUPERVISOR_INSTANCE_ID_ENV,
   LODY_SUPERVISOR_PID_ENV,
-  LODY_SUPERVISOR_TOKEN_ENV
+  LODY_SUPERVISOR_TOKEN_ENV,
+  isLocalCliPreviewConfirmation
 } from '@lody/shared/node/local-cli-supervisor'
 import {
   acquireLocalCliHostLease,
@@ -1026,6 +1027,52 @@ export class CliService {
       shell: shouldUseWindowsShell(command)
     })
     this.trackedCliChildren.add(child)
+    // The inherited IPC pipe identifies the exact owned worker. A local socket
+    // request can ask for this dialog, but can never supply its approval result.
+    let previewConfirmationPending = false
+    child.on('message', (message: unknown) => {
+      if (
+        !options?.supervisorControl ||
+        !isLocalCliPreviewConfirmation(message) ||
+        message.instanceId !== options.supervisorControl.instanceId ||
+        message.token !== options.supervisorControl.token ||
+        previewConfirmationPending
+      )
+        return
+      previewConfirmationPending = true
+      void dialog
+        .showMessageBox({
+          type: 'warning',
+          buttons: ['Cancel', 'Allow read-only preview'],
+          defaultId: 0,
+          cancelId: 0,
+          message: 'Allow this session to preview an additional worktree?',
+          detail: `Session: ${JSON.stringify(message.sessionId)}\nOwner: ${JSON.stringify(message.ownerUserId)}\nRoot: ${JSON.stringify(message.canonicalRoot)}\n\nRead-only access to this exact root on this machine. No writes or Code Collab access. Closing or cancelling denies access.`
+        })
+        .then(({ response }) => {
+          if (child.connected)
+            child.send({
+              type: 'lody/preview-confirmation-result',
+              instanceId: options.supervisorControl?.instanceId,
+              token: options.supervisorControl?.token,
+              challengeId: message.challengeId,
+              approved: response === 1
+            })
+        })
+        .catch(() => {
+          if (child.connected)
+            child.send({
+              type: 'lody/preview-confirmation-result',
+              instanceId: options.supervisorControl?.instanceId,
+              token: options.supervisorControl?.token,
+              challengeId: message.challengeId,
+              approved: false
+            })
+        })
+        .finally(() => {
+          previewConfirmationPending = false
+        })
+    })
     options?.onSpawn?.(child)
 
     const result = new Promise<CliRunResult>((resolvePromise, reject) => {

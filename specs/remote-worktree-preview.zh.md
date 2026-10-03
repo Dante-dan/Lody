@@ -49,3 +49,11 @@ Daemon 负责授权存储和校验。每项授权绑定一个已有权限的会�
 ## 参考验证
 
 `file-preview-session-grants.ts` 的可选 service 接入点现已在既有 service 测试中验证生命周期。未交付生产 daemon 接线、实际主机认证确认 UI、grant RPC 或远程 UI 回放。草案仍未批准。
+
+## 有界主机适配器（Electron 管理的根会话）
+
+生产预览服务已接入注册表，但在明确主机确认前没有授权。本地专用 `file/grant-worktree` 仅接收会话与目录，不接收批准、用户身份或授权代次。会话必须是本机 daemon 用户所有、未归档或删除的根会话；目录必须共享规范化 Git common directory，且是登记的准确 worktree。本切片不支持子会话。
+
+只有实际管理该 CLI 子进程的 Electron 可批准：daemon 通过继承的私有 Node IPC 发出新挑战，Electron 主进程原生对话框显示会话、所有者和规范目录，默认取消。结果必须在 30 秒内由同一私有通道返回，并匹配挑战。重放、过期、并发和断连均拒绝；确认后重核授权代次与目录身份。supervisor 能力仅留在主进程/worker 内存，不落盘、不记日志、不交给 renderer。独立 daemon 或附着到既有 runtime 的 Electron 缺少该通道，拒绝授权。
+
+归档、删除、用户/机器/父会话/项目元数据变化及本地 `file/revoke-worktree` 推进 daemon 自有代次并撤销访问；重启为空。既有远端 `file/preview` 仍有界只读，不增加远端授权 RPC、保存能力或 Code Collab 激活。本地请求者可请求原生确认，不能直接批准。当前是适配器/API 切片，没有新增远端 viewer 授权按钮。未进行原生桌面 UI 或跨机器端到端 QA；draft 不表示已批准意图，也不表示所有 #472 部署均已支持。

@@ -5,6 +5,8 @@ import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { pathToFileURL } from 'url';
 
 import { v4 as uuidV4 } from 'uuid';
@@ -334,6 +336,8 @@ import {
   type CodeCollabV2WorkspaceResolver,
 } from '@/lib/code-collab/code-collab-v2-service';
 import { FilePreviewService } from '@/lib/file-preview/file-preview-service';
+import { FilePreviewSessionGrants } from '@/lib/file-preview/file-preview-session-grants';
+import { confirmFilePreviewRootOnHost } from '@/lib/file-preview/file-preview-host-confirmation';
 import {
   CodeCollabV2DiffStore,
   type CodeCollabV2DiffStoreEvent,
@@ -852,6 +856,8 @@ export class MessageHandler {
   // File Preview v3. Separate from Code Collab on purpose: previewing a file must
   // not start a workspace watcher or publish a file index.
   private filePreviewService: FilePreviewService;
+  private filePreviewSessionGrants: FilePreviewSessionGrants;
+  private readonly filePreviewAuthorizationGenerations = new Map<SessionId, number>();
 
   /**
    * Get a logger with session context. Caches loggers per session for efficiency.
@@ -3010,7 +3016,74 @@ export class MessageHandler {
         );
       },
     });
+    this.filePreviewSessionGrants = new FilePreviewSessionGrants({
+      resolveAuthorizedSession: async (sessionId) => {
+        const record = await this.workspaceDocument.repo.getDocMeta(getSessionRoomId(sessionId));
+        const meta = record?.meta as SessionMeta | undefined;
+        if (
+          !record ||
+          isLoroRepoDocDeleted(record) ||
+          !meta ||
+          meta.isArchived ||
+          meta.parentSessionId ||
+          meta.userId !== this.userId
+        )
+          return null;
+        const ownerSessionId = (meta.parentSessionId ?? sessionId) as SessionId;
+        const ownerRecord = await this.workspaceDocument.repo.getDocMeta(
+          getSessionRoomId(ownerSessionId)
+        );
+        const ownerMeta = ownerRecord?.meta as SessionMeta | undefined;
+        if (
+          !ownerRecord ||
+          isLoroRepoDocDeleted(ownerRecord) ||
+          !ownerMeta ||
+          ownerMeta.isArchived ||
+          ownerMeta.userId !== this.userId ||
+          ownerMeta.machineId !== this.machineId
+        )
+          return null;
+        return {
+          ownerSessionId,
+          ownerUserId: this.userId,
+          authorizationGeneration: `${this.filePreviewAuthorizationGenerations.get(sessionId) ?? 0}:${this.filePreviewAuthorizationGenerations.get(ownerSessionId) ?? 0}`,
+        };
+      },
+      confirmWorktreeRoot: async (session, root) => {
+        const workspace = await this.resolveCodeCollabV2Workspace(session.ownerSessionId);
+        if (!workspace.ok) return false;
+        try {
+          const run = promisify(execFile);
+          const common = async (cwd: string) => {
+            const { stdout } = await run(
+              'git',
+              ['-C', cwd, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+              { timeout: 5000, maxBuffer: 262144 }
+            );
+            return fs.realpathSync(stdout.trim());
+          };
+          if ((await common(workspace.workspaceRoot)) !== (await common(root))) return false;
+          const { stdout } = await run(
+            'git',
+            ['-C', workspace.workspaceRoot, 'worktree', 'list', '--porcelain', '-z'],
+            { timeout: 5000, maxBuffer: 262144 }
+          );
+          if (
+            !stdout
+              .split('\0')
+              .some(
+                (line) => line.startsWith('worktree ') && fs.realpathSync(line.slice(9)) === root
+              )
+          )
+            return false;
+        } catch {
+          return false;
+        }
+        return await confirmFilePreviewRootOnHost(session, root);
+      },
+    });
     this.filePreviewService = new FilePreviewService({
+      sessionGrants: this.filePreviewSessionGrants,
       resolveWorkspace: async (sessionId) => {
         const resolved = await this.resolveCodeCollabV2Workspace(sessionId);
         return resolved.ok
@@ -3979,6 +4052,7 @@ export class MessageHandler {
           const sessionId = getSessionIdFromRoomId(event.docId);
           if (!sessionId) return;
           if ((event.patch as Partial<SessionMeta>).isArchived !== true) return;
+          this.invalidateFilePreviewAuthorization(sessionId);
           // Revoke media before unrelated ACP/Browser cleanup can fail.
           void this.iosSimulatorService.closeSession(sessionId);
           void this.handleSessionArchived(sessionId);
@@ -3989,9 +4063,15 @@ export class MessageHandler {
         (event) => {
           if (event.kind !== 'doc-metadata') return;
           const sessionId = getSessionIdFromRoomId(event.docId);
-          if (sessionId) void this.iosSimulatorService.closeSession(sessionId);
+          if (sessionId) {
+            this.invalidateFilePreviewAuthorization(sessionId);
+            void this.iosSimulatorService.closeSession(sessionId);
+          }
         },
-        { kinds: ['doc-metadata'], metadataFields: ['userId', 'machineId'] }
+        {
+          kinds: ['doc-metadata'],
+          metadataFields: ['userId', 'machineId', 'parentSessionId', 'project'],
+        }
       ),
       repo.watch(
         (event) => {
@@ -3999,6 +4079,7 @@ export class MessageHandler {
           if (event.to !== 'deleted') return;
           const sessionId = getSessionIdFromRoomId(event.docId);
           if (!sessionId) return;
+          this.invalidateFilePreviewAuthorization(sessionId);
           void this.iosSimulatorService.closeSession(sessionId);
           void this.handleSessionDeleted(sessionId);
         },
@@ -6444,6 +6525,14 @@ export class MessageHandler {
     }
   }
 
+  private invalidateFilePreviewAuthorization(sessionId: SessionId): void {
+    this.filePreviewAuthorizationGenerations.set(
+      sessionId,
+      (this.filePreviewAuthorizationGenerations.get(sessionId) ?? 0) + 1
+    );
+    this.filePreviewSessionGrants.revoke(sessionId);
+  }
+
   private async dispatchLocalMachineRpc(
     request: LocalMachineRpcRequestValidated
   ): Promise<LocalMachineRpcResult> {
@@ -6462,6 +6551,25 @@ export class MessageHandler {
     };
 
     switch (request.method) {
+      case 'file/grant-worktree': {
+        if (request.workspaceId !== this.workspaceId || request.machineId !== this.machineId)
+          return { status: 'worktree-grant', granted: false };
+        await assertOwner(request.params.sessionId as SessionId);
+        return {
+          status: 'worktree-grant',
+          granted:
+            (await this.filePreviewSessionGrants.grant(
+              request.params.sessionId as SessionId,
+              request.params.root
+            )) !== null,
+        };
+      }
+      case 'file/revoke-worktree':
+        if (request.workspaceId !== this.workspaceId || request.machineId !== this.machineId)
+          return { status: 'worktree-grant', granted: false };
+        await assertOwner(request.params.sessionId as SessionId);
+        this.invalidateFilePreviewAuthorization(request.params.sessionId as SessionId);
+        return { status: 'worktree-grant', granted: false };
       case 'mcp/list-tools':
         return await listMcpTools(request.params.server);
       case 'session/call-tool': {

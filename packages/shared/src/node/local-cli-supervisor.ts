@@ -28,6 +28,30 @@ export type LocalCliSupervisorShutdownMessage = {
   token: string;
 };
 
+export type LocalCliPreviewConfirmation = {
+  type: 'lody/preview-confirmation';
+  instanceId: string;
+  token: string;
+  challengeId: string;
+  sessionId: string;
+  ownerUserId: string;
+  canonicalRoot: string;
+};
+
+export function isLocalCliPreviewConfirmation(
+  value: unknown
+): value is LocalCliPreviewConfirmation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    record.type === 'lody/preview-confirmation' &&
+    ['instanceId', 'token', 'challengeId', 'sessionId', 'ownerUserId', 'canonicalRoot'].every(
+      (key) =>
+        typeof record[key] === 'string' && record[key].length > 0 && record[key].length <= 4096
+    )
+  );
+}
+
 export function isLocalCliSupervisorShutdownMessage(
   value: unknown
 ): value is LocalCliSupervisorShutdownMessage {

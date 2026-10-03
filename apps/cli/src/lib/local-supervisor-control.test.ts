@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import {
+  registerFilePreviewHostConfirmation,
+  confirmFilePreviewRootOnHost,
+} from './file-preview/file-preview-host-confirmation';
+import type { SessionId } from '@lody/shared';
+import {
   registerLocalSupervisorControl,
   resolveLocalSupervisorIdentity,
   scrubLocalSupervisorCapabilityEnv,
@@ -8,6 +13,76 @@ import {
 } from './local-supervisor-control';
 
 const cleanup: Array<() => void> = [];
+
+describe('private host preview confirmation', () => {
+  it('requires the private Electron peer and binds an approval to the exact challenge', async () => {
+    const events = new EventEmitter();
+    const sent: Record<string, unknown>[] = [];
+    const identity = {
+      instanceId: 'host',
+      pid: 1,
+      token: 'private-supervisor-capability',
+      launchMode: 'electron' as const,
+    };
+    const peer = {
+      connected: true,
+      on: (event: 'message' | 'disconnect', listener: (value?: unknown) => void) => {
+        events.on(event, listener);
+      },
+      off: (event: 'message' | 'disconnect', listener: (value?: unknown) => void) => {
+        events.off(event, listener);
+      },
+      send: (message: unknown, callback: (error: Error | null) => void) => {
+        sent.push(message as Record<string, unknown>);
+        callback(null);
+      },
+    };
+    cleanup.push(registerFilePreviewHostConfirmation(identity, peer));
+    const session = {
+      ownerSessionId: 'host-session' as SessionId,
+      ownerUserId: 'host-user',
+      authorizationGeneration: '1',
+    };
+    const pending = confirmFilePreviewRootOnHost(session, '/canonical/worktree');
+    expect(sent[0]).toMatchObject({
+      type: 'lody/preview-confirmation',
+      sessionId: 'host-session',
+      canonicalRoot: '/canonical/worktree',
+    });
+    expect(await confirmFilePreviewRootOnHost(session, '/another')).toBe(false);
+    events.emit('message', {
+      type: 'lody/preview-confirmation-result',
+      ...identity,
+      challengeId: 'wrong',
+      approved: true,
+    });
+    events.emit('message', {
+      type: 'lody/preview-confirmation-result',
+      ...identity,
+      token: 'wrong',
+      challengeId: sent[0]?.challengeId,
+      approved: true,
+    });
+    events.emit('message', {
+      type: 'lody/preview-confirmation-result',
+      ...identity,
+      challengeId: sent[0]?.challengeId,
+      approved: true,
+    });
+    expect(await pending).toBe(true);
+    const again = confirmFilePreviewRootOnHost(session, '/canonical/worktree');
+    events.emit('message', {
+      type: 'lody/preview-confirmation-result',
+      ...identity,
+      challengeId: sent[0]?.challengeId,
+      approved: true,
+    });
+    events.emit('disconnect');
+    expect(await again).toBe(false);
+    peer.connected = false;
+    expect(await confirmFilePreviewRootOnHost(session, '/canonical/worktree')).toBe(false);
+  });
+});
 
 afterEach(() => {
   for (const dispose of cleanup.splice(0)) dispose();

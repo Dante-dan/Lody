@@ -211,6 +211,16 @@ export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
     method: z.literal('file/resolve-local'),
     params: FilePreviewV3RequestSchema,
   }).strict(),
+  // Requests a native dialog from an owning Electron supervisor. Neither this
+  // socket nor the renderer can approve it, and no cloud RPC exposes this method.
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('file/grant-worktree'),
+    params: z.object({ sessionId: SessionIdSchema, root: z.string().min(1).max(4096) }).strict(),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('file/revoke-worktree'),
+    params: z.object({ sessionId: SessionIdSchema }).strict(),
+  }).strict(),
   BaseLocalMachineRpcRequestSchema.extend({
     method: z.literal('session/cancel'),
     params: z
@@ -341,6 +351,7 @@ export type LocalMachineRpcRequest = z.infer<typeof LocalMachineRpcRequestSchema
 export type LocalMachineRpcRequestValidated = LocalMachineRpcRequest;
 
 export const LocalMachineRpcResultSchema = z.union([
+  z.object({ status: z.literal('worktree-grant'), granted: z.boolean() }).strict(),
   IosSimulatorResponseSchema,
   McpToolListResultSchema,
   SessionToolResultSchema,

@@ -5,6 +5,32 @@ import {
 } from '../src/local-machine-rpc';
 
 describe('local Machine RPC', () => {
+  it('allows a worktree confirmation request but never caller approval or identity', () => {
+    const request = {
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1',
+      method: 'file/grant-worktree',
+      params: { sessionId: 'session-1', root: '/canonical/worktree' },
+    };
+    expect(safeParseLocalMachineRpcRequest(JSON.stringify(request)).success).toBe(true);
+    for (const fields of [
+      { approved: true },
+      { confirmedByUserId: 'owner' },
+      { authorizationGeneration: '1' },
+    ]) {
+      expect(
+        safeParseLocalMachineRpcRequest(
+          JSON.stringify({ ...request, params: { ...request.params, ...fields } })
+        ).success
+      ).toBe(false);
+    }
+    expect(
+      LocalMachineRpcResponseSchema.parse({
+        ok: true,
+        result: { status: 'worktree-grant', granted: false },
+      })
+    ).toEqual({ ok: true, result: { status: 'worktree-grant', granted: false } });
+  });
   it('allows Pi discovery by saved config reference but never caller launch inputs', () => {
     const request = {
       machineId: 'machine-1',
