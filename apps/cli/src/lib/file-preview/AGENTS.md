@@ -85,3 +85,7 @@ save path's text reads.
 
 Normative contract: `specs/file-preview-v3.md` (private repo). Schemas:
 `packages/shared/src/file-preview.ts`.
+
+## Session grant reference seam
+
+`FilePreviewSessionGrants` is an optional reference dependency for owning-suite validation. Production daemon wiring remains disabled. Only a trusted host adapter may authenticate session owner/principal/generation and confirm one canonical worktree root; request bodies, Markdown, cwd and Git membership never issue grants. Recheck live grants after asynchronous read/encoding before releasing bytes. Restart grants nothing; unsupported filesystem replacement identity fails closed. The draft [Spec](../../../../../specs/remote-worktree-preview.md) does not claim approved intent.

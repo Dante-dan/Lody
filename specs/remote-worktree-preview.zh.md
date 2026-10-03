@@ -44,3 +44,8 @@ Daemon 负责授权存储和校验。每项授权绑定一个已有权限的会�
 - [所属提案](../.agents/notes/proposed/architecture/2026-09-30-remote-worktree-preview.zh.md) 记录 `8304ae9e5a4b1125b81500d391228aaae48243e5` 上的实现与替代方案。
 - [预览规则](../apps/cli/src/lib/file-preview/AGENTS.md)、[路径策略](../apps/cli/src/lib/file-preview/file-preview-path-policy.ts)、[服务测试](../apps/cli/src/lib/file-preview/file-preview-service.test.ts) 与 [消息处理](../apps/cli/src/lib/message-handler.ts) 是当前边界及所属验证入口。
 - [本地链接 Spec](local-file-link-actions.zh.md) 保留独立的 Electron 同机行为。本草案没有交付授权存储、协议或运行时变更。
+
+
+## 参考验证
+
+`file-preview-session-grants.ts` 的可选 service 接入点现已在既有 service 测试中验证生命周期。未交付生产 daemon 接线、实际主机认证确认 UI、grant RPC 或远程 UI 回放。草案仍未批准。

@@ -79,3 +79,8 @@ runtime tests of this documentation change. Extend the existing owning suites.
 - [Owning proposal](../.agents/notes/proposed/architecture/2026-09-30-remote-worktree-preview.md) records current implementation and alternatives at `8304ae9e5a4b1125b81500d391228aaae48243e5`.
 - [Preview rules](../apps/cli/src/lib/file-preview/AGENTS.md), [path policy](../apps/cli/src/lib/file-preview/file-preview-path-policy.ts), [service tests](../apps/cli/src/lib/file-preview/file-preview-service.test.ts) and [message handler](../apps/cli/src/lib/message-handler.ts) define current boundaries and owning checks.
 - [Local link Spec](local-file-link-actions.md) preserves the separate same-machine Electron behavior. No grant storage, protocol or runtime change is delivered by this draft.
+
+
+## Reference validation
+
+The optional service seam in `file-preview-session-grants.ts` now has executable lifecycle coverage in the existing service suite. No production daemon, authenticated host confirmation UI, grant RPC or remote UI replay is delivered. The draft remains unapproved.
