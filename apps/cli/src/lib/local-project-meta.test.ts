@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -17,6 +17,7 @@ import type { LoroRepo } from 'loro-repo';
 import { deriveRepoIdFromLocalProjectPath } from '@lody/shared/node/worktree-paths';
 
 import {
+  detectLocalProjectAppleTargets,
   readMachineLocalProjects,
   reconcileMachineLocalProjectRootPaths,
   resolveWorkspaceLocalProjectRootPathWithRetry,
@@ -169,6 +170,7 @@ describe('local project root path publishing', () => {
       expect(repaired).toEqual({
         ...oldProject,
         rootPath: realpathSync.native(target),
+        appleTargets: [],
       });
       expect(deriveRepoIdFromLocalProjectPath(repaired.rootPath)).toBe(
         deriveRepoIdFromLocalProjectPath(realpathSync.native(target))
@@ -191,9 +193,82 @@ describe('local project root path publishing', () => {
         ...oldProject,
         rootPath: realpathSync.native(target),
         lastOpenedAtMs: 2,
+        appleTargets: [],
       });
     } finally {
       rmSync(temp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('local project Apple target hints', () => {
+  it('publishes root and nested native targets while excluding dependencies and deep projects', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lody-apple-targets-'));
+    try {
+      for (const path of [
+        'App.xcodeproj',
+        'apps/mobile/ios/App.xcworkspace',
+        'node_modules/dependency/Fake.xcodeproj',
+        'a/b/c/d/TooDeep.xcodeproj',
+      ]) {
+        mkdirSync(join(root, path), { recursive: true });
+      }
+      writeFileSync(join(root, 'Package.swift'), '// swift-tools-version: 6.0');
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies: { expo: '^54' } }));
+      writeFileSync(join(root, 'pubspec.yaml'), 'dependencies:\n  flutter:\n    sdk: flutter\n');
+      expect(await detectLocalProjectAppleTargets(root)).toEqual([
+        { kind: 'expo', path: '.' },
+        { kind: 'flutter', path: '.' },
+        { kind: 'swiftpm', path: '.' },
+        { kind: 'xcode', path: 'App.xcodeproj' },
+        { kind: 'xcode', path: 'apps/mobile/ios/App.xcworkspace' },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps ordinary projects empty and refreshes persisted hints after a root change', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'lody-apple-meta-'));
+    try {
+      const ordinary = join(root, 'ordinary');
+      const apple = join(root, 'apple');
+      mkdirSync(ordinary);
+      mkdirSync(join(apple, 'App.xcodeproj'), { recursive: true });
+      writeFileSync(
+        join(ordinary, 'package.json'),
+        JSON.stringify({ dependencies: { react: '*' } })
+      );
+      writeFileSync(join(ordinary, 'go.mod'), 'module example');
+      writeFileSync(join(ordinary, 'pyproject.toml'), '[project]');
+      const flock = new FakeMachineFlock();
+      const { repo } = createRepo(flock);
+      const sync = { markMachineFlockDocDirty: vi.fn() };
+      await upsertMachineLocalProject(
+        repo,
+        workspaceId,
+        machineId,
+        { ...projectMeta, rootPath: apple },
+        1,
+        { sync }
+      );
+      expect(
+        (await readMachineLocalProjects(repo, workspaceId, machineId))[localProjectId].appleTargets
+      ).toEqual([{ kind: 'xcode', path: 'App.xcodeproj' }]);
+      await upsertMachineLocalProject(
+        repo,
+        workspaceId,
+        machineId,
+        { ...projectMeta, rootPath: ordinary },
+        2,
+        { sync }
+      );
+      expect(
+        (await readMachineLocalProjects(repo, workspaceId, machineId))[localProjectId].appleTargets
+      ).toEqual([]);
+      expect(await detectLocalProjectAppleTargets(join(root, 'missing'))).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

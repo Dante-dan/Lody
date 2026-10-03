@@ -77,6 +77,30 @@ class FakeMachineFlock implements MachineFlockWritableFlock {
   }
 }
 
+describe('local project Apple metadata compatibility', () => {
+  it('preserves valid hints and keeps old or future project rows readable', () => {
+    const flock = new FakeMachineFlock();
+    const id = 'local-project-apple' as LocalProjectId;
+    const project = { id, name: 'App', rootPath: '/app', createdAtMs: 1 };
+    const key = machineFlockKeys.localProject(id);
+    flock.set(key, project);
+    expect(getMachineFlockLocalProjects(readMachineFlockRowsFromFlock(flock))[id]).toEqual(project);
+    flock.set(key, {
+      ...project,
+      appleTargets: [
+        { kind: 'xcode', path: 'ios/App.xcodeproj' },
+        { kind: 'future-kind', path: 'future' },
+        { kind: 'expo', path: 42 },
+        { kind: 'xcode', path: '../outside/App.xcodeproj' },
+      ],
+    });
+    expect(getMachineFlockLocalProjects(readMachineFlockRowsFromFlock(flock))[id]).toEqual({
+      ...project,
+      appleTargets: [{ kind: 'xcode', path: 'ios/App.xcodeproj' }],
+    });
+  });
+});
+
 describe('machine Flock helpers', () => {
   it('builds compact command values', () => {
     expect(buildMachineDeleteLocalProjectCommand({ requestedAt: 234 })).toEqual({

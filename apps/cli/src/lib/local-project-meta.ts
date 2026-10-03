@@ -17,7 +17,10 @@ import {
 import type { MachineLegacyMetaFields } from '@lody/shared';
 import type { LoroRepo } from 'loro-repo';
 import { realpathSync, statSync } from 'node:fs';
+import { open, opendir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { normalizeLocalProjectRootPath } from '@lody/shared/node/local-project';
+import { z } from 'zod';
 
 import { readTimeoutEnv, withTimeout } from './loro/timeout-utils';
 
@@ -28,6 +31,10 @@ export type MachineFlockSyncScheduler = {
 // Path reconciliation and history providers rewrite the same Flock project row.
 // Serialize their read-modify-write cycles so one cannot drop the other's fields.
 const machineCatalogWriteChains = new Map<string, Promise<unknown>>();
+const expoManifestSchema = z.object({
+  dependencies: z.object({ expo: z.string().optional() }).optional(),
+  devDependencies: z.object({ expo: z.string().optional() }).optional(),
+});
 
 export async function withMachineCatalogWriteLock<T>(
   machineRoomId: string,
@@ -55,6 +62,77 @@ function canonicalLocalProjectRootPath(rootPath: string): string {
   } catch {
     return rootPath;
   }
+}
+
+/** Bounded, local-only hints. Missed detection never removes simulator access. */
+export async function detectLocalProjectAppleTargets(
+  rootPath: string
+): Promise<NonNullable<LocalProjectMeta['appleTargets']>> {
+  const targets: NonNullable<LocalProjectMeta['appleTargets']> = [];
+  const queue = [{ path: '', depth: 0 }];
+  const ignored = new Set(['node_modules', 'Pods', 'vendor', 'build', 'dist', 'coverage']);
+  const readMarker = async (path: string): Promise<string> => {
+    try {
+      const file = await open(path, 'r');
+      try {
+        const buffer = Buffer.alloc(64 * 1024);
+        const { bytesRead } = await file.read(buffer, 0, buffer.length, 0);
+        return buffer.subarray(0, bytesRead).toString('utf8');
+      } finally {
+        await file.close();
+      }
+    } catch {
+      return '';
+    }
+  };
+  for (let scanned = 0; queue.length && scanned < 64 && targets.length < 32; scanned++) {
+    const current = queue.shift();
+    if (!current) break;
+    try {
+      const directory = await opendir(join(rootPath, current.path));
+      let entries = 0;
+      for await (const entry of directory) {
+        if (++entries > 256 || targets.length >= 32) break;
+        if (entry.name.startsWith('.') || ignored.has(entry.name)) continue;
+        const relativePath = [current.path, entry.name].filter(Boolean).join('/');
+        if (entry.isDirectory()) {
+          if (/\.(xcodeproj|xcworkspace)$/.test(entry.name)) {
+            targets.push({ kind: 'xcode', path: relativePath });
+          } else if (current.depth < 2 || (current.depth === 2 && entry.name === 'ios')) {
+            // apps/<name>/ios is the one extra level for native monorepo targets.
+            if (queue.length < 64) queue.push({ path: relativePath, depth: current.depth + 1 });
+          }
+        } else if (entry.isFile()) {
+          const path = current.path || '.';
+          if (entry.name === 'Package.swift') {
+            targets.push({ kind: 'swiftpm', path });
+          } else if (entry.name === 'package.json') {
+            try {
+              const manifest = expoManifestSchema.safeParse(
+                JSON.parse(await readMarker(join(rootPath, relativePath)))
+              );
+              if (
+                manifest.success &&
+                (manifest.data.dependencies?.expo || manifest.data.devDependencies?.expo)
+              ) {
+                targets.push({ kind: 'expo', path });
+              }
+            } catch {
+              /* Malformed/oversized manifests are missed hints, not project failures. */
+            }
+          } else if (entry.name === 'pubspec.yaml') {
+            const marker = await readMarker(join(rootPath, relativePath));
+            if (/\bflutter:\s*\n\s+sdk:\s*flutter\b/.test(marker)) {
+              targets.push({ kind: 'flutter', path });
+            }
+          }
+        }
+      }
+    } catch {
+      /* Missing or unreadable directories do not block registration. */
+    }
+  }
+  return targets.sort((a, b) => a.path.localeCompare(b.path) || a.kind.localeCompare(b.kind));
 }
 
 export function shouldApplyMachineDeleteLocalProjectCommand(
@@ -116,9 +194,18 @@ export async function upsertMachineLocalProject(
   options: { sync?: MachineFlockSyncScheduler; reason?: string } = {}
 ): Promise<void> {
   const handle = await repo.openFlockDoc(getMachineFlockDocId(workspaceId, machineId));
+  const rootPath = canonicalLocalProjectRootPath(project.rootPath);
+  const existing = getMachineFlockLocalProjects(
+    readMachineFlockRowsFromFlock(handle.flock, { families: ['localProject'] })
+  )[project.id];
+  const appleTargets =
+    existing?.rootPath === rootPath && existing.appleTargets !== undefined
+      ? existing.appleTargets
+      : await detectLocalProjectAppleTargets(rootPath);
   const canonicalProject = {
     ...project,
-    rootPath: canonicalLocalProjectRootPath(project.rootPath),
+    rootPath,
+    appleTargets,
   };
   const changed = writeMachineFlockRowToFlock(
     handle.flock,

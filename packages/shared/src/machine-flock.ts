@@ -186,12 +186,7 @@ export type MachineFlockAcpCapabilityKey = ['acpCapability', AgentConfigId];
 export type MachineFlockAcpModelCapabilityKey = ['acpModelCapability', AgentConfigId];
 /** @deprecated Compatibility read for rate limits written before provider-scoped quotas. */
 export type MachineFlockLegacyRateLimitKey = ['rateLimit', CliType, string];
-export type MachineFlockProviderRateLimitKey = [
-  'rateLimit',
-  AgentConfigId,
-  CliType,
-  string,
-];
+export type MachineFlockProviderRateLimitKey = ['rateLimit', AgentConfigId, CliType, string];
 export type MachineFlockRateLimitKey =
   | MachineFlockLegacyRateLimitKey
   | MachineFlockProviderRateLimitKey;
@@ -323,12 +318,7 @@ export const machineFlockKeys = {
     agentConfigId: AgentConfigId,
     cliType: CliType,
     limitId: string
-  ): MachineFlockProviderRateLimitKey => [
-    'rateLimit',
-    agentConfigId,
-    cliType,
-    limitId,
-  ],
+  ): MachineFlockProviderRateLimitKey => ['rateLimit', agentConfigId, cliType, limitId],
   /** @deprecated Compatibility helper for rows written before provider-scoped quotas. */
   legacyRateLimit: (cliType: CliType, limitId: string): MachineFlockLegacyRateLimitKey => [
     'rateLimit',
@@ -1536,6 +1526,29 @@ const normalizeLocalProjectMeta = (value: unknown): LocalProjectMeta | undefined
   }
   if (!isMissing(value.history)) {
     project.history = value.history as LocalProjectMeta['history'];
+  }
+  if (Array.isArray(value.appleTargets)) {
+    // Hints are optional: an unknown kind from a newer daemon must not discard
+    // the project itself, or hide a tool on an older client.
+    project.appleTargets = value.appleTargets.slice(0, 32).flatMap((target) => {
+      if (!isRecord(target) || !isNonEmptyString(target.path)) return [];
+      if (
+        target.path.length > 1024 ||
+        /^(?:[\\/]|[a-zA-Z]:)/.test(target.path) ||
+        target.path.split(/[\\/]/).includes('..')
+      )
+        return [];
+      const kind = target.kind;
+      if (
+        kind !== 'xcode' &&
+        kind !== 'swiftpm' &&
+        kind !== 'expo' &&
+        kind !== 'flutter' &&
+        kind !== 'other'
+      )
+        return [];
+      return [{ kind, path: target.path }];
+    });
   }
   return project;
 };

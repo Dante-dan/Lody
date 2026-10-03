@@ -136,6 +136,12 @@ export type ProjectRef =
       useWorktree?: boolean;
     };
 
+export type LocalProjectAppleTarget = {
+  kind: 'xcode' | 'swiftpm' | 'expo' | 'flutter' | 'other';
+  /** Project-root-relative hint; never authorizes a filesystem operation. */
+  path: string;
+};
+
 export type LocalProjectMeta = {
   id: LocalProjectId;
   name: string;
@@ -143,6 +149,8 @@ export type LocalProjectMeta = {
   createdAtMs: number;
   lastOpenedAtMs?: number;
   history?: LocalProjectHistoryCatalogs;
+  /** Optional, best-effort discovery for ordering tools, never hiding them. */
+  appleTargets?: LocalProjectAppleTarget[];
 };
 
 const DEFAULT_BASE_BRANCH = 'main';
