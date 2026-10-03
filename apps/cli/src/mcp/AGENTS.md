@@ -73,9 +73,10 @@ Parent instructions apply. Background: [README.md](README.md).
   Validate effort/Fast against the final model, never reject on probe mismatch; missing
   per-model data defers to runtime. Drop incompatible inherited selectors; fill builtin
   mode only if empty. [Inheritance rationale](README.md#chat-configuration).
-- `lody_session_create_options` publishes valid run-config values per agent config and stays
-  sparse by default (online Machines, one agent config, the current local project, no GitHub
-  fetch), expanding only through explicit query inputs.
+- `lody_session_create_options` publishes modes and option ids/types/choices per agent config,
+  never current values. Stay sparse by default (online Machines, one agent config, the current
+  local project, no GitHub fetch), expanding only through explicit query inputs.
+  Explicit permissions may exceed the parent; follow the caller's user authorization.
 - Machine presence is online/offline/unknown. `getOnlineMachineIds() === null` means
   unknown; block dispatch/report `MACHINE_OFFLINE` only for definite offline. Unknown
   proceeds under its own deadline. Expose three-state liveness, never a boolean.
