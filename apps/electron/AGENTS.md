@@ -54,6 +54,10 @@ Root rules apply. For `src/**`, read module, IPC and window contracts in
   basename. KDE uses that identity to associate Wayland/X11 windows with the
   installed icon.
 
+- Linux packaging consumes the pre-sized PNG set in `build/icons`, derived from
+  `build/icon.png`. Keep all seven sizes (16 through 512) present; the before-pack
+  guard rejects missing or mismatched assets instead of falling back to macOS art.
+
 ## Embedded CLI and native dependencies
 
 - The embedded CLI runs built JavaScript, never source-loader/Jiti. Development

@@ -1,3 +1,4 @@
+import { assertLinuxIconAssets } from './linux-icon-assets.mjs'
 import {
   installEmbeddedKeyringBinding,
   installEmbeddedNodePtyBinding,
@@ -21,6 +22,9 @@ export default async function beforePack(context) {
       `Unsupported packaging arch ${String(context.arch)} for the embedded CLI sqlite binding; ` +
         `universal builds would need one binding per slice.`
     )
+  }
+  if (platform === 'linux') {
+    assertLinuxIconAssets(new URL('../build/icons/', import.meta.url))
   }
   installEmbeddedSqliteBinding({ platform, arch: archName })
   installEmbeddedNodePtyBinding({ platform, arch: archName })

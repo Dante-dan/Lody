@@ -106,7 +106,7 @@ dmg:
   artifactName: LodyOSS-${version}-${arch}.${ext}
   writeUpdateInfo: false
 linux:
-  icon: build/icon.png
+  icon: build/icons
   executableName: lodyOssDesktop
   syncDesktopName: true
   target:
