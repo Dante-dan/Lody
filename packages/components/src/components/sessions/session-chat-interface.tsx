@@ -1,3 +1,4 @@
+import { useIosSimulatorPreviewRequest } from './ios-simulator/use-ios-simulator-preview-request';
 import { SessionPendingMessages } from '@/components/chat/session-pending-messages';
 import {
   buildDraftUserHistoryEntry,
@@ -218,6 +219,7 @@ import { Input } from '@lody/ui/input';
 import { Separator } from '@lody/ui/separator';
 import { Tooltip } from '@lody/ui/tooltip';
 import { useSessionDoc } from '@/hooks/use-session-doc';
+import { useSessionPendingConfig } from '@/hooks/use-session-pending-config';
 import { useSessionActions } from '@/hooks/use-session-actions';
 import { useWorkspaceMembers, type WorkspaceMember } from '@/hooks/use-workspace-members';
 import { UserAvatar } from '@/components/user-avatar';
@@ -1842,6 +1844,7 @@ interface SessionChatInterfaceProps {
   browserActionSession?: SessionMeta | null;
   /** Called when the user wants to open the Browser panel. */
   onOpenBrowser?: () => void;
+  onOpenIosSimulator?: () => void;
   /** Opens Browser without forcing a newly reported candidate navigation. */
   onOpenExistingBrowser?: () => void;
   /**
@@ -1886,6 +1889,11 @@ export type SessionChatInterfaceHandle = {
   toggleCommentReference: (reference: CommentReferencePayload) => boolean;
   addVisualAnnotationReference: (reference: VisualAnnotationReferencePayload) => boolean;
   toggleVisualAnnotationReference: (reference: VisualAnnotationReferencePayload) => boolean;
+  /**
+   * Adds files to the composer as attachments, the way a drop does. It never
+   * sends; false when the composer is not mounted to take them.
+   */
+  addAttachmentFiles: (files: File[]) => boolean;
   copyConversationHistory: () => Promise<void>;
   /** Plain-text conversation snapshot for the share-as-image card; null while
    * durable history has not loaded. */
@@ -2002,6 +2010,7 @@ export const SessionChatInterface = memo(
       onOpenPrTab,
       browserActionSession,
       onOpenBrowser,
+      onOpenIosSimulator,
       onOpenExistingBrowser,
       headerVariant = 'page',
       paintSessionMentionOverlay = true,
@@ -2118,6 +2127,7 @@ export const SessionChatInterface = memo(
       [postHog, sessionAnalyticsProperties]
     );
 
+    const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
     const localMachineId = useAtomValue(localMachineIdAtom);
     const localHomeDir = useAtomValue(localHomeDirAtom);
     const liveSessionPresence = useAtomValue(sessionLivePresenceAtomFamily(session.id));
@@ -2167,14 +2177,26 @@ export const SessionChatInterface = memo(
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [conversationVersion, conversationView, sessionTailFrom]
     );
-    const sessionConversationConfig = useMemo(
+    const durableConversationConfig = useMemo(
       () => resolveSessionConversationConfig(conversationConfigSources, sessionDoc?.mq ?? []),
       [conversationConfigSources, sessionDoc?.mq]
     );
-    const sessionConversationSourceFence = useMemo(
+    const durableConversationSourceFence = useMemo(
       () => resolveSessionConversationSourceFence(conversationConfigSources, sessionDoc?.mq ?? []),
       [conversationConfigSources, sessionDoc?.mq]
     );
+    const {
+      config: sessionConversationConfig,
+      sourceFence: sessionConversationSourceFence,
+      hasPendingConfig,
+    } = useSessionPendingConfig({
+      sessionId: session.id,
+      pendingSends: runtime?.pendingSends,
+      history: conversationView,
+      config: durableConversationConfig,
+      sourceFence: durableConversationSourceFence,
+      documentReady: sessionDocReady,
+    });
     const sessionRuntimeConfig = useMemo(
       () =>
         resolveSessionAcpRuntimeConfig(
@@ -2184,10 +2206,10 @@ export const SessionChatInterface = memo(
         ),
       [sessionDoc?.acpRuntimeConfig, sessionTailHistory, sessionDoc?.mq]
     );
-    // `sourceConfigKey` identifies the durable turn selected by the resolver,
-    // so there is no need to hash its mode/model/option values separately.
+    // A local send and its history/queue row share one fence, so landing the
+    // send cannot consume edits made for the next draft during its upload.
     const sessionConversationConfigRevision = `${session.id}:${
-      sessionConversationConfig.sourceConfigKey ?? ''
+      sessionConversationSourceFence.currentTurnKey ?? ''
     }`;
     const sessionConfigPreferences = useMemo(
       () => ({
@@ -2214,11 +2236,11 @@ export const SessionChatInterface = memo(
       selectModel: handleModelChange,
       selectConfigOption: handleConfigOptionChange,
     } = useAcpSessionConfigSelectionState({
-      enabled: !hideMessageArea && sessionDocReady,
+      enabled: !hideMessageArea && (sessionDocReady || hasPendingConfig),
       targetKey: `${session.id}:${session.cliType}:${session.agentType}`,
       preferenceRevision: sessionConversationConfigRevision,
       preferences: sessionConfigPreferences,
-      runtimePreferences: sessionRuntimeConfig,
+      runtimePreferences: hasPendingConfig ? null : sessionRuntimeConfig,
       preserveUnsentUserEdits: true,
     });
     const {
@@ -2477,7 +2499,6 @@ export const SessionChatInterface = memo(
     const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
     const lastSearchAnalyticsKeyRef = useRef<string | null>(null);
 
-    const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
     const queuedMessageBehavior = useAtomValue(queuedMessageBehaviorAtom);
     const {
       markSessionRead,
@@ -5043,6 +5064,13 @@ export const SessionChatInterface = memo(
       sessionDocReady,
     ]);
 
+    useIosSimulatorPreviewRequest(
+      session.id,
+      session.iosSimulatorPreviewRequestId,
+      isVisible && !hideMessageArea && !isMobile && Boolean(onOpenIosSimulator),
+      onOpenIosSimulator
+    );
+
     const headerBrowserSession =
       browserActionSession === undefined ? session : browserActionSession;
     // Agent-driven action: it appears only once the session actually has a
@@ -5128,6 +5156,12 @@ export const SessionChatInterface = memo(
         },
         toggleVisualAnnotationReference: (reference) => {
           return inputAreaRef.current?.toggleVisualAnnotationReference(reference) ?? false;
+        },
+        addAttachmentFiles: (files) => {
+          const inputArea = inputAreaRef.current;
+          if (!inputArea) return false;
+          inputArea.handleImageDrop(files);
+          return true;
         },
         copyConversationHistory: handleCopyConversationHistory,
         getShareImageData: async () => {
@@ -6405,6 +6439,9 @@ export const SessionChatInterface = memo(
                         ) : undefined
                       }
                       onOpenBrowser={browserActionAvailable ? handleOpenBrowser : undefined}
+                      onOpenIosSimulator={
+                        session.iosSimulatorPreviewRequestId ? onOpenIosSimulator : undefined
+                      }
                       privateAccessStatus={
                         isMobile && sharing?.visibility === 'private'
                           ? {
@@ -6491,7 +6528,7 @@ export const SessionChatInterface = memo(
                           durableAgentRoleKnownTurnKeys={
                             sessionConversationSourceFence.knownTurnKeys
                           }
-                          durableAgentRoleReady={sessionDocReady}
+                          durableAgentRoleReady={sessionDocReady || hasPendingConfig}
                           runConfigHasUserEdits={sessionRunConfigHasUserEdits}
                           modeOptions={modeOptions}
                           modelOptions={modelOptions}

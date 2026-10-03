@@ -15,6 +15,8 @@ Issue [#1215](https://github.com/LodyAI/Lody/issues/1215) 指出了语义接受�
 
 与 [#956](https://github.com/LodyAI/Lody/issues/956) 整合时保留既有可选的冻结验证 ID，维持传输与存储兼容；即使没有保存这些 ID，仍重新计算模型相关验证。因此旧 Operation 和具体 Role 配置无需新增 schema 字段或迁移即可受益。外围的确定性验证错误分类保持不变，不支持的目标配置仍返回 `COMMAND_REJECTED`，不重试到超时。本修改恢复已有的模型相关验证约定，不改变 Spec 意图；composer 菜单保持不变。
 
+合入 main 后保留显式 raw mode/model 覆盖继承标量选择器的优先级，以及旧式 Plan 冲突拒绝。目标模型校验仍在合并继承配置之前执行。
+
 ## 验证
 
 Session command 原有测试套件以合成机器能力行调用真实 `prepareSessionInput`，覆盖语义创建后 JSON 冻结的具体重放、Role 风格模型选项、探测模型或目标声明不支持的档位拒绝，以及未知选项拒绝。未运行真实 Devin ACP 或 daemon 重试调度；已覆盖共用的准备边界。
