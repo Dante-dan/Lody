@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { LocalFileResolution } from '@lody/shared/local-file-preview';
 import { createHash } from 'node:crypto';
 import { open } from 'node:fs/promises';
@@ -19,10 +20,16 @@ import {
 } from '@lody/shared';
 import { formatErrorMessage } from '@/utils/format-error';
 import {
+  getDefaultFilePreviewExtraRoots,
   resolveFilePreviewPath,
   type FilePreviewPathPolicyOptions,
   type ResolvedPreviewPath,
 } from './file-preview-path-policy';
+
+import type {
+  FilePreviewSessionGrants,
+  FilePreviewSessionGrantAccess,
+} from './file-preview-session-grants';
 
 const gzipAsync = promisify(gzip);
 
@@ -51,6 +58,8 @@ export type FilePreviewWorkspaceResolver = (sessionId: SessionId) => Promise<
 
 export type FilePreviewServiceOptions = {
   readonly resolveWorkspace: FilePreviewWorkspaceResolver;
+  /** Reference seam only; production requires a trusted authenticated host adapter. */
+  readonly sessionGrants?: FilePreviewSessionGrants;
   readonly limits?: Partial<typeof FILE_PREVIEW_V3_LIMITS>;
   readonly pathPolicy?: FilePreviewPathPolicyOptions;
   /** Test seam: overrides the fixed extra roots entirely. */
@@ -99,6 +108,31 @@ export class FilePreviewService {
   }
 
   async previewFile(request: FilePreviewV3Request): Promise<FilePreviewV3Response> {
+    const access = await this.deps.sessionGrants?.resolve(request.sessionId as SessionId);
+    const response = await this.previewFileWithGrant(request, access ?? null);
+    // Includes reads, unchanged-digest responses and asynchronous compression.
+    // Never release bytes from a grant revoked/replaced while IO was in flight.
+    if (
+      (response.status === 'ok' || response.status === 'unchanged') &&
+      access &&
+      access.roots.some((root) => {
+        const relative = isWithinGrantRoot(root, response.path);
+        return relative;
+      }) &&
+      !(await access.isCurrent())
+    ) {
+      return filePreviewV3Error('path_not_allowed', {
+        message: 'File is outside the workspace: the session worktree grant is no longer valid.',
+        path: request.path,
+      });
+    }
+    return response;
+  }
+
+  private async previewFileWithGrant(
+    request: FilePreviewV3Request,
+    access: FilePreviewSessionGrantAccess | null
+  ): Promise<FilePreviewV3Response> {
     const limits = this.limits;
     const workspace = await this.deps.resolveWorkspace(request.sessionId as SessionId);
     if (!workspace.ok) {
@@ -112,7 +146,10 @@ export class FilePreviewService {
     const resolution = resolveFilePreviewPath({
       workspaceRoot: workspace.workspaceRoot,
       requestedPath: request.path,
-      ...(this.deps.extraRoots === undefined ? {} : { extraRoots: this.deps.extraRoots }),
+      extraRoots: [
+        ...(this.deps.extraRoots ?? getDefaultFilePreviewExtraRoots(this.deps.pathPolicy)),
+        ...(access?.ownerSessionId === workspace.ownerSessionId ? access.roots : []),
+      ],
       options: {
         ...this.deps.pathPolicy,
       },
@@ -346,4 +383,10 @@ function hasBinaryNul(bytes: Uint8Array): boolean {
     if (bytes[index] === 0) return true;
   }
   return false;
+}
+
+function isWithinGrantRoot(root: string, target: string): boolean {
+  if (!path.isAbsolute(target)) return false;
+  const relative = path.relative(root, target);
+  return !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`);
 }

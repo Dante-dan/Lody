@@ -5,6 +5,7 @@ the reasoning behind those rules.
 
 ## Files
 
+- `file-preview-session-grants.ts` — optional reference lifecycle for explicit host-confirmed, authenticated session grants; production daemon wiring is not enabled.
 - `file-preview-service.ts` — resolves the workspace, authorizes the path, reads,
   classifies text vs binary, encodes, and answers.
 - `file-preview-path-policy.ts` — the security boundary: allowed roots, symlink

@@ -1,5 +1,14 @@
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { gunzipSync } from 'node:zlib';
@@ -7,6 +16,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { FILE_PREVIEW_V3_LIMITS, type SessionId } from '@lody/shared';
 import { FilePreviewService, type FilePreviewWorkspaceResolver } from './file-preview-service';
+
+import {
+  FilePreviewSessionGrants,
+  type FilePreviewAuthorizedSession,
+} from './file-preview-session-grants';
 
 const SESSION_ID = 'session-preview' as SessionId;
 
@@ -547,5 +561,142 @@ describe('FilePreviewService', () => {
     const response = await service.previewFile({ v: 3, sessionId: SESSION_ID, path: 'a.ts' });
 
     expect(response).toMatchObject({ status: 'error', code: 'session_not_found' });
+  });
+});
+
+describe('session worktree grant reference seam', () => {
+  async function fixture() {
+    const root = await makeDir('preview-session-grant-');
+    const workspaceRoot = path.join(root, 'main');
+    const worktree = path.join(root, 'topic');
+    await mkdir(workspaceRoot);
+    await mkdir(worktree);
+    await writeFile(path.join(workspaceRoot, 'a.txt'), 'main branch');
+    await writeFile(path.join(worktree, 'a.txt'), 'topic branch');
+    let session: FilePreviewAuthorizedSession | null = {
+      ownerSessionId: SESSION_ID,
+      ownerUserId: 'host-owner',
+      authorizationGeneration: '1',
+    };
+    const host = {
+      resolveAuthorizedSession: async () => session,
+      confirmWorktreeRoot: async (_session: FilePreviewAuthorizedSession, canonical: string) =>
+        canonical === (await realpath(worktree)),
+    };
+    const grants = new FilePreviewSessionGrants(host);
+    const service = new FilePreviewService({
+      resolveWorkspace: async () => ({ ok: true, ownerSessionId: SESSION_ID, workspaceRoot }),
+      extraRoots: [],
+      sessionGrants: grants,
+    });
+    const request = { v: 3 as const, sessionId: SESSION_ID, path: path.join(worktree, 'a.txt') };
+    return {
+      root,
+      worktree,
+      grants,
+      host,
+      service,
+      request,
+      setSession: (next: FilePreviewAuthorizedSession | null) => {
+        session = next;
+      },
+    };
+  }
+
+  it('needs explicit host confirmation and preserves branch identity, session isolation and readonly', async () => {
+    const f = await fixture();
+    expect(await f.service.previewFile(f.request)).toMatchObject({
+      status: 'error',
+      code: 'path_not_allowed',
+    });
+    expect(await f.grants.grant(SESSION_ID, f.root)).toBeNull();
+    expect(await f.grants.grant(SESSION_ID, f.worktree)).not.toBeNull();
+    expect(await f.service.previewFile(f.request)).toMatchObject({
+      status: 'ok',
+      readonly: true,
+      external: true,
+      content: { text: 'topic branch' },
+    });
+    expect(
+      await f.service.previewFile({ ...f.request, sessionId: 'another-session' })
+    ).toMatchObject({ status: 'error', code: 'path_not_allowed' });
+    await symlink(path.join(f.root, 'main', 'a.txt'), path.join(f.worktree, 'escape.txt'));
+    // A symlink to an unrelated root is still refused by the canonical path policy.
+    const outside = await makeDir('preview-unrelated-');
+    await writeFile(path.join(outside, 'secret'), 'private');
+    await symlink(path.join(outside, 'secret'), path.join(f.worktree, 'secret'));
+    expect(
+      await f.service.previewFile({ ...f.request, path: path.join(f.worktree, 'secret') })
+    ).toMatchObject({ status: 'error', code: 'path_not_allowed' });
+  });
+
+  it('fails closed on principal/generation change, restart and reused worktree paths', async () => {
+    const f = await fixture();
+    await f.grants.grant(SESSION_ID, f.worktree);
+    f.setSession({
+      ownerSessionId: SESSION_ID,
+      ownerUserId: 'new-owner',
+      authorizationGeneration: '2',
+    });
+    expect(await f.service.previewFile(f.request)).toMatchObject({
+      status: 'error',
+      code: 'path_not_allowed',
+    });
+    f.setSession({
+      ownerSessionId: SESSION_ID,
+      ownerUserId: 'host-owner',
+      authorizationGeneration: '1',
+    });
+    const restarted = new FilePreviewSessionGrants(f.host);
+    expect(await restarted.resolve(SESSION_ID)).toBeNull();
+    await rename(f.worktree, path.join(f.root, 'old-topic'));
+    await mkdir(f.worktree);
+    await writeFile(f.request.path, 'replacement');
+    expect(await f.service.previewFile(f.request)).toMatchObject({
+      status: 'error',
+      code: 'path_not_allowed',
+    });
+  });
+
+  it('does not release a completed read after concurrent revoke', async () => {
+    const f = await fixture();
+    await f.grants.grant(SESSION_ID, f.worktree);
+    let signal: () => void = () => {};
+    let resume: () => void = () => {};
+    const reached = new Promise<void>((resolve) => {
+      signal = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      resume = resolve;
+    });
+    const original = f.host.resolveAuthorizedSession;
+    let checks = 0;
+    f.host.resolveAuthorizedSession = async () => {
+      checks += 1;
+      if (checks === 2) {
+        signal();
+        await gate;
+      }
+      return original();
+    };
+    const reading = f.service.previewFile(f.request);
+    await reached;
+    f.grants.revoke(SESSION_ID);
+    resume();
+    expect(await reading).toMatchObject({ status: 'error', code: 'path_not_allowed' });
+  });
+
+  it('does not restore access when host confirmation races revoke or auth fails', async () => {
+    const f = await fixture();
+    f.host.confirmWorktreeRoot = async () => {
+      f.grants.revoke(SESSION_ID);
+      return true;
+    };
+    expect(await f.grants.grant(SESSION_ID, f.worktree)).toBeNull();
+    f.host.resolveAuthorizedSession = async () => {
+      throw new Error('auth unavailable');
+    };
+    expect(await f.grants.resolve(SESSION_ID)).toBeNull();
+    expect(await f.grants.grant(SESSION_ID, f.worktree)).toBeNull();
   });
 });
