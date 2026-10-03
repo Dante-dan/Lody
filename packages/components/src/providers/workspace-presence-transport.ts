@@ -63,9 +63,25 @@ export class WorkspacePresenceTransport extends EphemeralRoomTransport<
   protected readonly warnPrefix = 'createWorkspaceRuntime';
   protected readonly roomLabel = 'presence room';
   private lastSnapshotAtMs: number | null = null;
+  private awaitingReplacementSnapshot = false;
+  private preserveSnapshotOnStop = false;
+  private tearingDown = false;
   private readonly viewingInstanceId = createViewingInstanceId();
   private viewing: { sessionId: SessionId; userId: string; since: number } | null = null;
   private viewingHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
+
+  override start(args: WorkspacePresenceTransportStartOptions): void {
+    this.awaitingReplacementSnapshot = this.lastSnapshotAtMs !== null;
+    super.start(args);
+  }
+
+  override stop(options: { preserveSnapshot?: boolean } = {}): Promise<void> {
+    this.preserveSnapshotOnStop = options.preserveSnapshot ?? false;
+    // The stop hook runs synchronously, before resource close can await.
+    const stopped = super.stop();
+    this.preserveSnapshotOnStop = false;
+    return stopped;
+  }
 
   shouldRestartOnExternalWake(nowMs: number = Date.now()): boolean {
     const syncState = this.getSyncState();
@@ -128,6 +144,11 @@ export class WorkspacePresenceTransport extends EphemeralRoomTransport<
   }
 
   protected onStoreChange(store: PresenceStoreLike): void {
+    // A replacement store is initially empty; it is not an authoritative
+    // absence until the joined bootstrap has been applied.
+    if (this.tearingDown) return;
+    if (this.awaitingReplacementSnapshot && this.getSyncState() !== 'synced') return;
+    this.awaitingReplacementSnapshot = false;
     this.lastSnapshotAtMs = Date.now();
     this.options.onSnapshot?.(parseLodyPresenceStates(store.getAllStates()));
   }
@@ -149,13 +170,20 @@ export class WorkspacePresenceTransport extends EphemeralRoomTransport<
   protected override onBeforeTeardown(): void {
     this.stopViewingHeartbeat();
     if (this.viewing) {
+      this.tearingDown = true;
       this.store?.delete(
         getLodySessionViewingPresenceKey(this.viewing.userId, this.viewingInstanceId)
       );
+      this.tearingDown = false;
     }
   }
 
   protected override onBeforeStop(): void {
+    if (this.preserveSnapshotOnStop) {
+      this.awaitingReplacementSnapshot = true;
+      return;
+    }
+    this.awaitingReplacementSnapshot = false;
     this.lastSnapshotAtMs = null;
     this.options.onSnapshot?.({});
   }

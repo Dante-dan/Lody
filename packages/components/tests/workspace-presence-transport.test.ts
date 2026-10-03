@@ -171,6 +171,56 @@ describe('WorkspacePresenceTransport', () => {
     expect(stores[0]?.destroy).toHaveBeenCalledTimes(1);
   });
 
+  it('retains the last heartbeat through reconnect until the replacement joins', async () => {
+    const stores: FakePresenceStore[] = [];
+    const transports: FakePresenceTransport[] = [];
+    const snapshots: unknown[] = [];
+    const presence = new WorkspacePresenceTransport({
+      workspaceId: 'workspace-1' as WorkspaceId,
+      onSnapshot: (states) => snapshots.push(states),
+      createStore: () => {
+        const store = new FakePresenceStore();
+        stores.push(store);
+        return store;
+      },
+      createTransport: () => {
+        const transport = new FakePresenceTransport();
+        transports.push(transport);
+        return transport;
+      },
+    });
+    const args = { baseUrl: 'https://streams.example.test', auth: async () => 'token' };
+    const machineId = 'machine-1' as MachineId;
+    const instanceId = 'instance-1' as LodyPresenceInstanceId;
+    const key = getLodyMachinePresenceKey(machineId, instanceId);
+    const heartbeat = { [key]: { kind: 'machine', machineId, instanceId, updatedAt: 100 } };
+    try {
+      presence.start(args);
+      stores[0]!.setStates(heartbeat);
+      transports[0]!.emitStatus('joined');
+      presence.publishSessionViewing({ sessionId: 'session-1' as SessionId, userId: 'user-1' });
+      await presence.stop({ preserveSnapshot: true });
+      expect(snapshots.at(-1)).toMatchObject(heartbeat);
+      expect(presence.getSyncState()).toBe('idle');
+
+      presence.start(args);
+      expect(presence.getSyncState()).toBe('connecting');
+      expect(snapshots.at(-1)).toMatchObject(heartbeat);
+      // Local viewing publication and a stalled replacement restart cannot
+      // turn an empty pre-bootstrap store into a machine-offline snapshot.
+      presence.start(args);
+      expect(snapshots.at(-1)).toMatchObject(heartbeat);
+      transports[1]!.emitStatus('joined');
+      expect(snapshots.at(-1)).toMatchObject(heartbeat);
+      transports[2]!.emitStatus('joined');
+      expect(snapshots.at(-1)).not.toHaveProperty(key);
+      expect(presence.getSyncState()).toBe('synced');
+    } finally {
+      await presence.stop();
+    }
+    expect(snapshots.at(-1)).toEqual({});
+  });
+
   it('exposes the current ephemeral store on window for debugging', async () => {
     const { target: testWindow, restore } = installTestWindow();
     const stores: FakePresenceStore[] = [];
