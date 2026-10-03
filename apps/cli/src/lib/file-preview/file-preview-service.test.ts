@@ -636,6 +636,20 @@ describe('session worktree grant reference seam', () => {
     f.setSession({
       ownerSessionId: SESSION_ID,
       ownerUserId: 'new-owner',
+      authorizationGeneration: '1',
+    });
+    expect(await f.service.previewFile(f.request)).toMatchObject({
+      status: 'error',
+      code: 'path_not_allowed',
+    });
+    f.setSession({
+      ownerSessionId: SESSION_ID,
+      ownerUserId: 'host-owner',
+      authorizationGeneration: '1',
+    });
+    f.setSession({
+      ownerSessionId: SESSION_ID,
+      ownerUserId: 'host-owner',
       authorizationGeneration: '2',
     });
     expect(await f.service.previewFile(f.request)).toMatchObject({
