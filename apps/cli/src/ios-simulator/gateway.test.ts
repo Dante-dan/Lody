@@ -8,6 +8,13 @@ import { LocalPreviewProxyManager } from '@/preview/local-preview-proxy';
 import type { SessionId } from '@lody/shared';
 import type { SimulatorHostControl } from './host-controls';
 const cleanups: Array<() => Promise<unknown>> = [];
+async function waitForGatewayHandshake(native: WebSocket) {
+  // The server's connection event precedes the gateway receiving the upgrade.
+  // Its automatic pong proves that input will see an OPEN upstream socket.
+  const pong = once(native, 'pong');
+  native.ping();
+  await pong;
+}
 afterEach(async () => {
   for (const cleanup of cleanups.reverse()) await cleanup();
   cleanups.length = 0;
@@ -371,6 +378,7 @@ describe('simulator media boundary', () => {
       });
       await once(client, 'open');
       const [native] = await incoming;
+      await waitForGatewayHandshake(native);
       const point = { x1: 10, y1: 20, x2: 80, y2: 150, width: 100, height: 200 };
       for (const type of ['touch2-down', 'touch2-move']) {
         const received = once(native, 'message');
@@ -403,6 +411,7 @@ describe('simulator media boundary', () => {
     await once(client, 'open');
     client.send(JSON.stringify({ type: 'stream-config', width: 400, height: 800, dpr: 1 }));
     const [native] = (await incoming) as [WebSocket];
+    await waitForGatewayHandshake(native);
     for (const input of [
       { type: 'touch1-down', x: 50, y: 196, width: 100, height: 200, edge: 'bottom' },
       { type: 'touch1-move', x: 50, y: 100, width: 100, height: 200, edge: 'bottom' },
@@ -434,6 +443,7 @@ describe('simulator media boundary', () => {
     await once(client, 'open');
     client.send(JSON.stringify({ type: 'stream-config', width: 400, height: 800, dpr: 1 }));
     const [native] = (await incoming) as [WebSocket];
+    await waitForGatewayHandshake(native);
     if (scenario === 'change-edge') {
       const down = once(native, 'message');
       client.send(
