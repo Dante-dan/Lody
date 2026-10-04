@@ -331,12 +331,15 @@ export class SessionMonacoEditorController {
         ),
         options: {
           isWholeLine: true,
-          className: 'lody-session-monaco-selected-line',
-          marginClassName: 'lody-session-monaco-selected-line-gutter',
+          className: 'rangeHighlight',
         },
       },
     ]);
-    this.editor.revealLineInCenter(range.startLineNumber);
+    // Keep the anchor in Monaco's cursor state so later language setup and
+    // wrapped-line layout retain it. Immediate scrolling avoids a pending
+    // smooth reveal being replaced during the first viewer layout.
+    this.editor.setPosition({ lineNumber: range.startLineNumber, column: 1 });
+    this.editor.revealLineInCenter(range.startLineNumber, monaco.editor.ScrollType.Immediate);
   }
 
   dispose(): void {

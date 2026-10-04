@@ -94,9 +94,32 @@ for (const storyId of CODE_COLLAB_STORY_IDS) {
     await page.waitForLoadState('networkidle', { timeout: 20_000 });
 
     const fatal = collector.events.filter((event) => event.level !== 'warning').filter(notIgnored);
-    const summary = fatal
-      .map((event) => `[${event.level}] ${event.text}`)
-      .join('\n');
+    const summary = fatal.map((event) => `[${event.level}] ${event.text}`).join('\n');
     expect(fatal, `Story ${storyId} produced console error(s):\n${summary}`).toEqual([]);
   });
 }
+
+test('cold wrapped file anchor survives language setup, resize and repeated navigation', async ({
+  page,
+}) => {
+  await page.goto(
+    '/iframe.html?id=sessions-codecollabmonacoeditor--cold-line-anchor&viewMode=story'
+  );
+  await expect(page.getByRole('status', { name: 'Cursor line' })).toHaveText('6303');
+  await page.getByRole('button', { name: 'Expand viewer' }).click();
+  // Let the actual lazy language contribution finish before checking layout.
+  await page.waitForLoadState('networkidle');
+  const viewer = page.getByTestId('line-anchor-viewer');
+  await expect(viewer.locator('.view-line').filter({ hasText: 'const line6303 =' })).toBeVisible();
+  const highlight = viewer.locator('.rangeHighlight').first();
+  await expect(highlight).toBeVisible();
+  await expect
+    .poll(() => highlight.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .not.toBe('rgba(0, 0, 0, 0)');
+  await page.getByRole('button', { name: 'Go to first line' }).click();
+  await expect(page.getByRole('status', { name: 'Cursor line' })).toHaveText('1');
+  await expect(viewer.locator('.view-line').filter({ hasText: 'const line1 =' })).toBeVisible();
+  await page.getByRole('button', { name: 'Open line anchor' }).click();
+  await expect(page.getByRole('status', { name: 'Cursor line' })).toHaveText('6303');
+  await expect(viewer.locator('.view-line').filter({ hasText: 'const line6303 =' })).toBeVisible();
+});

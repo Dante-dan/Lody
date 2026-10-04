@@ -1,5 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
+import { Button } from '@lody/ui';
+import { SessionMonacoTextViewer } from '@/components/sessions/session-monaco-text-viewer';
 import { Provider, createStore } from 'jotai';
 import {
   getMachineRoomId,
@@ -287,4 +289,39 @@ export const RenamedOpenFile: Story = {
       </div>
     );
   },
+};
+
+const lineAnchorText = Array.from(
+  { length: 6600 },
+  (_, index) => `const line${index + 1} = "${'wrapped source content '.repeat(8)}";`
+).join('\n');
+
+function ColdLineAnchorFrame() {
+  const [width, setWidth] = useState(20);
+  const [selectedLines, setSelectedLines] = useState({ start: 6303, end: 6305 });
+  const [cursorLine, setCursorLine] = useState(1);
+  return (
+    <div>
+      <Button onClick={() => setWidth(500)}>Expand viewer</Button>
+      <Button onClick={() => setSelectedLines({ start: 1, end: 1 })}>Go to first line</Button>
+      <Button onClick={() => setSelectedLines({ start: 6303, end: 6305 })}>Open line anchor</Button>
+      <output aria-label="Cursor line">{cursorLine}</output>
+      <div data-testid="line-anchor-viewer" style={{ width, height: 400 }}>
+        <SessionMonacoTextViewer
+          text={lineAnchorText}
+          language="typescript"
+          resolvedTheme="dark"
+          selectedLines={selectedLines}
+          onSelectionChange={({ headOffset }) =>
+            setCursorLine(lineAnchorText.slice(0, headOffset).split('\n').length)
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+export const ColdLineAnchor: Story = {
+  name: 'Cold wrapped line anchor',
+  render: () => <ColdLineAnchorFrame />,
 };
