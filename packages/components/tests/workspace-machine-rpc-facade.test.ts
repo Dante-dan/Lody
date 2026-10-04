@@ -22,6 +22,43 @@ afterEach(() => {
 });
 
 describe('createWorkspaceMachineRpcFacade', () => {
+  it.each([undefined, {}, { localProjectBrowserLinks: 0 }, { localProjectBrowserLinks: 1 }])(
+    'requests repository browser URLs only from compatible machines (%j)',
+    async (protocolCapabilities) => {
+      vi.stubGlobal('window', {});
+      let sent: Record<string, unknown> | undefined;
+      const state = { git: false as const };
+      const facade = createWorkspaceMachineRpcFacade({
+        workspaceId,
+        getMachineProtocolCapabilities: async () => protocolCapabilities,
+        targetRouter: {
+          getPlaneForMachine: () => 'cloud',
+          resolvePlaneForMachine: async () => 'cloud',
+        },
+        getMachineRpcClient: async () =>
+          ({
+            requestLocalProjectGitState: async (request: Record<string, unknown>) => {
+              sent = request;
+              return { type: 'local-project/git-state_response', success: true, state };
+            },
+          }) as never,
+      });
+      await expect(
+        facade.requestLocalProjectGitState(
+          remoteMachineId,
+          'project-1' as import('@lody/shared').LocalProjectId,
+          'owner'
+        )
+      ).resolves.toMatchObject({ success: true, state });
+      expect(sent).toMatchObject({ localProjectId: 'project-1', requestedByUserId: 'owner' });
+      if (protocolCapabilities?.localProjectBrowserLinks === 1) {
+        expect(sent).toHaveProperty('includeBrowserUrl', true);
+      } else {
+        expect(sent).not.toHaveProperty('includeBrowserUrl');
+      }
+    }
+  );
+
   it.each([undefined, {}, { previewControl: 0 }])(
     'rejects unsupported remote preview control before handshake or authorization (%j)',
     async (protocolCapabilities) => {

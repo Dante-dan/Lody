@@ -3828,7 +3828,7 @@ function WorkspaceChatLanding({
             <Tooltip.Trigger
               render={
                 <Button
-                  size="sm"
+                  size="mini"
                   variant="ghost"
                   icon
                   aria-label={t('chat.openRepositoryInBrowser', 'Open repository in browser')}
