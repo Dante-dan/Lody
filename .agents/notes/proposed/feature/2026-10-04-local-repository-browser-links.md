@@ -39,9 +39,11 @@ capability negotiation. Repository checks must be reported with their actual
 results; no human approval, live GitLab API validation or full MR support is
 claimed by this reference implementation.
 
-The two shared suites passed 56 tests; the two component suites passed 37.
+The two shared suites passed 56 tests, the two component suites passed 37, and
+the two Streams RPC suites passed 112.
 Shared and Streams RPC typechecks, formatting, documentation, translations,
 fast lint and the public-boundary check passed. Root `pnpm check` stopped during
 ACP adapter preparation because the existing Devin checkout lacks dependencies.
-Component typechecking remains limited by unavailable `github-slugger` declarations
-in unchanged markdown consumers. Packaged Electron visual behavior is not exercised.
+A frozen-lockfile install restored the checkout dependency links; the final
+component typecheck passed. The complete root check was not rerun after repair.
+Packaged Electron visual behavior is not exercised.

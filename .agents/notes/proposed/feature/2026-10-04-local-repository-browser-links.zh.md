@@ -32,8 +32,10 @@ SSH 转 HTTPS 无法判断自建服务是否使用不同网页入口。
 所属测试套件覆盖远端解析、真实本地 Git 状态、工具栏链接安全和 capability 协商。
 仓库检查按实际结果报告；参考实现不代表人工批准、真实 GitLab API 验证或完整 MR 支持。
 
-两个 shared 套件通过 56 项测试，两个 components 套件通过 37 项。
+两个 shared 套件通过 56 项测试，两个 components 套件通过 37 项，
+两个 Streams RPC 套件通过 112 项。
 Shared 与 Streams RPC 类型检查、格式、文档、翻译、快速 lint 和公共边界检查通过。
 根 `pnpm check` 在 ACP adapter 准备阶段因现有 Devin checkout 缺少依赖而停止。
-Components 类型检查仍受未改动 Markdown 使用者缺少 `github-slugger` 声明限制。
+冻结锁文件安装恢复 checkout 的依赖链接，最终 Components 类型检查通过。
+修复后未重跑完整根检查。
 未执行打包 Electron 的视觉验证。
