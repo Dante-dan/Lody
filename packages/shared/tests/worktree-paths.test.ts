@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   deriveRepoIdFromLocalProjectPath,
+  getGitRemoteBrowserUrl,
   getDefaultSessionWorkdirFromDotlodyPath,
   getLodyDotlodyPath,
   getLodyReposBaseDirFromDotlodyPath,
@@ -79,5 +80,32 @@ describe('local project worktree paths', () => {
         'session123' as SessionId
       )
     ).toBe('\\\\build01\\home\\alice\\.lody\\chats\\session123');
+  });
+});
+
+describe('repository browser navigation', () => {
+  it.each([
+    ['git@gitlab.com:company/team/project.git', 'https://gitlab.com/company/team/project'],
+    [
+      'ssh://git@gitlab.example:2222/company/team/project.git',
+      'https://gitlab.example/company/team/project',
+    ],
+    [
+      'https://oauth2:private-token@gitlab.example:8443/company/team/project.git?token=secret#fragment',
+      'https://gitlab.example:8443/company/team/project',
+    ],
+    ['git@github.com:owner/repo.git', 'https://github.com/owner/repo'],
+  ])('maps %s to a credential-free browser link', (remote, expected) => {
+    expect(getGitRemoteBrowserUrl(remote)).toBe(expected);
+  });
+  it.each([
+    '/tmp/group/project',
+    'file:///group/project',
+    'javascript:alert(1)',
+    'git://gitlab.com/group/project',
+    'https://gitlab.com/group',
+    'https://gitlab.com/group/%2Fproject',
+  ])('does not navigate an unsupported remote %s', (remote) => {
+    expect(getGitRemoteBrowserUrl(remote)).toBeNull();
   });
 });

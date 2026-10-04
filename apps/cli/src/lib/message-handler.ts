@@ -2538,6 +2538,7 @@ export class MessageHandler {
   }
 
   private async getLocalProjectGitStateForRpc(args: {
+    includeBrowserUrl?: boolean;
     localProjectId: LocalProjectId;
     requestedByUserId: string;
   }): Promise<LocalProjectGitStateRpcResponse> {
@@ -2585,7 +2586,9 @@ export class MessageHandler {
     }
 
     try {
-      const state = await getLocalProjectGitStateAtRootPath(rootPath);
+      const state = await getLocalProjectGitStateAtRootPath(rootPath, {
+        includeBrowserUrl: args.includeBrowserUrl,
+      });
       return {
         type: 'local-project/git-state_response',
         machineId: this.machineId,
@@ -3522,8 +3525,9 @@ export class MessageHandler {
             workspaceId: this.workspaceId,
           });
         },
-        getLocalProjectGitState: async ({ localProjectId, requestedByUserId }) =>
+        getLocalProjectGitState: async ({ localProjectId, requestedByUserId, includeBrowserUrl }) =>
           await this.getLocalProjectGitStateForRpc({
+            includeBrowserUrl,
             localProjectId,
             requestedByUserId,
           }),

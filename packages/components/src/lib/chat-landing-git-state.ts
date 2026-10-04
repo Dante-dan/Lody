@@ -1,3 +1,4 @@
+import { getGitRemoteBrowserUrl } from '@lody/shared';
 import type {
   LocalProjectGitState,
   LocalProjectId,
@@ -95,4 +96,13 @@ export function isLocalProjectMachineOffline(args: {
   if (args.visibleLocalMachineId === args.projectMachineId) return false;
   if (!args.targetMachine) return false;
   return !args.isMachineOnline(args.projectMachineId);
+}
+
+/** Never let a response turn repository navigation into an arbitrary scheme launch. */
+export function getLocalProjectRepositoryBrowserUrl(
+  state: LocalProjectGitState | null
+): string | null {
+  return state?.git && state.repositoryBrowserUrl
+    ? getGitRemoteBrowserUrl(state.repositoryBrowserUrl)
+    : null;
 }

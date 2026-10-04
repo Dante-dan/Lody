@@ -1340,8 +1340,11 @@ export class LocalProjectControlService {
     };
   }
 
-  async getProjectGitState(rootPath: string): Promise<LocalProjectGitState> {
-    return await getLocalProjectGitStateAtRootPath(rootPath);
+  async getProjectGitState(
+    rootPath: string,
+    options?: { includeBrowserUrl?: boolean }
+  ): Promise<LocalProjectGitState> {
+    return await getLocalProjectGitStateAtRootPath(rootPath, options);
   }
 
   async listBrowseRoots(): Promise<LocalProjectBrowseRootsResult> {

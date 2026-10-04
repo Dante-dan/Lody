@@ -2140,6 +2140,7 @@ export const LocalProjectListRequestSchema = z
 export const LocalProjectGitStateRequestSchema = z
   .object({
     type: z.literal('local-project/git-state'),
+    includeBrowserUrl: z.boolean().optional(),
     machineId: MachineIdSchema,
     workspaceId: WorkspaceIdSchema,
     localProjectId: LocalProjectIdSchema,
@@ -2451,6 +2452,7 @@ export const LocalProjectGitStateSchema = z.discriminatedUnion('git', [
       currentBranch: z.string().nullable(),
       defaultBranch: z.string().nullable(),
       githubRepoFullName: z.string().nullable(),
+      repositoryBrowserUrl: z.string().url().nullable().optional(),
       workingTree: z
         .object({
           clean: z.boolean(),

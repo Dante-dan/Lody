@@ -984,6 +984,7 @@ export type LocalProjectControlRequest =
     }
   | {
       type: 'local-project/git-state';
+      includeBrowserUrl?: boolean;
       machineId: MachineId;
       workspaceId: WorkspaceId;
       localProjectId: LocalProjectId;

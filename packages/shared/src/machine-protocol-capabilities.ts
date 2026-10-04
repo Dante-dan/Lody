@@ -16,6 +16,7 @@ export const MACHINE_PROTOCOL_CAPABILITIES = {
   subagentEvents: 'subagentEvents',
   acpAuthenticationInteractions: 'acpAuthenticationInteractions',
   localProjectRemoval: 'localProjectRemoval',
+  localProjectBrowserLinks: 'localProjectBrowserLinks',
   providerSetup: 'providerSetup',
   schedules: 'schedules',
   preparedSessionInput: 'preparedSessionInput',
@@ -36,6 +37,7 @@ export const ACP_AUTHENTICATION_INTERACTIONS_PROTOCOL_VERSION = 2;
 export const SUBAGENT_CANCELLATION_PROTOCOL_VERSION = 1;
 export const SUBAGENT_EVENTS_PROTOCOL_VERSION = 1;
 export const LOCAL_PROJECT_REMOVAL_PROTOCOL_VERSION = 1;
+export const LOCAL_PROJECT_BROWSER_LINKS_PROTOCOL_VERSION = 1;
 export const PROVIDER_SETUP_PROTOCOL_VERSION = 1;
 export const SCHEDULES_PROTOCOL_VERSION = 1;
 export const PREPARED_SESSION_INPUT_PROTOCOL_VERSION = 1;
@@ -85,6 +87,8 @@ export function machineSupportsSubagentCancellation(
  * in the "supported" direction and there is no version fallback to catch it.
  */
 export const CURRENT_MACHINE_PROTOCOL_CAPABILITIES: MachineProtocolCapabilities = {
+  [MACHINE_PROTOCOL_CAPABILITIES.localProjectBrowserLinks]:
+    LOCAL_PROJECT_BROWSER_LINKS_PROTOCOL_VERSION,
   [MACHINE_PROTOCOL_CAPABILITIES.mcpToolDiscovery]: MCP_TOOL_DISCOVERY_PROTOCOL_VERSION,
   [MACHINE_PROTOCOL_CAPABILITIES.localProjectHistoryProvider]:
     LOCAL_PROJECT_HISTORY_PROVIDER_PROTOCOL_VERSION,

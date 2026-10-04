@@ -148,9 +148,14 @@ export class LocalProjectsIpc extends IpcService {
   }
 
   @IpcMethod()
-  async getGitState(workspaceId: string, localProjectId: string) {
+  async getGitState(
+    workspaceId: string,
+    localProjectId: string,
+    options?: { includeBrowserUrl?: boolean }
+  ) {
     const response = await sendLocalProjectControl({
       type: 'local-project/git-state',
+      ...(options?.includeBrowserUrl ? { includeBrowserUrl: true } : {}),
       workspaceId: workspaceId as WorkspaceId,
       localProjectId: localProjectId as LocalProjectId
     })

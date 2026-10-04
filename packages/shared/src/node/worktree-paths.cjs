@@ -136,7 +136,30 @@ function isLocalRepoId(repoId) {
   return String(repoId).startsWith(LOCAL_REPO_ID_PREFIX);
 }
 
+/** A navigation URL, never a provider identity or credential transport. */
+function getGitRemoteBrowserUrl(raw) {
+  const value = raw.trim();
+  try {
+    const scp = /^([^@\s]+@)?([^:/\s]+):(.+)$/.exec(value);
+    const url = new URL(scp && !value.includes('://') ? `ssh://${scp[2]}/${scp[3]}` : value);
+    if (!['https:', 'http:', 'ssh:'].includes(url.protocol)) return null;
+    const path = url.pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '');
+    const segments = path.split('/');
+    if (
+      segments.length < 2 ||
+      segments.some((part) => !/^[A-Za-z0-9_.-]+$/.test(part) || part === '.' || part === '..')
+    )
+      return null;
+    // SSH ports select SSH, not the web service. Do not carry them into HTTPS.
+    const host = url.protocol === 'ssh:' ? url.hostname : url.host;
+    return `${url.protocol === 'ssh:' ? 'https:' : url.protocol}//${host}/${path}`;
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
+  getGitRemoteBrowserUrl,
   parseGitHubRepo,
   deriveRepoIdFromGitHubRepo,
   deriveRepoIdFromLocalProjectPath,

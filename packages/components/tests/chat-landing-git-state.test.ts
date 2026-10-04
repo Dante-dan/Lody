@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { LocalProjectId, MachineId, MachineMeta, WorkspaceId } from '@lody/shared';
 import {
   getLocalProjectBranchLabel,
+  getLocalProjectRepositoryBrowserUrl,
   getLocalProjectGitStateLoadKey,
   getLocalProjectWorktreeAvailability,
   isLocalProjectMachineOffline,
@@ -177,5 +178,37 @@ describe('local project Git selection', () => {
 
     expect(resolveLocalProjectBranchSelection(state, 'feature/selected')).toBe('feature/selected');
     expect(getLocalProjectWorktreeAvailability(state)).toBe(true);
+  });
+});
+
+describe('local repository browser navigation', () => {
+  const git = {
+    git: true as const,
+    currentBranch: 'main',
+    defaultBranch: 'main',
+    branches: ['main'],
+    githubRepoFullName: null,
+    workingTree: {
+      clean: true,
+      staged: false,
+      unstaged: false,
+      untracked: false,
+      conflicted: false,
+    },
+  };
+  it('keeps older and non-Git projects without a browser action', () => {
+    expect(getLocalProjectRepositoryBrowserUrl(git)).toBeNull();
+    expect(getLocalProjectRepositoryBrowserUrl({ git: false })).toBeNull();
+  });
+  it('keeps the full self-hosted namespace and strips credential-shaped response data', () => {
+    expect(
+      getLocalProjectRepositoryBrowserUrl({
+        ...git,
+        repositoryBrowserUrl: 'https://user:token@gitlab.example/team/nested/project?secret=value',
+      })
+    ).toBe('https://gitlab.example/team/nested/project');
+    expect(
+      getLocalProjectRepositoryBrowserUrl({ ...git, repositoryBrowserUrl: 'javascript:alert(1)' })
+    ).toBeNull();
   });
 });

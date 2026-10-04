@@ -53,6 +53,7 @@ import { useCloudMutation, useCloudQuery } from '@lody/platform/react';
 import { usePostHog } from '@posthog/react';
 import {
   ArrowUp,
+  ExternalLink,
   FolderOpen,
   Github as GithubIcon,
   LockKeyhole,
@@ -170,6 +171,7 @@ import {
 import {
   getLocalProjectBranchLabel,
   getLocalProjectGitStateLoadKey,
+  getLocalProjectRepositoryBrowserUrl,
   getLocalProjectWorktreeAvailability,
   isLocalProjectMachineOffline,
   resolveLocalProjectBranchSelection,
@@ -3505,6 +3507,9 @@ function WorkspaceChatLanding({
       />
     ) : null;
 
+  const localRepositoryBrowserUrl =
+    contextType === 'local' ? getLocalProjectRepositoryBrowserUrl(activeLocalGitState) : null;
+
   const branchWorktreePill =
     branchSelectorNode || topWorktreeNode ? (
       <div {...stylex.props(composerSurface.contextPill)}>
@@ -3818,6 +3823,28 @@ function WorkspaceChatLanding({
         />
         {localGitStateRetryNode}
         {branchWorktreePill}
+        {localRepositoryBrowserUrl ? (
+          <Tooltip.Root>
+            <Tooltip.Trigger
+              render={
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  icon
+                  aria-label={t('chat.openRepositoryInBrowser', 'Open repository in browser')}
+                  onClick={() => {
+                    void openExternalUrl(localRepositoryBrowserUrl);
+                  }}
+                >
+                  <ExternalLink {...stylex.props(composerSurface.glyph14)} aria-hidden="true" />
+                </Button>
+              }
+            />
+            <Tooltip.Content side="bottom">
+              {t('chat.openRepositoryInBrowser', 'Open repository in browser')}
+            </Tooltip.Content>
+          </Tooltip.Root>
+        ) : null}
       </div>
     </ErrorBoundary>
   );

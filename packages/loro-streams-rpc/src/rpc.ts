@@ -624,6 +624,7 @@ export const LoroLocalProjectGitStateRpcRequestSchema = BaseRpcRequestSchema.ext
   method: z.literal('local-project/git-state'),
   params: z
     .object({
+      includeBrowserUrl: z.boolean().optional(),
       localProjectId: z.string().trim().min(1),
       requestedByUserId: z.string().trim().min(1),
     })
@@ -3220,6 +3221,7 @@ export class LoroStreamsMachineRpcClient {
   }
 
   async requestLocalProjectGitState(options: {
+    includeBrowserUrl?: boolean;
     localProjectId: LocalProjectId;
     requestedByUserId: string;
     timeoutMs?: number;
@@ -3228,6 +3230,7 @@ export class LoroStreamsMachineRpcClient {
       method: 'local-project/git-state',
       timeoutMs: options.timeoutMs ?? 30_000,
       params: {
+        ...(options.includeBrowserUrl ? { includeBrowserUrl: true } : {}),
         localProjectId: options.localProjectId,
         requestedByUserId: options.requestedByUserId,
       },

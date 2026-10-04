@@ -164,6 +164,9 @@ function isLocalProjectGitState(value) {
     (value.currentBranch === null || typeof value.currentBranch === 'string') &&
     (value.defaultBranch === null || typeof value.defaultBranch === 'string') &&
     (value.githubRepoFullName === null || typeof value.githubRepoFullName === 'string') &&
+    (value.repositoryBrowserUrl === undefined ||
+      value.repositoryBrowserUrl === null ||
+      typeof value.repositoryBrowserUrl === 'string') &&
     isObjectRecord(value.workingTree) &&
     typeof value.workingTree.clean === 'boolean' &&
     typeof value.workingTree.staged === 'boolean' &&
@@ -337,7 +340,11 @@ function isLocalProjectControlRequest(value) {
   }
 
   if (value.type === 'local-project/git-state') {
-    return typeof value.workspaceId === 'string' && typeof value.localProjectId === 'string';
+    return (
+      typeof value.workspaceId === 'string' &&
+      typeof value.localProjectId === 'string' &&
+      (value.includeBrowserUrl === undefined || typeof value.includeBrowserUrl === 'boolean')
+    );
   }
 
   if (value.type === 'local-project/list-files') {

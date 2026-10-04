@@ -3,7 +3,7 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
-const { parseGitHubRepo } = require('./worktree-paths.cjs');
+const { parseGitHubRepo, getGitRemoteBrowserUrl } = require('./worktree-paths.cjs');
 
 const execFileAsync = promisify(execFile);
 
@@ -483,8 +483,51 @@ async function probeGitHubRemoteAtRootPath(rootPath) {
   return null;
 }
 
+async function probeRemoteBrowserUrlAtRootPath(rootPath) {
+  await assertGitRepository(rootPath);
+
+  const remotes = await listGitRemotes(rootPath);
+  if (remotes.length === 0) return null;
+
+  const currentBranchRemote = await resolveCurrentBranchRemote(rootPath, remotes);
+  const prioritizedRemotes = [];
+  if (currentBranchRemote && remotes.includes(currentBranchRemote)) {
+    prioritizedRemotes.push(currentBranchRemote);
+  }
+  if (remotes.includes('origin') && currentBranchRemote !== 'origin') {
+    prioritizedRemotes.push('origin');
+  }
+  if (prioritizedRemotes.length === 0 && remotes.length === 1) {
+    prioritizedRemotes.push(remotes[0]);
+  }
+
+  const candidates = [];
+  for (const remoteName of prioritizedRemotes) {
+    candidates.push({ remoteName, direction: 'push' });
+    candidates.push({ remoteName, direction: 'fetch' });
+  }
+
+  for (const candidate of candidates) {
+    const remoteUrl = await resolveGitRemoteUrl(
+      rootPath,
+      candidate.remoteName,
+      candidate.direction
+    );
+    if (!remoteUrl) {
+      continue;
+    }
+    const browserUrl = getGitRemoteBrowserUrl(remoteUrl);
+    if (browserUrl) return browserUrl;
+  }
+
+  return null;
+}
+
 async function getLocalProjectGitHubRepoAtRootPath(rootPath) {
-  return (await probeGitHubRemoteAtRootPath(normalizeLocalProjectRootPath(rootPath)))?.repoFullName ?? null;
+  return (
+    (await probeGitHubRemoteAtRootPath(normalizeLocalProjectRootPath(rootPath)))?.repoFullName ??
+    null
+  );
 }
 
 async function listLocalProjectBranchesAtRootPath(rootPath) {
@@ -702,7 +745,7 @@ async function getLocalProjectWorkingTreeAtRootPath(rootPath) {
   };
 }
 
-async function getLocalProjectGitStateAtRootPath(rootPath) {
+async function getLocalProjectGitStateAtRootPath(rootPath, options) {
   const normalizedRootPath = ensureLocalProjectRootPath(rootPath);
   if (!(await isGitRepository(normalizedRootPath))) {
     return { git: false };
@@ -717,6 +760,9 @@ async function getLocalProjectGitStateAtRootPath(rootPath) {
     currentBranch: branches.currentBranch,
     defaultBranch: branches.defaultBranch,
     githubRepoFullName: githubRemote ? githubRemote.repoFullName : null,
+    ...(options?.includeBrowserUrl
+      ? { repositoryBrowserUrl: await probeRemoteBrowserUrlAtRootPath(normalizedRootPath) }
+      : {}),
     workingTree,
   };
 }

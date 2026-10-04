@@ -10,6 +10,7 @@ import {
   McpToolListResultSchema,
   MACHINE_PROTOCOL_CAPABILITIES,
   MCP_TOOL_DISCOVERY_PROTOCOL_VERSION,
+  LOCAL_PROJECT_BROWSER_LINKS_PROTOCOL_VERSION,
   machineSupportsProtocolCapability,
   type WorkspaceMcpServerMeta,
   DEFAULT_PREVIEW_CREATE_TIMEOUT_MS,
@@ -1262,6 +1263,11 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     options?: { timeoutMs?: number }
   ): Promise<LocalProjectGitStateRpcResponse | null> => {
     try {
+      const includeBrowserUrl = machineSupportsProtocolCapability(
+        { protocolCapabilities: await deps.getMachineProtocolCapabilities(machineId) },
+        MACHINE_PROTOCOL_CAPABILITIES.localProjectBrowserLinks,
+        LOCAL_PROJECT_BROWSER_LINKS_PROTOCOL_VERSION
+      );
       await waitForMachineRoute(machineId);
       if (
         window.__LODY_ELECTRON__ &&
@@ -1270,7 +1276,8 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
       ) {
         const state = await getIpcServices()!.localProjects.getGitState(
           workspaceId,
-          localProjectId
+          localProjectId,
+          includeBrowserUrl ? { includeBrowserUrl: true } : undefined
         );
         if ('error' in state) {
           return {
@@ -1296,6 +1303,7 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
       return await (
         await getMachineRpcClient(machineId)
       ).requestLocalProjectGitState({
+        ...(includeBrowserUrl ? { includeBrowserUrl: true } : {}),
         localProjectId,
         requestedByUserId,
         timeoutMs: options?.timeoutMs ?? 30_000,

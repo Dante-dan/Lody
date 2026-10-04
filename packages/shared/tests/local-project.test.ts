@@ -36,7 +36,8 @@ const {
     branchName: string
   ) => Promise<{ currentBranch: string }>;
   getLocalProjectGitStateAtRootPath: (
-    rootPath: string
+    rootPath: string,
+    options?: { includeBrowserUrl?: boolean }
   ) => ReturnType<typeof getLocalProjectGitStateAtRootPath>;
   resolveLocalProjectBranchAtRootPath: (
     rootPath: string,
@@ -1220,6 +1221,34 @@ describe('local-project helpers', () => {
     // The setup chains real git clone/fetch operations. On the self-hosted CI
     // runner, this file can execute under enough package-level test load that
     // git subprocesses exceed the default Vitest budget.
+    GIT_HELPER_TEST_TIMEOUT_MS
+  );
+
+  it.each([
+    ['git@gitlab.com:company/team/project.git', 'https://gitlab.com/company/team/project'],
+    [
+      'ssh://git@gitlab.example:2222/company/team/project.git',
+      'https://gitlab.example/company/team/project',
+    ],
+  ])(
+    'opts into browser navigation for GitLab remote %s without enabling GitHub',
+    async (url, expected) => {
+      tempDir = makeTempDir();
+      const projectDir = createGitProjectWithRemotes(tempDir, [{ name: 'origin', url }]);
+      for (const getState of [
+        getLocalProjectGitStateAtRootPath,
+        getLocalProjectGitStateAtRootPathCjs,
+      ]) {
+        const legacy = await getState(projectDir);
+        expect(legacy).not.toHaveProperty('repositoryBrowserUrl');
+        const state = await getState(projectDir, { includeBrowserUrl: true });
+        expect(state).toMatchObject({
+          git: true,
+          githubRepoFullName: null,
+          repositoryBrowserUrl: expected,
+        });
+      }
+    },
     GIT_HELPER_TEST_TIMEOUT_MS
   );
 

@@ -57,6 +57,8 @@ export type LocalProjectGitState =
       defaultBranch: string | null;
       branches: string[];
       githubRepoFullName: string | null;
+      /** Opt-in navigation only; absent on older daemons. */
+      repositoryBrowserUrl?: string | null;
       workingTree: LocalProjectWorkingTreeState;
     };
 

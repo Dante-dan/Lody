@@ -1896,7 +1896,9 @@ export class LodyFleet {
         return {
           ok: true,
           type: 'local-project/git-state',
-          result: await this.localProjectControlService.getProjectGitState(rootPath),
+          result: await this.localProjectControlService.getProjectGitState(rootPath, {
+            includeBrowserUrl: message.includeBrowserUrl,
+          }),
         };
       }
 

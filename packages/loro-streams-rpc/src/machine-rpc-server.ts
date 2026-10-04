@@ -466,6 +466,7 @@ type RpcServerDeps = {
     reason?: string;
   }) => Promise<SessionPreviewRevokeResponse>;
   getLocalProjectGitState?: (args: {
+    includeBrowserUrl?: boolean;
     localProjectId: LocalProjectId;
     requestedByUserId: string;
   }) => Promise<LocalProjectGitStateRpcResponse>;
@@ -1594,6 +1595,7 @@ export class LoroStreamsMachineRpcServer {
             return;
           }
           const response = await this.deps.getLocalProjectGitState({
+            includeBrowserUrl: request.params.includeBrowserUrl,
             localProjectId: request.params.localProjectId as LocalProjectId,
             requestedByUserId: request.params.requestedByUserId,
           });

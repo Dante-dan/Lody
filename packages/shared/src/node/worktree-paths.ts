@@ -8,6 +8,7 @@ import type { RepoId } from '..';
 
 export {
   parseGitHubRepo,
+  getGitRemoteBrowserUrl,
   deriveRepoIdFromGitHubRepo,
   getDefaultSessionWorkdirFromDotlodyPath,
   getLodyDotlodyPath,

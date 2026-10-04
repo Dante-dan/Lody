@@ -8,7 +8,7 @@ import type {
   LocalProjectId,
   LocalProjectWorkingTreeState,
 } from '../project';
-import { parseGitHubRepo } from '../worktree-paths';
+import { parseGitHubRepo, getGitRemoteBrowserUrl } from '../worktree-paths';
 
 const execFileAsync = promisify(execFile);
 
@@ -608,8 +608,53 @@ async function probeGitHubRemoteAtRootPath(rootPath: string): Promise<{
   return null;
 }
 
+async function probeRemoteBrowserUrlAtRootPath(rootPath: string): Promise<string | null> {
+  if (!(await isGitRepository(rootPath))) {
+    return null;
+  }
+
+  const remotes = await listGitRemotes(rootPath);
+  if (remotes.length === 0) return null;
+
+  const currentBranchRemote = await resolveCurrentBranchRemote(rootPath, remotes);
+  const prioritizedRemotes: string[] = [];
+  if (currentBranchRemote && remotes.includes(currentBranchRemote)) {
+    prioritizedRemotes.push(currentBranchRemote);
+  }
+  if (remotes.includes('origin') && currentBranchRemote !== 'origin') {
+    prioritizedRemotes.push('origin');
+  }
+  if (prioritizedRemotes.length === 0 && remotes.length === 1) {
+    prioritizedRemotes.push(remotes[0] as string);
+  }
+
+  const candidates: Array<{ remoteName: string; direction: 'push' | 'fetch' }> = [];
+  for (const remoteName of prioritizedRemotes) {
+    candidates.push({ remoteName, direction: 'push' });
+    candidates.push({ remoteName, direction: 'fetch' });
+  }
+
+  for (const candidate of candidates) {
+    const remoteUrl = await resolveGitRemoteUrl(
+      rootPath,
+      candidate.remoteName,
+      candidate.direction
+    );
+    if (!remoteUrl) {
+      continue;
+    }
+    const browserUrl = getGitRemoteBrowserUrl(remoteUrl);
+    if (browserUrl) return browserUrl;
+  }
+
+  return null;
+}
+
 export async function getLocalProjectGitHubRepoAtRootPath(rootPath: string) {
-  return (await probeGitHubRemoteAtRootPath(normalizeLocalProjectRootPath(rootPath)))?.repoFullName ?? null;
+  return (
+    (await probeGitHubRemoteAtRootPath(normalizeLocalProjectRootPath(rootPath)))?.repoFullName ??
+    null
+  );
 }
 
 async function listLocalProjectBranchesAtRootPath(rootPath: string): Promise<{
@@ -845,7 +890,8 @@ export async function getLocalProjectWorkingTreeAtRootPath(
 }
 
 export async function getLocalProjectGitStateAtRootPath(
-  rootPath: string
+  rootPath: string,
+  options?: { includeBrowserUrl?: boolean }
 ): Promise<LocalProjectGitState> {
   const normalizedRootPath = ensureLocalProjectRootPath(rootPath);
   if (!(await isGitRepository(normalizedRootPath))) {
@@ -861,6 +907,9 @@ export async function getLocalProjectGitStateAtRootPath(
     currentBranch: branches.currentBranch,
     defaultBranch: branches.defaultBranch,
     githubRepoFullName: githubRemote?.repoFullName ?? null,
+    ...(options?.includeBrowserUrl
+      ? { repositoryBrowserUrl: await probeRemoteBrowserUrlAtRootPath(normalizedRootPath) }
+      : {}),
     workingTree,
   };
 }
