@@ -7,7 +7,8 @@ Translation: current
 
 A desktop user can opt into experimental dictation using an existing Codex
 ChatGPT login. Speech produces an editable composer draft. It never sends a
-message or starts a coding turn without the user's normal Send action.
+message or starts a turn on the destination coding session without the user's
+normal Send action.
 
 ## Responsibilities
 
@@ -81,5 +82,6 @@ The schema confirms required `threadId` and `outputModality`, v3, WebRTC SDP,
 response is empty; SDP answers arrive as separate notifications. This validates
 shape only, not account access or event behavior. The voice thread must also
 isolate its working directory, omit startup context, and deny any tool/coding
-execution; a silent prompt or clientManagedHandoffs is not an enforced boundary
+execution, even if a native realtime handoff creates a voice-thread turn;
+a silent prompt or clientManagedHandoffs is not an enforced boundary
 against the model starting execution.

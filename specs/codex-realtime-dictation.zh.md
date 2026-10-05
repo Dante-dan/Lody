@@ -6,7 +6,7 @@ Translation: current
 [English](codex-realtime-dictation.md)
 
 桌面用户可以主动开启实验性听写，使用已有的 Codex ChatGPT 登录。
-语音进入输入框，用户编辑后按正常的发送按钮才会提交；听写不能自行发消息或启动代码执行。
+语音进入输入框，用户编辑后按正常的发送按钮才会提交；听写不能自行发消息或启动目标代码会话的执行。
 
 ## 职责
 
@@ -64,5 +64,6 @@ flowchart LR
 `threadId` 和 `outputModality`，支持 v3、WebRTC SDP、`prompt`、
 `includeStartupContext: false` 和 `clientManagedHandoffs`。启动响应为空对象，
 SDP answer 通过独立通知返回。此结果只验证结构，不证明账户权限或事件行为。
-语音线程还需隔离工作目录、禁用 startup context，并拒绝任何工具/代码执行；
+即使原生实时 handoff 创建语音线程中的 turn，也必须隔离工作目录、禁用 startup context，
+并拒绝工具和代码执行；
 不能把静默 prompt 或 clientManagedHandoffs 当成禁止模型启动执行的强制边界。
