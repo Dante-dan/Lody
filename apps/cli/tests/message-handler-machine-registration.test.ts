@@ -8,6 +8,7 @@ import {
   type WorkspaceId,
 } from '@lody/shared';
 import { MessageHandler } from '../src/lib/message-handler';
+import { getHostMachineProtocolCapabilities } from '../src/agent/managed-agent-runtime';
 import type { LoroDocumentManager } from '../src/lib/loro/doc';
 import type { SessionManager } from '../src/session/session-manager';
 import type { Logger } from '../src/utils/logger';
@@ -19,6 +20,7 @@ const createSilentLogger = (): Logger => ({
   error: () => {},
   success: () => {},
   debug: () => {},
+  trace: () => {},
   setLevel: () => {},
   child: () => createSilentLogger(),
   close: async () => {},
@@ -181,13 +183,27 @@ describe('MessageHandler machine registration', () => {
     expect(registeredMeta.name).toBe('machine-name');
     // Exhaustive on purpose: registration is where a capability key and its
     // version reach every client, so adding one must be acknowledged here.
+    const hostCapabilities = getHostMachineProtocolCapabilities();
     expect(registeredMeta.protocolCapabilities).toEqual({
+      mcpToolDiscovery: 1,
+      codexAuthProfiles: 1,
+      ...(hostCapabilities.builtinPi ? { builtinPi: 1 } : {}),
+      ...(hostCapabilities.piExtensions ? { piExtensions: 1 } : {}),
       acpAuthenticationInteractions: 2,
+      previewControl: 1,
+      iosSimulator: 1,
+      iosSimulatorControls: 1,
+      iosSimulatorExterior: 1,
       localProjectRemoval: 1,
+      localProjectHistoryProvider: 1,
       localFileResources: 1,
       providerSetup: 1,
       acpProtocolAuthentication: 2,
+      acpCapabilityRefreshCache: 1,
       subagentCancellation: 1,
+      subagentEvents: 1,
+      schedules: 1,
+      preparedSessionInput: 1,
     });
 
     await handler.cleanup();

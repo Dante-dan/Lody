@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { useState } from 'react';
 import { fn } from 'storybook/test';
+import { useTranslation } from 'react-i18next';
 import {
   getServerNow,
   SESSION_GOAL_COMMANDS,
@@ -9,7 +10,11 @@ import {
   type SessionGoalCommand,
   type SessionGoalMessage,
   type SessionPullRequestMeta,
+  type SessionMeta,
+  type SessionPullRequestCiState,
 } from '@lody/shared';
+import { getSessionGitHubState } from '@/lib/session-github-state';
+import { resolveSessionInfoBarGitHubActionIds } from '@/components/sessions/session-info-action-state';
 import { SessionInfoBar } from '@/components/sessions/session-info-bar';
 import type { ContextChipAction, PrCiRun } from '@/components/sessions/session-info-chips';
 import type { SessionStatusStripState } from '@/components/sessions/session-status-strip';
@@ -100,6 +105,7 @@ function StoryHarness({
   goalPending = null,
   scheduledTasks,
   prCiRuns,
+  prCiState,
   projectName = 'loro-dev/lody',
   branch = 'feat/presence-machine-online-session-status',
   workspaceLocation = null,
@@ -111,13 +117,13 @@ function StoryHarness({
   actionLabels,
   mergeAction = false,
   syncing = false,
-  task = null,
 }: {
   status?: SessionStatusStripState | null;
   goal?: SessionGoalMessage | null;
   goalPending?: SessionGoalCommand | null;
   scheduledTasks?: PendingScheduledTask[];
   prCiRuns?: PrCiRun[];
+  prCiState?: SessionPullRequestCiState | null;
   projectName?: string | null;
   branch?: string | null;
   workspaceLocation?: {
@@ -127,8 +133,7 @@ function StoryHarness({
   pr?: SessionPullRequestMeta | null;
   diffStat?: { add: number; del: number } | null;
   width?: number;
-  initialStage?: 'status' | 'goal' | 'schedule' | 'task' | 'context';
-  task?: { taskId: string; title: string } | null;
+  initialStage?: 'status' | 'goal' | 'schedule' | 'context';
   withPreview?: boolean;
   actionLabels?: string[];
   mergeAction?: boolean;
@@ -171,9 +176,8 @@ function StoryHarness({
         onGoalDismiss={() => setCurrentGoal(null)}
         scheduledTasks={scheduledTasks}
         prCiRuns={prCiRuns}
+        prCiState={prCiState}
         onOpenPrCiRun={fn()}
-        task={task}
-        onOpenTask={fn()}
         initialStage={initialStage}
         projectName={projectName}
         branch={branch}
@@ -216,6 +220,51 @@ export const ContextWithMachineRemoved: Story = {
 };
 
 export const NoPr: Story = { args: { pr: null } };
+
+function ObservationHarness({ ownerMeta }: { ownerMeta: SessionMeta }) {
+  const { t } = useTranslation();
+  const state = getSessionGitHubState(ownerMeta);
+  const labels: Record<string, string> = {
+    'create-pr': t('sessions.createPr', 'Create PR'),
+    'create-draft-pr': t('sessions.createDraftPr', 'Create Draft PR'),
+    'commit-and-push': t('sessions.commitAndPush', 'Commit & Push'),
+  };
+  const actionIds = resolveSessionInfoBarGitHubActionIds({
+    ...state,
+    canMutatePr: false,
+    isAgentBusy: false,
+    prStatus: state.latestPr?.status,
+    prCiState: state.latestPrState?.s,
+    prMergeState: state.latestPrState?.m,
+  });
+  return (
+    <StoryHarness
+      projectName={state.repoFullName}
+      branch={ownerMeta.branchName}
+      pr={state.latestPr}
+      prCiState={state.latestPrState?.s}
+      diffStat={ownerMeta.diffStats?.allChange}
+      actionLabels={actionIds.map((id) => labels[id] ?? id)}
+    />
+  );
+}
+
+export const DiscoveredPrAssociationRejected: StoryObj<typeof ObservationHarness> = {
+  render: (args) => <ObservationHarness {...args} />,
+  args: {
+    ownerMeta: {
+      userId: 'synthetic-user',
+      project: { kind: 'local', localProjectId: 'local-1', githubRepoFullName: 'owner/repo' },
+      branchName: 'feat/x',
+      workspaceDirty: true,
+      diffStats: { allChange: { add: 12, del: 3 } },
+      pullRequests: [{ url: 'https://github.com/owner/repo/pull/55', status: 'draft' }],
+      pullRequestState: {
+        'https://github.com/owner/repo/pull/55': { t: 1720000000, s: 'f', m: 'c' },
+      },
+    } as unknown as SessionMeta,
+  },
+};
 
 const worktreeLocation = {
   kind: 'worktree' as const,
@@ -554,36 +603,4 @@ function PeekPlayground() {
 
 export const RecencyFocus: Story = {
   render: () => <PeekPlayground />,
-};
-
-/**
- * 会话属于某个任务时，簇里多一个 task chip——它是从工作现场回到任务的路。
- * 任务链接不是状态，所以保持中性色，不带语义色。
- */
-export const WithTask: Story = {
-  args: {
-    status: null,
-    task: { taskId: 't1', title: 'Refactor the auth flow' },
-    projectName: 'loro-dev/lody',
-    branch: 'feat/tasks',
-  },
-};
-
-/** 任务标题还没同步过来时，chip 退化为"未命名任务"而不是空白。 */
-export const WithUntitledTask: Story = {
-  args: {
-    status: null,
-    task: { taskId: 't1', title: '' },
-    projectName: 'loro-dev/lody',
-  },
-};
-
-/** task chip 作为舞台项时给出打开任务的动作。 */
-export const TaskStaged: Story = {
-  args: {
-    status: null,
-    task: { taskId: 't1', title: 'Ship the PR poller fix' },
-    projectName: 'loro-dev/lody',
-    initialStage: 'task',
-  },
 };

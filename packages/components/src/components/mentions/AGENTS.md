@@ -8,31 +8,30 @@ Pipeline background: [ui-mentions.md](../../../../../.agents/docs/ui-mentions.md
 ## Triggers, menu, and candidates
 
 - `@` reaches every mention type through the two-level menu. Skills keep their
-  direct `$` menu, `/` still opens commands directly, and `#` opens no menu but
+  direct `$`/`￥` menu, `/` and `、` open commands directly, and `#` opens no menu but
   keeps its hydrator, so a pasted `#123` still expands before send.
 - `enableAtMentions` is the ONE list of what `@` reaches, gating both trigger
   registration and mounting `<Mention>`; every source with its own `enabled`
   rule (sessions: having any) belongs there too. Placeholder hints advertise `$`
   only under the conditions that enable Skill mentions.
-- Desktop menus render through `MentionContent`, capped at
-  `var(--mention-input-width)`.
+- The main desktop chat composer pins menus above its frame; inline and dialog
+  menus follow the caret and flip to fit. All cap/scroll within available room
+  and `var(--mention-input-width)`. The mobile dock stays above the whole frame.
 - `insertText` must keep its type's prompt form (`@path`, `#123`, `$token`,
   `/cmd`): reaching a type through `@` must not change what the agent receives.
   Directory candidates carry BOTH `navigateText` (`@dir/`, descend) and
   `insertText` (`@dir`, commit).
-- `MentionCategory.getCandidates` stays lazy: a query scoped to one category
-  never ranks files for other categories; bare `@` calls none. Aggregate results
-  are capped by `selectMentionMenuView`; the Role category lists all readable Roles.
+- `getCandidates` stays lazy; bare `@` ranks nothing. File menus index/search
+  in a Worker, cancel stale work, and publish current-source results only; no
+  UI-thread fallback. Aggregate results are capped; Roles list all readable entries.
 - Issues and PRs rank over their own slice of the shared cache, partitioned once
   by `useMentionCategories`.
-- File, Session, Agent Role, Issue, and PR candidates use the vendored VS Code
-  `scoreFuzzy` with non-contiguous matching, wrapped by any source-specific
-  ordering. Skills and commands keep their own ranking.
-- A candidate describes its side panel through the neutral
-  `MentionCandidateDetail` fields, which render verbatim — put i18n'd text
-  there, never a raw enum. The one exception is `detail.agentRole`, rendering
-  `sessions/agent-role-detail-pane.tsx`: desktop only, fixed height, stable
-  scrollbar gutter.
+- Files, Sessions, Roles, Issues, and PRs use vendored VS Code `scoreFuzzy`
+  with source ordering. Skills rank alone; typed slash queries merge Commands
+  and Prompt Shortcuts after source gates.
+- Side panels render neutral `MentionCandidateDetail` fields verbatim: use
+  i18n'd text, never raw enums. `detail.agentRole` instead renders
+  `sessions/agent-role-detail-pane.tsx` on desktop. The list sets pane height.
 - Lazy work is `MentionCategory.activation`; category navigation starts its
   destination synchronously through `MentionItem.onMentionNavigate`, while
   `selectMentionViewActivations` covers typed/pasted prefixes, direct triggers,
@@ -63,10 +62,10 @@ true })`. The fetch timestamp rides on the cached entry (survives IndexedDB).
 
 ## Before-send expansion and transcript
 
-- `useMentionPromptExpansion` is the single before-send text transform where
-  per-type hooks compose. `mention-expansion.ts` lists the rewritten kinds
-  (`REWRITTEN_SPAN_KINDS`) and derives the verbatim ones from
-  `MESSAGE_TEXT_SPAN_KINDS` minus it.
+- `useMentionPromptExpansion` owns before-send rewrites (`expand` /
+  `getRewrites`). Composer copy reuses them via
+  `getExpandedClipboardTextForSelection` (session → `[@Title](session://…)`,
+  not `@slug`). Rewritten: `REWRITTEN_SPAN_KINDS`; else verbatim.
 - The transcript chip comes from `MessageTextSpan.mark`, FROZEN at send time,
   never resolved from the catalog at render. A span field must be declared in
   BOTH `sanitizeMessageTextSpans` and the strict `MessageTextSpanSchema`.
@@ -99,22 +98,20 @@ true })`. The fetch timestamp rides on the cached entry (survives IndexedDB).
   rows; archived and own sessions stay excluded. Project scope is a menu-only
   filter over that complete list — never scope hydration, expansion, drag
   insertion, slug resolution, or child-session addressing.
-- A session mention commits as a plain `@<title-slug>` (no `session:` marker);
-  its range carries the real `sessionId`, and the expansion rewrites THE RANGE
-  into an id-bearing MCP instruction. A token with no range is sent verbatim —
-  never resolve a slug — and `hydrateSessionMentionsFromText` must skip any
-  token the file source knows.
-- Slugs resolve through the live list first, then a `localStorage` slug → id
-  map. That store stays synchronous, its key is registered in
-  `lib/clear-local-cache.ts`, and the write is skipped when the serialized map
-  is unchanged.
+- A session mention commits as plain `@<title-slug>` (no `session:` marker); the
+  range carries `sessionId`, and expansion rewrites to
+  `[@Title](session://<id>)`. A lone app-origin session URL paste becomes that
+  mention unless Cmd/Ctrl+Shift+V. No range → send verbatim; never resolve a
+  slug; hydration skips tokens the file source knows. Evidence:
+  [session:// URI](../../../../../.agents/notes/implemented/feature/2026-09-18-session-mention-uri-and-paste.md).
+- Slugs resolve through the live list, then a synchronous `localStorage` slug →
+  id map registered in `lib/clear-local-cache.ts`; skip unchanged writes.
 - A session dragged from the sidebar or a session tab onto a chat surface
-  becomes a mention, and the drop must produce a REAL range, not `@<slug>` text:
-  route it through `mentionActionsRef.insertSessionMention(sessionId)`, which
-  returns false for an unknown, own, or already-mentioned session. Draft and
-  file/diff tabs are not mention sources. The conversation COLUMN paints ONE
-  `ConversationDropOverlay` via `SessionMentionDropLayer`, never one per
-  keep-alive tab page.
+  becomes a mention; the drop must be a REAL range, not `@<slug>` text: use
+  `mentionActionsRef.insertSessionMention(sessionId)` (false for unknown, own,
+  or already-mentioned). Draft and file/diff tabs are not mention sources. The
+  conversation COLUMN paints ONE `ConversationDropOverlay` via
+  `SessionMentionDropLayer`, never one per keep-alive tab page.
 
 ## Agent Roles
 
@@ -129,8 +126,8 @@ true })`. The fetch timestamp rides on the cached entry (survives IndexedDB).
   candidate sets no detail `title`. The committed range shows that emoji through
   `applyAgentRoleEmojiChip`, boxed to the icon slot and clipped; its agent
   config and machine ride on `AgentRoleMentionItem`.
-- Role candidates pass visibility, executability, then work context: Local
-  Project pins to its machine; plain chat and GitHub may use authorized machines
-  unless bound to a `localWorktree`. List all readable Roles; disabled rows follow
+- Role candidates pass visibility, then executability. Every composer may
+  dispatch a Role to any authorized machine; there is no work-context pinning.
+  List all readable Roles; disabled rows follow
   available matches with a reason below the name. Only available Roles can be
   selected, hydrated from text, or expanded before send; never fall back.

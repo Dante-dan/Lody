@@ -32,31 +32,6 @@ vi.mock('beautiful-mermaid', () => ({
     `<svg xmlns="http://www.w3.org/2000/svg" width="${DIAGRAM_WIDTH}" height="${DIAGRAM_HEIGHT}" data-diagram="sequence"><text>Launch game</text></svg>`,
 }));
 
-// Streamdown renders a diagram only once it scrolls into view; jsdom has no
-// IntersectionObserver, so report every observed block as visible.
-class VisibleIntersectionObserver implements IntersectionObserver {
-  readonly root = null;
-  readonly rootMargin = '';
-  readonly thresholds: readonly number[] = [];
-
-  constructor(private readonly callback: IntersectionObserverCallback) {}
-
-  observe(target: Element): void {
-    this.callback(
-      [{ isIntersecting: true, intersectionRatio: 1, target } as IntersectionObserverEntry],
-      this
-    );
-  }
-
-  unobserve(): void {}
-  disconnect(): void {}
-  takeRecords(): IntersectionObserverEntry[] {
-    return [];
-  }
-}
-
-vi.stubGlobal('IntersectionObserver', VisibleIntersectionObserver);
-
 const { MarkdownRenderer } = await import('../src/components/ai-gui/markdown-renderer');
 
 (
@@ -82,11 +57,9 @@ const viewerClose = () =>
   document.body.querySelector<HTMLElement>('[data-testid="mermaid-diagram-viewer-close"]');
 
 /**
- * Streamdown defers a diagram until its block is on screen (a 300ms debounce
- * plus an idle callback) and both the block and the render runtime arrive
- * through dynamic imports. Fake timers drive that schedule so the wait is a
- * number of steps rather than a race against the wall clock;
- * `advanceTimersByTimeAsync` flushes the pending imports between them.
+ * The diagram renders after its runtime arrives through a dynamic import. Fake
+ * timers make the wait a number of steps rather than a race against the wall
+ * clock; `advanceTimersByTimeAsync` flushes the pending import between them.
  */
 async function flushUntil(condition: () => boolean, attempts = 20): Promise<void> {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
@@ -194,7 +167,7 @@ describe('diagram pinch arithmetic', () => {
 describe('inline canvas geometry', () => {
   /**
    * A 400x300 frame, drawn at the viewport origin, holding a 200x150 diagram
-   * that Streamdown has centred inside it.
+   * centred inside it.
    */
   const resting: MermaidCanvasView = {
     frame: { left: 0, top: 0, width: 400, height: 300 },
@@ -364,8 +337,7 @@ describe('mermaid full-screen viewer', () => {
   it('replaces the bundled full-screen control with a diagram that opens the viewer', async () => {
     const diagram = await renderMarkdown();
 
-    // Streamdown's own overlay is the one this fix removes; the block keeps its
-    // other controls.
+    // No bundled overlay; the block keeps its other controls.
     expect(container?.querySelector('button[title="View fullscreen"]')).toBeNull();
     expect(container?.querySelector('button[title="Copy code"]')).toBeTruthy();
 
@@ -465,8 +437,7 @@ describe('mermaid full-screen viewer', () => {
     await pressWith(diagram, 'mouse');
 
     expect(diagram.getAttribute('data-lody-canvas')).toBe('active');
-    // The ring is the only sign that the click did anything.
-    expect(diagram.style.outline).toContain('2px solid');
+    expect(diagram.style.outline).toBe('');
     // Activation is not the viewer: the diagram stays in the conversation.
     expect(viewer()).toBeNull();
 
@@ -544,6 +515,8 @@ describe('mermaid full-screen viewer', () => {
     expect(readTranslate(svg).x).toBe(zoomed.x - 30);
     expect(readTranslate(svg).y).toBe(zoomed.y - 20);
 
+    const retainedTransform = svg.style.transform;
+
     // Escape belongs to the canvas only while the canvas has focus. An
     // activated diagram sitting in the scrollback must not answer the Escape
     // that dismisses a dialog, nor prevent its default.
@@ -570,9 +543,9 @@ describe('mermaid full-screen viewer', () => {
       );
     });
 
-    // Escape hands the diagram back as the still preview it was.
+    // Escape stops interaction without moving the view.
     expect(diagram.getAttribute('data-lody-canvas')).toBeNull();
-    expect(svg.style.transform).toBe('');
+    expect(svg.style.transform).toBe(retainedTransform);
     expect(diagram.style.outline).toBe('');
   });
 
@@ -669,19 +642,63 @@ describe('mermaid full-screen viewer', () => {
     expect(diagram.getAttribute('data-lody-canvas')).toBeNull();
   });
 
-  it('releases the canvas when the reader presses somewhere else', async () => {
-    const diagram = await renderMarkdown();
-    const svg = diagram.querySelector('svg') as SVGSVGElement;
-    stubCanvasRects(diagram, svg);
-    await pressWith(diagram, 'mouse');
-    expect(diagram.getAttribute('data-lody-canvas')).toBe('active');
+  it.each(['outside press', 'focus out', 'Enter', 'viewer'])(
+    'preserves the view across %s and resumes from its last transform',
+    async (exit) => {
+      const diagram = await renderMarkdown();
+      const svg = diagram.querySelector('svg') as SVGSVGElement;
+      stubCanvasRects(diagram, svg);
+      await pressWith(diagram, 'mouse');
+      await act(async () => {
+        diagram.focus();
+        diagram.dispatchEvent(new KeyboardEvent('keydown', { key: '+', bubbles: true }));
+        diagram.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+      });
+      const retainedTransform = svg.style.transform;
+      const scale = readScale(svg);
+      expect(scale).toBeGreaterThan(1);
 
-    await act(async () => {
-      document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
-    });
+      if (exit === 'viewer') {
+        await openViewer();
+        const viewerSvg = viewerSurface()?.querySelector('svg') as SVGSVGElement;
+        expect(viewerSvg.style.transform).toBe('');
+        await clickOn(viewerClose() as HTMLElement);
+      } else {
+        await act(async () => {
+          if (exit === 'outside press') {
+            document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+          } else if (exit === 'focus out') {
+            diagram.blur();
+          } else {
+            diagram.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+          }
+        });
+      }
+      expect(diagram.getAttribute('data-lody-canvas')).toBeNull();
+      expect(svg.style.transform).toBe(retainedTransform);
+      const pinch = new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        deltaY: -20,
+        clientX: 200,
+        clientY: 150,
+      });
+      await act(async () => {
+        svg.dispatchEvent(pinch);
+      });
+      expect(pinch.defaultPrevented).toBe(false);
+      expect(svg.style.transform).toBe(retainedTransform);
 
-    expect(diagram.getAttribute('data-lody-canvas')).toBeNull();
-  });
+      await pressWith(diagram, 'mouse');
+      expect(svg.style.transform).toBe(retainedTransform);
+      await act(async () => {
+        diagram.focus();
+        diagram.dispatchEvent(new KeyboardEvent('keydown', { key: '+', bubbles: true }));
+      });
+      expect(readScale(svg)).toBeCloseTo(scale * scale, 5);
+    }
+  );
 
   it('leaves a wheel over a diagram in a message to the page', async () => {
     const diagram = await renderMarkdown();
@@ -699,7 +716,6 @@ describe('mermaid full-screen viewer', () => {
     });
     container?.removeEventListener('wheel', listener);
 
-    // Streamdown's pan/zoom canvas would have taken this one and zoomed instead.
     expect(wheel.defaultPrevented).toBe(false);
     expect(abovePage).toEqual([120]);
   });
@@ -760,5 +776,46 @@ describe('mermaid full-screen viewer', () => {
     // The next real click still closes.
     await clickOn(surface);
     expect(viewer()).toBeNull();
+  });
+
+  it('pans with one touch and zooms around two touch points', async () => {
+    await renderMarkdown();
+    await openViewer();
+    const surface = viewerSurface() as HTMLElement;
+    const svg = surface.querySelector('svg[data-diagram="sequence"]') as Element;
+    const zoomLabel = () => document.body.querySelector('[title="Reset zoom"]')?.textContent;
+    const pointer = (type: string, pointerId: number, clientX: number, clientY: number) =>
+      Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, clientX, clientY }), {
+        pointerType: 'touch',
+        pointerId,
+        isPrimary: pointerId === 1,
+      });
+
+    expect(surface.style.touchAction).toBe('none');
+    surface.scrollLeft = 100;
+    surface.scrollTop = 100;
+    await act(async () => {
+      svg.dispatchEvent(pointer('pointerdown', 1, 200, 200));
+      surface.dispatchEvent(pointer('pointermove', 1, 180, 170));
+      surface.dispatchEvent(pointer('pointerup', 1, 180, 170));
+    });
+    expect(surface.scrollLeft).toBe(120);
+    expect(surface.scrollTop).toBe(130);
+
+    await act(async () => {
+      svg.dispatchEvent(pointer('pointerdown', 1, 100, 200));
+      svg.dispatchEvent(pointer('pointerdown', 2, 200, 200));
+      const move = pointer('pointermove', 2, 250, 200);
+      surface.dispatchEvent(move);
+      expect(move.defaultPrevented).toBe(true);
+      surface.dispatchEvent(pointer('pointerup', 2, 250, 200));
+      surface.dispatchEvent(pointer('pointerup', 1, 100, 200));
+    });
+
+    expect(zoomLabel()).toBe('150%');
+    // The pinch started on the diagram, so its synthetic click cannot dismiss
+    // the viewer even though pointer capture retargets it to the surface.
+    await clickOn(surface);
+    expect(viewer()).toBeTruthy();
   });
 });

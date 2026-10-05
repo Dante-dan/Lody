@@ -1,5 +1,7 @@
 'use client';
 
+import { SiteAnchor } from '@site/components/site-anchor';
+
 import { Download, ExternalLink, Globe2, Laptop, MonitorDown, Smartphone } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -43,8 +45,7 @@ const MOBILE_ANDROID_DOWNLOAD_BASE = 'https://updates.lody.ai/mobile/production'
 const MOBILE_ANDROID_FALLBACK_DOWNLOAD_URL = `${MOBILE_ANDROID_DOWNLOAD_BASE}/lody-android-latest.apk`;
 
 /** App Store product page — CN vs US storefront (main branch DownloadPage.vue). */
-const APP_STORE_HREF_EN =
-  'https://apps.apple.com/us/app/lody-run-code-agent-anywhere/id6761373528';
+const APP_STORE_HREF_EN = 'https://apps.apple.com/us/app/lody-run-code-agent-anywhere/id6761373528';
 const APP_STORE_HREF_ZH =
   'https://apps.apple.com/cn/app/lody-%E9%9A%8F%E6%97%B6%E9%9A%8F%E5%9C%B0%E8%BF%90%E8%A1%8C-code-agent/id6761373528';
 const GOOGLE_PLAY_HREF = 'https://play.google.com/store/apps/details?id=ai.lody.android';
@@ -340,7 +341,7 @@ export function DownloadPage({ locale }: { locale: DownloadLocale }) {
                       const isOpen = item.action === 'open';
                       const target = item.target ?? (isOpen ? '_blank' : undefined);
                       return (
-                        <a
+                        <SiteAnchor
                           className="download-card__action"
                           href={getDownloadUrl(item, downloads)}
                           key={getItemKey(item)}
@@ -353,7 +354,7 @@ export function DownloadPage({ locale }: { locale: DownloadLocale }) {
                           ) : (
                             <Download aria-hidden="true" />
                           )}
-                        </a>
+                        </SiteAnchor>
                       );
                     })}
                   </div>

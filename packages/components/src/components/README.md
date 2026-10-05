@@ -1,7 +1,17 @@
 # Product surfaces
 
 Binding rules live in [AGENTS.md](AGENTS.md); this index explains ownership.
-Child directories such as `sessions/`, `mobile/`, and `chat/` own their scoped rules.
+Child directories such as `sessions/`, `mobile/`, `chat/`, and `archive/` own their scoped rules.
+
+| Area                | Entry points                                                                                                                                   | Responsibility                                                   |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Sidebar             | [`loro-sidebar.tsx`](loro-sidebar.tsx), [`session-list.tsx`](session-list.tsx)                                                                 | Organizes workspace and session navigation.                      |
+| Desktop layout      | [`web-workspace-layout.tsx`](web-workspace-layout.tsx), [`sidebar-update-banner.tsx`](sidebar-update-banner.tsx)                               | Owns the shell's safe areas and update notice.                   |
+| Startup             | [`boot-navigate.tsx`](boot-navigate.tsx), [`preloaded-main-layout.tsx`](preloaded-main-layout.tsx)                                             | Retains the boot shell during redirects and layout code loading. |
+| Provider readiness  | [`shared/agent-readiness-mark.tsx`](shared/agent-readiness-mark.tsx)                                                                           | Draws setup state across settings and onboarding.                |
+| Shared cues         | [`shared/`](shared/)                                                                                                                           | Draws cross-surface drop, run-config, and transport cues.        |
+| Session controls    | [`shared/workdir-mode-selector.tsx`](shared/workdir-mode-selector.tsx), [`shared/session-relation-card.tsx`](shared/session-relation-card.tsx) | Selects workdir mode and navigates session provenance.           |
+| Conversation access | [`session-sharing.tsx`](session-sharing.tsx), [`sharing/`](sharing/)                                                                           | Presents team visibility and static sharing controls.            |
 
 ## Sidebar and session rows
 
@@ -9,16 +19,59 @@ The sidebar spans `loro-sidebar.tsx`, `loro-app-sidebar.tsx`, `session-list.tsx`
 `sidebar-*.tsx`. `sessions/session-list-rows.ts` resolves row relationships, while
 `lib/session-opened-by-tree.ts` builds the presentation tree.
 
+Section labels scroll with their rows, per the
+[sidebar section scrolling Spec](../../../../specs/sidebar-section-scrolling.md).
+
+GitHub repository groups and local project folders both expose a desktop drag handle.
+Their orders are persisted per workspace; local project keys also include the owning
+machine so projects from different devices cannot collide. See the
+[sidebar project ordering Spec](../../../../specs/sidebar-project-ordering.md).
+
 [Sidebar relationship rationale](../../../../.agents/docs/components-sidebar-session-tree.md)
 explains why exact opener navigation and root-row indentation use separate ids.
 A child Tab may open an independent Session: the row sits under the root, but its
 navigation must still return to the precise creating Tab.
 
+Updated organize mode is a mixed recency list. The sidebar view popover exposes
+`Show Project` as a switch below the View and Tasks menu groups. It controls the
+second line with folder / muted GitHub owner mark + project name. The complete
+row acts as the Switch hover target, changing only the track color. It remains
+visible but disabled in Project mode, with a right-side tooltip explaining that
+it is available in Updated view. Touch users open the same hint by tapping the
+disabled row, while keyboard focus also exposes it. GitHub owner marks keep
+their original colors at a fixed 60% opacity in every row state. Nested opened
+Sessions stay one title line so the 30px tree trunk still meets. Workspace-mode
+Pinned omits the line.
+Decisions:
+[project context](../../../../.agents/notes/implemented/feature/2026-09-20-sidebar-updated-project-context.md)
+and [display preference](../../../../.agents/notes/implemented/feature/2026-09-20-sidebar-updated-project-display-preference.md).
+
 ## Entry points and layout
+
+- Entry and workspace-gate redirects use `BootNavigate`; `PreloadedMainLayout`
+  owns its boot-shell Suspense fallback for local and cloud paths. The ready layout
+  keeps the existing content gate while workspace data resolves. See
+  [startup intent](../../../../specs/app-startup-landing.md) and the
+  [first-paint decision](../../../../.agents/notes/implemented/feature/2026-09-26-boot-shell-first-paint.md).
+
+- Sidebar footer: Help (`?`), Archive, Settings, in that order. Help retains the
+  documentation, GitHub repository, community, GitHub Issues feedback, and bug-report menu; Archive is a direct
+  button and becomes the return action while open. Desktop controls share the UI
+  primitive's small size; mobile actions retain their touch targets. See the
+  [footer Spec](../../../../specs/sidebar-footer.md).
+
+- [Zen layout](../../../../specs/zen-layout.md): `AppCommands` dispatches the shared
+  layout action; the mounted desktop Session publishes its right-panel controls.
 
 - Sidebar Search, immediately below New Chat, opens the shared command palette
   through `lib/commands/palette-state.ts`; see the [Spec](../../../../specs/sidebar-search.md).
 - Chat landing: `chat/chat-landing.tsx`.
+- Desktop Settings: [`settings/desktop-settings-modal.tsx`](settings/desktop-settings-modal.tsx)
+  collapses its sidebar to an icon rail when the panel is at most 720px wide:
+  same rows and selection, labels and group headings fold away, and each icon
+  keeps an accessible name and a hover tooltip. The page and its editors stay
+  mounted through resizing; header actions wrap within the pane. [Decision and
+  verification](../../../../.agents/notes/implemented/bug-fix/2026-10-01-narrow-settings-panel.md).
 - Browser desktop sign-in handoff: `login-page.tsx` under `?client_id=electron`,
   the page the desktop app opens in the system browser. A desktop sign-out leaves
   this browser signed in as the previous account, so the page names that account
@@ -36,6 +89,53 @@ navigation must still return to the precise creating Tab.
   layout (`detectAppDeviceClass()` is `tablet`, viewport >= 768) with
   `viewport-fit=cover`, which is why desktop top/side padding also matters there.
   The composer owns its bottom edge; a global bottom inset would double-pad it.
+- Sidebar toggle: `WebWorkspaceLayout` retains the full-width sidebar, animates
+  its transform and the adjacent content width together, and honors reduced motion.
+  `SidebarVisibilityGate` pauses sidebar-only sources while hidden. Compact
+  navigation uses [`CompactNavigationDialog`](compact-navigation-dialog.tsx) for
+  focus containment, nested dismissal and return focus; its content scope is inert
+  while open. See [desktop layout intent](../../../../specs/desktop-windows.md).
+  Compact
+  presentation and settings navigation can still remount it: `LoroSidebar` saves
+  its viewport offset by workspace in `atoms/sidebar-state.ts` and restores it
+  before paint. [Decision](../../../../.agents/notes/implemented/bug-fix/2026-09-26-sidebar-content-width-animation.md).
+
+## Provider readiness
+
+[`shared/agent-readiness-mark.tsx`](shared/agent-readiness-mark.tsx) draws the
+provider's cold, arriving, and ready states in setup and onboarding. It owns its
+StyleX sizes, tones, `surface="avatar"` onboarding variant, and progress orbit;
+the indeterminate arc animates an HTML wrapper around the SVG to remain
+compositable on Retina displays. The migration keeps the previous rendered
+geometry and palette; its verification and the one product-theme colour bridge
+are recorded in the
+[StyleX migration note](../../../../.agents/notes/implemented/simplification/2026-09-26-agent-readiness-stylex.md).
+
+## Shared cues
+
+The [conversation drop overlay](shared/conversation-drop-overlay.tsx) paints a
+non-interactive mask over the active drop zone; the parent owns hit testing and
+drag state. The [DeepSeek delegation warning](shared/deepseek-delegation-warning.tsx)
+supplies the same linked warning contents to desktop and mobile run configuration.
+The [MCP transport icon](shared/mcp-transport.tsx) supplies the transport glyph to
+settings controls. Their visual rules are component-local StyleX, with the
+overlay's light/dark alpha tied to the app's explicit theme. See the
+[migration decision](../../../../.agents/notes/implemented/simplification/2026-09-26-shared-cues-stylex.md)
+for the visual-equivalence boundary.
+
+## Session controls
+
+The [workdir mode selector](shared/workdir-mode-selector.tsx) offers local and
+worktree modes in a compact menu. The companion worktree checkbox pill uses its
+flat `surface="context"` presentation in the chat landing composer. An
+unavailable worktree remains visible with
+its reason; after session creation the current mode is an inert, tooltip-named
+value rather than a disabled action. The
+[session relation card](shared/session-relation-card.tsx) presents opened/opened-by
+provenance in the conversation and operation stream, with navigation enabled
+only while its exact target is available. Both components own their visual
+rules in StyleX; the [session-control decision](../../../../.agents/notes/implemented/simplification/2026-09-26-session-controls-stylex.md)
+records the preservation boundary.
 
 ## Conversation access
 

@@ -301,7 +301,10 @@ export function isMarketingAtmospherePath(pathname: string): boolean {
   const bare = path.startsWith('/zh/') ? path.slice(3) : path === '/zh' ? '/' : path;
   return (
     bare === '/price' ||
+    bare === '/coding-agent-gui' ||
+    bare === '/coding-agent-remote-control' ||
     bare === '/download' ||
+    bare === '/download/nightly' ||
     bare === '/changelog' ||
     bare.startsWith('/changelog/')
   );
@@ -844,7 +847,16 @@ export function MarketingAtmosphereHost() {
 
   if (!warm) return null;
 
-  return <MarketingAtmosphere active={onMarketing} />;
+  return (
+    <MarketingAtmosphere
+      active={onMarketing}
+      className={
+        pathname.replace(/\/$/u, '').endsWith('/download/nightly')
+          ? 'marketing-atmosphere--nightly'
+          : undefined
+      }
+    />
+  );
 }
 
 export default MarketingAtmosphere;

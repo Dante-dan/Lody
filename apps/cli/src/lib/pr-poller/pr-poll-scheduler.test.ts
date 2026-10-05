@@ -30,6 +30,7 @@ function createTestLogger(): Logger {
     error: vi.fn(),
     success: vi.fn(),
     debug: vi.fn(),
+    trace: vi.fn(),
     setLevel: vi.fn(),
     setDebug: vi.fn(),
     child: vi.fn(() => logger),
@@ -101,6 +102,9 @@ class FakeWorkspace {
   /** When set, invalidateCredential swaps this in (token rotation / scope change). */
   replacementCredential: ResolvedGitHubCredential | null = null;
   associateResult = true;
+  associateEffect: (() => void) | null = null;
+  writeEffect: (() => void) | null = null;
+  hostedAssociation = true;
 
   readonly associateCalls: AssociatePullRequestArgs[] = [];
   readonly writtenPatches: Array<{ sessionId: SessionId; patch: PrPollMetaPatch }> = [];
@@ -127,6 +131,7 @@ class FakeWorkspace {
       listAliveSessionMetas: this.listAliveSessionMetas,
       readOwnerMeta: this.readOwnerMeta,
       writeOwnerMeta: async (sessionId, patch) => {
+        this.writeEffect?.();
         this.writtenPatches.push({ sessionId, patch });
         const current = this.metas.get(sessionId) ?? makeMeta();
         this.metas.set(sessionId, { ...current, ...patch });
@@ -145,10 +150,13 @@ class FakeWorkspace {
       waitForInitialSync: this.waitForInitialSync,
       resolveCredential: this.resolveCredential,
       invalidateCredential: this.invalidateCredential,
-      associatePullRequest: async (args) => {
-        this.associateCalls.push(args);
-        return this.associateResult;
-      },
+      associatePullRequest: !this.hostedAssociation
+        ? null
+        : async (args) => {
+            this.associateCalls.push(args);
+            this.associateEffect?.();
+            return this.associateResult;
+          },
       dispose: async () => {},
     };
   }
@@ -255,6 +263,21 @@ describe('PrPollScheduler', () => {
       batch: batch as PrPollBatchQuery,
       token: token as string,
     }));
+  }
+
+  /** Skip lines the daemon actually writes to `~/.lody/logs` — the reported symptom. */
+  function debugLines(fragment: string): string[] {
+    return (logger.debug as unknown as ReturnType<typeof vi.fn>).mock.calls
+      .map(([message]) => String(message))
+      .filter((message) => message.includes(fragment));
+  }
+
+  /** One session per repo, all sharing the workspace's single credential scope. */
+  function repoSession(repoFullName: string): SessionMeta {
+    return makeMeta({
+      project: { kind: 'github', repoFullName } as SessionMeta['project'],
+      branchName: 'feat/x',
+    });
   }
 
   beforeEach(() => {
@@ -516,6 +539,110 @@ describe('PrPollScheduler', () => {
     // 0.5 points missing at 4 pts/min → one point in 7.5 s.
     await advance(7_500);
     expect(calls()).toHaveLength(1);
+  });
+
+  it('an exhausted scope is skipped once per refill window, not once per repo per wake', async () => {
+    // Steady state on a shared credential: 4 pts/min against 3 repos means the
+    // bucket is empty far more often than not. Every wake used to re-resolve
+    // each repo's credential and log its own skip line.
+    stateStore = makeStateStore({
+      ...emptyPrPollerState(),
+      scopes: { 'managed:scope-1': { tokens: 0, updatedAtMs: T0 } },
+    });
+    scheduler = makeScheduler({ bucketRefillPointsPerMinute: 1 });
+    const workspace = new FakeWorkspace('ws1');
+    workspace.metas.set(sid('s1'), repoSession('owner/one'));
+    workspace.metas.set(sid('s2'), repoSession('owner/two'));
+    workspace.metas.set(sid('s3'), repoSession('owner/three'));
+
+    await startWith([workspace]);
+
+    // First wake learns each repo's scope the only way it can: by resolving.
+    expect(calls()).toHaveLength(0);
+    expect(workspace.resolveCredential).toHaveBeenCalledTimes(3);
+    expect(debugLines('Bucket empty for scope')).toHaveLength(1);
+    expect(scheduler.counters.skips).toBe(3);
+
+    // 50 s of external triggers: presence heartbeats and unrelated metadata
+    // writes. The scope stays gated, so none of them may cost a credential
+    // resolution, a GitHub call, or another log line.
+    for (let second = 0; second < 50; second += 1) {
+      workspace.setPresence(viewingPresence(sid('s1'), now));
+      workspace.metas.set(sid('s1'), { ...repoSession('owner/one'), title: `tick-${second}` });
+      workspace.notifyMetaChanged(sid('s1'));
+      await advance(1_000);
+    }
+    expect(calls()).toHaveLength(0);
+    expect(workspace.resolveCredential).toHaveBeenCalledTimes(3);
+    expect(debugLines('Bucket empty for scope')).toHaveLength(1);
+    // While gated the poller only wakes on its own capped schedule (≤30 s), so
+    // 50 s of triggers buy at most one extra skip pass over the three repos.
+    expect(scheduler.counters.skips).toBeLessThanOrEqual(9);
+
+    // One point refills 60 s after T0; the scope reopens and polls again.
+    await advance(11_000);
+    expect(calls()).toHaveLength(1);
+  });
+
+  it('a presence heartbeat cannot pull a wake in front of a frozen scope', async () => {
+    stateStore = makeStateStore({
+      ...emptyPrPollerState(),
+      scopes: { 'managed:scope-1': { tokens: 20, updatedAtMs: T0, frozenUntilMs: T0 + 120_000 } },
+    });
+    scheduler = makeScheduler();
+    const workspace = new FakeWorkspace('ws1');
+    workspace.metas.set(sid('s1'), makeMeta({ pullRequests: [prMeta(11)] }));
+    await startWith([workspace]);
+
+    expect(calls()).toHaveLength(0);
+    expect(workspace.resolveCredential).toHaveBeenCalledTimes(1);
+
+    // A viewed session heartbeats every 10 s while frozen: the target stays due
+    // the whole time, so an un-gated external wake would re-dispatch on each.
+    for (let elapsed = 0; elapsed < 110_000; elapsed += 10_000) {
+      workspace.setPresence(viewingPresence(sid('s1'), now));
+      await advance(10_000);
+    }
+    expect(calls()).toHaveLength(0);
+    // The remembered scope is re-verified once per credential refresh window
+    // (60 s), never per heartbeat: two real resolves across 110 s.
+    expect(workspace.resolveCredential).toHaveBeenCalledTimes(2);
+    expect(debugLines('is frozen')).toHaveLength(1);
+    // 11 heartbeats over 110 s; only the capped wakes (≤30 s) may skip.
+    expect(scheduler.counters.skips).toBeLessThanOrEqual(5);
+
+    await advance(11_000); // past the thaw
+    expect(calls()).toHaveLength(1);
+  });
+
+  it('a scope gate expires so a replacement credential on another scope is not locked out', async () => {
+    // Long freeze on the scope the repo resolved to. Gating by the LAST known
+    // scope must not outlive the resolver's credential refresh cadence, or a
+    // login/account switch to a healthy scope waits out the whole freeze.
+    stateStore = makeStateStore({
+      ...emptyPrPollerState(),
+      scopes: { 'managed:scope-1': { tokens: 20, updatedAtMs: T0, frozenUntilMs: T0 + 3_600_000 } },
+    });
+    scheduler = makeScheduler();
+    const workspace = new FakeWorkspace('ws1');
+    workspace.metas.set(sid('s1'), makeMeta({ pullRequests: [prMeta(11)] }));
+    await startWith([workspace]);
+    expect(calls()).toHaveLength(0);
+
+    await advance(5 * 60_000);
+    expect(calls()).toHaveLength(0);
+    // The workspace gains a managed credential on a different, healthy scope.
+    workspace.credential = {
+      token: 'token-2',
+      source: 'managed',
+      credentialScope: 'managed:scope-2',
+    };
+
+    // One refresh window (60 s) plus at most one capped wake (30 s) — not the
+    // remaining 55 minutes of the freeze on scope-1.
+    await advance(90_000);
+    expect(calls()).toHaveLength(1);
+    expect(calls()[0]?.token).toBe('token-2');
   });
 
   it('a RATE_LIMITED outcome freezes the scope until resetAt', async () => {
@@ -817,12 +944,45 @@ describe('PrPollScheduler', () => {
     expect(scheduler.counters.discoveries).toBe(1);
   });
 
-  it('a failed association keeps the discovery target due and retries the round', async () => {
+  it('discovers local PRs using ambient credentials without a product-cloud association', async () => {
+    const workspace = new FakeWorkspace('ws1');
+    workspace.hostedAssociation = false;
+    workspace.credential = {
+      token: 'local-token',
+      source: 'gh',
+      credentialScope: 'github:ambient:github.com',
+    };
+    workspace.metas.set(
+      sid('s1'),
+      makeMeta({
+        project: {
+          kind: 'local',
+          localProjectId: 'local-1',
+          githubRepoFullName: 'owner/repo',
+        } as SessionMeta['project'],
+        branchName: 'feat/x',
+      })
+    );
+    clientHandler = async (batch) => {
+      const outcome = successOutcome(batch);
+      if (outcome.kind === 'success') {
+        outcome.batch.discoveries = outcome.batch.discoveries.map((discovery) => ({
+          ...discovery,
+          prs: [observation(55)],
+        }));
+      }
+      return outcome;
+    };
+    await startWith([workspace]);
+
+    expect(workspace.associateCalls).toEqual([]);
+    expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([prMeta(55)]);
+    expect(scheduler.counters.discoveries).toBe(1);
+  });
+
+  it('publishes a discovered PR despite association rejection and retries without duplicate writes', async () => {
     const workspace = new FakeWorkspace('ws1');
     workspace.associateResult = false;
-    // The exact review-finding scenario: TERMINAL current PR + a newer PR on
-    // the branch. The fingerprint must not be committed on failure, or the
-    // owner would go idle-terminal and lose the new PR forever.
     workspace.metas.set(
       sid('s1'),
       makeMeta({
@@ -844,20 +1004,165 @@ describe('PrPollScheduler', () => {
     await startWith([workspace]);
 
     expect(workspace.associateCalls).toHaveLength(1);
-    expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([prMeta(9, 'merged')]);
-    expect(scheduler.counters.discoveries).toBe(0);
-    // No fingerprint, no success stamp → NOT idle-terminal; the whole round
-    // (GitHub query included) retries at the attempt floor.
+    expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([prMeta(9, 'merged'), prMeta(55)]);
+    expect(scheduler.counters.discoveries).toBe(1);
     expect(scheduler.peekState().discoveryFingerprints['ws1:s1']).toBeUndefined();
     await advance(config.lowMinIntervalMs);
-    expect(calls()).toHaveLength(2);
     expect(workspace.associateCalls).toHaveLength(2);
+    expect(workspace.writtenPatches).toHaveLength(1);
 
-    // Once the association endpoint recovers, the PR lands and the owner
-    // reaches idle-terminal only after the NEXT successful discovery pass.
     workspace.associateResult = true;
     await advance(config.lowMinIntervalMs);
     expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([prMeta(9, 'merged'), prMeta(55)]);
+    expect(scheduler.peekState().discoveryFingerprints['ws1:s1']).toBe('owner/repo|feat/x');
+    expect(workspace.writtenPatches).toHaveLength(1);
+    await advance(config.lowStatusIntervalMs);
+    expect(workspace.associateCalls).toHaveLength(3);
+  });
+
+  it.each(['rejected', 'thrown'] as const)(
+    'publishes an ambient-credential PR when hosted association is %s',
+    async (failure) => {
+      const workspace = new FakeWorkspace('ws1');
+      workspace.credential = {
+        token: 'synthetic-gh-token',
+        source: 'gh',
+        credentialScope: 'github:ambient:github.com',
+      };
+      workspace.associateResult = false;
+      if (failure === 'thrown')
+        workspace.associateEffect = () => {
+          throw new Error('synthetic association transport failure');
+        };
+      workspace.metas.set(
+        sid('s1'),
+        makeMeta({
+          project: {
+            kind: 'local',
+            localProjectId: 'local-1',
+            githubRepoFullName: 'owner/repo',
+          } as SessionMeta['project'],
+          branchName: 'feat/x',
+        })
+      );
+      clientHandler = async (batch) => {
+        const outcome = successOutcome(batch);
+        if (outcome.kind === 'success') {
+          for (const discovery of outcome.batch.discoveries)
+            discovery.prs = [observation(55, { status: 'draft', ciState: 'f', mergeState: 'c' })];
+          for (const status of outcome.batch.pullRequests)
+            status.pr = observation(status.prNumber, {
+              status: 'draft',
+              ciState: 'f',
+              mergeState: 'c',
+            });
+        }
+        return outcome;
+      };
+      await startWith([workspace]);
+      expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([prMeta(55, 'draft')]);
+      expect(workspace.metas.get(sid('s1'))?.pullRequestState?.[prMeta(55).url]).toMatchObject({
+        s: 'f',
+        m: 'c',
+      });
+      await advance(config.lowMinIntervalMs);
+      expect(workspace.writtenPatches).toHaveLength(1);
+      expect(scheduler.peekState().discoveryFingerprints['ws1:s1']).toBeUndefined();
+    }
+  );
+
+  it('clears an earlier fingerprint so a terminal observation with failed association retries after restart', async () => {
+    const workspace = new FakeWorkspace('ws1');
+    workspace.associateResult = false;
+    workspace.metas.set(
+      sid('s1'),
+      makeMeta({
+        project: { kind: 'github', repoFullName: 'owner/repo' } as SessionMeta['project'],
+        branchName: 'feat/x',
+      })
+    );
+    stateStore.getStored().discoveryFingerprints['ws1:s1'] = 'owner/repo|feat/x';
+    clientHandler = async (batch) => {
+      const outcome = successOutcome(batch);
+      if (outcome.kind === 'success')
+        for (const discovery of outcome.batch.discoveries)
+          discovery.prs = [observation(55, { status: 'merged' })];
+      return outcome;
+    };
+    await startWith([workspace]);
+    expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([prMeta(55, 'merged')]);
+    expect(stateStore.getStored().discoveryFingerprints['ws1:s1']).toBeUndefined();
+    scheduler.stop();
+    await scheduler.settle();
+    scheduler = makeScheduler();
+    workspace.associateResult = true;
+    await startWith([workspace]);
+    expect(stateStore.getStored().discoveryFingerprints['ws1:s1']).toBe('owner/repo|feat/x');
+    const callsAfterRecovery = calls().length;
+    await advance(config.lowDiscoveryIntervalMs);
+    expect(calls()).toHaveLength(callsAfterRecovery);
+  });
+
+  it.each(['branch', 'repo', 'deleted', 'migrated'] as const)(
+    'does not publish stale discovery when owner is %s during association',
+    async (change) => {
+      const workspace = new FakeWorkspace('ws1');
+      workspace.associateResult = false;
+      workspace.metas.set(
+        sid('s1'),
+        makeMeta({
+          project: { kind: 'github', repoFullName: 'owner/repo' } as SessionMeta['project'],
+          branchName: 'feat/x',
+        })
+      );
+      workspace.associateEffect = () => {
+        if (change === 'deleted') workspace.metas.delete(sid('s1'));
+        else
+          workspace.metas.set(
+            sid('s1'),
+            makeMeta({
+              project: {
+                kind: 'github',
+                repoFullName: change === 'repo' ? 'owner/other' : 'owner/repo',
+              } as SessionMeta['project'],
+              branchName: change === 'branch' ? 'feat/other' : 'feat/x',
+              machineId: change === 'migrated' ? ('machine-2' as MachineId) : LOCAL_MACHINE,
+            })
+          );
+      };
+      clientHandler = async (batch) => {
+        const outcome = successOutcome(batch);
+        if (outcome.kind === 'success')
+          for (const discovery of outcome.batch.discoveries) discovery.prs = [observation(55)];
+        return outcome;
+      };
+      await startWith([workspace]);
+      expect(workspace.metas.get(sid('s1'))?.pullRequests).toBeUndefined();
+      expect(workspace.writtenPatches).toEqual([]);
+      expect(scheduler.peekState().discoveryFingerprints['ws1:s1']).toBeUndefined();
+    }
+  );
+
+  it('retries failed metadata publication even after webhook association succeeded', async () => {
+    const workspace = new FakeWorkspace('ws1');
+    workspace.metas.set(sid('s1'), repoSession('owner/repo'));
+    workspace.writeEffect = () => {
+      throw new Error('synthetic metadata write failure');
+    };
+    clientHandler = async (batch) => {
+      const outcome = successOutcome(batch);
+      if (outcome.kind === 'success')
+        for (const discovery of outcome.batch.discoveries) discovery.prs = [observation(55)];
+      return outcome;
+    };
+    await startWith([workspace]);
+    expect(workspace.metas.get(sid('s1'))?.pullRequests).toBeUndefined();
+    expect(scheduler.peekState().discoveryFingerprints['ws1:s1']).toBeUndefined();
+    workspace.writeEffect = null;
+    await advance(config.lowMinIntervalMs);
+    expect(workspace.metas.get(sid('s1'))?.pullRequests).toEqual([prMeta(55)]);
+    expect(scheduler.peekState().discoveryFingerprints['ws1:s1']).toBe('owner/repo|feat/x');
+    expect(workspace.associateCalls).toHaveLength(1);
   });
 
   it('a malformed discovery alias is not a confirmed empty result (no idle-terminal)', async () => {

@@ -36,6 +36,8 @@ maintenance commands here.
 - `generate-acp-registry.mjs` produces the public ACP registry and its bundled,
   generation-time-validated SVG icon map. Use `--icons-only` when refreshing
   icons without also updating Provider versions.
+  Devin, Dimcode, Kimi and Kimi Code are excluded from discovery, including local
+  fallback entries; keep builtin icons and persisted-provider launch compatibility.
   `generate-open-source-attributions.mjs` produces the in-app attribution
   bundle and root `THIRD_PARTY_NOTICES.md`. Generated output must come only
   from public repository inputs.
@@ -48,7 +50,20 @@ maintenance commands here.
   A clean submodule is required for a publishable manifest; dirty artifacts are
   development-only and must never be uploaded to the managed-runtime channel.
 
+- `package-baguette-runtime.mjs` packages a prebuilt native binary and its resources,
+  verifies the executable/patch pins, and checks deterministic archive bytes twice.
+  `--print-pins` produces local candidate pins only. The runtime uses a distinct
+  Lody revision; rebuilds must never overwrite published immutable bytes.
+
 ## Install ownership
+
+- `package-pi-runtime.mjs` builds a frozen isolated Pi dependency closure, including
+  all supported optional platform packages. Windows Job binaries must be supplied
+  from successful CI for the exact source gitlink. Exclude pnpm installation metadata
+  from artifacts; it includes builder paths and timestamps. Validate the installed
+  closure with the adapter smoke and compare deterministic archive bytes.
+  Preserve relative dependency symlinks; reject absolute, escaping, or dangling
+  links. Exclude install-time `.bin` shims from the direct-entry runtime bundle.
 
 - `guard-nested-workspace-install.mjs` runs before a public-root install. If an
   ancestor lockfile already owns public package importers, fail with an explicit

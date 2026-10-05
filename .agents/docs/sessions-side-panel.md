@@ -67,8 +67,8 @@ this page is the full text of the rules summarised there.
   support; keep it visible but disabled when that conversation's machine is explicitly offline. That
   offline rule lives ONLY in `getSideChatLauncherState` — the shared fork entry point stays
   offline-clickable per `docs/acp-session-fork.md` §3.2.
-  Right-panel selection, collapse, route changes, and component cleanup must never delete it. Only its
-  explicit tab `X` terminates the ACP runtime and then permanently deletes the Session doc; if either
+  Right-panel selection, collapse, route changes, and component cleanup must never delete it. Only explicit
+  tab close (× or the native close action) terminates the ACP runtime and then permanently deletes the Session doc; if either
   step fails, keep the tab so the user can retry. This doc cleanup supplies the exact side Session id
   and does not wait for the global metadata cache. Parent-session permanent deletion instead
   discovers direct `parentSessionId` children and requires the complete metadata cache before it
@@ -86,7 +86,11 @@ this page is the full text of the rules summarised there.
   reattach, and navigates only after the target publishes committed root-Session meta. Dirty-source
   confirmation means committed `HEAD` only; never imply that uncommitted or untracked files move.
   Browser side-panel state and the mobile deep link are named `browser` / `?browser=1`; the removed
-  `preview` values are not migrated. Once opened, keep `SessionBrowserPanel` mounted while other fixed side-panel
+  `preview` values are not migrated. The iOS Simulator is a separate fixed panel beside it
+  (`ios-simulator` / `?simulator=1`), offered only when the tab Session's target machine is a Mac;
+  it shares no state with Browser, stays mounted once opened like Browser, polls only while a
+  preview is preparing and on screen, and tells its still-mounted viewer when it is hidden. Its rules live in
+  [ios-simulator/AGENTS.md](../../packages/components/src/components/sessions/ios-simulator/AGENTS.md). Once opened, keep `SessionBrowserPanel` mounted while other fixed side-panel
   tabs are active so managed DOM state and Electron native-view history survive tab switches.
   The desktop layout also keeps the whole side panel mounted while COLLAPSED (it only hides it), so
   anything in there that polls or holds a connection must take an explicit on-screen prop and pause

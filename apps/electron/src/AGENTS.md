@@ -6,8 +6,14 @@ native-dependency, and OSS-composition rules stay in `apps/electron/AGENTS.md`.
 
 ## Module boundaries
 
-- `src/main/index.ts` owns Electron lifecycle hooks, event wiring, IPC registration,
-  and dependency injection. Keep business logic out of it.
+- `src/main/index.ts` owns pre-application startup and the cloud desktop lease;
+  `application.ts` owns lifecycle wiring, IPC registration and dependency injection.
+  Keep credential stores and business imports behind the entry's dynamic import.
+  Pre-ready APIs stay in `desktop-bootstrap`; buffer launch URLs before any await.
+  Quit must retain ownership if the embedded CLI has not confirmed exit.
+  Nightly reserves the CLI Host before application import and passes that identity
+  to `CliService`; Worker stop/restart and control-only mode must not release it.
+  Stable/local keep their existing external-runtime policy.
 - Put domain services in `src/main/services/*`, IPC handlers and input validation in
   `src/main/ipc/*`, and local-project worker/storage code in
   `src/main/local-project/*`.
@@ -37,21 +43,21 @@ native-dependency, and OSS-composition rules stay in `apps/electron/AGENTS.md`.
   embedded browsers, navigation and close actions belong to their source window;
   auxiliary windows must not overwrite the primary window's persisted view state.
 
-- Desktop devbar diagnostics stay runtime opt-in (`LODY_DEVBAR=true`) and local to
-  memory. The compact GPU field identifies process CPU/RSS in its hover text;
-  never describe these measurements as hardware GPU usage or VRAM.
-  Enable precise Chromium heap reporting before app readiness only for devbar.
+- Devbar is off by default; hidden Developer Mode enables it, while
+  `LODY_DEVBAR=true` is automation only. Keep data in memory; MCP/Terminals
+  share that switch. GPU means process CPU/RSS, never hardware usage/VRAM.
+  Runtime heap is approximate; only the startup override enables precise readings.
 
 - Generic update metadata may carry localized Markdown under
   `vendor.lodyChangelog.locales.{en,zh_CN}` in addition to the standard English
   `releaseNotes` fallback. Main validates and bounds those remote strings before
   exposing them through `ElectronUpdaterState`; renderer code must use the shared
   safe Markdown renderer rather than raw HTML.
-- React render failures are split by owner: the root `createRoot` error callbacks
-  persist fatal IPC diagnostics, while `ErrorBoundary` owns caught-error UI and
-  PostHog reporting. De-duplicate the same error across React and window events.
-  Renderer-mounted notification must come from a committed layout-effect sentinel,
-  never a timer or microtask guess.
+- React root callbacks persist fatal IPC diagnostics; ErrorBoundary owns caught-error
+  UI and PostHog. Deduplicate errors; report mounted only from a committed layout effect.
+  Keep hang capture local and bounded, Wait tied to active stalls, and stack opt-in
+  limited to trusted product main frames.
+  Contract: [renderer recovery](../../../specs/renderer-fatal-recovery.md).
 - A CLI-armed reset (`lody app reset-cache`) is consumed once, before any window
   loads. `hard` is applied natively here because the renderer may not boot; `cache`
   is handed to the renderer exactly once, because only it can spare the Shortcut
@@ -68,34 +74,13 @@ native-dependency, and OSS-composition rules stay in `apps/electron/AGENTS.md`.
   regions in native fullscreen. Windows caption buttons stay an OS overlay
   (`MAIN_WINDOW_TITLE_BAR_OVERLAY_HEIGHT`); right-edge headers pad `pr-[144px]`
   so toolbar controls do not sit under them.
-- The onboarding window must be native Light before its first renderer paint; normal product windows start from the System theme source.
+- The onboarding window must be native Light before its first renderer paint; normal product windows start from the committed theme ([main/AGENTS.md](main/AGENTS.md#startup-theme)).
   An automatic login launch may suppress the initial product window, but onboarding and deep-link launches must remain visible during normal product use. Unpackaged E2E windows are the exception: they stay hidden unless `LODY_E2E_SHOW_WINDOW=1` and always disable background throttling.
 - `sessionControl.send` streams intermediate responses on `sessionControl.response`
   keyed by request id. The renderer subscribes before `invoke`, removes the
   listener after settlement, and treats only the final response as completion.
-- The public browser (`services/public-browser-service.ts`) has NO network guard:
-  no resolver check, no per-request hostname policy — only engine routing, so a
-  loopback address is refused here and sent to Managed Preview. The view is a
-  sandboxed `WebContentsView` with no preload, script injection, page capture,
-  or agent-facing tool; the only reader of what it renders is the person looking
-  at it, so it is strictly less capable than the user's own Chrome and a guard
-  protects nothing. The one it used to have blocked every fake-IP proxy user.
-  Engine routing is a check on the hostname TEXT: a public name that RESOLVES to
-  loopback (`localtest.me`) still renders here, showing this machine's loopback
-  rather than the agent's. Do not describe the split as resolution-accurate — it
-  is a routing miss, not an exposure, and closing it means resolving every
-  hostname again.
-  Two triggers require bringing a guard back, and both are about who is on the
-  other end, not about the address. A non-human READER — agent DOM access,
-  screenshots, a preload bridge — makes rendered content exfiltratable. A
-  non-human NAVIGATOR already exists: a Managed Preview page is agent-authored
-  and can post navigation requests to the panel, so `session-browser-panel.tsx`
-  refuses private-LAN destinations from page content. Keep that refusal on the
-  panel side; this process cannot tell the two sources apart.
-  The engine-routing check runs on `will-navigate` AND `will-redirect`, like
-  `installNavigationGuard` in `window.ts`: `will-navigate` does not fire for a
-  server-side 3xx, so a public page redirecting to loopback would otherwise
-  commit here and never reach Managed Preview.
+- Before changing public-browser routing, isolation or its callers, read
+  [the service boundary](main/services/AGENTS.md#public-browser).
 - Image preview export (`services/image-export-service.ts`) keeps the native
   menu, clipboard, and save dialog here because the renderer holds the only copy
   of the image (a `blob:` URL main cannot download). Bytes cross once, after the
@@ -113,5 +98,7 @@ native-dependency, and OSS-composition rules stay in `apps/electron/AGENTS.md`.
   and checks device/inode/size/mtime/ctime before and during reads. Replacement or
   modification invalidates the preview; no mixing revisions or writes through resources.
 - Text above the editor budget uses fixed bounded Range requests. Binary uses raw
-  streams with backpressure/cancellation; raster header dimensions bound decode cost.
+  streams with backpressure/cancellation; PDFs stay binary `application/pdf`, and
+  cross-origin readers can inspect `Accept-Ranges` and `Content-Range`.
+  Raster header dimensions bound decode cost.
   The scheme never bypasses CSP, executes file content, or authorizes a remote RPC.

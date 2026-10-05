@@ -1,3 +1,4 @@
+import type { AcpModelControls } from './acp-model-capabilities';
 import {
   AvailableCommand,
   PermissionOption,
@@ -9,10 +10,11 @@ import type { ToolCallContent as AcpToolCallContent, SessionMode } from '@agentc
 import type { PermissionOutcome } from './message';
 import type { SessionGoalAction } from './goal';
 import { createPlanModeConfigOption } from 'acp-extension-core';
+import type { LodySubagentSnapshot, LodySubagentProgress } from 'acp-extension-core';
 import type { AgentConfigId, AgentRoleId, McpServerId, SessionId } from './ids';
 import type { MessageTextSpan } from './message-text-spans';
 import type { MinimalVisualAnnotationAnchor } from './visual-annotation-types';
-import type { WorktreeScriptPhase } from './project';
+import type { ProjectRef, WorktreeScriptPhase } from './project';
 import {
   DEEPSEEK_HARNESS_AGENT_PRESETS,
   DEEPSEEK_HARNESS_PERMISSION_MODES,
@@ -20,9 +22,11 @@ import {
 
 export const MANAGED_BUILTIN_RUNTIMES = [
   { runtimeName: 'kimi-code', agentType: 'kimi', displayName: 'Kimi Code' },
+  { runtimeName: 'devin', agentType: 'devin', displayName: 'Devin' },
   { runtimeName: 'grok-build', agentType: 'grok', displayName: 'Grok' },
   { runtimeName: 'claude-code', agentType: 'claude', displayName: 'Claude Code' },
   { runtimeName: 'codex', agentType: 'codex', displayName: 'Codex' },
+  { runtimeName: 'pi', agentType: 'pi', displayName: 'Pi' },
 ] as const;
 
 export type ManagedBuiltinRuntime = (typeof MANAGED_BUILTIN_RUNTIMES)[number];
@@ -36,6 +40,7 @@ export const BUILTIN_AGENTS = [
   ...MANAGED_BUILTIN_RUNTIMES.map(({ agentType, displayName }) => ({ agentType, displayName })),
   { agentType: 'deepseek', displayName: 'DeepSeek Harness' },
   { agentType: 'bub', displayName: 'Bub' },
+  { agentType: 'dimcode', displayName: 'Dimcode' },
 ] as const;
 
 export type BuiltinAgent = (typeof BUILTIN_AGENTS)[number];
@@ -62,6 +67,8 @@ export type AgentType = string;
  * Exhaustive on purpose: adding a builtin agent must not silently default it.
  */
 const BUILTIN_ACP_TITLE_OWNERSHIP: Record<BuiltinAgentType, 'none' | 'untagged' | 'tagged'> = {
+  pi: 'none',
+  devin: 'none',
   claude: 'untagged',
   codex: 'tagged',
   grok: 'untagged',
@@ -70,6 +77,7 @@ const BUILTIN_ACP_TITLE_OWNERSHIP: Record<BuiltinAgentType, 'none' | 'untagged' 
   // Bub's ACP server does not push an authoritative session title, so Lody
   // keeps running its isolated title agent.
   bub: 'none',
+  dimcode: 'none',
 };
 
 const builtinAcpTitleOwnership = (
@@ -81,11 +89,12 @@ const builtinAcpTitleOwnership = (
     : 'none';
 
 /**
- * Builtin ACP adapters that generate their own session titles, so Lody never
+ * Advertised title ownership or legacy builtin adapters that generate titles, so Lody never
  * starts its isolated title agent for them and hides the title-generation config
  * from their agent settings.
  *
- * A runtime override revokes this. The table describes the managed runtime each
+ * A runtime override revokes only the identity fallback; an advertised capability
+ * still owns generation. The table describes the managed runtime each
  * agent normally launches, but `BuiltinRuntimeOverrides` can point the same
  * `agentType` at any executable — including one predating the title behaviour.
  * Such a session would otherwise get no title at all: the isolated generator is
@@ -97,10 +106,12 @@ const builtinAcpTitleOwnership = (
 export const acpOwnsSessionTitleGeneration = (
   cliType: AgentConfigCliType | null | undefined,
   agentType: AgentType | null | undefined,
-  runtimeOverrides?: BuiltinRuntimeOverrides
+  runtimeOverrides?: BuiltinRuntimeOverrides,
+  sessionTitle?: boolean
 ): boolean =>
-  !hasBuiltinRuntimeOverrideValues(runtimeOverrides) &&
-  builtinAcpTitleOwnership(cliType, agentType) !== 'none';
+  sessionTitle === true ||
+  (!hasBuiltinRuntimeOverrideValues(runtimeOverrides) &&
+    builtinAcpTitleOwnership(cliType, agentType) !== 'none');
 
 /**
  * Adapters whose pushed titles are authoritative without a `titleSource` tag.
@@ -133,7 +144,12 @@ export type BuiltinRuntimeOverrides = {
   claudeCodeExecutable?: string;
   kimiPath?: string;
   grokPath?: string;
+  devinPath?: string;
+  piExtensions?: string[];
 };
+
+export const PI_EXTENSIONS_MAX_SELECTIONS = 32;
+export const PI_EXTENSION_PATH_MAX_LENGTH = 4096;
 
 export const isBuiltinRuntimeOverrides = (value: unknown): value is BuiltinRuntimeOverrides => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -144,13 +160,25 @@ export const isBuiltinRuntimeOverrides = (value: unknown): value is BuiltinRunti
     claudeCodeExecutable?: unknown;
     kimiPath?: unknown;
     grokPath?: unknown;
+    devinPath?: unknown;
+    piExtensions?: unknown;
   };
   return (
     (record.codexPath === undefined || typeof record.codexPath === 'string') &&
     (record.claudeCodeExecutable === undefined ||
       typeof record.claudeCodeExecutable === 'string') &&
     (record.kimiPath === undefined || typeof record.kimiPath === 'string') &&
-    (record.grokPath === undefined || typeof record.grokPath === 'string')
+    (record.devinPath === undefined || typeof record.devinPath === 'string') &&
+    (record.grokPath === undefined || typeof record.grokPath === 'string') &&
+    (record.piExtensions === undefined ||
+      (Array.isArray(record.piExtensions) &&
+        record.piExtensions.length <= PI_EXTENSIONS_MAX_SELECTIONS &&
+        record.piExtensions.every(
+          (entry) =>
+            typeof entry === 'string' &&
+            entry.trim().length > 0 &&
+            entry.length <= PI_EXTENSION_PATH_MAX_LENGTH
+        )))
   );
 };
 
@@ -158,8 +186,8 @@ export const hasBuiltinRuntimeOverrideValues = (
   runtimeOverrides: BuiltinRuntimeOverrides | undefined
 ): boolean =>
   !!runtimeOverrides &&
-  Object.values(runtimeOverrides).some(
-    (value) => typeof value === 'string' && value.trim().length > 0
+  Object.values(runtimeOverrides).some((value) =>
+    Array.isArray(value) ? value.length > 0 : typeof value === 'string' && value.trim().length > 0
   );
 
 export const getBuiltinRuntimeOverrideSourceVersionSuffix = (
@@ -348,7 +376,7 @@ export type AcpCommandSummary = {
 // Codex-only carry a bogus ladder for every agent that spells other variants
 // with the same brackets — a Claude probe stored `{ opus: ['1m'] }` — and the
 // per-model effort picker would rebuild that model's ladder from it.
-export const ACP_CAPABILITY_CACHE_VERSION = 8;
+export const ACP_CAPABILITY_CACHE_VERSION = 9;
 
 export type AcpCapabilityAuthority = 'unavailable' | 'provisional' | 'authoritative';
 
@@ -376,10 +404,18 @@ export type AcpCapabilityCacheEntry = {
    * `configOptions` is a snapshot that only describes `currentValue`'s model.
    */
   modelReasoningEfforts?: Record<string, string[]>;
+  /**
+   * Per-model controls from the config's `acpModelCapability` row, attached by
+   * `getMachineFlockAcpCapabilities` when its source version matches. Never
+   * stored in the capability row itself; see `acp-model-capabilities.ts`.
+   */
+  declaredModelControls?: Record<string, AcpModelControls>;
   /** Available slash commands advertised by the agent. */
   availableCommands?: AcpCommandSummary[];
   /** True only when the runtime initialize response advertised `sessionCapabilities.fork`. */
   sessionFork?: boolean;
+  /** Runtime advertised Core sessionTitle v1 (automatic, tagged title updates). */
+  sessionTitle?: boolean;
   /** True only when the runtime advertised Lody's acknowledged steering extension. */
   acknowledgedSteer?: boolean;
   /**
@@ -433,9 +469,12 @@ export const getReadableAcpCapabilityCacheEntryForRuntimeOverrides = (
     return undefined;
   }
   const sourceVersionSuffix = getBuiltinRuntimeOverrideSourceVersionSuffix(runtimeOverrides);
-  return !sourceVersionSuffix || readableEntry.sourceVersion?.endsWith(sourceVersionSuffix) === true
-    ? readableEntry
-    : undefined;
+  const matches = sourceVersionSuffix
+    ? readableEntry.sourceVersion?.endsWith(sourceVersionSuffix) === true
+    : readableEntry.cliType !== 'builtin' ||
+      readableEntry.agentType !== 'pi' ||
+      !readableEntry.sourceVersion?.includes('+override:');
+  return matches ? readableEntry : undefined;
 };
 
 export const isAcpCapabilityCacheEntryCurrentForRuntimeOverrides = (
@@ -445,8 +484,9 @@ export const isAcpCapabilityCacheEntryCurrentForRuntimeOverrides = (
   if (!isAcpCapabilityCacheEntryCurrent(entry)) {
     return false;
   }
-  const sourceVersionSuffix = getBuiltinRuntimeOverrideSourceVersionSuffix(runtimeOverrides);
-  return !sourceVersionSuffix || entry.sourceVersion?.endsWith(sourceVersionSuffix) === true;
+  return (
+    getReadableAcpCapabilityCacheEntryForRuntimeOverrides(entry, runtimeOverrides) !== undefined
+  );
 };
 
 export const getAcpCapabilityCacheEntryAuthority = (
@@ -484,6 +524,105 @@ export const getAcpCapabilityCacheStaleReason = (
   return undefined;
 };
 
+/**
+ * How long a persisted runtime capability entry may answer a
+ * `machine/acp-capabilities-refresh` request without starting the agent again.
+ *
+ * `sourceVersion` already covers every input Lody controls (adapter version,
+ * managed-runtime version, runtime-override path, custom launch spec, and the
+ * env values that change an agent's identity), so the TTL exists only for drift
+ * Lody cannot observe: slash commands, sub-agents or model entitlements that the
+ * user changes in the agent's own configuration. Two other paths converge faster
+ * than the TTL — creating a real session rewrites the entry from that session's
+ * own `session/new` response, and Settings offers an explicit forced refresh —
+ * so the TTL only bounds staleness for agents nobody launches, where it costs at
+ * most one probe per config per day.
+ */
+export const ACP_CAPABILITY_REFRESH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Age after which rewriting an unchanged capability entry is worth a Machine
+ * Flock write, solely to move `fetchedAt` forward.
+ *
+ * Writers skip unchanged entries so that every probe and every created session
+ * does not cost a Flock write, flush and sync. That skip must not outlive the
+ * TTL, or an entry whose content never changes expires once and then misses
+ * forever. Half the TTL is the smallest window that still gives two guarantees
+ * at once: a renewal is at most one write per config per half-TTL no matter how
+ * often sessions start or refreshes are forced, and an agent that starts even
+ * one session per half-TTL keeps its entry fresh without any probe at all,
+ * because that session's own write lands before the entry can expire.
+ */
+export const ACP_CAPABILITY_FETCH_TIME_RENEW_AFTER_MS = ACP_CAPABILITY_REFRESH_CACHE_TTL_MS / 2;
+
+/** Whether an unchanged entry should still be rewritten to renew its fetch time. */
+export const shouldRenewAcpCapabilityFetchTime = (
+  entry: Pick<AcpCapabilityCacheEntry, 'fetchedAt'>,
+  nowMs: number
+): boolean => nowMs - entry.fetchedAt >= ACP_CAPABILITY_FETCH_TIME_RENEW_AFTER_MS;
+
+export type AcpCapabilityRefreshCacheMissReason =
+  | AcpCapabilityCacheStaleReason
+  | 'source-version-unresolved'
+  | 'launch-inputs-unknown'
+  | 'launch-inputs-changed'
+  | 'not-runtime-provenance'
+  | 'expired';
+
+export type AcpCapabilityRefreshCacheDecision =
+  | { hit: true; entry: AcpCapabilityCacheEntry }
+  | { hit: false; reason: AcpCapabilityRefreshCacheMissReason };
+
+/**
+ * Whether the launch inputs that produced a persisted entry match the ones a
+ * probe would use now. `sourceVersion` cannot answer this alone: for custom and
+ * registry configs, and for every builtin except DeepSeek's base URL, it does not
+ * depend on the config's environment, and a token or endpoint change can still
+ * change what the agent advertises. The answering daemon remembers a fingerprint
+ * per entry it wrote, in memory only, so this is `'unknown'` after a restart.
+ */
+export type AcpCapabilityLaunchInputsMatch = 'matching' | 'changed' | 'unknown';
+
+/**
+ * Decides whether a capability refresh may be answered from the persisted entry.
+ *
+ * `expectedSourceVersion` is `undefined` when the caller cannot name the version
+ * a fresh probe would produce (an uninstalled managed runtime, for example); that
+ * is always a miss, never an implicit hit. A future-dated `fetchedAt` counts as
+ * fresh because both sides stamp it from the same server clock, so a negative age
+ * means clock adjustment rather than an entry worth re-probing.
+ */
+export const decideAcpCapabilityRefreshCache = (args: {
+  entry: AcpCapabilityCacheEntry | undefined;
+  expectedSourceVersion: string | undefined;
+  launchInputs: AcpCapabilityLaunchInputsMatch;
+  nowMs: number;
+  ttlMs?: number;
+}): AcpCapabilityRefreshCacheDecision => {
+  const { entry, expectedSourceVersion, launchInputs, nowMs } = args;
+  const ttlMs = args.ttlMs ?? ACP_CAPABILITY_REFRESH_CACHE_TTL_MS;
+  if (expectedSourceVersion === undefined) {
+    return { hit: false, reason: 'source-version-unresolved' };
+  }
+  if (launchInputs !== 'matching') {
+    return {
+      hit: false,
+      reason: launchInputs === 'changed' ? 'launch-inputs-changed' : 'launch-inputs-unknown',
+    };
+  }
+  const staleReason = getAcpCapabilityCacheStaleReason(entry, expectedSourceVersion);
+  if (staleReason || !entry) {
+    return { hit: false, reason: staleReason ?? 'missing' };
+  }
+  if (entry.provenance !== 'runtime') {
+    return { hit: false, reason: 'not-runtime-provenance' };
+  }
+  if (nowMs - entry.fetchedAt > ttlMs) {
+    return { hit: false, reason: 'expired' };
+  }
+  return { hit: true, entry };
+};
+
 export const isBuiltinAgentType = (agentType: string): agentType is BuiltinAgentType =>
   BUILTIN_AGENTS.some((agent) => agent.agentType === agentType);
 
@@ -499,9 +638,10 @@ export const isManagedBuiltinAgentType = (
  * Builtins that may be created through the durable provider-setup queue.
  * Managed runtimes use it for download + verification; Bub uses the same queue
  * only to keep its user-installed command unpublished until a live probe passes.
+ * Dimcode uses the same verification path with its npx-managed package.
  */
 export const supportsBuiltinProviderSetup = (agentType: string): agentType is BuiltinAgentType =>
-  isManagedBuiltinAgentType(agentType) || agentType === 'bub';
+  isManagedBuiltinAgentType(agentType) || agentType === 'bub' || agentType === 'dimcode';
 
 export const getManagedBuiltinRuntimeByAgentType = (
   agentType: string
@@ -1179,6 +1319,7 @@ export type SystemNoticeName =
   | 'chat_failed'
   | 'agent_warning'
   | 'task_proposal'
+  | 'schedule_proposal'
   | 'session_fork_origin';
 
 /**
@@ -1276,10 +1417,8 @@ export type MessageItemActor = {
 };
 
 /**
- * Metadata for the task_proposal system notice: an agent suggesting that work
- * be recorded as a task. The notice stays in history unresolved, so a proposal
- * ignored today can still be confirmed days later — unlike a dialog, which
- * would vanish while the session ran unattended.
+ * Leftover metadata for stored `task_proposal` system notices. The Tasks
+ * product is gone; this shape exists only so existing history still parses.
  */
 export type TaskProposalMeta = {
   /** Stable id so repeated proposals of the same work do not stack up. */
@@ -1296,6 +1435,55 @@ export type TaskProposalMeta = {
 };
 
 /**
+ * The time rule an agent may propose: exactly the named shapes the schedule
+ * editor offers, never cron. `timeZone` is optional because the person, not the
+ * agent, is where the wall clock lives; the client fills in its own zone.
+ */
+export type ScheduleProposalRule =
+  | { kind: 'manual' }
+  | { kind: 'minutes'; every: number }
+  | { kind: 'hours'; every: number }
+  | { kind: 'daily'; hour: number; minute: number; timeZone?: string }
+  | { kind: 'weekdays'; hour: number; minute: number; timeZone?: string }
+  | { kind: 'weekly'; weekdays: number[]; hour: number; minute: number; timeZone?: string }
+  | { kind: 'monthly'; days: number[]; hour: number; minute: number; timeZone?: string }
+  | { kind: 'once'; at: string };
+
+/**
+ * Where a proposed schedule runs, when the person named it in conversation.
+ * Anything absent is taken from the conversation the proposal was made in.
+ */
+export type ScheduleProposalTarget = {
+  agentConfigId?: string;
+  agentRoleId?: string;
+  machineId?: string;
+  project?: ProjectRef;
+};
+
+/**
+ * Metadata for the schedule_proposal system notice: an agent has gathered
+ * enough to schedule a task and is asking the person to create it. Confirming
+ * on the card IS the creation; there is no form afterwards. Like a task
+ * proposal, it stays in history unresolved until acted on.
+ */
+export type ScheduleProposalMeta = {
+  /** Stable id; a retried proposal replaces itself instead of stacking. */
+  proposalId: string;
+  title: string;
+  prompt: string;
+  rule: ScheduleProposalRule;
+  destination?:
+    | { kind: 'new_session' }
+    | { kind: 'own_session' }
+    | { kind: 'existing_session'; sessionId: string };
+  target?: ScheduleProposalTarget;
+  outcome?: 'created' | 'dismissed';
+  /** Set once the person confirmed and the schedule exists. */
+  scheduleId?: string;
+  proposedBy?: MessageItemActor;
+};
+
+/**
  * System notice metadata by notice name
  */
 export type SystemNoticeMeta = {
@@ -1303,6 +1491,7 @@ export type SystemNoticeMeta = {
   chat_failed: ChatFailedMeta;
   agent_warning: AgentWarningMeta;
   task_proposal: TaskProposalMeta;
+  schedule_proposal: ScheduleProposalMeta;
   session_fork_origin: SessionForkOriginMeta;
 };
 
@@ -1500,6 +1689,13 @@ export type SubagentTaskUsage = {
  * event into the transcript.
  */
 export type SubagentTaskPayload = {
+  /** Normalized run transcript. Absent on legacy provider task rows. */
+  run?: {
+    sessionId: string;
+    snapshot: LodySubagentSnapshot;
+    progress?: LodySubagentProgress;
+    items: SubagentRunItem[];
+  };
   taskId: string;
   status: SubagentTaskStatus;
   /** Provider-neutral task category published through `_meta.lody.task`. */
@@ -1529,6 +1725,11 @@ export type SubagentTaskPayload = {
   skipTranscript?: boolean;
   hasOutputFile?: boolean;
 };
+
+export type SubagentRunItem = Extract<
+  MessageContent,
+  { type: 'text' | 'thought' | 'tool_call' | 'plan' }
+> & { nativeTurnId?: string; messageId?: string };
 
 export type MessageContent =
   | {
@@ -1685,23 +1886,17 @@ export type IssuePRMention = {
   number: number;
 };
 
-export type ACPSessionConfig = {
+export type ACPTurnConfig = {
   prompt: string;
   inputBlocks?: SessionInputBlock[];
   cliType: AgentConfigCliType;
   agentType: AgentType;
-  /** Launch spec for `cliType: 'custom'` agents; resolved from the agent config / session meta. */
-  customAcp?: CustomAcpLaunchSpec;
-  /** Advanced runtime binary override for builtin Claude/Codex agents. */
-  runtimeOverrides?: BuiltinRuntimeOverrides;
   modeId?: SessionMode['id'];
   modelId?: string;
   /** Config option values (configId → value) for setSessionConfigOption. */
   configOptionValues?: Record<string, AcpConfigOptionValue>;
   /** Workspace MCP catalog ids selected for this session. */
   mcpServerIds?: McpServerId[];
-  /** Whether the built-in Lody Task MCP tools are available to this Turn's Agent session. */
-  taskToolsEnabled?: boolean;
   /**
    * Agent Role identity selected in the composer for this Turn. Null is an
    * explicit None selection; absence is legacy/unknown. This is provenance for
@@ -1711,6 +1906,7 @@ export type ACPSessionConfig = {
   agentRoleId?: AgentRoleId | null;
   /** Catalog revision whose values were frozen into this Turn. */
   agentRoleRevision?: number;
+  agentRoleSnapshot?: import('./message-author').AgentRoleSnapshot;
   issuePRMentions?: IssuePRMention[];
   // continue to chat
   resume?: ACPSessionId;
@@ -1718,11 +1914,19 @@ export type ACPSessionConfig = {
   chainDepth?: number;
 };
 
+/** Provider launch fields belong only to the durable session config, never per-turn input. */
+export type ACPSessionConfig = ACPTurnConfig & {
+  /** Launch spec for `cliType: 'custom'` agents; resolved from the agent config / session meta. */
+  customAcp?: CustomAcpLaunchSpec;
+  /** Advanced runtime binary override for builtin Claude/Codex agents. */
+  runtimeOverrides?: BuiltinRuntimeOverrides;
+};
+
 /**
  * Persisted per-user-turn dispatch config.
  * Keep this looser than `ACPSessionConfig` so older docs and partial writes remain readable.
  */
-export type SessionTurnInputConfig = Partial<ACPSessionConfig> & {
+export type SessionTurnInputConfig = Partial<ACPTurnConfig> & {
   /** An accepted steer has no independently editable provider turn boundary. */
   _lodyDeliveryKind?: import('./message-schemas').SessionHistoryDeliveryKind;
 };

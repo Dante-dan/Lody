@@ -1,3 +1,4 @@
+import { GITHUB_CREDENTIAL_ENV_KEYS } from '@/lib/gh-token-env';
 import { RepoId, SessionId } from '@lody/shared';
 import { resolveLocalProjectBranchAtRootPath } from '@lody/shared/node/local-project';
 import spawn from 'cross-spawn';
@@ -6,11 +7,7 @@ import * as path from 'path';
 import { Logger } from '@/utils/logger';
 import { withFileLock } from '@/utils/file-lock';
 import { redactUrlAuth } from '@/utils/github';
-import {
-  buildCredentialHelperValueForHost,
-  ensureCredentialHelperScript,
-  getCredentialHelperHostPath,
-} from '@/lib/git-credential-helper-script';
+import { getCredentialHelperHostPath } from '@/lib/git-credential-helper-script';
 import { formatErrorMessage } from '@/utils/format-error';
 import { ensureLodyDataDir, getLodyDataDir } from '@lody/shared/node/installation-profile';
 import { mapGitSpawnError } from './git-process-error';
@@ -109,18 +106,45 @@ type RepoFetchMode = 'skip' | 'best-effort' | 'required';
  * caches by `repoId` alone, so two workspaces sharing a repo share one instance.
  */
 export type GitCredentialBrokerAuth = {
+  /** Host-derived ownership; absent is not permission to inherit machine tokens. */
+  allowLocalAuth?: boolean;
   workspaceId: string;
   url: string;
   token: string;
+  contextToken: string;
+  stateFilePath?: string;
+  /** Prepared per-call routing, never shared on the cached WorktreeManager. */
+  transportEnv: Record<string, string>;
 };
 
 const buildBrokerAuthEnv = (auth: GitCredentialBrokerAuth | undefined): NodeJS.ProcessEnv =>
   auth
     ? {
+        ...auth.transportEnv,
+        ...(!auth.allowLocalAuth
+          ? Object.fromEntries(
+              [
+                ...GITHUB_CREDENTIAL_ENV_KEYS,
+                ...Object.keys(process.env).filter((key) =>
+                  GITHUB_CREDENTIAL_ENV_KEYS.includes(key.toUpperCase())
+                ),
+              ].map((key) => [key, undefined])
+            )
+          : {}),
         LODY_GIT_CRED_BROKER_URL: auth.url,
         LODY_GIT_CRED_BROKER_TOKEN: auth.token,
+        LODY_GIT_CRED_CONTEXT_TOKEN: auth.contextToken,
+        LODY_GIT_CRED_CONTEXT_FILE: undefined,
+        LODY_GIT_CRED_BROKER_STATE_FILE: auth.stateFilePath,
+        LODY_GIT_OPERATION: 'read',
       }
-    : {};
+    : {
+        LODY_GIT_CRED_BROKER_URL: undefined,
+        LODY_GIT_CRED_BROKER_TOKEN: undefined,
+        LODY_GIT_CRED_CONTEXT_TOKEN: undefined,
+        LODY_GIT_CRED_CONTEXT_FILE: undefined,
+        LODY_GIT_CRED_BROKER_STATE_FILE: undefined,
+      };
 
 export type RemoveWorktreeOptions = {
   baseBranchName?: string;
@@ -210,11 +234,11 @@ const isTerminalPromptsDisabledErrorMessage = (message: string): boolean => {
 // may block indefinitely in non-interactive clone/fetch paths.
 export const buildGitHubCredentialConfigArgs = (helperValue: string): string[] => [
   '-c',
-  'credential.helper=',
+  'credential.https://github.com.helper=',
   '-c',
-  `credential.helper=${helperValue}`,
+  `credential.https://github.com.helper=${helperValue}`,
   '-c',
-  'credential.useHttpPath=true',
+  'credential.https://github.com.useHttpPath=true',
 ];
 
 type HelperDebugEntry = {
@@ -378,30 +402,6 @@ export class WorktreeManager {
     });
   }
 
-  private buildGitAuthArgs(): string[] {
-    if (!this.repoUrl) {
-      return [];
-    }
-
-    // Only enable the GitHub credential helper for GitHub HTTPS remotes.
-    // For non-GitHub/local remotes, avoid touching installation-owned credential state.
-    try {
-      const url = new URL(this.repoUrl);
-      const host = normalizeGitHubHost(url.hostname.toLowerCase());
-      const isGitHubHost = host === 'github.com';
-      const isHttps = url.protocol === 'https:';
-      if (!isGitHubHost || !isHttps) {
-        return [];
-      }
-    } catch {
-      return [];
-    }
-
-    ensureCredentialHelperScript(this.repoId);
-    const helperValue = buildCredentialHelperValueForHost(this.repoId);
-    return buildGitHubCredentialConfigArgs(helperValue);
-  }
-
   private isLocalSharedSource(): boolean {
     return this.source.kind === 'local-shared';
   }
@@ -525,7 +525,10 @@ export class WorktreeManager {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${brokerToken}`,
           },
-          body: JSON.stringify({ repoFullName: remote.repoFullName }),
+          body: JSON.stringify({
+            repoFullName: remote.repoFullName,
+            contextToken: options.brokerAuth?.contextToken,
+          }),
           signal: controller.signal,
         });
 
@@ -779,7 +782,7 @@ export class WorktreeManager {
       const cloneUrl = this.repoUrl;
       try {
         await this.runGit(
-          [...this.buildGitAuthArgs(), 'clone', '--bare', cloneUrl, this.bareGitDir],
+          ['clone', '--bare', cloneUrl, this.bareGitDir],
           this.baseDir,
           buildBrokerAuthEnv(brokerAuth)
         );
@@ -815,7 +818,7 @@ export class WorktreeManager {
     this.logger.debug(`[${this.repoId}] Fetching latest changes from origin (mode=${fetchMode})`);
     try {
       await this.runGit(
-        [...this.buildGitAuthArgs(), 'fetch', 'origin', '--prune'],
+        ['fetch', 'origin', '--prune'],
         this.bareGitDir,
         buildBrokerAuthEnv(brokerAuth)
       );
@@ -987,42 +990,42 @@ export class WorktreeManager {
    * - `origin/master`
    * - `origin/HEAD` (symbolic ref if configured)
    */
-  private async resolvePrimaryRemoteBaseRef(): Promise<string | null> {
+  private async resolvePrimaryRemoteBaseRef(env?: NodeJS.ProcessEnv): Promise<string | null> {
     if (!this.repoUrl) {
       return null;
     }
 
-    if (await this.hasCommitish('origin/main')) {
+    if (await this.hasCommitish('origin/main', env)) {
       return 'origin/main';
     }
 
-    if (await this.hasCommitish('origin/master')) {
+    if (await this.hasCommitish('origin/master', env)) {
       return 'origin/master';
     }
 
     const originHead = await this.resolveDefaultRemoteRef();
-    if (originHead && (await this.hasCommitish(originHead))) {
+    if (originHead && (await this.hasCommitish(originHead, env))) {
       return originHead;
     }
 
     return null;
   }
 
-  private async hasCommitish(rev: string): Promise<boolean> {
+  private async hasCommitish(rev: string, env?: NodeJS.ProcessEnv): Promise<boolean> {
     try {
-      await this.runGit(['rev-parse', '--verify', `${rev}^{commit}`], this.getGitAdminCwd());
+      await this.runGit(['rev-parse', '--verify', `${rev}^{commit}`], this.getGitAdminCwd(), env);
       return true;
     } catch {
       return false;
     }
   }
 
-  private async resolveBaseRef(preferredBranch?: string): Promise<string> {
+  private async resolveBaseRef(preferredBranch?: string, env?: NodeJS.ProcessEnv): Promise<string> {
     if (this.source.kind === 'local-shared') {
       const preferred = preferredBranch?.trim();
       if (preferred) {
         if (preferred.startsWith('refs/heads/') || preferred.startsWith('refs/remotes/')) {
-          if (await this.hasCommitish(preferred)) return preferred;
+          if (await this.hasCommitish(preferred, env)) return preferred;
           throw new Error(`Local project branch not found: ${preferred}`);
         }
         // `preferred` can still be a pre-selector bare name, which git itself
@@ -1033,7 +1036,7 @@ export class WorktreeManager {
           })
         ).refName;
       }
-      if (await this.hasCommitish('HEAD')) return 'HEAD';
+      if (await this.hasCommitish('HEAD', env)) return 'HEAD';
       throw new Error(`[${this.repoId}] Local repository has no commit to use as a worktree base`);
     }
 
@@ -1045,7 +1048,7 @@ export class WorktreeManager {
       }
       candidates.push(preferredBranch);
     } else if (this.repoUrl) {
-      const primary = await this.resolvePrimaryRemoteBaseRef();
+      const primary = await this.resolvePrimaryRemoteBaseRef(env);
       if (primary) {
         candidates.push(primary);
       }
@@ -1065,7 +1068,7 @@ export class WorktreeManager {
     candidates.push('main', 'master');
 
     for (const candidate of candidates) {
-      if (await this.hasCommitish(candidate)) {
+      if (await this.hasCommitish(candidate, env)) {
         return candidate;
       }
     }
@@ -1211,9 +1214,13 @@ export class WorktreeManager {
     );
   }
 
-  private async runWorktreeAddWithPruneRetry(args: string[], cwd: string): Promise<void> {
+  private async runWorktreeAddWithPruneRetry(
+    args: string[],
+    cwd: string,
+    env: NodeJS.ProcessEnv
+  ): Promise<void> {
     try {
-      await this.runGit(args, cwd);
+      await this.runGit(args, cwd, env);
     } catch (error) {
       if (!this.isLikelyStaleWorktreeError(error)) {
         throw error;
@@ -1228,7 +1235,7 @@ export class WorktreeManager {
           `[${this.repoId}] git worktree prune failed before retry: ${formatErrorMessage(pruneError)}`
         );
       }
-      await this.runGit(args, cwd);
+      await this.runGit(args, cwd, env);
     }
   }
 
@@ -1244,12 +1251,13 @@ export class WorktreeManager {
     sessionId: SessionId,
     worktreePath: string,
     startPoint: string,
-    cwd: string
+    cwd: string,
+    env: NodeJS.ProcessEnv
   ): Promise<void> {
     const branchName = await this.resolveAvailableSessionBranchName(sessionId);
     const createArgs = ['worktree', 'add', '-b', branchName, worktreePath, startPoint];
     try {
-      await this.runGit(createArgs, cwd);
+      await this.runGit(createArgs, cwd, env);
       return;
     } catch (error) {
       if (!this.isLikelyStaleWorktreeError(error)) {
@@ -1272,13 +1280,14 @@ export class WorktreeManager {
       // conflict must never take this path.
       if (!this.isBranchNameConflictError(error) && (await this.hasLocalBranch(branchName))) {
         const [branchHead, startPointHead] = await Promise.all([
-          this.runGit(['rev-parse', '--verify', `${branchName}^{commit}`], cwd),
-          this.runGit(['rev-parse', '--verify', `${startPoint}^{commit}`], cwd),
+          this.runGit(['rev-parse', '--verify', `${branchName}^{commit}`], cwd, env),
+          this.runGit(['rev-parse', '--verify', `${startPoint}^{commit}`], cwd, env),
         ]);
         if (branchHead === startPointHead) {
           await this.runWorktreeAddWithPruneRetry(
             ['worktree', 'add', worktreePath, branchName],
-            cwd
+            cwd,
+            env
           );
           return;
         }
@@ -1287,7 +1296,11 @@ export class WorktreeManager {
       // The branch was not created by the failed command (or another writer won
       // its name). Allocate a new suffix instead of attaching to that ref.
       const retryBranchName = await this.resolveAvailableSessionBranchName(sessionId);
-      await this.runGit(['worktree', 'add', '-b', retryBranchName, worktreePath, startPoint], cwd);
+      await this.runGit(
+        ['worktree', 'add', '-b', retryBranchName, worktreePath, startPoint],
+        cwd,
+        env
+      );
     }
   }
 
@@ -1315,7 +1328,8 @@ export class WorktreeManager {
     sessionId: SessionId,
     baseBranch?: string,
     restoreBranchName?: string,
-    exactStartPoint?: string
+    exactStartPoint?: string,
+    brokerAuth?: GitCredentialBrokerAuth
   ): Promise<WorktreeInfo> {
     return withRepoLock(this.repoId, async () => {
       assertSafeSessionId(sessionId);
@@ -1338,6 +1352,13 @@ export class WorktreeManager {
         return info;
       }
 
+      // A lost cache must be cloned before validating a persisted restore branch.
+      // Existing caches are fetched only once below; first clones also need that
+      // fetch to populate origin/* after installing the bare-clone refspec.
+      if (!this.isLocalSharedSource() && !fs.existsSync(this.bareGitDir)) {
+        await this.ensureRepoLocked('skip', brokerAuth);
+      }
+      const gitEnv = buildBrokerAuthEnv(brokerAuth);
       const existingBranchName = await this.resolveRestoreBranchName(restoreBranchName);
 
       // Cutting a fresh branch needs up-to-date origin refs for its base, so the
@@ -1345,14 +1366,16 @@ export class WorktreeManager {
       // needs local refs; fetch best-effort so an unreachable origin (offline,
       // dead proxy) does not block the restore.
       await this.ensureRepoLocked(
-        this.repoUrl ? (existingBranchName ? 'best-effort' : 'required') : 'skip'
+        this.repoUrl ? (existingBranchName ? 'best-effort' : 'required') : 'skip',
+        brokerAuth
       );
 
       if (existingBranchName) {
         if (exactStartPoint) {
           const existingHead = await this.runGit(
             ['rev-parse', '--verify', `${existingBranchName}^{commit}`],
-            gitAdminCwd
+            gitAdminCwd,
+            gitEnv
           );
           if (existingHead !== exactStartPoint) {
             throw new Error(
@@ -1366,13 +1389,15 @@ export class WorktreeManager {
         );
         await this.runWorktreeAddWithPruneRetry(
           ['worktree', 'add', worktreePath, existingBranchName],
-          gitAdminCwd
+          gitAdminCwd,
+          gitEnv
         );
       } else {
         if (exactStartPoint) {
           const verifiedStartPoint = await this.runGit(
             ['rev-parse', '--verify', `${exactStartPoint}^{commit}`],
-            gitAdminCwd
+            gitAdminCwd,
+            gitEnv
           );
           if (verifiedStartPoint !== exactStartPoint) {
             throw new Error(
@@ -1386,10 +1411,11 @@ export class WorktreeManager {
             sessionId,
             worktreePath,
             exactStartPoint,
-            gitAdminCwd
+            gitAdminCwd,
+            gitEnv
           );
         } else {
-          const resolvedBase = await this.resolveBaseRef(baseBranch);
+          const resolvedBase = await this.resolveBaseRef(baseBranch, gitEnv);
           this.logger.debug(
             `[${this.repoId}] Creating new worktree (sessionId=${sessionId} base=${resolvedBase}): ${worktreePath}`
           );
@@ -1397,7 +1423,8 @@ export class WorktreeManager {
             sessionId,
             worktreePath,
             resolvedBase,
-            gitAdminCwd
+            gitAdminCwd,
+            gitEnv
           );
         }
       }

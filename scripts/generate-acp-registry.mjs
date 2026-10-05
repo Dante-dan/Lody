@@ -10,10 +10,15 @@ const EXCLUDED_REMOTE_REGISTRY_AGENT_IDS = new Set([
   'claude-p',
   'codex-acp',
   'grok-build',
+  'pi-acp',
+  'devin',
+  'dimcode',
+  'kimi',
+  'kimi-code',
 ]);
 const OFFICIAL_NPM_REGISTRY = 'https://registry.npmjs.org/';
 const MAX_REGISTRY_ICON_BYTES = 256 * 1024;
-const EXTRA_REMOTE_REGISTRY_ICON_IDS = ['grok-build'];
+const EXTRA_REMOTE_REGISTRY_ICON_IDS = ['grok-build', 'pi-acp', 'devin', 'dimcode', 'kimi'];
 const LOCAL_ONLY_REGISTRY_ICON_IDS = ['reasonix'];
 const INTERACTIVE_CLAUDE_ACP_VERSION = '0.1.5';
 const INTERACTIVE_CLAUDE_REGISTRY_AGENT = {
@@ -78,16 +83,6 @@ const LOCAL_REGISTRY_AGENTS = {
     args: ['acp'],
     versionArgs: ['--version'],
   },
-  kimi: {
-    command: 'kimi',
-    args: ['acp'],
-    versionArgs: ['-V'],
-  },
-  'kimi-code': {
-    command: 'kimi',
-    args: ['acp'],
-    versionArgs: ['-V'],
-  },
   opencode: {
     command: 'opencode',
     args: ['acp'],
@@ -102,16 +97,6 @@ const LOCAL_REGISTRY_AGENTS = {
 };
 const LOCAL_REGISTRY_AGENT_IDS = new Set(Object.keys(LOCAL_REGISTRY_AGENTS));
 const LOCAL_REGISTRY_AGENT_FALLBACKS = {
-  kimi: {
-    name: 'Kimi CLI',
-    description: "Moonshot AI's coding assistant",
-    icon: 'https://cdn.agentclientprotocol.com/registry/v1/latest/kimi.svg',
-  },
-  'kimi-code': {
-    name: 'Kimi Code CLI',
-    description: "Moonshot AI's next-generation coding agent CLI",
-    icon: 'https://cdn.agentclientprotocol.com/registry/v1/latest/kimi.svg',
-  },
   opencode: {
     name: 'OpenCode',
   },
@@ -429,6 +414,19 @@ export async function buildRegistryIconArtifacts(iconAgents, fetchImpl = fetch) 
   };
 }
 
+export function normalizeRegistryAgents(agentsRaw) {
+  const agentsById = new Map(agentsRaw.filter(isRecord).map((agent) => [agent.id, agent]));
+  const normalizedRemote = agentsRaw
+    .map((agent) => normalizeRegistryAgent(agent))
+    .filter((agent) => agent !== null);
+
+  const normalizedLocal = Array.from(LOCAL_REGISTRY_AGENT_IDS)
+    .map((id) => normalizeLocalAgent(agentsById.get(id), id))
+    .filter((agent) => agent !== null);
+
+  return [...normalizedRemote, ...normalizedLocal].sort((a, b) => a.id.localeCompare(b.id));
+}
+
 async function main({ iconsOnly = false } = {}) {
   const response = await fetch(REGISTRY_URL);
   if (!response.ok) {
@@ -444,17 +442,7 @@ async function main({ iconsOnly = false } = {}) {
       .filter(([id]) => !!id)
   );
 
-  const normalizedRemote = agentsRaw
-    .map((agent) => normalizeRegistryAgent(agent))
-    .filter((agent) => agent !== null);
-
-  const normalizedLocal = Array.from(LOCAL_REGISTRY_AGENT_IDS)
-    .map((id) => normalizeLocalAgent(agentsById.get(id), id))
-    .filter((agent) => agent !== null);
-
-  const normalized = [...normalizedRemote, ...normalizedLocal].sort((a, b) =>
-    a.id.localeCompare(b.id)
-  );
+  const normalized = normalizeRegistryAgents(agentsRaw);
 
   const extraIconAgents = EXTRA_REMOTE_REGISTRY_ICON_IDS.map((id) => agentsById.get(id)).filter(
     (agent) => agent !== undefined
@@ -495,7 +483,7 @@ import type { RegistryAcpAgent } from '../ai';
 
 export const ACP_REGISTRY_SOURCE_URL = '${REGISTRY_URL}';
 export const ACP_REGISTRY_GENERATED_AT = '${generatedAt}';
-export const EXCLUDED_REMOTE_REGISTRY_AGENT_IDS = ['claude-acp', 'claude-p', 'codex-acp', 'grok-build'] as const;
+export const EXCLUDED_REMOTE_REGISTRY_AGENT_IDS = ${JSON.stringify([...EXCLUDED_REMOTE_REGISTRY_AGENT_IDS])} as const;
 
 export const HARDCODED_REGISTRY_ACP_AGENTS: RegistryAcpAgent[] = ${toTsObjectLiteral([
     INTERACTIVE_CLAUDE_REGISTRY_AGENT,

@@ -10,9 +10,9 @@ Root and `apps/cli/AGENTS.md` apply; `specs/session-orchestration.md` owns behav
 - Target input creation is fenced by the SQLite item-materialization claim.
   Acceptance owns new claims; the lease Worker only adopts absent/expired
   claims. Loro history evidence clears the claim. Before an adopted claim may
-  treat a missing fixed Turn as permission to write, an explicit remote Streams
-  target-document sync must confirm that the local replica is caught up. A local
-  transport-only sync is not confirmation. A failed remote confirmation is
+  treat a missing fixed Turn as permission to write, confirm authority: cloud
+  requires remote Streams catch-up (local transport sync is insufficient); OSS
+  uses the daemon repo that owns every MCP write. A failed confirmation is
   uncertainty and arms the same owned bounded-backoff wake as a materializer
   error; unrelated SQLite/Meta watch hints must not be the only retry path, and
   every retry rechecks the fixed user Turn id first.
@@ -28,6 +28,8 @@ Root and `apps/cli/AGENTS.md` apply; `specs/session-orchestration.md` owns behav
   the source Session. Recovery uses that user for attribution/authorization and the current owner
   Machine credential to execute. Completion preserves userId. Matching includes both ids, kind,
   and fingerprint; reuse from another Turn is `OPERATION_ID_REUSED`, not a retry.
+  Presentation snapshots live in `operation_authors`, atomically with acceptance; do not
+  extend strict legacy Operation rows/configs. Recovery uses these snapshots.
 - `operation-coordinator.ts` is owned only by the local Host-lease Worker. MCP
   subprocesses may accept Operations but never schedule completion Turns.
 - Reconciliation is level-checked. Loro subscriptions and SQLite directory

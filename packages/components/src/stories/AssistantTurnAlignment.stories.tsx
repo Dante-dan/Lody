@@ -8,7 +8,8 @@
  * indent (the prose used to carry `sm:px-2` and sat 8px right of the chevrons).
  */
 import type { Meta, StoryObj } from '@storybook/react';
-import { Provider, createStore } from 'jotai';
+import { Provider, createStore, useAtomValue } from 'jotai';
+import { expect, waitFor } from 'storybook/test';
 import type { ReactNode } from 'react';
 import type { MessageContent, SessionHistoryParsed, SessionId } from '@lody/shared';
 import type { ChatStreamItem, SessionChatStreamViewProps } from '@/components/ai-gui/view';
@@ -16,6 +17,11 @@ import { MessageRowView, SessionChatStreamView } from '@/components/ai-gui/view'
 import { runtimeAtom } from '@/atoms';
 import { CONVERSATION_CONTENT_WIDTH_CLASS } from '@/lib/conversation-layout';
 import { cn } from '@/lib/utils';
+import * as stylex from '@stylexjs/stylex';
+import { colors } from '@lody/ui/tokens/colors.stylex';
+import { conversation } from '../components/ai-gui/conversation.tokens.stylex';
+import { conversationFontSizeAtom } from '@/atoms/settings';
+import { InterfaceFontController } from '@/components/interface-font-controller';
 
 /**
  * `usePermissionResponse` reports `isReady: !!runtime`, and a NOT-ready card
@@ -52,6 +58,251 @@ const renderMessageRow: SessionChatStreamViewProps['renderMessageRow'] = ({
   message,
   sessionId: storySessionId,
 }) => <MessageRowView message={message} sessionId={storySessionId} />;
+
+const rhythmStyles = stylex.create({
+  frame: { height: '1500px', width: '100%', backgroundColor: colors.background },
+});
+const rhythmTheme = stylex.createTheme(conversation, {
+  bubbleFill: 'rgb(24 64 80)',
+  readingLeading: '24px',
+  paragraphGap: '16px',
+  activityPitch: '28px',
+  responseGap: '48px',
+  roundGap: '80px',
+  surfaceGap: '24px',
+});
+
+const rhythmMessages: SessionHistoryParsed[] = [
+  {
+    id: 'rhythm-user-1',
+    role: 'user',
+    timestamp: '2026-10-01T08:00:00.000Z',
+    read: true,
+    items: [
+      {
+        type: 'text',
+        text: '检查文件重命名后搜索结果是否及时更新。Please preserve the open draft.\n\n验收：中文、English、数字 512 和标点都应正常。',
+      },
+    ],
+  },
+  {
+    id: 'rhythm-assistant-1',
+    role: 'assistant',
+    timestamp: '2026-10-01T08:00:01.000Z',
+    read: true,
+    finished: true,
+    items: [
+      {
+        type: 'tool_call',
+        toolCallId: 'rhythm-read',
+        kind: 'read',
+        title: 'Read search-index.ts',
+        status: 'completed',
+      },
+      {
+        type: 'tool_call',
+        toolCallId: 'rhythm-run',
+        kind: 'execute',
+        title: 'pnpm test search-index',
+        status: 'completed',
+        content: [{ type: 'content', content: { type: 'text', text: '12 passed · 0 failed' } }],
+      },
+      {
+        type: 'text',
+        text: '索引更新与文件重命名共享一次提交。The open draft remains available.\n\n1. 保留会话标识与工作目录。\n2. 失败时返回明确的错误。\n3. 检查中文、English、512 和 punctuation。\n\n```ts\nconst generation = index.version;\nawait index.rename("新标题", { preserveDraft: true });\n```\n\n> Review: verify mixed text and punctuation in the same viewport.',
+      },
+    ],
+  },
+  {
+    id: 'rhythm-user-2',
+    role: 'user',
+    timestamp: '2026-10-01T08:01:00.000Z',
+    read: true,
+    items: [
+      {
+        type: 'text',
+        text: '补充验证说明，包含中英文混排。Add the verification results to the report.',
+      },
+    ],
+  },
+  {
+    id: 'rhythm-assistant-2',
+    role: 'assistant',
+    timestamp: '2026-10-01T08:01:01.000Z',
+    read: true,
+    finished: true,
+    items: [
+      {
+        type: 'tool_call',
+        toolCallId: 'rhythm-report',
+        kind: 'read',
+        title: 'Read verification.md',
+        status: 'completed',
+      },
+      {
+        type: 'text',
+        text: '验证说明已准备好。The results are ready for review.\n\n- 中文：标点、字面与换行。\n- English: rhythm, punctuation, and ambiguous glyphs.\n- Mixed text: baseline and CJK / Latin balance.',
+      },
+    ],
+  },
+];
+const rhythmItems: ChatStreamItem[] = rhythmMessages.map((message, turnIndex) => ({
+  type: 'message',
+  sessionId,
+  message,
+  turnIndex,
+}));
+
+export const ConversationRhythm: Story = {
+  args: { sessionId, items: rhythmItems, renderMessageRow },
+  render: () => <ConversationRhythmScene />,
+};
+
+export const ConversationRhythmTheme: Story = {
+  ...ConversationRhythm,
+  render: () => <ConversationRhythmScene themed />,
+};
+
+const rhythmWithoutFooter = rhythmItems.map((item) =>
+  item.type === 'message' && item.message.role === 'assistant'
+    ? {
+        ...item,
+        message: {
+          ...item.message,
+          finished: false,
+          items: item.message.items.filter((content) => content.type === 'text'),
+        },
+      }
+    : item
+);
+const rhythmWithFiles = rhythmItems.map((item) =>
+  item.type === 'message' && item.message.id === 'rhythm-assistant-1'
+    ? {
+        ...item,
+        message: {
+          ...item.message,
+          fileDiff: [
+            { filePath: 'src/search-index.ts', add: 12, del: 4 },
+            { filePath: 'tests/search-index.test.ts', add: 24, del: 2 },
+          ],
+        },
+      }
+    : item
+);
+
+const rhythmReadingItems = rhythmItems.map((item) =>
+  item.type === 'message' && item.message.id === 'rhythm-assistant-1'
+    ? {
+        ...item,
+        message: {
+          ...item.message,
+          items: item.message.items.map((content) =>
+            content.type === 'text'
+              ? {
+                  ...content,
+                  text: content.text.replace(
+                    '索引更新与文件重命名共享一次提交。The open draft remains available.',
+                    '索引更新与文件重命名共享一次提交。搜索列表会显示新的标题，已经打开的草稿继续保留光标、选择范围和未保存的内容。我们同时检查了较长的中文说明与 English text，确保自动换行后，每一行仍然容易追踪，不需要在段落之间反复寻找阅读位置。The open draft remains available while the search results refresh, and the same conversation stays selected throughout the update.\n\n验证覆盖普通重命名、连续修改和失败恢复。遇到错误时，界面保留用户已经输入的内容，并明确说明哪些操作没有完成。This paragraph describes the failure path with enough continuous text to compare line spacing, paragraph separation, and the transition from activity rows to the final answer.'
+                  ),
+                }
+              : content
+          ),
+        },
+      }
+    : item
+);
+
+export const ConversationRhythmReading: Story = {
+  ...ConversationRhythm,
+  render: () => <ConversationRhythmScene items={rhythmReadingItems} />,
+};
+
+const rhythmProgressItems = rhythmReadingItems.map((item) =>
+  item.type === 'message' && item.message.id === 'rhythm-assistant-1'
+    ? {
+        ...item,
+        message: {
+          ...item.message,
+          items: [
+            {
+              type: 'text' as const,
+              text: '先检查搜索索引与草稿保存之间的关系，确认文件改名后列表能够及时刷新。接下来会分别检查正常更新和失败恢复，保留用户正在编辑的内容，并记录每一步的验证结果。',
+            },
+            item.message.items[0]!,
+            {
+              type: 'text' as const,
+              text: '已经找到索引更新的入口。现在检查重复修改和失败重试是否会覆盖草稿，并验证较长的文件名在列表中仍然清晰可读。The next check covers the error path and preserves the current selection.',
+            },
+            ...item.message.items.slice(1),
+          ],
+        },
+      }
+    : item
+);
+
+export const ConversationRhythmProgress: Story = {
+  ...ConversationRhythm,
+  render: () => <ConversationRhythmScene items={rhythmProgressItems} />,
+};
+
+export const ConversationRhythmProgressStreaming: Story = {
+  ...ConversationRhythm,
+  render: () => (
+    <ConversationRhythmScene
+      items={rhythmProgressItems.map((item) =>
+        item.type === 'message' && item.message.id === 'rhythm-assistant-1'
+          ? { ...item, message: { ...item.message, finished: false } }
+          : item
+      )}
+    />
+  ),
+};
+
+export const ConversationRhythmReadingStreaming: Story = {
+  ...ConversationRhythm,
+  render: () => (
+    <ConversationRhythmScene
+      items={rhythmReadingItems.map((item) =>
+        item.type === 'message' && item.message.id === 'rhythm-assistant-1'
+          ? { ...item, message: { ...item.message, finished: false } }
+          : item
+      )}
+    />
+  ),
+};
+
+export const ConversationRhythmWithoutFooter: Story = {
+  ...ConversationRhythm,
+  render: () => <ConversationRhythmScene items={rhythmWithoutFooter} />,
+};
+
+export const ConversationRhythmWithFiles: Story = {
+  ...ConversationRhythm,
+  render: () => <ConversationRhythmScene items={rhythmWithFiles} />,
+};
+
+function ConversationRhythmScene({
+  themed = false,
+  items = rhythmItems,
+}: {
+  themed?: boolean;
+  items?: ChatStreamItem[];
+}) {
+  const fontSize = useAtomValue(conversationFontSizeAtom);
+  return (
+    <div {...stylex.props(rhythmStyles.frame, themed && rhythmTheme)}>
+      <InterfaceFontController enabled />
+      <SessionChatStreamView
+        sessionId={sessionId}
+        items={items}
+        conversationFontSize={fontSize}
+        renderMessageRow={({ message, sessionId: id }) => (
+          <MessageRowView message={message} sessionId={id} conversationFontSize={fontSize} />
+        )}
+      />
+    </div>
+  );
+}
 
 const streamingTurn: SessionHistoryParsed = {
   id: 'alignment-assistant',
@@ -156,11 +407,142 @@ export const DesktopStreamingTurn: Story = {
         items={items}
         sessionId={sessionId}
         renderMessageRow={renderMessageRow}
+        lastAssistantMessageId={streamingTurn.id}
+        onCopyContext={() => undefined}
         agentActivityLabel="Exploring"
         agentActivityTone="warning"
       />
     </div>
   ),
+};
+
+const scrollToLatestTurn: SessionHistoryParsed = {
+  id: 'alignment-scroll-to-latest',
+  role: 'assistant',
+  // Keep the live-duration label representative when the story is opened later.
+  timestamp: new Date(Date.now() - 30_000).toISOString(),
+  read: true,
+  finished: false,
+  items: [
+    {
+      type: 'text',
+      text: Array.from(
+        { length: 36 },
+        (_, index) =>
+          `Streaming output line ${index + 1}: the reader is away from the latest response, so new content keeps arriving below the viewport.`
+      ).join('\n\n'),
+    },
+  ],
+};
+
+const scrollToLatestItems: ChatStreamItem[] = [
+  { type: 'message', sessionId, message: scrollToLatestTurn, turnIndex: 0 } as const,
+];
+
+function moveAwayFromLatest(viewport: HTMLElement): void {
+  // Move away from the real bottom before releasing follow. A wheel event alone
+  // changes the mode but leaves the viewport at the end, which makes the story
+  // show a return control in a state that is already at the latest row.
+  const maxScrollTop = viewport.scrollHeight - viewport.clientHeight;
+  if (maxScrollTop <= 0) throw new Error('Conversation viewport does not overflow');
+  viewport.scrollTop = Math.max(0, maxScrollTop - 200);
+  viewport.dispatchEvent(new Event('scroll', { bubbles: true }));
+  viewport.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -20 }));
+}
+
+async function releaseScrollToLatest(canvasElement: HTMLElement): Promise<{
+  button: HTMLButtonElement;
+  viewport: HTMLElement;
+}> {
+  const viewport = await waitFor(() => {
+    const node = canvasElement.querySelector<HTMLElement>('[data-message-selection-scroll]');
+    if (!node) throw new Error('Conversation viewport is not mounted');
+    return node;
+  });
+  await waitFor(() => {
+    moveAwayFromLatest(viewport);
+    return viewport;
+  });
+  const button = await waitFor(() => {
+    const control = canvasElement.querySelector<HTMLButtonElement>('[data-scroll-to-latest]');
+    if (!control) throw new Error('Scroll-to-latest control is not visible');
+    return control;
+  });
+  return { button, viewport };
+}
+
+async function expectAtRealBottom(viewport: HTMLElement): Promise<void> {
+  await waitFor(() => {
+    const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    if (distance > 1) throw new Error(`Still ${Math.ceil(distance)}px from the real bottom`);
+    return true;
+  });
+}
+
+async function leaveScrollToLatestVisible(
+  canvasElement: HTMLElement,
+  viewport: HTMLElement
+): Promise<HTMLButtonElement> {
+  await moveAwayFromLatest(viewport);
+  return await waitFor(() => {
+    const button = canvasElement.querySelector<HTMLButtonElement>('[data-scroll-to-latest]');
+    if (!button) throw new Error('Scroll-to-latest control did not return');
+    return button;
+  });
+}
+
+export const DesktopScrollToLatestWorking: Story = {
+  args: { sessionId, items: scrollToLatestItems, renderMessageRow },
+  globals: { theme: 'dark' },
+  render: () => (
+    <div className="relative h-[520px] w-full bg-background">
+      <SessionChatStreamView
+        items={scrollToLatestItems}
+        sessionId={sessionId}
+        className="h-full"
+        renderMessageRow={renderMessageRow}
+        lastAssistantMessageId={scrollToLatestTurn.id}
+        agentActivityLabel="Working"
+        agentActivityTone="primary"
+        agentActivityShimmer
+      />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const { button, viewport } = await releaseScrollToLatest(canvasElement);
+    await expect(button.querySelector('.animate-spin')).not.toBeNull();
+    await button.click();
+    await expectAtRealBottom(viewport);
+    const visibleButton = await leaveScrollToLatestVisible(canvasElement, viewport);
+    await expect(visibleButton.querySelector('.animate-spin')).not.toBeNull();
+  },
+};
+
+export const DesktopScrollToLatestWaiting: Story = {
+  args: { sessionId, items: scrollToLatestItems, renderMessageRow },
+  globals: { theme: 'dark' },
+  render: () => (
+    <div className="relative h-[520px] w-full bg-background">
+      <SessionChatStreamView
+        items={scrollToLatestItems}
+        sessionId={sessionId}
+        className="h-full"
+        renderMessageRow={renderMessageRow}
+        lastAssistantMessageId={scrollToLatestTurn.id}
+        agentActivityLabel="Waiting for permission"
+        agentActivityTone="warning"
+        agentActivityShimmer={false}
+      />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const { button, viewport } = await releaseScrollToLatest(canvasElement);
+    await expect(button.querySelector('.lucide-arrow-down')).not.toBeNull();
+    await button.click();
+    await expectAtRealBottom(viewport);
+    const visibleButton = await leaveScrollToLatestVisible(canvasElement, viewport);
+    await expect(visibleButton.querySelector('.lucide-arrow-down')).not.toBeNull();
+  },
 };
 
 export const DesktopFinishedTurn: Story = {
@@ -378,11 +760,8 @@ const planModeTurn: SessionHistoryParsed = {
       isLatest: true,
       markdown: [
         '## Goal',
-        '',
         'Keep every top-level row of a plan-mode turn on one left rail.',
-        '',
         '## Steps',
-        '',
         '1. No per-shell horizontal pad on the `switch_mode` card.',
         '2. The resolved permission card sits on the rail, not on its own `ml-4`.',
       ].join('\n'),
@@ -508,11 +887,8 @@ const planAwaitingDecisionTurn: SessionHistoryParsed = {
       isLatest: true,
       markdown: [
         '## Goal',
-        '',
         'Keep every top-level row of a plan-mode turn on one left rail.',
-        '',
         '## Steps',
-        '',
         '1. No per-shell horizontal pad on the `switch_mode` card.',
         '2. The resolved permission card sits on the rail.',
         '3. Attachments sort below the plan.',
@@ -550,11 +926,8 @@ const planAwaitingDecisionTurn: SessionHistoryParsed = {
  */
 const PARITY_PLAN = [
   '## Goal',
-  '',
   'Render the same plan panel whichever adapter produced it.',
-  '',
   '## Steps',
-  '',
   '1. Resolve the carrier in `plan-surface.ts`.',
   '2. Feed every carrier into one `PlanPanel`.',
 ].join('\n');
@@ -666,6 +1039,95 @@ export const DesktopPlanDenied: Story = outcomeStory(
 export const DesktopPlanWithdrawn: Story = outcomeStory(
   planExitOutcomeTurn('alignment-plan-cancelled', { outcome: 'cancelled' })
 );
+
+/**
+ * COMMAND STEPS — the expanded activity group's verb contract.
+ *
+ * Command tool calls title themselves with the raw command, so the step gets
+ * its verb from the renderer: "Running" while the call is in flight (the verb
+ * shimmers, like every other step's), "Ran" once it lands. Searches and reads
+ * keep the verbs their own titles already carry. Click the group header to
+ * expand the list the screenshot below describes.
+ */
+const commandStepsTurn: SessionHistoryParsed = {
+  id: 'alignment-command-steps',
+  role: 'assistant',
+  timestamp: new Date(Date.now() - 47_000).toISOString(),
+  read: true,
+  finished: false,
+  items: [
+    {
+      type: 'text',
+      text: 'dev 服务器起不来,先看启动脚本,再确认依赖解析和 vite 配置。',
+    },
+    {
+      type: 'tool_call',
+      toolCallId: 'command-steps-sed',
+      title: "sed -n '1,240p' apps/electron/scripts/dev-local.mjs",
+      kind: 'execute',
+      status: 'completed',
+      content: [
+        {
+          type: 'terminal_command',
+          command: '/bin/bash',
+          args: ['-lc', "sed -n '1,240p' apps/electron/scripts/dev-local.mjs"],
+          cwd: '/repo',
+        },
+      ],
+    },
+    {
+      type: 'tool_call',
+      toolCallId: 'command-steps-git',
+      title: 'git status --short',
+      kind: 'execute',
+      status: 'completed',
+    },
+    {
+      type: 'tool_call',
+      toolCallId: 'command-steps-search',
+      title: "Search for 'buildWith|transformAsync|unplugin'",
+      kind: 'search',
+      status: 'completed',
+    },
+    {
+      type: 'tool_call',
+      toolCallId: 'command-steps-read',
+      title: 'Read packages/components/src/components/ai-gui/view.tsx',
+      kind: 'read',
+      status: 'completed',
+      locations: [{ path: 'packages/components/src/components/ai-gui/view.tsx' }],
+    },
+    {
+      type: 'tool_call',
+      toolCallId: 'command-steps-pnpm',
+      title: 'pnpm --dir apps/electron exec electron-vite dev --mode oss',
+      kind: 'execute',
+      status: 'in_progress',
+    },
+  ],
+};
+
+export const DesktopCommandSteps: Story = {
+  args: {
+    sessionId,
+    items: [{ type: 'message', sessionId, message: commandStepsTurn, turnIndex: 0 } as const],
+    renderMessageRow,
+  },
+  globals: { theme: 'dark' },
+  render: () => (
+    <WithRuntime>
+      <div className="relative h-[380px] w-full bg-background">
+        <SessionChatStreamView
+          items={[{ type: 'message', sessionId, message: commandStepsTurn, turnIndex: 0 } as const]}
+          sessionId={sessionId}
+          renderMessageRow={renderMessageRow}
+          lastAssistantMessageId={commandStepsTurn.id}
+          agentActivityLabel="Working"
+        />
+      </div>
+    </WithRuntime>
+  ),
+};
 
 export const DesktopPlanModeTurn: Story = {
   args: { sessionId, items: planModeItems, renderMessageRow },

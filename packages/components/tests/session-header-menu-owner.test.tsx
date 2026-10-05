@@ -78,8 +78,9 @@ describe('SessionHeaderMenu owner transfer', () => {
     );
     await act(async () => {
       trigger?.dispatchEvent(
-        new TestPointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'mouse' })
+        new TestPointerEvent('mousedown', { bubbles: true, button: 0, pointerType: 'mouse' })
       );
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
   }
 
@@ -93,9 +94,9 @@ describe('SessionHeaderMenu owner transfer', () => {
 
   /** Rows read "<avatar initials><name>", so match by substring, not equality. */
   function ownerRow(name: string): HTMLElement {
-    const row = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
-      (item) => item.textContent?.includes(name)
-    );
+    const row = Array.from(
+      document.querySelectorAll<HTMLElement>('[role^="menuitem"]')
+    ).find((item) => item.textContent?.includes(name));
     expect(row, `owner row for ${name}`).toBeDefined();
     return row!;
   }

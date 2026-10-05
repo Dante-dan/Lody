@@ -1,5 +1,7 @@
+import type { MessageAuthor } from '../message-author';
 import type { MessageContent, ModelInfo, SessionTurnInputConfig } from '../ai';
 import type { PlanEntry } from '@agentclientprotocol/sdk';
+import type { SessionTurnTokenUsage } from './token-usage';
 
 // # Session domain DTOs
 //
@@ -15,6 +17,8 @@ import type { PlanEntry } from '@agentclientprotocol/sdk';
 export type SessionTurnRole = 'user' | 'assistant' | 'system';
 
 export type SessionTurnStatus =
+  /** Materialized by a schedule but inert until `latestUserMsgId` commits it. */
+  | 'prepared'
   | 'pending'
   | 'pending_apply'
   | 'delivery_unknown'
@@ -39,7 +43,9 @@ export type SessionTurn = {
   readonly plan?: readonly unknown[];
   readonly read?: boolean;
   readonly userId?: string;
+  readonly author?: MessageAuthor;
   readonly modelInfo?: ModelInfo;
+  readonly tokenUsage?: SessionTurnTokenUsage;
   readonly fileDiff?: readonly unknown[];
   readonly status?: SessionTurnStatus;
   readonly inputConfig?: unknown;
@@ -62,7 +68,9 @@ export interface SessionTurnWritableValues {
   role: SessionTurnRole;
   read: boolean | undefined;
   userId: string | undefined;
+  author: MessageAuthor | undefined;
   modelInfo: ModelInfo | undefined;
+  tokenUsage: SessionTurnTokenUsage | undefined;
   fileDiff: readonly unknown[] | undefined;
   status: SessionTurnStatus | undefined;
   inputConfig: unknown;
@@ -131,13 +139,13 @@ export type SessionDirectoryScalars = {
 export const SESSION_DIRECTORY_INPUT_CONFIG_KEYS = [
   'agentRoleId',
   'agentRoleRevision',
+  'agentRoleSnapshot',
   'modeId',
   'modelId',
   'cliType',
   'agentType',
   'mcpServerIds',
   'configOptionValues',
-  'taskToolsEnabled',
 ] as const;
 
 /** Business history shape, independent of the storage schema and container ids.

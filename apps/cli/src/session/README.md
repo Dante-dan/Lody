@@ -9,11 +9,11 @@ Dispatch architecture: context/message-flow.md — user turns arrive by being wr
 session doc (meta pointers), not via a message bus. The WS/DO path is DEPRECATED. The
 CLI/MCP orchestration contract is specs/session-orchestration.md.
 
-| Boundary         | Owner                                             | Responsibility                                                       |
-| ---------------- | ------------------------------------------------- | -------------------------------------------------------------------- |
-| Admission        | [Dispatch watcher](session-dispatch-watcher.ts)   | Resolves metadata activation against history, queue, and RPC offers. |
-| Execution        | [Execution service](session-execution-service.ts) | Owns turns, steer results, cancellation, and raw-request drain.      |
-| Process lifetime | [Session](session.ts)                             | Owns ACP resources and confirmed termination.                        |
+| Boundary         | Owner                                             | Responsibility                                                                       |
+| ---------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Admission        | [Dispatch watcher](session-dispatch-watcher.ts)   | Resolves metadata activation against history, queue, and RPC offers.                 |
+| Execution        | [Execution service](session-execution-service.ts) | Owns turns, steer results, cancellation, and raw-request drain.                      |
+| Process lifetime | [Session](session.ts)                             | Owns ACP resources, confirmed termination, and bounded Codex refresh-start recovery. |
 
 ## Files
 
@@ -33,14 +33,20 @@ CLI/MCP orchestration contract is specs/session-orchestration.md.
 - `acp-error-classification.ts` — JSON-RPC/transport error string matching for the above.
 - `session-manager.ts` / `session.ts` / `session-sandbox.ts` / `terminal-manager.ts` —
   session and process lifecycle, workdirs, worktrees, sandboxed spawning, ACP terminals.
+  Managed GitHub credential preparation excludes local projects and their worktrees;
+  context refresh only rotates sessions already enrolled during preparation.
 - `session-preparation-service.ts` — process-local speculative ACP lease/state owner.
 - `session-fork-service.ts` / `session-fork-operation-store.ts` — the fork saga and its
   machine-local marker store.
 - `session-edit-and-resend-service.ts` — same-session replacement of the last normal User turn.
 - `session-launch-config-resolver.ts` — durable launch config resolution.
+- `workspace-git-service.ts` — observes checkout branches for local folders and worktrees,
+  serializes reads/writes per owner Session, and publishes the last named branch. Execution
+  binds, terminal turns, and authorized Code Collab activation/refresh use this service;
+  observation requires neither a running agent nor a GitHub remote.
 - `turn-post-processing-service.ts` — post-turn work (titles, notifications, diff stats,
   and the `workspaceDirty`/`workspaceUnpushed` probes that drive the Info Bar's
-  Commit & Push action; both cancellation routes run `syncWorkspaceGitState` alone,
+  Commit & Push action; both cancellation routes refresh the branch and run `syncWorkspaceGitState`,
   which self-gates on the session's GitHub binding).
 - `session-diff-stats-target.ts` — chooses which writer owns a session's `diffStats`.
 - `session-access-policy.ts` — local-first dispatch access precheck (optimistic-allow cache,
@@ -200,6 +206,15 @@ space is still spawned directly. The shell is non-interactive and non-login (`sh
 change its environment. A spawn that still fails answers with a JSON-RPC code instead of a bare
 errno, and its error is recorded as an exit status so no waiter is left pending.
 
+### Imported ACP identity
+
+Continuation and fork use the shared `resolveSessionAcpTargetId` projection: a
+Lody-owned runtime supersedes the immutable imported source; an unresolved source
+history conflict cannot authorize native fork. Import does not fabricate a live
+runtime id. Fork copies an ACP runtime configuration baseline only when it belongs
+to the copied last user turn and source ACP identity, rebasing it to the new native
+session id. Ordinary and worktree forks use the same projection and fence.
+
 ### Fork saga recovery
 
 Because a preparing target publishes no Session meta until its final commit, the repo meta
@@ -221,25 +236,30 @@ subscriptions at every daemon start (see [../lib/loro/AGENTS.md](../lib/loro/AGE
 
 ### GitHub credential broker
 
-Agent `gh` auth for GitHub repo sessions is set up in `session-manager.ts`: it creates the git
-credential broker, prepends the `~/.lody/bin/gh` shim, and injects/refreshes a managed
-`GH_TOKEN` when no user token is present. The shim lives in `../lib/gh-shim-script.ts`; token
-fetching/caching is in `../lib/github-token-manager.ts`; git HTTPS auth uses
-`../lib/git-credential-helper-script.ts`. Session process trees are already correct —
-`prepareGitHubRepoSessionConfig` injects the env explicitly. The host-side rule is in
-[worktree/AGENTS.md](worktree/AGENTS.md).
+Managed GitHub sessions receive a trusted conversation-owner snapshot and workspace
+Git/gh adapters from `session-manager.ts`. The shared credential iterator tries
+personal, eligible machine and repository App sources once, without a cloud policy
+lookup. The broker supplies optional managed tokens; owner-local credentials remain
+available during token-service failure. Native Git helpers use `GIT_EXEC_PATH`;
+standard URLs remain standard. Host operations pin the same owner snapshot through
+checkout. Managed credential helpers also cover checkout filters and LFS; non-owner
+host children scrub inherited GitHub tokens. Owner refresh updates shell eligibility
+and retires the old runtime on transfer, since running children retain their old
+environments. The interrupted operation is not replayed. See [the contract](../../../../specs/github-identity-fallback.md) and
+[worktree rules](worktree/AGENTS.md) for ownership, write non-replay and isolation.
 
 ### Commit identity
 
 The effective identity becomes `GIT_AUTHOR_*`/`GIT_COMMITTER_*` in the session env (`session.ts`
 `updateGitIdentity`, re-applied per turn via the execution service's `bindReadySession`). When
-the turn requester is the machine owner, the repository/machine Git identity wins and the
-resolved Lody/GitHub identity is its fallback. A non-owner requester always uses their resolved
+the turn requester is the machine owner, the repository/machine Git identity is used without a cloud profile lookup; missing local
+identity uses neutral LodyAI. Non-owner profile queries have a 60-second deadline; failed or
+timed-out entries are evicted so later turns can retry. A non-owner requester always uses their resolved
 Lody/GitHub identity and can never inherit the machine owner's Git config; if no usable requester
 identity exists, the neutral LodyAI identity is used. The cloud composition root owns hosted
 user resolution because the daemon does not own an end-user browser session; the local access
 port resolves only its synthetic owner and never performs network I/O. PR and push identity
-itself comes from the requester-bound GitHub token, not from git config. Identity changes update the host Session environment without restarting ACP or its sandbox,
+itself comes from the conversation-owner GitHub credential, not from git config. Identity changes update the host Session environment without restarting ACP or its sandbox,
 including adopted preparations. Existing ACP children retain their launch environment; live
 identity propagation into adapter-owned Git commands remains unresolved.
 

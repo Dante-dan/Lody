@@ -1,6 +1,20 @@
 // @vitest-environment jsdom
 
 import React, { act } from 'react';
+import {
+  buildMentionFileIndex,
+  getSuggestions,
+} from '../src/components/mentions/file-search/engine';
+import type {
+  FileSearchRequest,
+  FileSearchResponse,
+} from '../src/components/mentions/file-search/client';
+
+import type { SkillMentionItem } from '../src/components/mentions/mention-skill-source';
+
+const skillItems: SkillMentionItem[] = [];
+
+let fileEntry: { paths: string[]; fetchedAt: number; truncated: boolean } | null = null;
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -17,7 +31,7 @@ const sessionItems: Array<{
 vi.mock('../src/components/mentions/mention-project-file-source', async (importOriginal) => ({
   ...(await importOriginal<object>()),
   useMentionProjectFiles: () => ({
-    fileData: { entry: null, status: 'ready' as const },
+    fileData: { entry: fileEntry, status: 'ready' as const },
     initializeLazyDirectory: async () => undefined,
     getKnownFileTokens: () => new Set<string>(),
   }),
@@ -29,7 +43,7 @@ vi.mock('../src/components/mentions/mention-skill-source', async (importOriginal
     skillScanEnabled.push(enabled);
     return {
       skillState: { status: enabled ? ('ready' as const) : ('idle' as const) },
-      skillItems: [],
+      skillItems,
       knownSkillTokens: new Set<string>(),
     };
   },
@@ -64,7 +78,9 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
     await initI18n('en');
     originalScrollIntoView = HTMLElement.prototype.scrollIntoView;
     HTMLElement.prototype.scrollIntoView = vi.fn();
+    fileEntry = null;
     skillScanEnabled.length = 0;
+    skillItems.length = 0;
     sessionItems.length = 0;
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -88,6 +104,7 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
     skillAgent?: { machineId?: string; cliType?: string };
     mentionSource?: unknown;
     commandsEnabled?: boolean;
+    availableCommands?: Array<{ name: string; description: string }>;
   }) {
     function ControlledComposer() {
       const [value, setValue] = React.useState(props.value);
@@ -98,6 +115,7 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
           skillAgent={props.skillAgent as never}
           mentionSource={props.mentionSource as never}
           commandsEnabled={props.commandsEnabled}
+          availableCommands={props.availableCommands}
           resetOnEmpty={false}
         />
       );
@@ -142,6 +160,126 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
   }
+
+  it.each(['/', '、'])(
+    'opens and filters commands from %s, then commits the slash form',
+    async (trigger) => {
+      await render({
+        value: '',
+        availableCommands: [
+          { name: 'review', description: 'Review changes' },
+          { name: 'compact', description: 'Compact history' },
+        ],
+      });
+      await typeInto(trigger);
+      expect(document.body.textContent).toContain('Review changes');
+      expect(document.body.textContent).toContain('Compact history');
+      await typeInto(`${trigger}rev`);
+      expect(document.body.textContent).toContain('Review changes');
+      expect(document.body.textContent).not.toContain('Compact history');
+      await act(async () => {
+        textarea()!.dispatchEvent(
+          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+        );
+      });
+      expect(textarea()!.value.trimEnd()).toBe('/review');
+    }
+  );
+
+  it.each(['text 、rev', '、rev argument', 'text /rev', '/rev argument'])(
+    'does not offer commands for mixed prompt %s',
+    async (value) => {
+      await render({
+        value: '',
+        availableCommands: [{ name: 'review', description: 'Review changes' }],
+      });
+      await typeInto(value);
+      expect(document.querySelector('[data-slot="mention-item"]')).toBeNull();
+      expect(textarea()!.value).toBe(value);
+    }
+  );
+
+  it.each(['@file:', '@', '@other:'])(
+    'shows asynchronous file search state and commits %s results through the composer',
+    async (prefix) => {
+      vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
+      let respond: ((data: FileSearchResponse) => void) | undefined;
+      let query: Extract<FileSearchRequest, { type: 'query' }> | undefined;
+      vi.stubGlobal(
+        'Worker',
+        class {
+          onmessage: ((event: { data: FileSearchResponse }) => void) | null = null;
+          onerror = null;
+          onmessageerror = null;
+          constructor() {
+            respond = (data) => this.onmessage?.({ data });
+          }
+          postMessage(message: FileSearchRequest) {
+            if (message.type === 'query') query = message;
+          }
+          terminate() {}
+        }
+      );
+      fileEntry = {
+        paths:
+          prefix === '@other:'
+            ? ['src/other:Composer.tsx', 'src/other:Other.ts']
+            : ['src/Composer.tsx', 'src/Other.ts'],
+        fetchedAt: 1,
+        truncated: false,
+      };
+      const selectedPath = prefix === '@other:' ? 'src/other:Other.ts' : 'src/Other.ts';
+      // A file row reads its name, then the folder it sits in.
+      const selectedRowText = `${selectedPath.slice(4)}src`;
+      try {
+        await render({ value: '', mentionSource: { kind: 'local', localProjectId: 'project-1' } });
+        await typeInto(`${prefix}Composer`);
+        expect(document.body.textContent).toContain('Loading');
+        await act(async () => respond?.({ type: 'ready' }));
+        if (!query) throw new Error('Expected file query');
+        const initial = query;
+        await typeInto(`${prefix}Other`);
+        await act(async () =>
+          respond?.({
+            type: 'result',
+            id: initial.id,
+            term: initial.term,
+            items: getSuggestions(buildMentionFileIndex(fileEntry)!, initial.term),
+          })
+        );
+        expect(
+          document.querySelector('[data-slot="mention-item"]')?.textContent ?? ''
+        ).not.toContain('Composer.tsx');
+        const current = query;
+        await act(async () =>
+          respond?.({
+            type: 'result',
+            id: current.id,
+            term: current.term,
+            items: getSuggestions(buildMentionFileIndex(fileEntry)!, current.term),
+          })
+        );
+        const row = Array.from(
+          document.querySelectorAll<HTMLElement>('[data-slot="mention-item"]')
+        ).find((element) => element.textContent?.includes(selectedRowText));
+        expect(row).toBeDefined();
+        await act(async () => vi.advanceTimersToNextFrame());
+        if (prefix === '@') {
+          expect(highlightedRowText()).toContain('Other.tssrc');
+          await act(async () =>
+            textarea()?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+          );
+        } else {
+          await act(async () => row?.click());
+        }
+        expect(textarea()?.value).toContain(`@${selectedPath}`);
+        expect(textarea()?.value).not.toContain('file:');
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    }
+  );
 
   it('renders a plain textarea when no mention type is reachable', async () => {
     await render({ value: '' });
@@ -271,7 +409,90 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
     expect(document.body.textContent).toContain('Current project');
   });
 
-  it('offers all projects from an empty current-project result and scopes the command', async () => {
+  it.each([
+    { name: 'No project', projectKey: 'chat' as const, mentionSource: undefined },
+    {
+      name: 'GitHub project',
+      projectKey: 'github:lodyai/lody' as const,
+      mentionSource: { kind: 'github', repoFullName: 'lodyai/lody' },
+    },
+    {
+      name: 'local project',
+      projectKey: 'local:machine-1:project-1' as const,
+      mentionSource: { kind: 'local', machineId: 'machine-1', localProjectId: 'project-1' },
+    },
+  ])(
+    'distinguishes unmatched searches from an empty $name scope',
+    async ({ projectKey, mentionSource }) => {
+      for (let index = 0; index < 14; index++) {
+        sessionItems.push({
+          sessionId: `scoped-${index}`,
+          title: `Scoped conversation ${index}`,
+          slug: `scoped-conversation-${index}`,
+          activityAt: 14 - index,
+          projectKey,
+        });
+      }
+      sessionItems.push({
+        sessionId: 'other',
+        title: 'Elsewhere parser work',
+        slug: 'elsewhere-parser-work',
+        activityAt: 1,
+        projectKey: 'github:lodyai/other',
+      });
+      await render({ value: '', mentionSource });
+      await typeInto('@');
+      const category = Array.from(
+        document.querySelectorAll<HTMLElement>('[data-slot="mention-item"]')
+      ).find((row) => row.textContent === 'Sessions');
+      if (!category) throw new Error('Sessions category missing');
+      await act(async () => category.click());
+
+      const rows = () =>
+        Array.from(document.querySelectorAll<HTMLElement>('[data-slot="mention-item"]')).map(
+          (row) => row.textContent
+        );
+      const initialRows = rows();
+      expect(initialRows).toHaveLength(14);
+      expect(textarea()!.value).toBe('@session:');
+
+      for (const query of ['zzzzunmatched', 'elsewhere']) {
+        await typeInto(`@session:${query}`);
+        expect(rows()).toEqual([]);
+        expect(document.body.textContent).toContain(`Nothing matches “${query}”`);
+        expect(document.body.textContent).not.toContain('There are no other sessions');
+        expect(textarea()!.value).toBe(`@session:${query}`);
+        expect(document.activeElement).toBe(textarea());
+        await typeInto('@session:');
+        expect(rows()).toEqual(initialRows);
+      }
+
+      await typeInto('@session:elsewhere');
+      await act(async () => {
+        commands.execute('mention.toggleSessionProjectScope');
+      });
+      expect(textarea()!.value).toBe('@session:elsewhere');
+      expect(document.activeElement).toBe(textarea());
+      expect(rows()).toHaveLength(1);
+      expect(rows()[0]).toContain('Elsewhere parser work');
+      await typeInto('@session:zzzzunmatched');
+      expect(document.body.textContent).toContain('Nothing matches “zzzzunmatched”');
+      await typeInto('@session:');
+      expect(rows()).toHaveLength(15);
+      await act(async () => {
+        commands.execute('mention.toggleSessionProjectScope');
+      });
+      expect(rows()).toEqual(initialRows);
+    }
+  );
+
+  it.each([
+    { mentionSource: undefined, message: 'There are no other sessions without a project.' },
+    {
+      mentionSource: { kind: 'github', repoFullName: 'lodyai/lody' },
+      message: 'There are no other sessions in the current project.',
+    },
+  ])('offers all projects from an empty scope: $message', async ({ mentionSource, message }) => {
     sessionItems.push({
       sessionId: 'other',
       title: 'Cross project session',
@@ -281,14 +502,15 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
     });
     await render({
       value: '',
-      mentionSource: { kind: 'github', repoFullName: 'lodyai/lody' },
+      mentionSource,
     });
 
     expect(commands.execute('mention.toggleSessionProjectScope')).toBe(false);
+    await typeInto('@session:');
+    expect(document.body.textContent).toContain(message);
+    expect(document.body.textContent).toContain('View all projects');
     await typeInto('@session:cross');
-    expect(document.body.textContent).toContain(
-      'There are no other sessions in the current project.'
-    );
+    expect(document.body.textContent).toContain(message);
     expect(document.body.textContent).not.toContain('Cross project session');
 
     expect(commands.execute('mention.toggleSessionProjectScope')).toBe(true);
@@ -329,13 +551,53 @@ describe('CombinedMentionTextarea mention enablement and activation', () => {
     expect(skillScanEnabled).toContain(true);
   });
 
-  it('retains $ as a direct skill-menu trigger', async () => {
+  it.each(['$', '￥'])('opens skills from %s and commits the dollar form', async (trigger) => {
+    for (const token of ['review', 'research']) {
+      skillItems.push({
+        token,
+        dir: '.agents/skills',
+        scope: 'project',
+        skill: {
+          id: token,
+          name: token,
+          relativePath: `.agents/skills/${token}/SKILL.md`,
+          isSymlink: false,
+        },
+      });
+    }
     await render({ value: '', skillAgent: { machineId: 'machine-1' } });
     expect(skillScanEnabled).not.toContain(true);
+    await typeInto(`Use ${trigger}`);
+    expect(document.body.textContent).toContain('review');
+    expect(document.body.textContent).toContain('research');
+    await typeInto(`Use ${trigger}rev`);
+    expect(document.body.textContent).toContain('review');
+    expect(document.body.textContent).not.toContain('research');
+    await act(async () => {
+      textarea()!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+      );
+    });
+    expect(textarea()!.value.trimEnd()).toBe('Use $review');
+  });
 
-    await typeInto('$');
+  it.each(['$', '￥'])('keeps %s plain when skills are unavailable', async (trigger) => {
+    await render({ value: '', availableCommands: [{ name: 'review', description: 'Review' }] });
+    await typeInto(`${trigger}review`);
+    expect(document.querySelector('[data-slot="mention-item"]')).toBeNull();
+    expect(textarea()!.value).toBe(`${trigger}review`);
+  });
 
-    expect(skillScanEnabled).toContain(true);
+  it('preserves an unselected yuan query on dismissal', async () => {
+    await render({ value: '', skillAgent: { machineId: 'machine-1' } });
+    await typeInto('￥unknown');
+    await act(async () => {
+      textarea()!.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+      );
+    });
+    expect(textarea()!.value).toBe('￥unknown');
+    expect(document.querySelector('[data-slot="mention-item"]')).toBeNull();
   });
 
   it('still scans skills for a draft that already carries a $ token', async () => {

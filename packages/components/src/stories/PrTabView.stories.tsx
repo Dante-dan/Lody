@@ -1,14 +1,19 @@
 import type { Meta, StoryObj } from '@storybook/react';
+import { useState } from 'react';
 import type {
   GitHubCheckRun,
   GitHubIssueComment,
   GitHubPullRequestDetails,
+  GitHubPullRequestCommit,
+  GitHubPullRequestFile,
   GitHubReview,
   GitHubReviewComment,
   GitHubReviewThread,
   GitHubUser,
 } from '@lody/shared';
 import { PrTabView, type PrTabViewData } from '@/components/sessions/pr-tab-view';
+import type { UseGitHubPrDiffResult } from '@/hooks/use-github-pr-diff';
+import type { PrCommitSelection } from '@/lib/github-pr-diff';
 
 const alice: GitHubUser = {
   login: 'alice',
@@ -39,6 +44,7 @@ const basePr: GitHubPullRequestDetails = {
   draft: false,
   htmlUrl: 'https://github.com/loro-dev/lody/pull/42',
   baseRef: 'main',
+  baseSha: 'base0000000000',
   headRef: 'feat/pr-tab-for-github-worktree',
   headSha: 'deadbeefcafef00d',
   user: alice,
@@ -78,6 +84,24 @@ const reviewComment = (overrides: Partial<GitHubReviewComment>): GitHubReviewCom
   ...overrides,
 });
 
+const threadOneHunk = [
+  '@@ -120,6 +120,12 @@ export const PrTabView = memo(function PrTabView({',
+  '   const { t } = useTranslation();',
+  '   const pr = data?.pullRequest;',
+  '-  const conversation = buildConversation(data);',
+  '+  const conversation = data',
+  '+    ? buildConversation(data.issueComments, data.reviewThreads, data.reviews)',
+  '+    : [];',
+].join('\n');
+
+const threadTwoHunk = [
+  '@@ -706,4 +706,7 @@ export async function githubFetchReviewThreads(',
+  '   const commits = await fetchCommits(token, repo, pr);',
+  '+  const head = commits.at(-1);',
+  '+  if (!head) return [];',
+  '   return threads.filter((thread) => thread.commitId === head.sha);',
+].join('\n');
+
 const threadOne: GitHubReviewThread = {
   id: 101,
   anchor: {
@@ -102,7 +126,7 @@ const threadOne: GitHubReviewThread = {
     }),
   ],
   outdated: false,
-  diffHunk: '',
+  diffHunk: threadOneHunk,
   subjectType: 'line',
 };
 
@@ -126,7 +150,7 @@ const threadTwo: GitHubReviewThread = {
     }),
   ],
   outdated: true,
-  diffHunk: '',
+  diffHunk: threadTwoHunk,
   subjectType: 'line',
 };
 
@@ -244,6 +268,91 @@ const baseData: PrTabViewData = {
   checkRuns: passingChecks,
 };
 
+const storyCommits: GitHubPullRequestCommit[] = [
+  {
+    sha: 'commit1111111111',
+    message: 'Add the PR changes surface',
+    authorLogin: 'alice',
+    authoredAt: '2026-09-29T22:30:00.000Z',
+    htmlUrl: 'https://github.com/loro-dev/lody/commit/commit1111111111',
+    parentSha: 'base0000000000',
+  },
+  {
+    sha: 'deadbeefcafef00d',
+    message: 'Polish the diff controls',
+    authorLogin: 'alice',
+    authoredAt: '2026-09-30T00:15:00.000Z',
+    htmlUrl: 'https://github.com/loro-dev/lody/commit/deadbeefcafef00d',
+    parentSha: 'commit1111111111',
+  },
+];
+
+const storyFiles: GitHubPullRequestFile[] = [
+  {
+    path: 'README.md',
+    previousPath: null,
+    status: 'modified',
+    additions: 4,
+    deletions: 1,
+    changes: 5,
+    sha: 'readme000000000',
+    blobUrl: 'https://github.com/loro-dev/lody/blob/deadbeefcafef00d/README.md',
+    rawUrl: null,
+    patch: null,
+  },
+  {
+    path: 'packages/components/src/components/sessions/pr-tab-view.tsx',
+    previousPath: null,
+    status: 'modified',
+    additions: 15,
+    deletions: 3,
+    changes: 18,
+    sha: 'view00000000000',
+    blobUrl:
+      'https://github.com/loro-dev/lody/blob/deadbeefcafef00d/packages/components/src/components/sessions/pr-tab-view.tsx',
+    rawUrl: null,
+    patch: null,
+  },
+];
+
+const storyFileContent = new Map([
+  [
+    'README.md',
+    {
+      status: 'ready' as const,
+      oldText: '# Lody\n\nReview code.',
+      newText: '# Lody\n\nReview code in the session PR tab.\n',
+    },
+  ],
+  [
+    'packages/components/src/components/sessions/pr-tab-view.tsx',
+    {
+      status: 'ready' as const,
+      oldText: 'const tab = "Summary";\n',
+      newText: 'const tab = "Summary";\nconst changes = "Changes";\n',
+    },
+  ],
+]);
+
+const storyChanges: UseGitHubPrDiffResult & {
+  selection: PrCommitSelection;
+  onSelectionChange: (selection: PrCommitSelection) => void;
+} = {
+  state: 'ready',
+  commits: storyCommits,
+  files: storyFiles,
+  range: { from: 'base0000000000', to: 'deadbeefcafef00d', historical: false },
+  mergeBaseSha: 'base0000000000',
+  error: null,
+  contentByPath: storyFileContent,
+  refresh: async () => {},
+  loadFile: async () => {},
+  selection: { type: 'all' },
+  onSelectionChange: () => {},
+};
+
+const changesData: PrTabViewData = { ...baseData, changes: storyChanges };
+
 const storyCallbacks = {
   onRefresh: () => {
     /* no-op in stories */
@@ -307,6 +416,29 @@ export const OpenCiPassed: Story = {
   },
 };
 
+export const Changes: Story = {
+  args: {
+    repoFullName: 'loro-dev/lody',
+    prNumber: 42,
+    state: 'ready',
+    data: changesData,
+    initialTab: 'changes',
+    ...storyCallbacks,
+  },
+  render: function ChangesStory(args) {
+    const [selection, setSelection] = useState<PrCommitSelection>({ type: 'all' });
+    return (
+      <PrTabView
+        {...args}
+        data={{
+          ...args.data!,
+          changes: { ...storyChanges, selection, onSelectionChange: setSelection },
+        }}
+      />
+    );
+  },
+};
+
 export const OpenCiRunning: Story = {
   args: {
     repoFullName: 'loro-dev/lody',
@@ -342,6 +474,10 @@ export const Merged: Story = {
         closedAt: new Date(Date.now() - 1000 * 60 * 30).toISOString(),
       },
     },
+    branchExists: true,
+    onDeleteBranch: () => {
+      /* no-op in stories */
+    },
     ...storyCallbacks,
   },
 };
@@ -376,21 +512,28 @@ export const LongBody: Story = {
         ...basePr,
         body: [
           '## Summary',
-          '',
           'Wire the PR badge into a new in-app **PR tab** so reviewers never leave the app.',
-          '',
           '### Fetches',
-          '',
           '- Title / body / branches',
           '- Review threads (reuse existing component)',
           '- Issue comments',
           '- `check-runs` summary',
-          '',
           '```ts',
           "const result = await githubFetchPullRequestDetails(token, 'loro-dev/lody', 42);",
           '```',
-          '',
           '> Reviewers can click a review thread to open the corresponding line in the diff viewer.',
+          '## Related issue',
+          'Closes #41.',
+          '## Problem / pressure',
+          'Reviewers bounce between the app and GitHub for every review round, and lose the',
+          'session context each time they do.',
+          '## Approach',
+          '- Fetch PR details, threads, reviews and checks in one hook',
+          '- Render them in a side-panel tab next to the conversation',
+          '- Keep merge, close and ready-for-review in the header',
+          '## Verification',
+          '- `pnpm check`',
+          '- Manual walk through open, draft, merged and closed PRs',
         ].join('\n'),
       },
     },
@@ -414,7 +557,20 @@ export const ErrorState: Story = {
     prNumber: 42,
     state: 'error',
     data: null,
-    error: 'GitHub returned 404. The PR may have been deleted.',
+    error: 'GitHub request failed: 404 Not Found',
+    ...storyCallbacks,
+  },
+};
+
+/** Association/identity not yet confirmed server-side: the verified cause stays inline. */
+export const ErrorIdentityBlocked: Story = {
+  args: {
+    repoFullName: 'loro-dev/lody',
+    prNumber: 42,
+    state: 'error',
+    data: null,
+    error:
+      'Cannot verify this session’s repository identity. GitHub operations are paused. Retry after reconnecting to Lody. If the repository was removed, reinstalled or renamed, ask a workspace administrator to verify the original repository and PR association; a matching name alone is not enough.',
     ...storyCallbacks,
   },
 };
@@ -438,6 +594,25 @@ export const MergeConflict: Story = {
     data: {
       ...baseData,
       pullRequest: { ...basePr, mergeable: false, mergeableState: 'dirty' },
+    },
+    ...storyCallbacks,
+  },
+};
+
+/** The owning session offers the agent's "Resolve conflicts": an ordinary enabled command. */
+export const MergeConflictResolvable: Story = {
+  args: {
+    repoFullName: 'loro-dev/lody',
+    prNumber: 42,
+    state: 'ready',
+    data: {
+      ...baseData,
+      pullRequest: { ...basePr, mergeable: false, mergeableState: 'dirty' },
+      checkRuns: failingChecks,
+    },
+    onResolveConflicts: () => {
+      // eslint-disable-next-line no-console
+      console.log('[story] resolve conflicts');
     },
     ...storyCallbacks,
   },

@@ -38,9 +38,27 @@ Translation: current
 - 除 type/toolCallId 外，工具字段只解析本次变化的值，不重验未修改的工具内容；
   只修改 outcome 时保留已有请求信息。修改工具身份需完整 item 解析；变化的 content block
   单独解析。新增字段非法时，整条命令在写入前拒绝。
-- 新历史接受原有内置 CLI selector 的归一化，不重写旧历史。steer 配置和保持身份的
-  task proposal 编辑也只校验变化的字段。
+- 新历史接受原有内置 CLI selector 的归一化，不重写旧历史。steer 配置编辑只校验变化的字段。
 - 队列提升必须在历史接受后才删除队列行；写入失败保留队列行。
+- 每条缓冲中的 ACP 通知在自动重试期间保留稳定 operation ID。若 backend 在后续写入失败前只提交了
+  批次前缀，重试时必须复用原 ID，backend 对已接受的 ID 按幂等操作处理。过滤和拆分批次必须保持
+  ID 与通知的对应关系。分别入队的 Provider 通知即使 payload 相同，也仍是不同事件。
+- 调度和激活检查遇到重复 turn ID 时，采用最后一条已存记录，与定点历史读写一致。
+  前面的副本不能复活已进入终态的最后一条。完整历史导出保留所有已存记录，不执行去重。
+  尝试修复终态后，若该身份仍可被调度，当前检查必须结束，不重放该消息或反复物化历史。
+- 用户状态写入作用于该用户 turn 的所有已存副本。是否接受带条件的写入由最后一条副本决定；
+  前面的副本随之更新，但已进入终态的副本不得回退。steer 结果只迁移仍处于 steer 状态的副本。
+  任一副本已开始或已结束时，拒绝把未送达的 steer 重新排队。
+- 追加一条历史中尚不存在的排队 turn 之前，队列提升在其租约内重新读取会话 meta。若该 turn 的
+  steer 已被拒绝，保留队列行，直到该 steer 自己的历史到达，或 missing-history 恢复将其结束。
+  若 steer 已被接收或已结束、turn 正在执行或已处理、激活已结算、存在 missing-history
+  tombstone 或已完成的 assistant 输出，则删除队列行且不追加历史；这些证据优先于被拒绝的
+  steer 状态。
+- 输入框 steering 必须同时具备权威 ACP acknowledged steering 能力、活跃 prompt 和已知未结束
+  assistant turn。忙碌期间，Guide 偏好或反转 Queue 的发送若不具备该能力，直接追加到正规 Queue；
+  能力信息不可用或仅为 provisional 时也如此。消息保留队列顺序及正常提升前的编辑/删除能力，
+  不创建 pending-apply 历史，也不发出 steer 请求。这是投递前的路由决策；已经提交的原生 steer
+  仍遵循下文的投递结果规则。
 - 手动 Codex 压缩持有 native turn 直到完成。Stop 中断该 turn，并保留 ACP prompt，
   直到 `turn/completed` 确认结果或 provider 连接关闭。对已 in-flight 且 ACP session 就绪的
   prompt，Lody 记录取消并发送 provider cancel，不中断 owner fiber。ACP 返回前保留 owner
@@ -48,15 +66,21 @@ Translation: current
   配置也纳入同一收尾流程。Stop 后五秒仍有请求未结束时，Lody 终止旧 session，让连接关闭
   结束请求。计时不等待 cancel ACK，
   也不因重复 Stop 重置。终止失败则继续持有 owner，直到 ACP 结束。start/interrupt ACK
-  和压缩 item 的完成均不能释放执行 ownership。CLI 在取消确认后、接受下一轮前，
-  将尚未结束的压缩标记为 failed。打开 Session 不触发历史修复 RPC，也不改写旧结果。
+  和压缩 item 的完成均不能释放执行 ownership。助手 turn 收尾时会结算其遗留的上下文
+  压缩标记，适用于所有路径而不只是取消确认之后：provider 从未推进到终态的标记，在接受
+  下一轮之前持久化为 failed。若同一 turn 中还有更晚的压缩标记，被取代的标记属于同一次
+  压缩的重复身份（adapter 重复声明了已在进行中的压缩），予以移除，使一次压缩只呈现一
+  行。之后若 provider 仍为同一 `toolCallId` 发来更新，以该更新为准。
+  打开 Session 不触发历史修复 RPC，也不改写旧结果。
 - steer adapter 只报告三种最终投递结果：`applied`、`not-applied` 或 `unknown`。只有
   `not-applied` 可以把同一个用户轮次交回普通 dispatch；`applied` 表示已经消费，
   `unknown` 则在历史中变为 `delivery_unknown` 并返回 `delivery-unknown`，绝不自动调度。
   显式重发必须提示原消息可能已经执行，并创建新的用户轮次；不能改写原投递结论。
   Session execution 不根据 Stop、传输失败或本地 ownership 状态推断投递结果。
 - Stop 和目标 prompt 结束会中止本地文档加载、准备、配置及投递结论等待，释放 steer 队列
-  和 rewrite lease；不取消原始请求，也不丢弃其结论。已经进入 applied 所有权交接的操作
+  和 rewrite lease；不取消原始请求，也不丢弃其结论。例外：handoff adapter 可能先返回被让出的
+  prompt，再报告已提交 steer 的结论，因此其完成需等待该结论；引导 prompt 是下一轮本身，
+  绝不作为取消收尾的残留请求。已经进入 applied 所有权交接的操作
   必须完整结束；排队中的 steer 不得为已停止的目标开始准备。结果持久化失败仍须释放
   application lease，并允许取消收尾继续。
 - 执行端统一拥有 steer 状态，以及 `steerTurnStatuses` 中按消息 ID 记录的恢复激活。
@@ -73,7 +97,7 @@ Translation: current
   replacement 的进程。create/restore 原有的取消 fence 保持有效。
 - promotion 写入失败不能丢失已确认的未投递结论。CLI 返回 `promotion-failed` 和错误，不能
   假装恢复成功或改报投递未知。daemon 的 `recoveryOwned` 响应表示恢复仍由该 daemon 负责：
-  前端仅对明确的 promotion 失败通过同一 RPC 重试一次，持续失败则报错。旧响应保留
+  前端既不重试也不修复该轮次。旧响应（没有 `recoveryOwned`）保留
   pending_apply/pending/seen 的 dispatch 修复。不得复活 active、terminal 或已删除的轮次；
   超时或投递未知绝不授权重试。
 - foreground run configuration 归属其 turn 的 Effect signal。turn 被中断后，在途配置请求

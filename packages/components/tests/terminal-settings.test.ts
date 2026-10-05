@@ -15,12 +15,6 @@ import {
   buildTerminalFontLoadSpec,
   buildTerminalFontPreviewFamily,
 } from '../src/components/terminal/terminal-theme';
-import {
-  conversationMonoFontSizeStyle,
-  conversationTextFontSizeStyle,
-  terminalTextFontSizeStyle,
-  userTextCollapsedHeight,
-} from '../src/components/ai-gui/conversation-font-size-classes';
 
 describe('terminal appearance settings', () => {
   it('normalizes persisted font values to bounded settings', () => {
@@ -46,28 +40,21 @@ describe('terminal appearance settings', () => {
 
 describe('conversation appearance settings', () => {
   it('offers a fixed scale and snaps every persisted value onto it', () => {
-    expect([...CONVERSATION_FONT_SIZES]).toEqual([8, 12, 14, 16, 20, 24, 28, 32]);
+    expect([...CONVERSATION_FONT_SIZES]).toEqual([12, 13, 14, 15, 16]);
 
     // Sizes a previous build could persist keep the closest step the user picked
     // instead of being clamped into a range or reset to the default.
-    expect(normalizeConversationFontSize(24)).toBe(24);
-    expect(normalizeConversationFontSize(14.7)).toBe(14);
-    expect(normalizeConversationFontSize(13)).toBe(14); // exact tie rounds up
-    expect(normalizeConversationFontSize(9)).toBe(8);
-    expect(normalizeConversationFontSize(30)).toBe(32);
-    expect(normalizeConversationFontSize(1)).toBe(8);
-    expect(normalizeConversationFontSize(400)).toBe(32);
+    expect(normalizeConversationFontSize(24)).toBe(16);
+    expect(normalizeConversationFontSize(14.7)).toBe(15);
+    expect(normalizeConversationFontSize(14.5)).toBe(15); // exact tie rounds up
+    expect(normalizeConversationFontSize(9)).toBe(12);
+    expect(normalizeConversationFontSize(30)).toBe(16);
+    expect(normalizeConversationFontSize(1)).toBe(12);
+    expect(normalizeConversationFontSize(400)).toBe(16);
 
     expect(normalizeConversationFontSize('small')).toBe(12);
     expect(normalizeConversationFontSize('default')).toBe(DEFAULT_CONVERSATION_FONT_SIZE);
     expect(normalizeConversationFontSize('large')).toBe(16);
     expect(normalizeConversationFontSize(undefined)).toBe(DEFAULT_CONVERSATION_FONT_SIZE);
-  });
-
-  it('scales every conversation text variant from a custom size', () => {
-    expect(conversationTextFontSizeStyle(24)).toEqual({ fontSize: '24px' });
-    expect(conversationMonoFontSizeStyle(24)).toEqual({ fontSize: '16px' });
-    expect(terminalTextFontSizeStyle(24)).toEqual({ fontSize: '20px' });
-    expect(userTextCollapsedHeight(24)).toBe(274);
   });
 });

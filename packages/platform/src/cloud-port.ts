@@ -19,6 +19,12 @@ import type {
 
 export interface CloudSessionSharingPort {
   request(input: SessionShareRequestInput): Promise<SessionShareRequestResult>;
+  getResult(
+    input: Pick<
+      SessionShareRequestInput,
+      'workspaceId' | 'sourceSessionId' | 'requesterUserId' | 'deliveryPublicKey'
+    > & { shareRequestId: string }
+  ): Promise<SessionShareRequestResult>;
 }
 
 /**
@@ -229,7 +235,14 @@ export interface CloudAttachmentUploadPort {
 }
 
 export interface CloudRemotePreviewPort {
-  gatewayBaseUrl: string;
+  /** Short-lived ICE credentials; null/absent providers never trigger cloud I/O. */
+  simulatorIceServers?(input: MachineAccessRequest): Promise<{
+    iceServers: Array<{ urls: string[]; username?: string; credential?: string }>;
+    expiresAt: number;
+  }>;
+  verifyControl(
+    input: import('@lody/shared').VerifyPreviewControlInput
+  ): Promise<{ requesterUserId: string; expiresAt: number }>;
 }
 
 export interface RuntimeArtifactsPort {
@@ -257,6 +270,15 @@ export interface CloudGithubWriteTokenContext {
 }
 
 export interface CloudGithubTokenManager {
+  getCredentialPolicy(context: CloudGithubWriteTokenContext): Promise<{ personalEnabled: boolean }>;
+  getCredentialCandidate(
+    repoFullName: string,
+    context: CloudGithubWriteTokenContext,
+    source: 'personal' | 'app',
+    invalidatedPersonalToken?: string
+  ): Promise<
+    { token: string; tokenSource: 'personal' | 'app' } | { available: false; reason: string } | null
+  >;
   startAutoRefresh(): void;
   getAppTokenForRepo(repoFullName: string): Promise<string>;
   getWriteTokenForRepo(

@@ -7,9 +7,10 @@ Root `AGENTS.md` applies; this file adds CLI context. Build, PR-poller, and adap
 
 ## Build and packaging
 
-- The Node 22 bundle uses native top-level await. Do not run a browser TLA
-  compatibility transform over its output chunks. Validate the CLI SSR build
-  under `NODE_OPTIONS=--max-old-space-size=2048`; increasing the heap is not a fix.
+- CLI SSR uses native Node 22 TLA, never browser TLA transforms.
+  Validate at `NODE_OPTIONS=--max-old-space-size=2048`, not a raised heap.
+  Use per-package chunks, transitive assignment and CJS helper chunks.
+  Keep maps and no app code in vendor chunks.
 
 - The public CLI defaults to the local platform, discovers no deployment dotenv files, and must
   never initialize telemetry in local mode even if PostHog variables exist in the shell.
@@ -19,6 +20,8 @@ Root `AGENTS.md` applies; this file adds CLI context. Build, PR-poller, and adap
   `splitting: true`, and keep the no-hoisting assertion.
 - Import the CLI's own `version` from `@/pkg`, never a relative `../package.json`; the package
   `name` stays `lody` in every composition.
+- Optional desktop provenance comes from the compiled constant in `utils/desktop-build.ts`,
+  never runtime environment variables. File/hybrid log initialization records it at debug level.
 - Keep `prepare:acp-adapters` before `dev-build.mjs` and Vite: skipping it can silently launch old
   adapter capabilities from a stale `dist/`.
 - `engines.node` is pinned to `>=22.14.0 <23 || >=23.6.0` by better-sqlite3's
@@ -48,7 +51,12 @@ Root `AGENTS.md` applies; this file adds CLI context. Build, PR-poller, and adap
 - After a remote prompt arrives, only correctness-critical setup may block before ACP
   `agent.prompt`; never await notifications, analytics, or UI summaries
   (context/cli-prompt-hot-path.md).
-- Startup order and timing traces: context/cli-startup.md. Local logs: context/cli-logs.md.
+- Startup order and timing traces: context/cli-startup.md.
+- The daemon file log always keeps `debug`, so a per-token or per-tick `logger.debug` evicts the 20 MB
+  rotation window. Move it to `logger.trace` (`LODY_LOG_TRACE=1`) only if its subsystem's failures
+  stay diagnosable without it; keep failing/slow branches at `debug`
+  ([note](../../.agents/notes/implemented/architecture/2026-09-16-daemon-log-volume.md)).
+- File logs use `createFileTransport`; a raw `DailyRotateFile` makes a full disk crash the daemon.
 - Read context/local-agent-ownership.md before changing local ports/sockets, daemon PID state,
   Electron/daemon startup, Supervisor retries, or Worker shutdown; health probes are observation
   only and never authorize PID killing.
@@ -57,7 +65,7 @@ Root `AGENTS.md` applies; this file adds CLI context. Build, PR-poller, and adap
 
 ## Cross-entry agent contracts
 
-Before changing MCP tools, their callers, or delegated Task automation, read
+Before changing MCP tools or their callers, read
 [src/mcp/AGENTS.md](src/mcp/AGENTS.md) for Session acceptance, reply bounds, and
 execution/consent rules. These rules also bind CLI callers outside that directory.
 
@@ -66,7 +74,8 @@ execution/consent rules. These rules also bind CLI callers outside that director
   never rewrite the exact opener to the root or treat either as `parentSessionId`.
 - INVARIANT: reasoning effort and fast mode are per MODEL, because an ACP probe's `configOptions`
   describe only the model current at probe time. Validate effort against the TARGET model using
-  `AcpCapabilityCacheEntry.modelReasoningEfforts` and skip the resulting `validatedConfigIds` in
+  `getModelEffortChoices` (the stored per-model declaration first, then
+  `modelReasoningEfforts`) and skip the resulting `validatedConfigIds` in
   `validateTurnConfigOptionValues`; dispatch what cannot be checked offline as requested. Keep
   runtime rejections in debug diagnostics: Codex/Claude mismatches for model, effort, Fast, or Plan
   never become visible `agent_warning` notices, while other rejections still do. Claude Fable
@@ -82,6 +91,10 @@ execution/consent rules. These rules also bind CLI callers outside that director
 
 ## Agents, GitHub, and PR status
 
+- Checkout branch observations belong to `session/workspace-git-service.ts`, independent of
+  GitHub/PR support. Publish to the workspace owner, serialize probe plus write, and keep
+  startup/file snapshot observation off the prompt/RPC critical path.
+
 - ACP authentication rules: [src/agent/AGENTS.md](src/agent/AGENTS.md). A capability refresh after
   login proves credentials became usable and must finish inside the renderer's 300-second deadline.
 - Agent `gh` auth for GitHub repo sessions is set up in `src/session/session-manager.ts`; the
@@ -93,6 +106,9 @@ execution/consent rules. These rules also bind CLI callers outside that director
   DeepSeek capability source version and thread the Agent config environment through every
   probe/session source-version derivation, so two endpoint catalogs never share a cache identity.
   Never put the API key or a derivative of it in that cache key.
+- Pi extension scanning runs only the pinned runtime's read-only listing entry under a frozen
+  default or saved-profile environment — never caller-supplied launch fields. Selections
+  require the pinned extension-aware runtime (`piExtensionsProtocolVersion`), not a fallback.
 - `src/lib/pr-poller/` compensates for a broken hosted GitHub webhook → Streams fan-out. Keep
   policy in its pure modules with a thin scheduler, keep priority driven by presence and
   `lastMessageAt` rather than a turn-end hook, and keep only scheduling state (never PR status) in

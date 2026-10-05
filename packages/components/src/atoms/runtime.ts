@@ -1,3 +1,5 @@
+import type { PendingSessionSends } from '../lib/session-pending-sends';
+import type { SessionSendResources } from '@/lib/session-send-resources';
 import type { LocalFilePreviewResource } from '@lody/shared/local-file-preview';
 import type { SessionData } from '@lody/shared/session-data';
 import { atom } from 'jotai';
@@ -5,6 +7,8 @@ import type { LoroDoc } from 'loro-crdt';
 import type { LoroRepo } from 'loro-repo';
 import type { ConversationView } from '@/lib/conversation-view';
 import type {
+  McpToolListResult,
+  WorkspaceMcpServerMeta,
   InferInputType,
   InferType,
   ClientToServer,
@@ -24,10 +28,12 @@ import type {
   SessionDocMeta,
   SessionTurnInputConfig,
   SessionId,
-  TaskId,
-  TaskDocInput,
-  TaskDocState,
+  SessionMeta,
+  SessionHistoryBackendKind,
+  SessionOperation,
   MachineId,
+  AgentConfigId,
+  MachinePiExtensionsResponse,
   MachinePingResponse,
   MachineRestartResponse,
   MachineStatusResponse,
@@ -100,6 +106,8 @@ export type SessionDocUpdater =
 export type SessionDocStore = {
   readonly sessionId: SessionId;
   readonly roomId: string;
+  /** Immutable history ownership selected from the session catalog. */
+  readonly historyBackend: SessionHistoryBackendKind;
   readonly doc: LoroDoc;
   readonly firstSynced: Promise<void>;
   acquireSync: () => () => void;
@@ -143,21 +151,11 @@ export type PreviewVisualCommentDocStore = {
   waitUntilSynced: () => Promise<void>;
 };
 
-export type TaskDocUpdater =
-  | Partial<TaskDocInput>
-  | ((state: Readonly<TaskDocInput>) => TaskDocInput)
-  | ((state: TaskDocInput) => void);
-
-export type TaskDocStore = {
-  readonly taskId: TaskId;
+export type ScheduleDocStore = {
   readonly roomId: string;
-  readonly doc: LoroDoc;
   readonly firstSynced: Promise<void>;
-  getSyncState: () => RoomSyncState;
-  subscribeSyncState: (listener: (state: RoomSyncState) => void) => () => void;
-  getState: () => TaskDocState;
-  setState: (updater: TaskDocUpdater) => void;
-  subscribe: (listener: (state: TaskDocState) => void) => () => void;
+  getState: () => import('@lody/shared').ScheduleDocument | null;
+  subscribe: (listener: () => void) => () => void;
   dispose: () => void;
   waitUntilSynced: () => Promise<void>;
 };
@@ -167,11 +165,32 @@ export type WorkspaceRuntime = {
    * The workspace slug used for caching the (slug, id) mapping.
    */
   readonly workspaceSlug: string;
+  withScheduleStore: <T>(
+    scheduleId: string,
+    fn: (store: ScheduleDocStore) => Promise<T> | T,
+    options?: { create?: boolean }
+  ) => Promise<T>;
+  acquireScheduleStore: (scheduleId: string) => Promise<ScheduleDocStore>;
+  releaseScheduleStoreRef: (scheduleId: string) => void;
   /**
    * The workspace id used for IndexedDB/WebSocket connections.
    */
   readonly workspaceId: WorkspaceId;
+  readonly sendResources: SessionSendResources;
+  /** In-memory sends whose attachments are still preparing; lost with the page. */
+  readonly pendingSends: PendingSessionSends | null;
+  readonly accountId: string | null;
+  /**
+   * True only when a Machine RPC to this machine provably cannot be sent now
+   * (its route needs the network and the browser is offline).
+   */
+  isMachineRpcUnreachable?: (machineId: MachineId) => boolean;
   readonly repo: LoroRepo;
+  /** Read targets from the ready metadata source, independently of UI projection. */
+  readSessionOperationTargets: (
+    sessionId: SessionId,
+    operation: SessionOperation
+  ) => Promise<[SessionMeta, ...SessionMeta[]]>;
   /** Workspace-owned, scoped LRU for owner-session file-index Flock resources. */
   readonly codeCollabFileIndexCache: CodeCollabFileIndexCache;
   /**
@@ -216,6 +235,13 @@ export type WorkspaceRuntime = {
   ) => Promise<T>;
   releaseSessionStore: (sessionId: SessionId) => Promise<void>;
   acquireSessionStore: (sessionId: SessionId) => Promise<SessionDocStore>;
+  /**
+   * The session's store if it is already open, synchronously, without taking a
+   * reference. Lets a newly mounted conversation render a cached session in
+   * its first commit; the consumer still acquires it to keep it alive.
+   * Optional: runtimes without a synchronous cache always open asynchronously.
+   */
+  peekSessionStore?: (sessionId: SessionId) => SessionDocStore | undefined;
   releaseSessionStoreRef: (sessionId: SessionId) => void;
   withPreviewVisualCommentStore: <T>(
     sessionId: SessionId,
@@ -224,10 +250,6 @@ export type WorkspaceRuntime = {
   releasePreviewVisualCommentStore: (sessionId: SessionId) => Promise<void>;
   acquirePreviewVisualCommentStore: (sessionId: SessionId) => Promise<PreviewVisualCommentDocStore>;
   releasePreviewVisualCommentStoreRef: (sessionId: SessionId) => void;
-  withTaskStore: <T>(taskId: TaskId, fn: (store: TaskDocStore) => Promise<T> | T) => Promise<T>;
-  releaseTaskStore: (taskId: TaskId) => Promise<void>;
-  acquireTaskStore: (taskId: TaskId) => Promise<TaskDocStore>;
-  releaseTaskStoreRef: (taskId: TaskId) => void;
   sendControl: (message: ClientToServer) => void;
   waitForSessionCreateResponse: (
     sessionId: SessionId,
@@ -367,7 +389,7 @@ export type WorkspaceRuntime = {
     requestedByUserId: string,
     target: PreviewTarget,
     approval: PreviewTargetApproval,
-    options?: { replaceExisting?: boolean; timeoutMs?: number }
+    options?: { restart?: boolean; timeoutMs?: number }
   ) => Promise<SessionPreviewCreateResponse | null>;
   resolveMachineTargetPlane: (
     machineId: MachineId,
@@ -459,6 +481,12 @@ export type WorkspaceRuntime = {
     },
     options?: { timeoutMs?: number; ownerSessionId?: SessionId | string }
   ) => Promise<CodeCollabV2LspUnsupported | CodeCollabV2Error | null>;
+  requestSessionPreviewStatus: (
+    machineId: MachineId,
+    sessionId: SessionId,
+    requestedByUserId: string,
+    options?: { renewEndpointId?: string; timeoutMs?: number }
+  ) => Promise<import('@lody/shared').SessionPreviewStatusResponse | null>;
   requestSessionPreviewRevoke: (
     machineId: MachineId,
     sessionId: SessionId,
@@ -475,11 +503,31 @@ export type WorkspaceRuntime = {
     request: LocalProjectControlRequest,
     options?: { timeoutMs?: number }
   ) => Promise<LocalProjectControlResponse | null>;
+  requestLocalMcpTools: (
+    machineId: MachineId,
+    server: WorkspaceMcpServerMeta
+  ) => Promise<McpToolListResult>;
   requestMachineBugReport: (
     machineId: MachineId,
     args: { description: string; reporterUserId: string; requestToken: string },
     options?: { timeoutMs?: number }
   ) => Promise<MachineBugReportResponse | null>;
+  requestMachinePiExtensions: (
+    machineId: MachineId,
+    options?: { configId?: AgentConfigId }
+  ) => Promise<MachinePiExtensionsResponse>;
+  /**
+   * The one `ios-simulator/control` Machine RPC. Local machines are reached
+   * directly; remote ones with a preview-control proof for the exact command.
+   * Transport failures resolve as `{ success: false, error: 'failed' }`.
+   */
+  requestIosSimulatorControl: (request: {
+    machineId: MachineId;
+    sessionId: SessionId;
+    requestedByUserId: string;
+    command: import('@lody/shared').IosSimulatorCommand;
+    timeoutMs?: number;
+  }) => Promise<import('@lody/shared').IosSimulatorResponse>;
   dispose: () => Promise<void>;
 };
 

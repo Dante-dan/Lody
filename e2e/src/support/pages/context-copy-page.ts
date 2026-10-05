@@ -17,6 +17,7 @@ import {
   SECOND_RESPONSE,
   type ContextCopyFixture,
 } from '../fixtures/context-copy-fixture.js';
+import { openSidebarArchive } from './sidebar-footer.js';
 
 const AGENT_NAME = 'Deterministic Context Copy Agent';
 
@@ -57,15 +58,22 @@ export class ContextCopyPage {
   }
 
   async copyContextThroughFirstUserMessage(): Promise<void> {
+    const conversation = this.page.locator('[data-conversation-scroll-engine]');
+    await conversation.hover();
+    await this.page.mouse.wheel(0, -1000);
     const firstPrompt = this.page.getByText(FIRST_PROMPT_MARKER);
     await expect(firstPrompt).toBeVisible({ timeout: 30_000 });
-    // User turns expose the same real fork popover but lack a turn-id test hook.
-    // The first visible action belongs to the first rendered user turn.
+    // The scroll engine can settle 1–2px from zero. Wait for the actual menu
+    // anchor to enter the viewport before hover/click can scroll it into view.
+    await expect(firstPrompt).toBeInViewport({ ratio: 1 });
     await firstPrompt.hover();
-    await this.page
-      .getByRole('button', { name: /^(Fork session|分叉会话)$/u })
-      .first()
-      .click();
+    const forkButton = this.page
+      .getByTestId('user-message-metadata')
+      .locator('..')
+      .filter({ hasText: FIRST_PROMPT_MARKER })
+      .getByRole('button', { name: /^(Fork session|分叉会话)$/u });
+    await expect(forkButton).toBeInViewport({ ratio: 1 });
+    await forkButton.click();
     await this.copyFromForkMenu();
   }
 
@@ -207,12 +215,10 @@ export class ContextCopyPage {
   }
 
   private async copyFromForkMenu(): Promise<void> {
-    const forkMenu = this.page.locator(
-      '[role="menu"][aria-label="Fork conversation"][data-state="open"]'
-    );
+    const forkMenu = this.page.locator('[role="menu"][data-open]');
     await expect(forkMenu).toBeVisible();
     await expect(
-      forkMenu.getByRole('menuitem', { name: /^(Current workspace|当前工作区)$/u })
+      forkMenu.getByRole('menuitem', { name: /^(Fork to new tab|分叉到新标签页)$/u })
     ).toHaveCount(0);
     await forkMenu
       .getByRole('menuitem', { name: /(Copy context as Markdown|复制 Markdown 上下文)/u })
@@ -256,7 +262,7 @@ export class ContextCopyPage {
       .click();
     await this.page.getByRole('menuitem', { name: /^(Archive session|归档会话)$/u }).click();
     await expect(this.page).toHaveURL(/#\/local\/chat(?:\?.*)?$/u, { timeout: 30_000 });
-    await this.page.getByRole('button', { name: /^(Archive|归档)$/u, exact: true }).click();
+    await openSidebarArchive(this.page);
     await expect(this.page).toHaveURL(/#\/local\/archive(?:\?.*)?$/u);
     const archived = this.archivedRow(sessionId);
     await expect(archived).toBeVisible({ timeout: 30_000 });

@@ -44,3 +44,9 @@ The workaround depends on Monaco's current `.find-widget.visible`,
 local and should be removed when the upstream Find tooltip positioning defect is
 fixed and the regression passes without it. It does not change narrow tooltips in
 other Monaco consumers.
+
+## Current-main integration
+
+The October 6 integration with main `0ab7526` preserves the existing Find
+regression alongside the upstream undo/save coverage in the same Storybook suite.
+The viewer JSX follows the current formatter; the scoped workaround is unchanged.

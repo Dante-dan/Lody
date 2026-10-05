@@ -15,17 +15,24 @@ import { Spinner } from '@/ui/spinner';
 import type { FileTreeItem } from '@lody/shared';
 
 import { useAtomValue } from 'jotai';
-import { conversationFontSizeAtom } from '@/atoms';
+import { conversationFontSizeAtom, extendedCodeLanguagesEnabledAtom } from '@/atoms';
 import { FileIcon, FolderIcon } from '@/components/icons/file-icons';
 import { MobileEdgeBackSwipeZone } from '@/components/mobile/mobile-edge-back-swipe';
 import { SessionFileImagePreview } from '@/components/sessions/session-file-image-preview';
 import { MarkdownRenderer } from '@/components/ai-gui/markdown-renderer';
+import { MarkdownFileResources } from '@/components/ai-gui/markdown-file-image';
 import { SessionMonacoTextViewer } from '@/components/sessions/session-monaco-text-viewer';
+import { SessionShikiTextViewer } from '@/components/sessions/session-shiki-text-viewer';
 import { useFileWorkspaceTree } from '@/hooks/use-code-session';
 import { isNativeAppShell } from '@/lib/native-platform';
 import type { FileWorkspaceProvider, FileWorkspaceSnapshot } from '@/lib/file-workspace-provider';
 import { getImageMimeTypeForPath, isSvgPath } from '@/lib/image-file-preview';
-import { getSessionFileMonacoLanguageId, isSessionMarkdownPath } from '@/lib/session-file-language';
+import {
+  getSessionFileLanguageId,
+  getSessionFileMonacoLanguageId,
+  isSessionFileShikiLanguage,
+  isSessionMarkdownPath,
+} from '@/lib/session-file-language';
 import { cn } from '@/lib/utils';
 import { useActiveVSCodeTheme, useResolvedTheme } from '../../theme-provider';
 
@@ -641,7 +648,7 @@ function MobileFilePreview({
           });
           return;
         }
-        setContent({ status: 'ready', path, snapshot: result.snapshot });
+        setContent({ status: 'ready', path: result.entry.path, snapshot: result.snapshot });
       })
       .catch((error: unknown) => {
         if (cancelled) return;
@@ -724,13 +731,20 @@ function MobileFilePreview({
     );
   }
 
-  return (
+  const textPreview = (
     <MobileTextPreview
-      path={path}
+      path={content.path}
       text={snapshot.text}
       onScrollActivity={onScrollActivity}
       bottomClearanceClassName={bottomClearanceClassName}
     />
+  );
+  return provider ? (
+    <MarkdownFileResources provider={provider} documentPath={content.path} automatic={false} active>
+      {textPreview}
+    </MarkdownFileResources>
+  ) : (
+    textPreview
   );
 }
 
@@ -770,6 +784,8 @@ function MobileTextPreview({
   const resolvedTheme = useResolvedTheme();
   const activeVSCodeTheme = useActiveVSCodeTheme();
   const conversationFontSize = useAtomValue(conversationFontSizeAtom);
+  const extendedCodeLanguagesEnabled = useAtomValue(extendedCodeLanguagesEnabledAtom);
+  const language = getSessionFileLanguageId(path, extendedCodeLanguagesEnabled);
 
   if (isSessionMarkdownPath(path)) {
     return (
@@ -785,6 +801,25 @@ function MobileTextPreview({
     );
   }
 
+  if (isSessionFileShikiLanguage(language)) {
+    return (
+      <div
+        className={cn(
+          'min-h-0 flex-1 overflow-hidden overscroll-contain',
+          bottomClearanceClassName
+        )}
+      >
+        <SessionShikiTextViewer
+          key={path}
+          path={path}
+          text={text}
+          language={language}
+          className="h-full min-h-0"
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn('min-h-0 flex-1 overflow-hidden overscroll-contain', bottomClearanceClassName)}
@@ -792,7 +827,7 @@ function MobileTextPreview({
       <SessionMonacoTextViewer
         key={path}
         text={text}
-        language={getSessionFileMonacoLanguageId(path)}
+        language={getSessionFileMonacoLanguageId(path, extendedCodeLanguagesEnabled)}
         resolvedTheme={resolvedTheme}
         vscodeTheme={activeVSCodeTheme ?? null}
         readOnly

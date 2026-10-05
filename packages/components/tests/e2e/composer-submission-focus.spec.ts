@@ -1,5 +1,186 @@
 import { expect, test } from '@playwright/test';
 
+for (const openWith of ['click', 'keyboard'] as const) {
+  test(`project search receives focus on ${openWith} and on reopening`, async ({ page }) => {
+    await page.goto('/iframe.html?id=chat-unifiedprojectselector--selected-private&viewMode=story');
+    const trigger = page.getByRole('button', { name: 'lody', exact: true });
+    const search = page.getByPlaceholder('Search projects', { exact: true });
+    for (let opening = 0; opening < 2; opening += 1) {
+      if (openWith === 'keyboard') {
+        await trigger.focus();
+        await page.keyboard.press('Enter');
+      } else {
+        await trigger.click();
+      }
+      await expect(search).toBeFocused();
+      await expect(search).toHaveValue('');
+      await page.getByRole('menuitem').first().hover();
+      await page.keyboard.type('loro-inspector');
+      await expect(search).toHaveValue('loro-inspector');
+      await expect(
+        page.getByRole('menuitem', { name: 'loro-inspector', exact: true })
+      ).toBeVisible();
+      await expect(page.getByRole('menuitem')).toHaveCount(4);
+      await page.keyboard.press('Escape');
+      await expect(search).toBeHidden();
+    }
+  });
+}
+
+for (const openWith of ['hover', 'click', 'keyboard'] as const) {
+  test(`model search receives focus on ${openWith} and on reopening`, async ({ page }) => {
+    await page.goto('/iframe.html?id=sessions-composerrunconfigmenu--model-search&viewMode=story');
+    const search = page.getByRole('textbox', { name: 'Search models', exact: true });
+    // The story opens the submenu for its preview. Start our interactions closed.
+    await expect(search).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(search).toBeHidden();
+    const trigger = page.getByRole('button', { name: 'Run configuration', exact: true });
+    const model = page.getByRole('menuitem', { name: /^Model/ });
+    for (let opening = 0; opening < 2; opening += 1) {
+      await trigger.click();
+      if (openWith === 'keyboard') {
+        await model.focus();
+        await page.keyboard.press('ArrowRight');
+      } else if (openWith === 'click') {
+        await model.click();
+      } else {
+        await model.hover();
+      }
+      await expect(search).toBeFocused();
+      const modelMenu = page.getByRole('menu').last();
+      await expect.poll(() => modelMenu.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+      await expect
+        .poll(async () => {
+          const submenu = await modelMenu.boundingBox();
+          const viewport = page.viewportSize();
+          return (
+            !!submenu &&
+            !!viewport &&
+            submenu.y >= 0 &&
+            submenu.y + submenu.height <= viewport.height &&
+            submenu.height <= 329
+          );
+        })
+        .toBe(true);
+      const initialMenu = await modelMenu.boundingBox();
+      expect(initialMenu).not.toBeNull();
+      const expectSearchAnchored = async () => {
+        await expect(search).toBeFocused();
+        await expect
+          .poll(async () => {
+            const menu = await modelMenu.boundingBox();
+            const field = await search.boundingBox();
+            const row = await model.boundingBox();
+            const viewport = page.viewportSize();
+            if (!menu || !field || !row || !viewport) return Infinity;
+            const top = Math.max(8, Math.min(row.y - 32, viewport.height - 8 - menu.height));
+            return Math.max(Math.abs(menu.y - top), Math.abs(field.y - (menu.y + 4)));
+          })
+          .toBeLessThan(1);
+      };
+      if (openWith !== 'keyboard') {
+        // A real pointer keeps moving over the trigger after the submenu opens.
+        await model.hover({ position: { x: 12, y: 12 } });
+        if (openWith === 'click') await model.click({ position: { x: 12, y: 12 } });
+        await expect(search).toBeFocused();
+      }
+      for (const character of '54m') {
+        await page.keyboard.type(character);
+        await expectSearchAnchored();
+      }
+      await expect(search).toHaveValue('54m');
+      const match = page.getByRole('menuitemradio');
+      await expect(match).toHaveText(['5.4-mini']);
+      const result = await match.boundingBox();
+      const field = await search.boundingBox();
+      expect(result).not.toBeNull();
+      expect(field).not.toBeNull();
+      expect(field!.y + field!.height).toBeLessThanOrEqual(result!.y);
+      const modelRow = await model.boundingBox();
+      expect(modelRow).not.toBeNull();
+      expect(Math.abs(result!.y - (modelRow!.y + 4))).toBeLessThan(1);
+      await expect
+        .poll(async () => (await modelMenu.boundingBox())?.height ?? Infinity)
+        .toBeLessThan(100);
+      await search.fill('zzzz-no-model');
+      await expect(match).toHaveCount(0);
+      await expect(modelMenu.getByText('No models match', { exact: true })).toBeVisible();
+      await expectSearchAnchored();
+      await expect
+        .poll(async () => (await modelMenu.boundingBox())?.height ?? Infinity)
+        .toBeLessThan(100);
+      await search.fill('');
+      await expect(match).toHaveCount(10);
+      await expectSearchAnchored();
+      await expect
+        .poll(async () => Math.abs((await modelMenu.boundingBox())!.height - initialMenu!.height))
+        .toBeLessThan(1);
+      await search.fill('54m');
+      await expect(match).toHaveText(['5.4-mini']);
+      await expectSearchAnchored();
+      await page.keyboard.press('ArrowDown');
+      await expect(match).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(search).toBeHidden();
+      await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+      await page.mouse.move(0, 0);
+    }
+  });
+}
+
+test('run-config submenus align with their own trigger rows when space permits', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  await page.goto('/iframe.html?id=sessions-composerrunconfigmenu--closed&viewMode=story');
+  await page.getByRole('button', { name: 'Run configuration', exact: true }).click();
+  for (const name of ['Role', 'Agent', 'Model', 'Reasoning']) {
+    const row = page
+      .getByRole('menu')
+      .first()
+      .getByRole('menuitem', { name: new RegExp(`^${name}`) });
+    const target = await row.boundingBox();
+    expect(target).not.toBeNull();
+    // Move through the submenu's pointer corridor rather than waiting for it to clear.
+    await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2, {
+      steps: 8,
+    });
+    await expect(row).toHaveAttribute('aria-expanded', 'true');
+    await expect(page.getByRole('menu')).toHaveCount(2);
+    await expect
+      .poll(async () => {
+        const trigger = await row.boundingBox();
+        const submenu = await page.getByRole('menu').last().boundingBox();
+        if (!trigger || !submenu || submenu.x < trigger.x + trigger.width) return Infinity;
+        return Math.abs(trigger.y - submenu.y);
+      })
+      .toBeLessThan(1);
+  }
+});
+
+test.describe('model search on touch', () => {
+  test.use({ hasTouch: true });
+
+  test('opening the submenu does not autofocus until the field is tapped', async ({ page }) => {
+    await page.goto('/iframe.html?id=sessions-composerrunconfigmenu--model-search&viewMode=story');
+    const search = page.getByRole('textbox', { name: 'Search models', exact: true });
+    await expect(search).toBeVisible();
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Run configuration', exact: true }).tap();
+    const model = page.getByRole('menuitem', { name: /^Model/ });
+    await model.tap();
+    await expect(search).toBeVisible();
+    await expect(search).not.toBeFocused();
+    await model.tap();
+    await expect(search).not.toBeFocused();
+    await search.tap();
+    await page.keyboard.type('54m');
+    await expect(search).toHaveValue('54m');
+    await expect(page.getByRole('menuitemradio')).toHaveText(['5.4-mini']);
+  });
+});
+
 test('editing a sent message focuses its input with the caret at the end', async ({ page }) => {
   await page.goto('/iframe.html?id=ai-gui-usermessageeditor--from-message-edit&viewMode=story');
   await page.getByRole('button', { name: 'Edit message', exact: true }).click();
@@ -168,3 +349,221 @@ for (const platform of ['desktop', 'narrow-browser', 'wide-native'] as const) {
     await expect(input).not.toBeFocused();
   });
 }
+
+test.describe('attachment upload submission', () => {
+  for (const width of [390, 1280]) {
+    test.describe(`viewport ${width}`, () => {
+      test.use({ viewport: { width, height: 900 } });
+      for (const action of ['Enter', 'Meta+Shift+Enter', 'cancel', 'failure'] as const) {
+        test(`retains upload intent for ${action}`, async ({ page }) => {
+          let release!: (status: number) => void;
+          let started!: () => void;
+          const uploadStarted = new Promise<void>((resolve) => {
+            started = resolve;
+          });
+          const uploadResult = new Promise<number>((resolve) => {
+            release = resolve;
+          });
+          const image = {
+            type: 'image',
+            imageId: 'synthetic-browser-image',
+            fileName: 'sample.png',
+            mimeType: 'image/png',
+            sizeBytes: 68,
+            width: 1,
+            height: 1,
+          };
+          await page.route('**/session-images/upload', async (route) => {
+            if (route.request().method() === 'OPTIONS') {
+              await route.fulfill({
+                status: 204,
+                headers: {
+                  'access-control-allow-origin': '*',
+                  'access-control-allow-methods': 'POST',
+                  'access-control-allow-headers': 'authorization,content-type',
+                },
+              });
+              return;
+            }
+            started();
+            const status = await uploadResult;
+            await route.fulfill({
+              status,
+              headers: { 'access-control-allow-origin': '*' },
+              json: status === 200 ? { image } : { error: 'Synthetic upload failure' },
+            });
+          });
+          await page.addInitScript(() => {
+            (window as typeof window & { submissions: unknown[] }).submissions = [];
+            window.addEventListener('storybook:attachments-submitted', (event) => {
+              (window as typeof window & { submissions: unknown[] }).submissions.push(
+                (event as CustomEvent).detail
+              );
+            });
+          });
+          await page.goto(
+            '/iframe.html?id=sessions-sessionchatinputarea--uploading-attachments-pending-acceptance&viewMode=story'
+          );
+          const input = page.locator('textarea');
+          await input.fill('Inspect this image');
+          await page.locator('input[type="file"]').setInputFiles({
+            name: 'sample.png',
+            mimeType: 'image/png',
+            buffer: Buffer.from(
+              'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR1sAAAAASUVORK5CYII=',
+              'base64'
+            ),
+          });
+          await uploadStarted;
+          await input.press(action === 'Meta+Shift+Enter' ? action : 'Enter');
+          await expect(input).toBeDisabled();
+          await expect(
+            page.getByRole('button', { name: 'Cancel send', exact: true })
+          ).toBeVisible();
+          const submissions = () =>
+            page.evaluate(() => (window as typeof window & { submissions: unknown[] }).submissions);
+          expect(await submissions()).toEqual([]);
+          if (action === 'cancel')
+            await page.getByRole('button', { name: 'Cancel send', exact: true }).click();
+          release(action === 'failure' ? 500 : 200);
+          if (action === 'cancel' || action === 'failure') await expect(input).toBeEnabled();
+          if (action === 'cancel')
+            await expect(
+              page.getByRole('img', { name: 'sample.png', exact: true })
+            ).not.toHaveClass(/grayscale/);
+          if (action === 'cancel' || action === 'failure') {
+            await expect(input).toHaveValue('Inspect this image');
+            expect(await submissions()).toEqual([]);
+          } else {
+            await expect.poll(submissions).toHaveLength(1);
+            await expect(
+              page.getByRole('button', { name: 'Cancel send', exact: true })
+            ).toHaveCount(0);
+            await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeDisabled();
+            await expect(
+              page.getByRole('button', { name: 'Run configuration', exact: true })
+            ).toBeDisabled();
+            await expect(input).toBeDisabled();
+            expect(await submissions()).toEqual([
+              {
+                blocks: [image, { type: 'text', text: 'Inspect this image' }],
+                ...(action === 'Meta+Shift+Enter'
+                  ? { options: { invertSubmitBehavior: true } }
+                  : {}),
+              },
+            ]);
+            await page.evaluate(() =>
+              window.dispatchEvent(new Event('storybook:accept-attachments'))
+            );
+            await expect(input).toBeEnabled();
+            await expect(input).toHaveValue('');
+            await expect(
+              page.getByRole('button', { name: 'Run configuration', exact: true })
+            ).toBeEnabled();
+          }
+        });
+      }
+    });
+  }
+});
+
+test.describe('composer selector leading column', () => {
+  /* A selector's popup is spatially a child of its trigger: its painted edge
+     stays on the trigger's edge, while its rows keep the shared popup inset —
+     their leading icons sit on the menu's own column (inset + item pad), not
+     on the trigger's mark. The trigger seats its glyph on its own geometry:
+     centred on the icon-only square, one item pad in on a labeled trigger.
+     An earlier lead margin that chased the row column left the icon-only
+     glyph visibly off-centre once the rows kept the inset. */
+  const cases = [
+    // The machine selector is deliberately exempt: it keeps the popup's own
+    // inset grid by owner decision, so only the run-config family is pinned.
+    {
+      name: 'run configuration',
+      story: 'sessions-desktoprunconfigmenu--locked-agent',
+      trigger: 'Run configuration',
+      leadingRows: ['Plan', 'Fast'],
+      iconOnly: false,
+    },
+    {
+      name: 'permission',
+      story: 'sessions-desktoprunconfigmenu--locked-agent',
+      trigger: /^Permission:/,
+      leadingRows: ['Read-only', 'Agent', 'Full access'],
+      iconOnly: true,
+    },
+  ];
+
+  for (const { name, story, trigger, leadingRows, iconOnly } of cases) {
+    test(`${name} menu keeps the popup inset column`, async ({ page }) => {
+      await page.goto(`/iframe.html?id=${story}&viewMode=story`);
+      const triggerButton = page.getByRole('button', {
+        name: trigger,
+        exact: typeof trigger === 'string',
+      });
+      await triggerButton.click();
+      const menu = page.getByRole('menu');
+      await expect(menu).toBeVisible();
+      // Measure the popup's resting position, not a frame of its rise.
+      await page.evaluate(async () => {
+        await Promise.all(
+          document.getAnimations({ subtree: true }).map((a) => a.finished.catch(() => {}))
+        );
+      });
+      // The surface must stay parented: its painted edge sits ON the
+      // trigger's edge — sliding the popup to reach a column is a regression.
+      const [triggerBox, popupLeft] = await Promise.all([
+        triggerButton.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return { left: r.left, center: r.left + r.width / 2 };
+        }),
+        menu.evaluate((el) => el.getBoundingClientRect().left),
+      ]);
+      expect(Math.abs(popupLeft - triggerBox.left)).toBeLessThanOrEqual(0.75);
+      const triggerCenter = await triggerButton
+        .locator('svg')
+        .first()
+        .evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return r.left + r.width / 2;
+        });
+      // The icon-only square centres its glyph; a labeled trigger's leading
+      // glyph sits one item pad (8px) in, the centre of its 16px box.
+      const expectedTriggerCenter = iconOnly ? triggerBox.center : triggerBox.left + 16;
+      expect(Math.abs(triggerCenter - expectedTriggerCenter)).toBeLessThanOrEqual(0.75);
+      const leadingCenters = await page.evaluate(() => {
+        const items = [
+          ...document.querySelectorAll<HTMLElement>(
+            '[role="menuitem"],[role="menuitemradio"],[role="menuitemcheckbox"]'
+          ),
+        ];
+        return items
+          .map((item) => {
+            // The leading slot is the row's first element child holding the
+            // glyph itself; rows without one are skipped so a trailing
+            // chevron or check cannot stand in for the column.
+            const slot = item.firstElementChild;
+            const glyph =
+              slot?.firstElementChild instanceof SVGElement ? slot.firstElementChild : null;
+            if (!glyph) return null;
+            const rect = glyph.getBoundingClientRect();
+            return {
+              text: item.textContent?.trim() ?? '',
+              center: rect.left + rect.width / 2,
+            };
+          })
+          .filter((x): x is { text: string; center: number } => x != null);
+      });
+      for (const label of leadingRows) {
+        const row = leadingCenters.find((r) => r.text.startsWith(label));
+        expect(row, `leading icon of row "${label}"`).toBeTruthy();
+      }
+      // The rows keep the shared inset: every leading icon sits on the
+      // menu's own column — popup edge + 4px inset + 8px item pad + half
+      // the 16px icon box.
+      for (const row of leadingCenters) {
+        expect(Math.abs(row.center - (popupLeft + 20))).toBeLessThanOrEqual(0.75);
+      }
+    });
+  }
+});

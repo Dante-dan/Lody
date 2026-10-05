@@ -4,6 +4,18 @@ Binding rules live in [AGENTS.md](AGENTS.md) and in the scoped `AGENTS.md` of ea
 subdirectory; this file is the navigation index. Cross-module explanations live in
 [`.agents/docs/`](../../../../.agents/docs/AGENTS.md).
 
+## Resource discovery
+
+- `discovery-query.ts` — strict query schemas, scope-bound keyset pagination and
+  shared Session title/Machine/Agent/Role filters.
+- `resource-discovery.ts` — readable directory projections, Role availability,
+  sensitive-field exclusion and list/get behavior shared by MCP and CLI.
+  List inputs are validated here against resource-specific allowlists derived from
+  the shared query schema; the CLI only translates flags and resolves selectors.
+- `resource-discovery-runtime.ts` — synchronized workspace readers and caller-specific
+  authorization; it supplies the existing workspace command runtime to the query service.
+  Intent and limits: [resource discovery](../../../../specs/resource-discovery.md).
+
 ## Message hub and transports
 
 - `usage/usage-tracking-service.ts` — cumulative usage snapshot staging and
@@ -20,7 +32,9 @@ subdirectory; this file is the navigation index. Cross-module explanations live 
   `runBridgeTransition`.
 - `machine-lifecycle.ts` — remote lifecycle verification and upgrade intents; runs the
   fixed npm install through `cross-spawn` so Windows `npm.cmd` shims use the command
-  interpreter. `../commands/daemon-runner.ts` owns restart and upgrade handoff.
+  interpreter. It resolves the installed package through that npm's global root
+  and verifies its entry/version. `../commands/daemon-runner.ts` owns restart and
+  handoff to that explicit entry, including matching-version readiness.
 - `cloud-cli-port.ts` — the sole official-build composition root for cloud clients,
   endpoint-derived adapters, and their lifecycle. `start.ts` validates
   identity/deployment configuration once and injects the resulting `CloudPort` through
@@ -47,21 +61,14 @@ subdirectory; this file is the navigation index. Cross-module explanations live 
 - `session-transient-store.ts` — buffered ACP updates and their turn ownership.
 - `session-activity-status.ts`, `session-live-status.ts` — derived busy/idle state.
 
-## Projects, providers, and tasks
+## Projects and providers
 
 - `local-project-history-sync-service.ts` / `local-project-history-precheck.ts` —
-  builtin Codex local-project history import.
+  Provider-bound local-project ACP history catalogs, import and refresh. Catalogs
+  separate configurations; legacy transcript identifiers remain stable.
 - `local-project-removal.ts` — local project deletion, session archiving, and optional
   Lody-created worktree cleanup.
 - `provider-setup-manager.ts` — durable builtin provider setup; managed runtimes are installed before verification, while user-installed Bub is only published after a successful live probe.
-- `task-doc.ts` — every CLI-side read/write of a Task document, plus
-  `listWorkspaceTaskIds` and the index-only listing (`listTasksFromIndex` / pure
-  `selectTaskIndexRows`). Normative contract: specs/tasks.md.
-- `task-image-upload.ts` — MCP `lody_task_upload_images`: reads local images with
-  `O_NOFOLLOW`, uploads them to the workspace's private Task image endpoint, and
-  returns stable `lody-image://<imageId>` Markdown references. It appends nothing to
-  Session history; agents pass the returned Markdown to Task propose/body/comment
-  tools explicitly.
 
 ## Subdirectories
 
@@ -71,15 +78,13 @@ subdirectory; this file is the navigation index. Cross-module explanations live 
 - `file-preview/` — the `file/preview` (File Preview v3) read path
   ([AGENTS.md](file-preview/AGENTS.md)).
 - `loro/` — Loro repo/runtime layer, presence, machine flock rooms, and connection
-  recovery ([AGENTS.md](loro/AGENTS.md)).
+  recovery ([AGENTS.md](loro/AGENTS.md)). `session-model-summary.ts` projects actual
+  assistant models through shallow scalar/count reads of already-open documents.
+  It compares current catalog metadata on each reconciliation so stale overwrites
+  are repaired on the next history change or flush.
 - `pr-poller/` — PR discovery, lifecycle, CI rollup, and merge-state reconciliation
   ([AGENTS.md](pr-poller/AGENTS.md)).
 - `review-automation/` — "Auto review and merge"
   ([AGENTS.md](review-automation/AGENTS.md)).
-- `task-automation/` — delegated task automation: `planTaskAutomation` is a pure
-  policy holding every gate that keeps it from spending tokens by surprise, the
-  scheduler is a thin orchestrator, and the per-workspace handle watches the task
-  index and re-evaluates on `onMetaRoomSynced` so work held while offline still
-  starts.
 - `analytics/`, `git/`, `notifications/`, `session-export/`, `usage/` — supporting
   services.

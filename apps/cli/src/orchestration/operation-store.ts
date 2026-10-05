@@ -1,3 +1,4 @@
+import { AgentMessageAuthorSchema, AgentRoleSnapshotSchema } from '@lody/shared';
 import { createHash } from 'node:crypto';
 import { chmodSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
@@ -25,6 +26,16 @@ import {
   type WorkspaceId,
 } from '@lody/shared';
 import { getLodyDataDir } from '@lody/shared/node/installation-profile';
+import { discoveryCursor, DiscoveryPageShape } from '@/lib/discovery-query';
+
+export const OperationListQuerySchema = z
+  .object({
+    limit: DiscoveryPageShape.limit,
+    cursor: DiscoveryPageShape.cursor,
+    state: z.enum(['active', 'finished']).optional(),
+  })
+  .strict();
+export type OperationListQuery = z.input<typeof OperationListQuerySchema>;
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_RETENTION_MS = 7 * DAY_MS;
@@ -62,10 +73,10 @@ const FrozenConfigSchema = z
             modeId: z.string().optional(),
             modelId: z.string().optional(),
             configOptionValues: z.record(z.string(), z.union([z.string(), z.boolean()])).optional(),
-            taskToolsEnabled: z.boolean().optional(),
             inheritSessionDefaults: z.literal(false).optional(),
           })
-          .strict()
+          // Older stored configs may still carry `taskToolsEnabled`; drop it.
+          .strip()
           .nullable()
       )
       .optional(),
@@ -398,6 +409,18 @@ export class LodyOperationStore {
     const fingerprint = fingerprintLodyCommand(input.kind, canonical);
     const frozenConfig = FrozenConfigSchema.parse(input.frozenContinuationConfig);
     const items = z.array(OperationItemSchema).parse(input.items);
+    const targetRoles = input.targetRoleSnapshots
+      ? z.array(AgentRoleSnapshotSchema.nullable()).max(20).parse(input.targetRoleSnapshots)
+      : undefined;
+    if (targetRoles && targetRoles.length !== items.length)
+      throw new Error('Target Role snapshots must match Operation items.');
+    const author = input.author ? AgentMessageAuthorSchema.parse(input.author) : undefined;
+    if (
+      author &&
+      (author.sessionId !== input.requesterSessionId || author.turnId !== frozenConfig.sourceTurnId)
+    ) {
+      throw new Error('Operation author does not match its source turn.');
+    }
     const transaction = this.db.transaction(
       (): { created: boolean; operation: StoredLodyOperation; claimedItemIndexes: number[] } => {
         const existing = this.getStored(input.requesterSessionId, input.operationId);
@@ -436,6 +459,18 @@ export class LodyOperationStore {
             input.deadlineAt,
             JSON.stringify(items)
           );
+        if (inserted.changes === 1 && (author || targetRoles)) {
+          this.db
+            .prepare(
+              `INSERT INTO operation_authors (requester_session_id, operation_id, author_json, target_roles_json) VALUES (?, ?, ?, ?)`
+            )
+            .run(
+              input.requesterSessionId,
+              input.operationId,
+              author ? JSON.stringify(author) : null,
+              targetRoles ? JSON.stringify(targetRoles) : null
+            );
+        }
         const operation = this.getStored(input.requesterSessionId, input.operationId);
         if (!operation) throw new Error('Accepted Operation was not readable after insert.');
         const claimedItemIndexes: number[] = [];
@@ -516,6 +551,62 @@ export class LodyOperationStore {
       )
       .all(workspaceId, ownerMachineId);
     return rows.map((row) => this.decodeOperation(row));
+  }
+
+  listForRequester(
+    scope: { workspaceId: WorkspaceId; requesterSessionId: SessionId; requesterUserId: string },
+    input: OperationListQuery = {}
+  ) {
+    const query = OperationListQuerySchema.parse(input);
+    const cursor = discoveryCursor(
+      { limit: query.limit, cursor: query.cursor },
+      JSON.stringify([
+        'operations',
+        scope.workspaceId,
+        scope.requesterSessionId,
+        scope.requesterUserId,
+        query.state ?? null,
+      ])
+    );
+    const rows = this.db
+      .prepare(`SELECT * FROM operations WHERE workspace_id = ? AND requester_session_id = ?
+      AND requester_user_id = ? AND (? IS NULL OR state = ?) AND (? IS NULL OR operation_id > ?)
+      ORDER BY operation_id ASC LIMIT ?`)
+      .all(
+        scope.workspaceId,
+        scope.requesterSessionId,
+        scope.requesterUserId,
+        query.state ?? null,
+        query.state ?? null,
+        cursor.after ?? null,
+        cursor.after ?? null,
+        cursor.limit + 1
+      );
+    const operations = rows.slice(0, cursor.limit).map((row) => this.decodeOperation(row));
+    const last = operations.at(-1);
+    const hasMore = rows.length > cursor.limit;
+    return {
+      ok: true as const,
+      items: operations.map((operation) => ({
+        operationId: operation.operationId,
+        kind: operation.kind,
+        state: operation.state,
+        createdAt: operation.createdAt,
+        deadlineAt: operation.deadlineAt,
+        itemCount: operation.items.length,
+      })),
+      hasMore,
+      ...(hasMore && last ? { nextCursor: cursor.encode(last.operationId) } : {}),
+    };
+  }
+
+  hasPendingWorkForRequester(workspaceId: WorkspaceId, requesterSessionId: SessionId): boolean {
+    return !!this.db
+      .prepare(
+        `SELECT 1 FROM operations WHERE workspace_id=? AND requester_session_id=? AND state='active'
+      UNION ALL SELECT 1 FROM deliveries WHERE workspace_id=? AND requester_session_id=? AND state='pending' LIMIT 1`
+      )
+      .get(workspaceId, requesterSessionId, workspaceId, requesterSessionId);
   }
 
   // Absence of a settlement is the durable obligation, including for Operations
@@ -1214,7 +1305,27 @@ export class LodyOperationStore {
           'Operation completion'
         ) as LodyOperationCompletion)
       : undefined;
+    const authorRow = this.db
+      .prepare(
+        'SELECT author_json, target_roles_json FROM operation_authors WHERE requester_session_id = ? AND operation_id = ?'
+      )
+      .get(parsed.requester_session_id, parsed.operation_id) as
+      | { author_json: string | null; target_roles_json: string | null }
+      | undefined;
+    const author = authorRow?.author_json
+      ? parseJson(authorRow.author_json, AgentMessageAuthorSchema, 'Operation author')
+      : undefined;
     return {
+      ...(author ? { author } : {}),
+      ...(authorRow?.target_roles_json
+        ? {
+            targetRoleSnapshots: parseJson(
+              authorRow.target_roles_json,
+              z.array(AgentRoleSnapshotSchema.nullable()),
+              'target Role snapshots'
+            ),
+          }
+        : {}),
       workspaceId: parsed.workspace_id as WorkspaceId,
       ownerMachineId: parsed.owner_machine_id as MachineId,
       requesterSessionId: parsed.requester_session_id as SessionId,
@@ -1429,6 +1540,15 @@ export class LodyOperationStore {
           REFERENCES operations (requester_session_id, operation_id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS operation_authors (
+        requester_session_id TEXT NOT NULL,
+        operation_id TEXT NOT NULL,
+        author_json TEXT,
+        target_roles_json TEXT,
+        PRIMARY KEY (requester_session_id, operation_id),
+        FOREIGN KEY (requester_session_id, operation_id)
+          REFERENCES operations(requester_session_id, operation_id) ON DELETE CASCADE
+      );
       CREATE TABLE IF NOT EXISTS orchestration_meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -1476,6 +1596,7 @@ export class LodyOperationStore {
       'table:operation_item_materializations',
       'table:operation_progress_settlements',
       'table:orchestration_meta',
+      'table:operation_authors',
     ]);
     const existingObjects = this.db
       .prepare(

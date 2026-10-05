@@ -11,6 +11,7 @@ import type {
   WorkspaceId,
 } from '@lody/shared';
 
+import type { SessionUsageUpdate } from 'acp-extension-core';
 import { MessageHandler } from '../src/lib/message-handler';
 import { SessionDocument } from '../src/lib/loro/doc';
 import type { LoroDocumentManager } from '../src/lib/loro/doc';
@@ -26,6 +27,7 @@ const createSilentLogger = (): Logger => ({
   error: () => {},
   success: () => {},
   debug: () => {},
+  trace: () => {},
   setLevel: () => {},
   child: () => createSilentLogger(),
   close: async () => {},
@@ -364,7 +366,75 @@ describe('MessageHandler ACP batching', () => {
     }
   });
 
-  it('settles only a failed compaction across finalization, reload, and later activity', async () => {
+  it('records each turn its own token usage deltas, including late reports', async () => {
+    vi.useRealTimers();
+    const sessionId = 'turn-token-usage' as SessionId;
+    const { repo, docs, handler } = await createHandlerHarness([sessionId]);
+    const doc = docs.get(sessionId);
+    if (!doc) throw new Error(`Missing session doc for ${sessionId}`);
+    const host = handler as unknown as {
+      beginConversationTurn(sessionId: SessionId): string;
+      createAssistantEntryForTurn(
+        sessionId: SessionId,
+        sessionDoc: SessionDocument,
+        turnId: string
+      ): Promise<void>;
+      finalizeACPState(sessionId: SessionId, turnId?: string): Promise<void>;
+      recordTurnTokenUsage(
+        sessionId: SessionId,
+        update: SessionUsageUpdate
+      ): Promise<void> | undefined;
+    };
+    const row = (inputTokens: number, cacheReadInputTokens: number) => ({
+      inputTokens,
+      outputTokens: 20,
+      cacheReadInputTokens,
+      cacheCreationInputTokens: 5,
+      reasoningOutputTokens: 7,
+    });
+    // Cumulative modelUsage is deliberately large: only `delta` is attributed.
+    const report = (delta?: ReturnType<typeof row>): SessionUsageUpdate => ({
+      sessionId,
+      usage: row(1, 1),
+      modelUsage: { model: row(900_000, 900_000) },
+      ...(delta ? { delta: { usage: delta, modelUsage: { model: delta } } } : {}),
+    });
+
+    try {
+      const first = host.beginConversationTurn(sessionId);
+      await host.createAssistantEntryForTurn(sessionId, doc, first);
+      await host.recordTurnTokenUsage(sessionId, report(row(100, 1000)));
+      await host.recordTurnTokenUsage(sessionId, report(row(50, 2000)));
+      await host.recordTurnTokenUsage(sessionId, report());
+      await host.finalizeACPState(sessionId, first);
+      // Background work reporting after the turn ended belongs to that turn.
+      await host.recordTurnTokenUsage(sessionId, report(row(10, 0)));
+
+      const second = host.beginConversationTurn(sessionId);
+      await host.createAssistantEntryForTurn(sessionId, doc, second);
+      await host.recordTurnTokenUsage(sessionId, report(row(3, 4)));
+      await host.finalizeACPState(sessionId, second);
+
+      const reopened = new SessionDocument(repo, sessionId, async () => {});
+      await reopened.initOffline({ history: [] });
+      const history = await reopened.sessionData.history.readAll();
+      expect(history.find((entry) => entry.id === first)?.tokenUsage).toEqual({
+        inputTokens: 160,
+        outputTokens: 60,
+        cacheReadInputTokens: 3000,
+        cacheCreationInputTokens: 15,
+        reasoningOutputTokens: 21,
+      });
+      expect(history.find((entry) => entry.id === second)?.tokenUsage).toMatchObject({
+        inputTokens: 3,
+        cacheReadInputTokens: 4,
+      });
+    } finally {
+      await destroyRepoOnRealTimers(repo);
+    }
+  });
+
+  it('settles an open compaction across finalization, reload, and later activity', async () => {
     vi.useRealTimers();
     const sessionId = 'compaction-lifecycle' as SessionId;
     const { repo, docs, handler } = await createHandlerHarness([sessionId]);
@@ -374,11 +444,7 @@ describe('MessageHandler ACP batching', () => {
       beginConversationTurn(sessionId: SessionId): string;
       enqueueACPUpdate(sessionId: SessionId, update: AcpSessionNotification): void;
       flushACPUpdatesNow(sessionId: SessionId): Promise<void>;
-      finalizeACPState(
-        sessionId: SessionId,
-        turnId?: string,
-        options?: { settleContextCompactionAsFailed?: boolean }
-      ): Promise<void>;
+      finalizeACPState(sessionId: SessionId, turnId?: string): Promise<void>;
     };
     const findCompaction = (history: SessionHistoryInput[], toolCallId: string) =>
       history
@@ -405,6 +471,9 @@ describe('MessageHandler ACP batching', () => {
       await host.flushACPUpdatesNow(sessionId);
       expect(isSessionContextCompacting(await doc.sessionData.history.readAll())).toBe(true);
 
+      // Nothing after the turn boundary can carry `compact-1` to a terminal
+      // status, so finalization owns it: the durable record must not reload as
+      // a compaction that is still running. Repeating the call is a no-op.
       await host.finalizeACPState(sessionId, turnId);
       await host.finalizeACPState(sessionId, turnId);
 
@@ -412,20 +481,9 @@ describe('MessageHandler ACP batching', () => {
       await reopened.initOffline({ history: [] });
       const reloadedHistory = await reopened.sessionData.history.readAll();
       const reloadedTurn = reloadedHistory.find((entry) => entry.id === turnId);
-      const staleCompaction = findCompaction(reloadedHistory, 'compact-1');
       expect(reloadedTurn?.finished).toBe(true);
-      expect(staleCompaction).toMatchObject({ status: 'in_progress' });
-      expect(isSessionContextCompacting(reloadedHistory)).toBe(true);
-
-      await host.finalizeACPState(sessionId, turnId, {
-        settleContextCompactionAsFailed: true,
-      });
-      await host.finalizeACPState(sessionId, turnId, {
-        settleContextCompactionAsFailed: true,
-      });
-      const failedHistory = await reopened.sessionData.history.readAll();
-      expect(findCompaction(failedHistory, 'compact-1')).toMatchObject({ status: 'failed' });
-      expect(isSessionContextCompacting(failedHistory)).toBe(false);
+      expect(findCompaction(reloadedHistory, 'compact-1')).toMatchObject({ status: 'failed' });
+      expect(isSessionContextCompacting(reloadedHistory)).toBe(false);
 
       host.enqueueACPUpdate(sessionId, {
         sessionId,
@@ -779,6 +837,81 @@ describe('MessageHandler ACP batching', () => {
       await destroyRepoOnRealTimers(repo);
     }
   }, 120_000);
+
+  it('deduplicates the persisted prefix when a backend batch fails partway through', async () => {
+    vi.useRealTimers();
+    const sessionId = 'partial-acp-batch' as SessionId;
+    const { repo, docs, handler } = await createHandlerHarness([sessionId]);
+    const doc = docs.get(sessionId);
+    if (!doc) throw new Error(`Missing session doc for ${sessionId}`);
+
+    const originalAgentWrites = doc.agentWrites;
+    const appliedOperationIds = new Set<string>();
+    const observedOperationBatches: string[][] = [];
+    let injectFailure = true;
+    const retryableAgentWrites = {
+      ...originalAgentWrites,
+      applyAgentBatch: async (input: Parameters<typeof originalAgentWrites.applyAgentBatch>[0]) => {
+        const notifications = input.notifications ?? [];
+        const operationIds = input.operationIds ?? [];
+        observedOperationBatches.push([...operationIds]);
+        const { operationIds: _operationIds, ...batchInput } = input;
+
+        for (const [index, notification] of notifications.entries()) {
+          const operationId = operationIds[index];
+          if (operationId && appliedOperationIds.has(operationId)) continue;
+
+          await originalAgentWrites.applyAgentBatch({
+            ...batchInput,
+            notifications: [notification],
+          });
+          if (operationId) appliedOperationIds.add(operationId);
+          if (injectFailure) {
+            injectFailure = false;
+            throw new Error('simulated backend interruption after first item');
+          }
+        }
+      },
+    };
+    const originalAgentWritesDescriptor = Object.getOwnPropertyDescriptor(doc, 'agentWrites');
+    Object.defineProperty(doc, 'agentWrites', {
+      configurable: true,
+      get: () => retryableAgentWrites,
+    });
+
+    try {
+      const host = handler as unknown as {
+        beginConversationTurn(id: SessionId): string;
+        enqueueACPUpdate(id: SessionId, update: AcpSessionNotification): void;
+        flushACPUpdatesNow(id: SessionId): Promise<void>;
+      };
+      host.beginConversationTurn(sessionId);
+      for (const text of ['prefix', 'suffix']) {
+        host.enqueueACPUpdate(sessionId, {
+          sessionId,
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text },
+          },
+        });
+      }
+
+      await host.flushACPUpdatesNow(sessionId);
+
+      const history = await doc.sessionData.history.readAll();
+      expect(readItems(history[0])).toEqual([{ type: 'text', text: 'prefixsuffix' }]);
+      expect(observedOperationBatches).toHaveLength(2);
+      expect(observedOperationBatches[1]).toEqual(observedOperationBatches[0]);
+      expect(new Set(observedOperationBatches[0]).size).toBe(2);
+    } finally {
+      if (originalAgentWritesDescriptor) {
+        Object.defineProperty(doc, 'agentWrites', originalAgentWritesDescriptor);
+      } else {
+        Reflect.deleteProperty(doc, 'agentWrites');
+      }
+      await destroyRepoOnRealTimers(repo);
+    }
+  });
 
   it('keeps unread state and coalesces plans when a plan write is retried', async () => {
     vi.useRealTimers();

@@ -1,26 +1,86 @@
 import { useEffect, useRef, type ComponentProps, type FormEvent, type ReactNode } from 'react';
-import {
-  ArrowLeft,
-  ArrowRight,
-  MessageCircle,
-  Monitor,
-  Power,
-  RefreshCw,
-  Share2,
-  X,
-} from 'lucide-react';
-import { Spinner } from '@/ui/spinner';
+import { ArrowLeft, ArrowRight, MessageCircle, Power, RefreshCw, Share2, X } from 'lucide-react';
+import * as stylex from '@stylexjs/stylex';
+import { colors } from '@lody/ui/tokens/colors.stylex';
+import { Spinner } from '@lody/ui/spinner';
 import { useTranslation } from 'react-i18next';
 
-import { Button } from '@/ui/button';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/ui/tooltip';
+import { Button } from '@lody/ui/button';
+import { Tooltip } from '@lody/ui/tooltip';
 import { cn } from '@/lib/utils';
+import {
+  PreviewConnectionStatus,
+  type PreviewConnectionStatusProps,
+} from './preview-connection-status';
+
+const styles = stylex.create({
+  toolbar: {
+    display: 'flex',
+    minWidth: 0,
+    alignItems: 'center',
+    gap: '2px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: colors.separator,
+    backgroundColor: colors.background,
+    paddingInline: '6px',
+    paddingBottom: '6px',
+    paddingTop: 'calc(0.375rem + var(--safe-area-top))',
+  },
+  form: { minWidth: 0, flex: '1 1 0%', paddingInline: '4px' },
+  addressWell: {
+    display: 'flex',
+    minWidth: 0,
+    height: '32px',
+    alignItems: 'center',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderColor: {
+      default: 'hsl(var(--input-border))',
+      ':focus-within': 'hsl(var(--ring))',
+    },
+    borderRadius: '6px',
+    backgroundColor: 'hsl(var(--input-field))',
+    transitionProperty: 'border-color, box-shadow',
+    transitionDuration: '150ms',
+    boxShadow: {
+      default: null,
+      ':focus-within': '0 0 0 1px hsl(var(--ring))',
+    },
+  },
+  addressInput: {
+    width: '100%',
+    height: '100%',
+    minWidth: 0,
+    flex: '1 1 0%',
+    borderWidth: 0,
+    backgroundColor: 'transparent',
+    paddingInline: '10px',
+    color: {
+      default: colors.label,
+      '::placeholder': colors.secondaryLabel,
+    },
+    fontSize: '0.75rem',
+    lineHeight: '1rem',
+    outlineStyle: 'none',
+    opacity: {
+      default: null,
+      '::placeholder': 1,
+    },
+    boxShadow: {
+      default: null,
+      ':focus-visible': 'none',
+    },
+  },
+  statusSlot: { display: 'flex', flexShrink: 0, alignItems: 'center', marginInlineEnd: '2px' },
+  icon: { width: '16px', height: '16px' },
+});
 
 type SessionBrowserToolbarProps = {
   leadingSlot?: ReactNode;
   focusAddress?: boolean;
   address: string;
-  remoteMachineName?: string;
+  previewStatus?: PreviewConnectionStatusProps;
   canGoBack: boolean;
   canGoForward: boolean;
   loading: boolean;
@@ -49,21 +109,23 @@ function ToolbarButton({
   ...props
 }: ComponentProps<typeof Button> & { label: string }) {
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className={cn('h-8 w-8 shrink-0', className)}
-          aria-label={label}
-          {...props}
-        >
-          {children}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
+    <Tooltip.Root>
+      <Tooltip.Trigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            icon
+            className={cn('shrink-0', className)}
+            aria-label={label}
+            {...props}
+          >
+            {children}
+          </Button>
+        }
+      />
+      <Tooltip.Content>{label}</Tooltip.Content>
+    </Tooltip.Root>
   );
 }
 
@@ -71,7 +133,7 @@ export function SessionBrowserToolbar({
   leadingSlot,
   focusAddress = false,
   address,
-  remoteMachineName,
+  previewStatus,
   canGoBack,
   canGoForward,
   loading,
@@ -104,24 +166,24 @@ export function SessionBrowserToolbar({
   };
 
   return (
-    <TooltipProvider delayDuration={350}>
+    <Tooltip.Provider delay={350}>
       {/* Pad for the notch on mobile full-screen drawers; desktop keeps
          `--safe-area-top: 0` so the bar height is unchanged. */}
-      <div className="flex min-w-0 items-center gap-0.5 border-b border-border bg-background px-1.5 pb-1.5 pt-[calc(0.375rem+var(--safe-area-top))]">
+      <div {...stylex.props(styles.toolbar)}>
         {leadingSlot}
         <ToolbarButton
           label={t('sessions.browser.back', 'Back')}
           disabled={!canGoBack || busy}
           onClick={onBack}
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeft {...stylex.props(styles.icon)} />
         </ToolbarButton>
         <ToolbarButton
           label={t('sessions.browser.forward', 'Forward')}
           disabled={!canGoForward || busy}
           onClick={onForward}
         >
-          <ArrowRight className="h-4 w-4" />
+          <ArrowRight {...stylex.props(styles.icon)} />
         </ToolbarButton>
         <ToolbarButton
           label={
@@ -132,11 +194,15 @@ export function SessionBrowserToolbar({
           disabled={busy}
           onClick={loading ? onStop : onReload}
         >
-          {loading ? <X className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
+          {loading ? (
+            <X {...stylex.props(styles.icon)} />
+          ) : (
+            <RefreshCw {...stylex.props(styles.icon)} />
+          )}
         </ToolbarButton>
 
-        <form className="min-w-0 flex-1 px-1" onSubmit={submit}>
-          <div className="flex h-8 min-w-0 items-center rounded-md border border-input-border bg-input-field transition-colors focus-within:border-ring focus-within:ring-1 focus-within:ring-ring">
+        <form {...stylex.props(styles.form)} onSubmit={submit}>
+          <div {...stylex.props(styles.addressWell)}>
             <input
               ref={addressInputRef}
               type="text"
@@ -156,17 +222,12 @@ export function SessionBrowserToolbar({
               autoCorrect="off"
               spellCheck={false}
               disabled={busy}
-              className="h-full min-w-0 flex-1 bg-transparent px-2.5 text-xs text-foreground outline-none placeholder:text-muted-foreground"
+              {...stylex.props(styles.addressInput)}
             />
-            {remoteMachineName ? (
-              <span
-                className="flex min-w-0 max-w-[40%] shrink-0 items-center gap-1 border-l border-input-border/70 px-2 text-[11px] text-muted-foreground"
-                aria-label={`${t('sessions.browser.remoteMachine', 'Remote machine')}: ${remoteMachineName}`}
-                title={remoteMachineName}
-              >
-                <Monitor className="h-3 w-3 shrink-0" aria-hidden />
-                <span className="truncate">{remoteMachineName}</span>
-              </span>
+            {previewStatus ? (
+              <div {...stylex.props(styles.statusSlot)}>
+                <PreviewConnectionStatus {...previewStatus} />
+              </div>
             ) : null}
           </div>
         </form>
@@ -187,7 +248,7 @@ export function SessionBrowserToolbar({
           aria-pressed={annotationEnabled}
           onClick={onToggleAnnotation}
         >
-          <MessageCircle className="h-4 w-4" />
+          <MessageCircle {...stylex.props(styles.icon)} />
         </ToolbarButton>
         <ToolbarButton
           label={
@@ -198,7 +259,11 @@ export function SessionBrowserToolbar({
           disabled={!shareAvailable || busy}
           onClick={onShare}
         >
-          {sharing ? <Spinner className="h-4 w-4" /> : <Share2 className="h-4 w-4" />}
+          {sharing ? (
+            <Spinner label={null} size="small" />
+          ) : (
+            <Share2 {...stylex.props(styles.icon)} />
+          )}
         </ToolbarButton>
         {hasShareUrl ? (
           <ToolbarButton
@@ -206,10 +271,10 @@ export function SessionBrowserToolbar({
             disabled={busy}
             onClick={onStopSharing}
           >
-            <Power className="h-4 w-4" />
+            <Power {...stylex.props(styles.icon)} />
           </ToolbarButton>
         ) : null}
       </div>
-    </TooltipProvider>
+    </Tooltip.Provider>
   );
 }

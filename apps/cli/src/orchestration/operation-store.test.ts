@@ -1,3 +1,4 @@
+import { buildAgentMessageAuthor } from '@lody/shared';
 import { chmod, mkdtemp, rm, stat } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -59,6 +60,99 @@ afterEach(async () => {
 });
 
 describe('LodyOperationStore', () => {
+  it('freezes source authors across retries and reopening without changing legacy operation rows', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'lody-author-'));
+    roots.add(root);
+    const dbPath = path.join(root, 'operations.sqlite3');
+    const input = baseInput();
+    const author = buildAgentMessageAuthor({
+      sessionId: input.requesterSessionId,
+      turnId: 'source-turn-1',
+      name: 'Agent A',
+      inputConfig: { modelId: 'model-a' },
+      role: { id: 'role-a' as never, revision: 1, name: 'Reviewer', emoji: '🔎' },
+    });
+    let store = new LodyOperationStore(dbPath);
+    try {
+      store.accept({ ...input, author, targetRoleSnapshots: [author.role ?? null] });
+      const retry = store.accept({
+        ...input,
+        author: { ...author, name: 'Renamed', role: undefined },
+      });
+      expect(retry.operation.author).toEqual(author);
+      store.close();
+      store = new LodyOperationStore(dbPath);
+      expect(store.get(input.requesterSessionId, input.operationId)).toMatchObject({
+        requesterUserId: 'user-1',
+        author,
+        targetRoleSnapshots: [author.role],
+      });
+      const db = new Database(dbPath);
+      try {
+        const row = db.prepare('SELECT * FROM operations').get() as Record<string, unknown>;
+        expect(row).not.toHaveProperty('author_json');
+        expect(JSON.parse(row.frozen_config_json as string)).not.toHaveProperty('author');
+      } finally {
+        db.close();
+      }
+      expect(() =>
+        store.accept({
+          ...input,
+          operationId: 'bad-author',
+          author: { ...author, sessionId: 'other' },
+        })
+      ).toThrow('source turn');
+      expect(() => store.get(input.requesterSessionId, 'bad-author')).toThrow();
+    } finally {
+      store.close();
+    }
+  });
+
+  it('pages requester-owned summaries without prompts and rejects foreign cursor scopes', async () => {
+    const store = await makeStore();
+    const scope = {
+      workspaceId: 'workspace-1' as WorkspaceId,
+      requesterSessionId: 'requester-1' as SessionId,
+      requesterUserId: 'user-1',
+    };
+    try {
+      for (const operationId of ['a', 'b', 'c']) store.accept({ ...baseInput(), operationId });
+      store.accept({
+        ...baseInput(),
+        operationId: 'foreign-session',
+        requesterSessionId: 'other' as SessionId,
+      });
+      store.accept({ ...baseInput(), operationId: 'foreign-user', requesterUserId: 'other' });
+      store.accept({
+        ...baseInput(),
+        operationId: 'foreign-workspace',
+        workspaceId: 'other' as WorkspaceId,
+      });
+      const first = store.listForRequester(scope, { limit: 2, state: 'active' });
+      expect(first.items.map((row) => row.operationId)).toEqual(['a', 'b']);
+      const second = store.listForRequester(scope, {
+        limit: 2,
+        state: 'active',
+        cursor: first.nextCursor,
+      });
+      expect(second.items.map((row) => row.operationId)).toEqual(['c']);
+      expect(second.hasMore).toBe(false);
+      expect(first.items[0]).not.toHaveProperty('canonicalCommand');
+      expect(() =>
+        store.listForRequester(
+          { ...scope, requesterUserId: 'other' },
+          { cursor: first.nextCursor, state: 'active' }
+        )
+      ).toThrow('CURSOR_INVALID');
+      expect(() =>
+        store.listForRequester(scope, { cursor: first.nextCursor, state: 'finished' })
+      ).toThrow('CURSOR_INVALID');
+      expect(store.listForRequester(scope, { state: 'finished' }).items).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
   it('restricts the store directory and database to the local account', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'lody-operation-store-permissions-'));
     roots.add(root);
@@ -259,7 +353,7 @@ describe('LodyOperationStore', () => {
     }
   });
 
-  it('round-trips a frozen create dispatch config including the task tools gate', async () => {
+  it('round-trips a frozen create dispatch config', async () => {
     const store = await makeStore();
     try {
       const accepted = store.accept({
@@ -273,7 +367,6 @@ describe('LodyOperationStore', () => {
               modeId: 'default',
               modelId: 'gpt-5',
               configOptionValues: { fast: true },
-              taskToolsEnabled: false,
               inheritSessionDefaults: false as const,
             },
           ],
@@ -286,7 +379,6 @@ describe('LodyOperationStore', () => {
           modeId: 'default',
           modelId: 'gpt-5',
           configOptionValues: { fast: true },
-          taskToolsEnabled: false,
           inheritSessionDefaults: false,
         },
       ]);

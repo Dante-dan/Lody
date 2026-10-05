@@ -1,11 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { isElectronRenderer, isMacOSElectronRenderer } from '@/lib/electron';
-import {
-  ContextMenu,
-  ContextMenuTrigger,
-  ContextMenuContent,
-  ContextMenuItem,
-} from '@/ui/context-menu';
+import { ContextMenu } from '@lody/ui/context-menu';
 import { isNewWindowClick, openDesktopWindow } from '@/lib/desktop-window';
 import {
   type ComponentPropsWithoutRef,
@@ -15,49 +10,55 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   useSyncExternalStore,
 } from 'react';
+import { useStore } from 'jotai';
 import { cn } from '@/lib/utils';
-import { WINDOW_DRAG_EXEMPT_CLASS, WINDOW_DRAG_HEADER_CLASS } from '@/ui/window-drag-region';
+import { sidebarScrollTopByWorkspaceAtom } from '@/atoms/sidebar-state';
+import {
+  WINDOW_DRAG_EXEMPT_CLASS,
+  WINDOW_DRAG_HEADER_CLASS,
+  useMacTrafficLightRowPadClass,
+  useWindowsCaptionRowPadClass,
+} from '@/ui/window-drag-region';
 import { useElectronFullscreen } from '@/lib/electron';
-import { Badge } from '@/ui/badge';
-import { Button } from '@/ui/button';
-import { Kbd } from '@/ui/kbd';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/ui/tooltip';
+import { Badge } from '@lody/ui/badge';
+import { Button } from '@lody/ui/button';
+import * as stylex from '@stylexjs/stylex';
+import { colors } from '@lody/ui/tokens/colors.stylex';
+import { control, radius, space, text } from '@lody/ui/tokens/scales.stylex';
+import { Kbd } from '@lody/ui/kbd';
+import { Tooltip } from '@lody/ui/tooltip';
 import { commands, formatKeyBinding, type ShortcutCommandId } from '@/lib/commands';
 import { setCommandPaletteOpen } from '@/lib/commands/palette-state';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/ui/dropdown-menu';
+import { Menu } from '@/ui/menu';
 import { ScrollArea } from '@/ui/scroll-area';
 import {
   AppWindow,
   Archive,
-  ListTodo,
+  CircleHelp,
   BookOpen,
   Bug,
-  CircleHelp,
+  ClipboardList,
+  ListTodo,
   Github,
   SquarePen,
   Link2,
+  ListFilter,
   MessageSquareMore,
+  ArrowLeft,
+  ArrowRight,
   PanelLeft,
   Plus,
   Search,
   Settings,
   Users,
 } from 'lucide-react';
-import { Spinner } from '@/ui/spinner';
+import { Spinner } from '@lody/ui/spinner';
 import {
   SessionList,
   type SessionListProps,
@@ -75,8 +76,14 @@ import { WorkspaceAvatar } from './workspace-avatar';
 import type { SidebarOrganizeMode } from '@/atoms/sidebar-state';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { useStableNow } from '@/hooks/use-stable-now';
+import {
+  SIDEBAR_ROW_TEXT_CLASS,
+  SIDEBAR_CAPTION_TEXT_CLASS,
+  SIDEBAR_HELPER_TEXT_CLASS,
+  SIDEBAR_CONTROL_TEXT_CLASS,
+} from './sidebar-row-shared';
 
-export type LoroSidebarNavKey = 'home' | 'archive' | 'tasks';
+export type LoroSidebarNavKey = 'home' | 'archive' | 'schedules';
 
 export type LoroSidebarChatScope = 'my' | 'team';
 export type LoroSidebarOrganizeMode = SidebarOrganizeMode;
@@ -88,6 +95,8 @@ export type LoroSidebarWorkspace = {
   logo?: string | null;
   /** Paid plan tier for the Plus/Enterprise badge; null/undefined = free. */
   planTier?: 'plus' | 'enterprise' | null;
+  /** Member count, when known (the active workspace). Shown in the switcher header. */
+  memberCount?: number | null;
 };
 
 export type LoroSidebarRepoItemDelta = {
@@ -118,8 +127,7 @@ export type LoroSidebarChatItem = {
 
 export type LoroSidebarLabels = {
   home: string;
-  tasks: string;
-  newTask: string;
+  schedules: string;
   docs: string;
   joinCommunity: string;
   feedback: string;
@@ -133,6 +141,7 @@ export type LoroSidebarLabels = {
   connectGithubRepo: string;
   planPlus: string;
   planEnterprise: string;
+  planFree: string;
   pinned: string;
   connectionLoading: string;
   connectionReconnecting: string;
@@ -149,6 +158,8 @@ export interface LoroSidebarProps {
   userEmail: string;
   workspaces: LoroSidebarWorkspace[];
   currentWorkspaceId: string;
+  /** Stable workspace key for restoring the scroll viewport after a desktop remount. */
+  scrollStateKey?: string | null;
   /**
    * Whether the workspace identity opens the switch/create menu. Platforms
    * without the `multiWorkspace` capability render the identity as a static
@@ -172,12 +183,15 @@ export interface LoroSidebarProps {
   activeNav?: LoroSidebarNavKey | null;
 
   topContent?: ReactNode;
-  /** Reserves the filter trigger's space in the first visible section header. */
-  desktopFilterPlaceholder?: ReactNode;
+  /** The filter trigger element rendered in-flow on the first visible section
+      header. Caller-owned so its open state survives remounting between slots. */
+  desktopFilterAction?: ReactNode;
   /**
    * In-flow content rendered after {@link sessionListProps} inside the scroll
    * viewport (workspace mode only). LoroAppSidebar uses this to place the Chats
    * section below the GitHub Worktrees list so Chats reads as the last section.
+   * When present without top or pinned content, that section owns the desktop
+   * filter action; the preceding list must not mount a second fallback action.
    */
   afterSessionListContent?: ReactNode;
   bottomFloatingContent?: ReactNode;
@@ -217,6 +231,9 @@ export interface LoroSidebarProps {
    * the visual contract aligned with `SessionList.isLoading` in Workspace mode.
    */
   updatedIsLoading?: boolean;
+  /** Whether Updated-mode rows show their project mark and name below the title. */
+  showUpdatedProjectNames?: boolean;
+  onShowUpdatedProjectNamesChange?: (next: boolean) => void;
   onOrganizeModeChange?: (mode: LoroSidebarOrganizeMode) => void;
   onChatScopeChange?: (scope: LoroSidebarChatScope) => void;
   onSelectUpdatedItem?: (id: string, tabSessionId?: string) => void;
@@ -250,17 +267,11 @@ export interface LoroSidebarProps {
   onLinkRepoClicked?: () => void;
   onHomeClicked?: () => void;
   onArchiveClicked?: () => void;
-  onTasksClicked?: () => void;
-  /** Capture a task without leaving where you are. Also gated by `showTasks`. */
-  onNewTaskClicked?: () => void;
-  /**
-   * Whether the Tasks entry exists at all. Defaults to false so a caller that
-   * forgets it hides the beta rather than leaking it — see
-   * `tasksFeatureEnabledAtom`.
-   */
-  showTasks?: boolean;
+  /** Shows the Schedules entry; absent where there is nowhere to go. */
+  onSchedulesClicked?: () => void;
   onSettingsClicked?: () => void;
   onDocsClicked?: () => void;
+  onGithubClicked?: () => void;
   onJoinCommunityClicked?: () => void;
   onFeedbackClicked?: () => void;
   onBugReportClicked?: () => void;
@@ -277,6 +288,12 @@ export interface LoroSidebarProps {
    * hover-reveal button on the workspace row, or keyboard shortcut at parent).
    */
   onRequestCollapse?: () => void;
+  /**
+   * Overlay presentation for the compact desktop layout: fluid width owned by
+   * the caller's wrapper, no resize sash. Desktop chrome stays desktop —
+   * unlike `isMobile`, which swaps in touch chrome and safe-area insets.
+   */
+  overlay?: boolean;
 }
 
 /**
@@ -285,10 +302,43 @@ export interface LoroSidebarProps {
  */
 const COLLAPSE_DRAG_THRESHOLD = 160;
 
+const footerStyles = stylex.create({
+  desktop: { columnGap: space[1] },
+  workspaceControl: {
+    width: '100%',
+    minWidth: 0,
+    justifyContent: 'flex-start',
+    gap: space[2],
+    textAlign: 'start',
+  },
+  workspaceNameplate: {
+    display: 'flex',
+    alignItems: 'center',
+    height: control.small,
+    paddingInline: space[2],
+    boxSizing: 'border-box',
+    fontSize: text.subheadlineSize,
+    lineHeight: 1,
+    color: colors.secondaryLabel,
+    userSelect: 'none',
+  },
+  actions: {
+    display: 'flex',
+    alignItems: 'center',
+    flexShrink: 0,
+    gap: space[1],
+  },
+  selectedAction: {
+    display: 'inline-flex',
+    backgroundColor: colors.selectedFill,
+    borderRadius: radius.small,
+  },
+  selectedMobileAction: { borderRadius: radius.large },
+});
+
 const defaultLabels: LoroSidebarLabels = {
   home: 'Home',
-  tasks: 'Tasks',
-  newTask: 'New task',
+  schedules: 'Schedules',
   docs: 'Docs',
   joinCommunity: 'Join community',
   feedback: 'Feedback',
@@ -302,6 +352,7 @@ const defaultLabels: LoroSidebarLabels = {
   connectGithubRepo: 'Connect GitHub repo',
   planPlus: 'Plus',
   planEnterprise: 'Enterprise',
+  planFree: 'Free',
   pinned: 'Pinned',
   connectionLoading: 'Loading',
   connectionReconnecting: 'Reconnecting',
@@ -309,12 +360,19 @@ const defaultLabels: LoroSidebarLabels = {
   workspaceSyncing: 'Syncing workspace…',
   filter: {
     triggerAriaLabel: 'Filter sidebar',
-    organizeHeading: 'Organize',
-    showHeading: 'Show',
-    organizeWorkspace: 'Workspace',
+    organizeHeading: 'View',
+    showHeading: 'Tasks',
+    organizeProject: 'Project',
     organizeUpdated: 'Updated',
+    updatedProjectNames: 'Show Project',
+    updatedProjectNamesUnavailable: 'Available in Updated view',
     showMyTasks: 'My Tasks',
     showAllTasks: 'All Tasks',
+    emptyMyTasks: 'No tasks match this view',
+    emptyMyTasksHint: 'Try showing every task in this workspace.',
+    emptyAllTasks: 'No tasks yet',
+    emptyAllTasksHint: 'Tasks in this workspace will appear here.',
+    showAllTasksAction: 'Show all tasks',
   },
   updated: {
     heading: 'Chats',
@@ -424,17 +482,6 @@ function GlassSurface({ className, children }: { className?: string; children: R
   );
 }
 
-function LineChangeBadge({ lineChange }: { lineChange: LoroSidebarRepoItemDelta }) {
-  const addedText = `+${lineChange.add}`;
-  const removedText = `-${lineChange.del}`;
-  return (
-    <div className="flex items-center gap-1 text-[11px] tabular-nums">
-      <span className="text-code-added">{addedText}</span>
-      <span className="text-code-removed">{removedText}</span>
-    </div>
-  );
-}
-
 type WorkspaceIdentityStatus = 'loading' | 'reconnecting' | 'offline' | 'syncing';
 
 function ConnectionPill({
@@ -457,23 +504,14 @@ function ConnectionPill({
           ? labels.connectionLoading
           : labels.connectionOffline;
   return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] font-medium',
-        isLoading
-          ? 'bg-sidebar-hover text-sidebar-foreground-muted'
-          : 'bg-status-danger/[0.12] text-status-danger ring-1 ring-status-danger/20'
-      )}
+    <Badge
+      tone={isLoading ? 'running' : 'danger'}
+      icon={isLoading ? <Spinner className="h-3 w-3" label={null} /> : undefined}
       aria-label={label}
       data-workspace-status={state}
     >
-      {isLoading ? (
-        <Spinner className="h-3 w-3 shrink-0" aria-hidden />
-      ) : (
-        <span className="h-1.5 w-1.5 rounded-full bg-status-danger" aria-hidden />
-      )}
-      <span>{label}</span>
-    </span>
+      {label}
+    </Badge>
   );
 }
 
@@ -492,26 +530,41 @@ const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconB
   ref
 ) {
   const isMobile = useIsMobile();
-  return (
+  const button = (
     <Button
       ref={ref}
       type="button"
       variant="ghost"
-      size="icon"
-      className={cn(getLoroSidebarFooterIconButtonClassName(isMobile, active), className)}
+      size="small"
+      icon={!isMobile}
+      aria-label={label}
+      aria-current={active ? 'page' : undefined}
+      className={cn(isMobile && 'h-12 w-12', className)}
       {...buttonProps}
     >
-      {children}
+      {isMobile ? (
+        <span className="flex size-5 items-center justify-center">{children}</span>
+      ) : (
+        children
+      )}
       <span className="sr-only">{label}</span>
     </Button>
+  );
+  return active ? (
+    <span
+      {...stylex.props(footerStyles.selectedAction, isMobile && footerStyles.selectedMobileAction)}
+    >
+      {button}
+    </span>
+  ) : (
+    button
   );
 });
 
 /**
  * The live binding for a command, formatted for this platform, or null when the
- * command is unbound (or not registered — Storybook, or the Tasks beta off).
- * Read from the registry rather than `COMMAND_SHORTCUTS` so a rebound key is
- * what the tooltip teaches.
+ * command is unbound (or not registered). Read from the registry rather than
+ * `COMMAND_SHORTCUTS` so a rebound key is what the tooltip teaches.
  */
 function useCommandShortcutLabel(id: ShortcutCommandId): string | null {
   const binding = useSyncExternalStore(
@@ -524,41 +577,114 @@ function useCommandShortcutLabel(id: ShortcutCommandId): string | null {
   return binding ? formatKeyBinding(binding) : null;
 }
 
-/**
- * Quick capture from the Tasks row. Writing a task down has to stay cheaper
- * than starting a chat, so the entry sits where you already are instead of
- * behind a navigation; the tooltip is where its shortcut gets taught.
- */
-function SidebarNewTaskButton({ label, onClick }: { label: string; onClick: () => void }) {
-  const shortcut = useCommandShortcutLabel('tasks.quickAdd');
+type NavigationAvailability = {
+  canGoBack: boolean;
+  canGoForward: boolean;
+};
+
+type WindowNavigation = {
+  canGoBack: boolean;
+  canGoForward: boolean;
+  addEventListener: (type: string, listener: () => void) => void;
+  removeEventListener: (type: string, listener: () => void) => void;
+};
+
+const readNavigationAvailability = (): NavigationAvailability => {
+  const navigation = (window as Window & { navigation?: WindowNavigation }).navigation;
+  if (navigation && typeof navigation.canGoBack === 'boolean') {
+    return { canGoBack: navigation.canGoBack, canGoForward: navigation.canGoForward };
+  }
+  return {
+    canGoBack: window.history.length > 1,
+    canGoForward: false,
+  };
+};
+
+let navigationAvailabilitySnapshot: NavigationAvailability = {
+  canGoBack: false,
+  canGoForward: false,
+};
+
+const getNavigationAvailabilitySnapshot = (): NavigationAvailability => {
+  const next = readNavigationAvailability();
+  if (
+    next.canGoBack === navigationAvailabilitySnapshot.canGoBack &&
+    next.canGoForward === navigationAvailabilitySnapshot.canGoForward
+  ) {
+    return navigationAvailabilitySnapshot;
+  }
+  navigationAvailabilitySnapshot = next;
+  return next;
+};
+
+const subscribeNavigationAvailability = (onStoreChange: () => void) => {
+  window.addEventListener('popstate', onStoreChange);
+  const navigation = (window as Window & { navigation?: WindowNavigation }).navigation;
+  navigation?.addEventListener('currententrychange', onStoreChange);
+  navigation?.addEventListener('navigate', onStoreChange);
+  return () => {
+    window.removeEventListener('popstate', onStoreChange);
+    navigation?.removeEventListener('currententrychange', onStoreChange);
+    navigation?.removeEventListener('navigate', onStoreChange);
+  };
+};
+
+function useNavigationAvailability(): NavigationAvailability {
+  return useSyncExternalStore(
+    subscribeNavigationAvailability,
+    getNavigationAvailabilitySnapshot,
+    () => navigationAvailabilitySnapshot
+  );
+}
+
+function SidebarHeaderIconButton({
+  label,
+  shortcut,
+  onClick,
+  className,
+  disabled = false,
+  children,
+}: {
+  label: string;
+  shortcut?: string | null;
+  onClick?: () => void;
+  className?: string;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  const button = (
+    <button
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        'flex shrink-0 items-center justify-center rounded-md outline-hidden',
+        'h-7 w-7',
+        disabled
+          ? 'cursor-default text-sidebar-foreground-muted/40'
+          : 'text-sidebar-foreground-muted hover:bg-sidebar-hover hover:text-sidebar-hover-foreground focus-visible:ring-1 focus-visible:ring-sidebar-ring/40',
+        className
+      )}
+    >
+      {children}
+    </button>
+  );
+  if (disabled) return button;
   return (
-    <TooltipProvider delayDuration={400}>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label={label}
-            onClick={onClick}
-            className={cn(
-              'flex h-6 w-6 items-center justify-center rounded-md text-sidebar-foreground-muted',
-              'transition-colors hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
-              'outline-hidden focus-visible:ring-1 focus-visible:ring-sidebar-ring/40'
-            )}
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        </TooltipTrigger>
-        <TooltipContent side="right" className="flex items-center gap-1.5">
-          <span>{label}</span>
-          {shortcut ? <Kbd>{shortcut}</Kbd> : null}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <Tooltip.Root>
+      <Tooltip.Trigger render={button} />
+      <Tooltip.Content side="bottom" className="flex items-center gap-1.5">
+        <span>{label}</span>
+        {shortcut ? <Kbd>{shortcut}</Kbd> : null}
+      </Tooltip.Content>
+    </Tooltip.Root>
   );
 }
 
 function NavButton({
   active,
+  isMobile,
   label,
   icon,
   onClick,
@@ -566,6 +692,7 @@ function NavButton({
   action,
 }: {
   active: boolean;
+  isMobile: boolean;
   label: string;
   icon: ReactNode;
   onClick?: () => void;
@@ -584,22 +711,37 @@ function NavButton({
         type="button"
         onClick={onClick}
         className={cn(
-          'group flex w-full select-none items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm outline-hidden transition',
+          // Same size as the session titles below: a smaller label reads as
+          // undersized next to its 16px icon.
+          SIDEBAR_ROW_TEXT_CLASS,
+          'group flex w-full select-none items-center rounded-lg py-1.5 text-left outline-hidden transition',
+          // Desktop rows share a +15px icon and +37px text column with the
+          // project, repository, and session rows below them.
+          isMobile ? 'gap-2 px-2' : 'gap-1.5 px-[9px]',
           'focus-visible:ring-1 focus-visible:ring-sidebar-ring/30',
           active
             ? 'bg-sidebar-selection text-sidebar-selection-foreground'
-            : 'text-sidebar-foreground dark:text-sidebar-foreground/75 hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
+            : // Same brightness as unselected session titles; hover changes the fill only.
+              'text-sidebar-row-foreground hover:bg-sidebar-hover',
           // Keep the label clear of the trailing control instead of letting it
           // truncate under it.
           action && 'pr-8'
         )}
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-current">
+        {/* The slot is the 16px icon box itself, not a padded frame. On desktop,
+            its +15px start and the label's +37px start match the list rows.
+            Height stays 20px to keep the row's optical line. */}
+        <span className="flex h-5 w-4 shrink-0 items-center justify-center text-current">
           {icon}
         </span>
         <span className="truncate">{label}</span>
         {badge !== undefined && badge > 0 ? (
-          <span className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground">
+          <span
+            className={cn(
+              SIDEBAR_CAPTION_TEXT_CLASS,
+              'ml-auto shrink-0 tabular-nums text-muted-foreground'
+            )}
+          >
             {badge > 99 ? '99+' : badge}
           </span>
         ) : null}
@@ -611,7 +753,7 @@ function NavButton({
 
 export function getLoroSidebarFooterClassName(isMobile: boolean): string {
   return cn(
-    'flex shrink-0 items-center justify-between border-t',
+    'flex shrink-0 items-center justify-between border-t-[0.5px]',
     isMobile
       ? 'pl-[calc(6px+var(--safe-area-left))] pr-[calc(12px+var(--safe-area-right))] pt-1 pb-2'
       : 'px-1.5 py-1',
@@ -619,15 +761,9 @@ export function getLoroSidebarFooterClassName(isMobile: boolean): string {
   );
 }
 
-export function getLoroSidebarFooterIconButtonClassName(isMobile: boolean, active = false): string {
-  return cn(
-    isMobile ? 'h-12 w-12 rounded-xl [&_svg]:h-5 [&_svg]:w-5' : 'h-7 w-7 rounded-md',
-    'transition-colors focus-visible:ring-1 focus-visible:ring-sidebar-ring/40',
-    active
-      ? 'bg-sidebar-selection text-sidebar-selection-foreground'
-      : 'text-sidebar-foreground dark:text-sidebar-foreground-muted hover:bg-sidebar-hover hover:text-sidebar-hover-foreground'
-  );
-}
+export const DEFAULT_DESKTOP_SIDEBAR_WIDTH = 280;
+export const MIN_DESKTOP_SIDEBAR_WIDTH = 240;
+export const MAX_DESKTOP_SIDEBAR_WIDTH = 420;
 
 export const LoroSidebar = memo(function LoroSidebar({
   className,
@@ -635,17 +771,18 @@ export const LoroSidebar = memo(function LoroSidebar({
   userEmail,
   workspaces,
   currentWorkspaceId,
+  scrollStateKey,
   workspaceSwitcherEnabled = true,
   connectionUiState,
   workspaceSyncing = false,
   isElectron = false,
-  isElectronMacOS = false,
-  defaultWidth = 280,
-  minWidth = 240,
-  maxWidth = 420,
+  isElectronMacOS: _isElectronMacOS = false,
+  defaultWidth = DEFAULT_DESKTOP_SIDEBAR_WIDTH,
+  minWidth = MIN_DESKTOP_SIDEBAR_WIDTH,
+  maxWidth = MAX_DESKTOP_SIDEBAR_WIDTH,
   activeNav = null,
   topContent,
-  desktopFilterPlaceholder,
+  desktopFilterAction,
   afterSessionListContent,
   bottomFloatingContent,
   repoSections = defaultRepoSections,
@@ -660,6 +797,8 @@ export const LoroSidebar = memo(function LoroSidebar({
   updatedBucketsCollapsed,
   updatedShowFullBuckets,
   updatedIsLoading = false,
+  showUpdatedProjectNames = true,
+  onShowUpdatedProjectNamesChange,
   onOrganizeModeChange,
   onChatScopeChange,
   onSelectUpdatedItem,
@@ -681,21 +820,41 @@ export const LoroSidebar = memo(function LoroSidebar({
   onLinkRepoClicked,
   onHomeClicked,
   onArchiveClicked,
-  onTasksClicked,
-  onNewTaskClicked,
-  showTasks = false,
+  onSchedulesClicked,
   onSettingsClicked,
   onDocsClicked,
+  onGithubClicked,
   onJoinCommunityClicked,
   onFeedbackClicked,
   onBugReportClicked,
   onWidthChange,
   collapsed = false,
   onRequestCollapse,
+  overlay = false,
 }: LoroSidebarProps) {
   const isMobile = useIsMobile();
   const isElectronFullscreen = useElectronFullscreen();
+  const macTrafficLightRowPadClass = useMacTrafficLightRowPadClass();
+  const windowsCaptionRowPadClass = useWindowsCaptionRowPadClass();
   const { t } = useTranslation();
+  const store = useStore();
+  const scrollViewportRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const viewport = scrollViewportRef.current;
+    if (!viewport || !scrollStateKey) return undefined;
+    viewport.scrollTop = store.get(sidebarScrollTopByWorkspaceAtom)[scrollStateKey] ?? 0;
+    return () => {
+      const previous = store.get(sidebarScrollTopByWorkspaceAtom);
+      store.set(sidebarScrollTopByWorkspaceAtom, {
+        ...previous,
+        [scrollStateKey]: viewport.scrollTop,
+      });
+    };
+  }, [collapsed, scrollStateKey, store]);
+  const collapseShortcut = useCommandShortcutLabel('sidebar.toggle');
+  const backShortcut = useCommandShortcutLabel('nav.back');
+  const forwardShortcut = useCommandShortcutLabel('nav.forward');
+  const { canGoBack, canGoForward } = useNavigationAvailability();
   const mergedLabels: LoroSidebarLabels = {
     ...defaultLabels,
     ...labels,
@@ -797,24 +956,81 @@ export const LoroSidebar = memo(function LoroSidebar({
     return null;
   }
 
-  // This instance never moves between section headers: only its same-sized
-  // placeholder moves. That keeps an open popover open across organize changes.
-  const desktopFilterNode = !isMobile ? (
-    <SidebarFilterPopover
-      organize={organizeMode}
-      scope={chatScope}
-      onOrganizeChange={onOrganizeModeChange}
-      onScopeChange={onChatScopeChange}
-      labels={mergedLabels.filter}
-      side="bottom"
-      align="end"
-      triggerClassName="h-5 w-5 [&_svg]:h-3.5 [&_svg]:w-3.5"
-    />
-  ) : null;
-  const sectionHeaderFilterPlaceholder = !isMobile
-    ? (desktopFilterPlaceholder ?? <span aria-hidden="true" className="block h-5 w-5" />)
+  // The filter trigger is a normal in-flow action on whichever section header
+  // is first — the row's items-center keeps it aligned, so no overlay or
+  // placeholder. The caller supplies the element with lifted open state so
+  // remounting the one instance at a new slot keeps an open popover open; the
+  // local fallback covers direct uses (e.g. stories) that do not pass one.
+  const sectionHeaderFilterAction = !isMobile
+    ? (desktopFilterAction ?? (
+        <SidebarFilterPopover
+          organize={organizeMode}
+          scope={chatScope}
+          onOrganizeChange={onOrganizeModeChange}
+          onScopeChange={onChatScopeChange}
+          showUpdatedProjectNames={showUpdatedProjectNames}
+          onShowUpdatedProjectNamesChange={onShowUpdatedProjectNamesChange}
+          labels={mergedLabels.filter}
+          side="right"
+          align="start"
+          triggerClassName="h-5 w-5 [&_svg]:h-4 [&_svg]:w-4"
+        />
+      ))
     : null;
   const hasPinnedItems = Boolean(pinnedItems?.length);
+  const isWorkspaceEmpty =
+    organizeMode === 'workspace' &&
+    !topContent &&
+    !hasPinnedItems &&
+    !afterSessionListContent &&
+    !sessionListProps?.isLoading;
+  const workspaceEmptyState = isWorkspaceEmpty ? (
+    <div
+      className="flex flex-col items-center px-6 pb-5 pt-7 text-center"
+      data-sidebar-empty-state={chatScope}
+    >
+      <div className="flex size-9 items-center justify-center rounded-xl bg-sidebar-accent text-sidebar-foreground-muted ring-1 ring-inset ring-sidebar-border/60">
+        {chatScope === 'my' ? (
+          <ListFilter className="size-4" strokeWidth={1.8} aria-hidden="true" />
+        ) : (
+          <ClipboardList className="size-4" strokeWidth={1.8} aria-hidden="true" />
+        )}
+      </div>
+      <p
+        className={cn(
+          SIDEBAR_CONTROL_TEXT_CLASS,
+          'mt-3 max-w-[220px] font-medium text-sidebar-foreground'
+        )}
+      >
+        {chatScope === 'my' ? mergedLabels.filter.emptyMyTasks : mergedLabels.filter.emptyAllTasks}
+      </p>
+      <p
+        className={cn(
+          SIDEBAR_HELPER_TEXT_CLASS,
+          'mt-0.5 max-w-[220px] text-sidebar-foreground-muted'
+        )}
+      >
+        {chatScope === 'my'
+          ? mergedLabels.filter.emptyMyTasksHint
+          : mergedLabels.filter.emptyAllTasksHint}
+      </p>
+      {chatScope === 'my' && onChatScopeChange ? (
+        <Button
+          type="button"
+          variant="secondary"
+          size="small"
+          className={cn(
+            SIDEBAR_HELPER_TEXT_CLASS,
+            'mt-3 h-7 rounded-full border-sidebar-border bg-sidebar px-3 font-medium text-sidebar-foreground shadow-none hover:bg-sidebar-hover hover:text-sidebar-hover-foreground'
+          )}
+          onClick={() => onChatScopeChange('team')}
+        >
+          <Users className="mr-1.5 size-3.5" strokeWidth={1.8} aria-hidden="true" />
+          {mergedLabels.filter.showAllTasksAction}
+        </Button>
+      ) : null}
+    </div>
+  ) : undefined;
   const workspaceIdentityStatus: WorkspaceIdentityStatus | null =
     connectionUiState && connectionUiState !== 'online'
       ? connectionUiState
@@ -828,8 +1044,7 @@ export const LoroSidebar = memo(function LoroSidebar({
           name: workspaceName,
           logo: workspaces.find((ws) => ws.id === currentWorkspaceId)?.logo,
         }}
-        className="h-5 w-5 text-[10px]"
-        fallbackClassName="bg-sidebar-hover/60 text-sidebar-foreground"
+        size="small"
       />
       <span className="min-w-0 flex flex-1 items-center gap-2">
         <span className="min-w-0 flex-1 truncate font-medium">{workspaceName}</span>
@@ -840,219 +1055,312 @@ export const LoroSidebar = memo(function LoroSidebar({
     </>
   );
   const windowDrag = isElectron && !isElectronFullscreen;
-  const workspaceIdentityClassName = cn(
-    'grid w-full min-w-0 select-none grid-cols-[20px_1fr_16px] items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm',
-    isMobile ? 'h-9' : 'h-8',
+  const mobileWorkspaceIdentityClassName = cn(
+    SIDEBAR_CONTROL_TEXT_CLASS,
+    'flex w-full min-w-0 select-none items-center gap-2 rounded-lg px-2 py-1.5 text-left',
+    'h-9',
     'text-sidebar-foreground dark:text-sidebar-foreground/75',
     workspaceSwitcherEnabled &&
       'hover:bg-sidebar-hover hover:text-sidebar-hover-foreground focus-visible:outline-hidden focus-visible:bg-sidebar-hover'
   );
+  const getPlanLabel = (planTier: LoroSidebarWorkspace['planTier']) =>
+    planTier === 'enterprise'
+      ? mergedLabels.planEnterprise
+      : planTier === 'plus'
+        ? mergedLabels.planPlus
+        : mergedLabels.planFree;
+  const newWindowHint = t('workspace.openInNewWindowHint', {
+    key: isMacOSElectronRenderer() ? '⌘' : 'Ctrl',
+  });
+  const renderWorkspaceControl = (menuSide: 'top' | 'bottom') =>
+    workspaceSwitcherEnabled ? (
+      <Menu.Root modal={!isMobile}>
+        <div className="flex min-w-0 flex-1">
+          <Menu.Trigger
+            render={
+              isMobile ? (
+                <button
+                  type="button"
+                  className={cn(
+                    mobileWorkspaceIdentityClassName,
+                    windowDrag && WINDOW_DRAG_EXEMPT_CLASS
+                  )}
+                  data-workspace-switcher-trigger
+                  data-workspace-syncing={workspaceSyncing ? 'true' : 'false'}
+                  aria-busy={workspaceSyncing || undefined}
+                >
+                  {workspaceIdentity}
+                </button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="small"
+                  className={cn(
+                    stylex.props(footerStyles.workspaceControl).className,
+                    windowDrag && WINDOW_DRAG_EXEMPT_CLASS
+                  )}
+                  data-workspace-switcher-trigger
+                  data-workspace-syncing={workspaceSyncing ? 'true' : 'false'}
+                  aria-busy={workspaceSyncing || undefined}
+                >
+                  {workspaceIdentity}
+                </Button>
+              )
+            }
+          />
+        </div>
+        <Menu.Content align="start" side={menuSide} className="w-64">
+          <Menu.GroupLabel
+            className={cn(SIDEBAR_HELPER_TEXT_CLASS, 'normal-case font-normal tracking-normal')}
+          >
+            {userEmail}
+          </Menu.GroupLabel>
+          <Menu.Separator />
+
+          {workspaces.length > 0 ? (
+            <>
+              <Menu.GroupLabel className={cn(SIDEBAR_HELPER_TEXT_CLASS, 'font-medium')}>
+                {mergedLabels.switchWorkspace}
+              </Menu.GroupLabel>
+              <Menu.RadioGroup
+                value={currentWorkspaceId}
+                onValueChange={(value) => onWorkspaceSelected?.(value)}
+              >
+                {/* Local provider: hosts may render the sidebar without a root one. */}
+                <Tooltip.Provider delay={400}>
+                  {workspaces.map((ws) => {
+                    const workspaceSlug = ws.slug;
+                    const supportsNewWindow = isElectronRenderer() && !!workspaceSlug;
+                    // The avatar carries identity, so the check moves to the
+                    // row's trailing edge. ps-2/pe-8 replace the ps-8 selection
+                    // indent: the 20px avatar and the action rows' 20px icon
+                    // boxes share one leading column, and gap-1.5 lands every
+                    // label on the same text column.
+                    const row = (
+                      <Menu.RadioItem
+                        key={ws.id}
+                        value={ws.id}
+                        indicator="check"
+                        indicatorSide="end"
+                        // Resolve the radio item in the dropdown's context before
+                        // introducing the separate right-click menu in its render.
+                        render={
+                          supportsNewWindow
+                            ? (props) => (
+                                <ContextMenu.Root>
+                                  <ContextMenu.Trigger render={<div {...props} />} />
+                                  <ContextMenu.Content>
+                                    <ContextMenu.Item
+                                      icon={AppWindow}
+                                      onClick={() => {
+                                        openDesktopWindow(undefined, workspaceSlug, 'context_menu');
+                                      }}
+                                    >
+                                      {t('workspace.openInNewWindow')}
+                                    </ContextMenu.Item>
+                                  </ContextMenu.Content>
+                                </ContextMenu.Root>
+                              )
+                            : undefined
+                        }
+                        icon={
+                          <WorkspaceAvatar
+                            workspace={{ name: ws.name, logo: ws.logo }}
+                            className="h-5 w-5 text-[10px]"
+                          />
+                        }
+                        className="gap-1.5 ps-2"
+                        onClickCapture={(event) => {
+                          if (!workspaceSlug || !isNewWindowClick(event)) return;
+                          if (openDesktopWindow(undefined, workspaceSlug, 'modifier_click')) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }
+                        }}
+                        endContent={
+                          ws.id === currentWorkspaceId ? (
+                            // The checked row is the current workspace — it
+                            // carries the richer plan/members line that used to
+                            // need a separate header card.
+                            <span
+                              className={cn(
+                                SIDEBAR_CAPTION_TEXT_CLASS,
+                                'truncate text-muted-foreground'
+                              )}
+                            >
+                              {typeof ws.memberCount === 'number'
+                                ? t('workspace.switcher.planAndMembers', {
+                                    plan: getPlanLabel(ws.planTier),
+                                    count: ws.memberCount,
+                                  })
+                                : t('workspace.switcher.plan', {
+                                    plan: getPlanLabel(ws.planTier),
+                                  })}
+                            </span>
+                          ) : ws.planTier ? (
+                            <Badge>
+                              {ws.planTier === 'enterprise'
+                                ? mergedLabels.planEnterprise
+                                : mergedLabels.planPlus}
+                            </Badge>
+                          ) : null
+                        }
+                      >
+                        {ws.name}
+                      </Menu.RadioItem>
+                    );
+
+                    if (!supportsNewWindow || ws.id === currentWorkspaceId) return row;
+
+                    return (
+                      <Tooltip.Root key={ws.id}>
+                        <Tooltip.Trigger render={row} />
+                        <Tooltip.Content side="right" sideOffset={8}>
+                          {newWindowHint}
+                        </Tooltip.Content>
+                      </Tooltip.Root>
+                    );
+                  })}
+                </Tooltip.Provider>
+              </Menu.RadioGroup>
+              <Menu.Separator />
+            </>
+          ) : null}
+
+          {/* Icon boxes match the radio rows' avatars, so both row kinds
+              share one leading column and one text column. */}
+          <Menu.Item className="gap-1.5" icon={Plus} onClick={() => onCreateWorkspaceClicked?.()}>
+            {mergedLabels.createWorkspace}
+          </Menu.Item>
+          <Menu.Item className="gap-1.5" icon={Users} onClick={() => onInviteClicked?.()}>
+            {mergedLabels.inviteMembers}
+          </Menu.Item>
+          <Menu.Item className="gap-1.5" icon={Link2} onClick={() => onLinkRepoClicked?.()}>
+            {mergedLabels.connectGithubRepo}
+          </Menu.Item>
+        </Menu.Content>
+      </Menu.Root>
+    ) : (
+      <div className="min-w-0 flex-1">
+        <div
+          className={
+            isMobile
+              ? mobileWorkspaceIdentityClassName
+              : stylex.props(footerStyles.workspaceControl, footerStyles.workspaceNameplate)
+                  .className
+          }
+          data-workspace-identity
+        >
+          {workspaceIdentity}
+        </div>
+      </div>
+    );
 
   return (
     <div
       // No overflow-hidden here: the resize sash extends past the right border
       // so its hit area straddles the edge; the inner content div clips instead.
-      className={cn(
-        'relative h-full select-none rounded-2xl border-x',
-        // Linear-like: soft cool wash + hairline edge, not a heavy gray slab.
-        'border-sidebar-border/70 bg-sidebar text-sidebar-foreground shadow-[0_1px_2px_hsl(0_0%_0%/0.03)]',
-        className
-      )}
+      className={cn('relative h-full select-none bg-sidebar text-sidebar-foreground', className)}
       style={
-        isMobile
+        isMobile || overlay
           ? undefined
           : { width: sidebarWidth, minWidth: resolvedMinWidth, maxWidth: resolvedMaxWidth }
       }
     >
-      {!isMobile && (
-        // VSCode-style sash: a 12px pointer hit area straddling the border
-        // (6px inside + 6px outside, so hovering ON or just past the edge
-        // still triggers); the visible affordance is a thin 2px line covering
-        // the border itself. Slight hover delay so it doesn't flash when the
-        // cursor merely passes over the edge.
-        <div
-          className={cn(
-            'absolute -right-1.5 top-0 z-20 h-full w-3 cursor-col-resize bg-transparent',
-            // Line spans only the border's straight segment (card corners are
-            // 12px rounded), with soft rounded ends.
-            'after:absolute after:right-[5px] after:top-3 after:bottom-3 after:w-[2px]',
-            'after:rounded-full after:bg-transparent after:transition-colors after:duration-150',
-            isResizing
-              ? 'after:bg-sidebar-ring/70'
-              : 'hover:after:bg-sidebar-ring/50 hover:after:delay-150'
-          )}
-          onPointerDown={handleResizeStart}
-          onPointerMove={handleResizeMove}
-          onPointerUp={handleResizeEnd}
-          onPointerCancel={handleResizeEnd}
-        />
-      )}
-
-      <div
-        className={cn(
-          'relative flex h-full flex-col overflow-hidden rounded-[inherit]',
-          !isMobile && 'p-[2px]'
+      {!isMobile &&
+        !overlay && (
+          // VSCode-style sash: a 12px pointer hit area straddling the border
+          // (6px inside + 6px outside, so hovering ON or just past the edge
+          // still triggers); the visible affordance is a thin 2px line covering
+          // the border itself. Slight hover delay so it doesn't flash when the
+          // cursor merely passes over the edge.
+          <div
+            className={cn(
+              'absolute -right-1.5 top-0 z-20 h-full w-3 cursor-col-resize bg-transparent',
+              // 2px line covers the panel's `border-r` for the full height.
+              'after:absolute after:right-[5px] after:top-0 after:bottom-0 after:w-[2px]',
+              'after:bg-transparent after:transition-colors after:duration-150',
+              isResizing
+                ? 'after:bg-sidebar-ring/70'
+                : 'hover:after:bg-sidebar-ring/50 hover:after:delay-150'
+            )}
+            onPointerDown={handleResizeStart}
+            onPointerMove={handleResizeMove}
+            onPointerUp={handleResizeEnd}
+            onPointerCancel={handleResizeEnd}
+          />
         )}
-      >
+
+      <div className="relative flex h-full flex-col overflow-hidden">
         <div
           className={cn(
-            'group/sidebar-header relative flex items-center justify-between gap-2',
+            'relative flex items-center justify-between gap-2',
             isMobile
               ? 'pl-[calc(12px+var(--safe-area-left))] pr-[calc(12px+var(--safe-area-right))] pt-[calc(12px+var(--safe-area-top))]'
-              : isElectronMacOS
-                ? 'h-[72px] px-1.5 pt-7'
-                : 'h-11 px-1.5',
+              : cn('h-11 px-1.5', macTrafficLightRowPadClass, windowsCaptionRowPadClass),
             windowDrag && WINDOW_DRAG_HEADER_CLASS
           )}
         >
-          {workspaceSwitcherEnabled ? (
-            <DropdownMenu modal={!isMobile}>
-              <div className="min-w-0 flex-1">
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className={cn(
-                      workspaceIdentityClassName,
-                      windowDrag && WINDOW_DRAG_EXEMPT_CLASS
-                    )}
-                    data-workspace-switcher-trigger
-                    data-workspace-syncing={workspaceSyncing ? 'true' : 'false'}
-                    aria-busy={workspaceSyncing || undefined}
-                  >
-                    {workspaceIdentity}
-                  </button>
-                </DropdownMenuTrigger>
-              </div>
-              <DropdownMenuContent align="start" className="w-64">
-                <DropdownMenuLabel className="text-xs font-normal">{userEmail}</DropdownMenuLabel>
-                <DropdownMenuSeparator />
-
-                {workspaces.length > 0 ? (
-                  <>
-                    <DropdownMenuLabel className="text-xs font-medium">
-                      {mergedLabels.switchWorkspace}
-                    </DropdownMenuLabel>
-                    <DropdownMenuRadioGroup
-                      value={currentWorkspaceId}
-                      onValueChange={(value) => onWorkspaceSelected?.(value)}
-                    >
-                      {workspaces.map((ws) => {
-                        const workspaceSlug = ws.slug;
-                        const row = (
-                          <DropdownMenuRadioItem
-                            key={ws.id}
-                            value={ws.id}
-                            className="gap-2"
-                            onClickCapture={(event) => {
-                              if (!workspaceSlug || !isNewWindowClick(event)) return;
-                              if (openDesktopWindow(undefined, workspaceSlug)) {
-                                event.preventDefault();
-                                event.stopPropagation();
-                              }
-                            }}
-                          >
-                            <WorkspaceAvatar
-                              workspace={{ name: ws.name, logo: ws.logo }}
-                              className="h-5 w-5 shrink-0 text-[10px]"
-                            />
-                            <span className="min-w-0 truncate">{ws.name}</span>
-                            {ws.planTier ? (
-                              <Badge
-                                variant="secondary"
-                                className="ml-auto shrink-0 px-1.5 py-0 text-[10px]"
-                              >
-                                {ws.planTier === 'enterprise'
-                                  ? mergedLabels.planEnterprise
-                                  : mergedLabels.planPlus}
-                              </Badge>
-                            ) : null}
-                          </DropdownMenuRadioItem>
-                        );
-
-                        // Only wrap in a context menu where the window action
-                        // exists: a DISABLED ContextMenuTrigger stamps
-                        // `data-disabled` onto the row it wraps, and menu items
-                        // style that as `pointer-events-none`, which would make
-                        // every workspace unclickable in the browser.
-                        if (!isElectronRenderer() || !workspaceSlug) return row;
-
-                        return (
-                          <ContextMenu key={ws.id}>
-                            <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-                            <ContextMenuContent>
-                              <ContextMenuItem
-                                onSelect={() => {
-                                  openDesktopWindow(undefined, workspaceSlug);
-                                }}
-                              >
-                                <AppWindow />
-                                {t('workspace.openInNewWindow')}
-                              </ContextMenuItem>
-                            </ContextMenuContent>
-                          </ContextMenu>
-                        );
-                      })}
-                    </DropdownMenuRadioGroup>
-                    {isElectronRenderer() && workspaces.some((ws) => ws.slug) ? (
-                      <p className="px-2 py-1.5 text-xs text-muted-foreground">
-                        {t('workspace.openInNewWindowHint', {
-                          key: isMacOSElectronRenderer() ? '⌘' : 'Ctrl',
-                        })}
-                      </p>
-                    ) : null}
-                    <DropdownMenuSeparator />
-                  </>
-                ) : null}
-
-                <DropdownMenuItem onSelect={() => onCreateWorkspaceClicked?.()}>
-                  <Plus className="h-4 w-4" />
-                  {mergedLabels.createWorkspace}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onInviteClicked?.()}>
-                  <Users className="h-4 w-4" />
-                  {mergedLabels.inviteMembers}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onLinkRepoClicked?.()}>
-                  <Link2 className="h-4 w-4" />
-                  {mergedLabels.connectGithubRepo}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {isMobile ? (
+            renderWorkspaceControl('bottom')
+          ) : isElectron ? (
+            <span className="min-w-0 flex-1" />
           ) : (
-            <div className="min-w-0 flex-1">
-              <div className={workspaceIdentityClassName} data-workspace-identity>
-                {workspaceIdentity}
-              </div>
-            </div>
-          )}
-          {/* Collapse toggle anchored to the header's top-right corner.
-              `top-2` centers the h-7 button inside the standard h-11 header.
-              On macOS Electron the header is taller (`h-[72px] pt-7`) and its
-              top sits 11px below the window top (card `mt-2` + 1px border +
-              inner `p-[2px]`); `-top-0.5` then puts the button center at
-              11 - 2 + 14 = 23px, exactly on the traffic-light centerline
-              (`trafficLightPosition.y` 16 + 7px radius in
-              apps/electron/src/main/window.ts) — and level with the
-              collapsed-state expand button (`top-[9px]` in
-              web-chat-landing-screen.tsx), so the control stays put across
-              collapse/expand. */}
-          {!isMobile && onRequestCollapse ? (
-            <button
-              type="button"
-              aria-label="Collapse sidebar"
-              onClick={() => onRequestCollapse()}
-              className={cn(
-                'absolute right-1.5 flex h-7 w-7 items-center justify-center rounded-md',
-                isElectronMacOS ? '-top-0.5' : 'top-2',
-                'text-sidebar-foreground-muted hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
-                windowDrag && WINDOW_DRAG_EXEMPT_CLASS,
-                isElectron
-                  ? 'focus-visible:outline-hidden'
-                  : 'opacity-0 pointer-events-none group-hover/sidebar-header:opacity-100 group-hover/sidebar-header:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto focus-visible:outline-hidden transition-opacity duration-100'
-              )}
+            <span
+              aria-label="Lody"
+              className="select-none px-[9px] text-[18px] font-semibold leading-none tracking-[-0.03em] text-reading"
+              style={{ fontFamily: 'var(--font-wordmark)' }}
             >
-              <PanelLeft className="h-4 w-4" />
-            </button>
+              Lody
+            </span>
+          )}
+          {!isMobile ? (
+            <Tooltip.Provider delay={400}>
+              <div
+                className={cn(
+                  // `gap-0.5` between full-size buttons keeps Back and Forward
+                  // apart as two targets instead of one fused control.
+                  'ml-auto flex shrink-0 items-center gap-0.5',
+                  windowDrag && WINDOW_DRAG_EXEMPT_CLASS
+                )}
+              >
+                {onRequestCollapse ? (
+                  <SidebarHeaderIconButton
+                    label={t('commands.sidebar.toggle', 'Toggle Sidebar')}
+                    shortcut={collapseShortcut}
+                    onClick={() => onRequestCollapse()}
+                    // Always visible: the collapse control is found where it
+                    // was last seen, not revealed by hovering the header.
+                    className="focus-visible:outline-hidden"
+                  >
+                    <PanelLeft className="h-4 w-4" />
+                  </SidebarHeaderIconButton>
+                ) : null}
+                <SidebarHeaderIconButton
+                  disabled={!canGoBack}
+                  label={t('commands.nav.back', 'Back')}
+                  shortcut={backShortcut}
+                  onClick={() => {
+                    if (!canGoBack) return;
+                    if (!commands.execute('nav.back')) window.history.back();
+                  }}
+                >
+                  <ArrowLeft className="h-4 w-4" strokeWidth={1.75} />
+                </SidebarHeaderIconButton>
+                <SidebarHeaderIconButton
+                  disabled={!canGoForward}
+                  label={t('commands.nav.forward', 'Forward')}
+                  shortcut={forwardShortcut}
+                  onClick={() => {
+                    if (!canGoForward) return;
+                    if (!commands.execute('nav.forward')) window.history.forward();
+                  }}
+                >
+                  <ArrowRight className="h-4 w-4" strokeWidth={1.75} />
+                </SidebarHeaderIconButton>
+              </div>
+            </Tooltip.Provider>
           ) : null}
         </div>
 
@@ -1063,44 +1371,43 @@ export const LoroSidebar = memo(function LoroSidebar({
             'flex flex-col gap-px',
             isMobile
               ? 'mt-2 pl-[calc(12px+var(--safe-area-left))] pr-[calc(12px+var(--safe-area-right))]'
-              : '-mt-1 px-1.5'
+              : 'px-1.5'
           )}
         >
           <NavButton
             active={activeNav === 'home'}
+            isMobile={isMobile}
             label={mergedLabels.home}
-            icon={<SquarePen className="h-4 w-4" />}
+            icon={<SquarePen className="h-4 w-4" strokeWidth={1.75} />}
             onClick={onHomeClicked}
           />
-          <NavButton
-            active={false}
-            label={t('common.search', 'Search')}
-            icon={<Search className="h-4 w-4" />}
-            onClick={() => setCommandPaletteOpen(true)}
-          />
-          {/* Tasks sits with New Chat rather than in the bottom icon rail: it is a
-             primary destination, and the rail reads as utilities (docs, feedback,
-             settings). Still gated — see `showTasks`. */}
-          {showTasks ? (
+          {onSchedulesClicked ? (
             <NavButton
-              active={activeNav === 'tasks'}
-              label={mergedLabels.tasks}
+              active={activeNav === 'schedules'}
+              isMobile={isMobile}
+              label={mergedLabels.schedules}
               icon={<ListTodo className="h-4 w-4" />}
-              onClick={onTasksClicked}
-              action={
-                onNewTaskClicked ? (
-                  <SidebarNewTaskButton label={mergedLabels.newTask} onClick={onNewTaskClicked} />
-                ) : undefined
-              }
+              onClick={onSchedulesClicked}
             />
           ) : null}
+          <NavButton
+            active={false}
+            isMobile={isMobile}
+            label={t('common.search', 'Search')}
+            icon={<Search className="h-4 w-4" strokeWidth={1.75} />}
+            onClick={() => setCommandPaletteOpen(true)}
+          />
         </div>
 
         <ScrollArea
+          viewportRef={scrollViewportRef}
           className={cn(
             'min-h-0 flex-1',
             isMobile ? 'mt-4 pb-[calc(12px+env(safe-area-inset-bottom,0px))]' : 'mt-2'
           )}
+          // Overlay only while the list is scrolling. Radix defaults to `hover`,
+          // which paints the thumb as soon as the pointer enters the sidebar.
+          type="scroll"
           scrollbarClassName={!isMobile ? 'w-2 p-px' : undefined}
           scrollbarThumbClassName={
             !isMobile
@@ -1118,15 +1425,10 @@ export const LoroSidebar = memo(function LoroSidebar({
           viewportClassName={cn(
             isMobile
               ? 'pl-[calc(12px+env(safe-area-inset-left,0px))] pr-[calc(12px+env(safe-area-inset-right,0px))]'
-              : 'pl-1.5 pr-2.5 pb-3'
+              : 'px-1.5 pb-3'
           )}
         >
           <div className="relative">
-            {!isMobile && desktopFilterNode ? (
-              <div className="pointer-events-none absolute right-[9px] top-1 z-10 flex h-7 items-center">
-                <div className="pointer-events-auto flex">{desktopFilterNode}</div>
-              </div>
-            ) : null}
             {hasPinnedItems ? (
               <div className={cn('pt-1', pinnedSectionCollapsed ? 'pb-1' : 'pb-3')}>
                 <SidebarUpdatedSessionList
@@ -1134,6 +1436,7 @@ export const LoroSidebar = memo(function LoroSidebar({
                   now={now}
                   isMobile={isMobile}
                   showPinnedIcon={false}
+                  showProjectContext={organizeMode === 'updated' && showUpdatedProjectNames}
                   selectedItemId={updatedSelectedItemId ?? null}
                   collapsedBuckets={pinnedSectionCollapsed ? PINNED_BUCKETS_COLLAPSED : undefined}
                   labels={{
@@ -1152,7 +1455,7 @@ export const LoroSidebar = memo(function LoroSidebar({
                   onShareItemWithTeam={onShareUpdatedItemWithTeam}
                   onOpenPullRequest={onOpenUpdatedItemPullRequest}
                   getItemHref={getUpdatedItemHref}
-                  headerAction={sectionHeaderFilterPlaceholder ?? undefined}
+                  headerAction={sectionHeaderFilterAction ?? undefined}
                 />
               </div>
             ) : null}
@@ -1175,6 +1478,7 @@ export const LoroSidebar = memo(function LoroSidebar({
                     now={now}
                     isMobile={isMobile}
                     isLoading={updatedIsLoading}
+                    showProjectContext={showUpdatedProjectNames}
                     selectedItemId={updatedSelectedItemId ?? null}
                     labels={mergedLabels.updated}
                     collapsedBuckets={updatedBucketsCollapsed}
@@ -1191,7 +1495,7 @@ export const LoroSidebar = memo(function LoroSidebar({
                     onOpenPullRequest={onOpenUpdatedItemPullRequest}
                     getItemHref={getUpdatedItemHref}
                     headerAction={
-                      hasPinnedItems ? undefined : (sectionHeaderFilterPlaceholder ?? undefined)
+                      hasPinnedItems ? undefined : (sectionHeaderFilterAction ?? undefined)
                     }
                   />
                 </div>
@@ -1208,12 +1512,11 @@ export const LoroSidebar = memo(function LoroSidebar({
                   <SessionList
                     {...sessionListProps}
                     className={sessionListClassName}
+                    emptyState={workspaceEmptyState}
                     headerAction={
-                      topContent || hasPinnedItems
+                      topContent || hasPinnedItems || afterSessionListContent
                         ? sessionListProps.headerAction
-                        : (sessionListProps.headerAction ??
-                          sectionHeaderFilterPlaceholder ??
-                          undefined)
+                        : (sessionListProps.headerAction ?? sectionHeaderFilterAction ?? undefined)
                     }
                   />
                 ) : null}
@@ -1224,43 +1527,52 @@ export const LoroSidebar = memo(function LoroSidebar({
               <div className="space-y-3 pt-1">
                 {repoSections.map((section, sectionIndex) => (
                   <div key={section.id} className="space-y-2">
-                    <div className="flex items-center gap-2 px-1 text-[12px] font-medium text-sidebar-foreground-muted">
+                    <div
+                      className={cn(
+                        SIDEBAR_CONTROL_TEXT_CLASS,
+                        'flex items-center gap-2 px-1 font-medium text-sidebar-foreground-muted'
+                      )}
+                    >
                       <Github className="h-3.5 w-3.5" />
                       <span className="truncate">{section.repoFullName}</span>
-                      {sectionIndex === 0 && sectionHeaderFilterPlaceholder ? (
-                        <span className="ml-auto shrink-0">{sectionHeaderFilterPlaceholder}</span>
+                      {sectionIndex === 0 && sectionHeaderFilterAction ? (
+                        <span className="ml-auto shrink-0">{sectionHeaderFilterAction}</span>
                       ) : null}
                     </div>
 
-                    <GlassSurface className="p-1">
-                      <ul className="space-y-1">
-                        {section.items.map((item) => (
-                          <li key={item.id}>
-                            <div
-                              className={cn(
-                                'flex items-center gap-2 rounded-lg px-2 py-2 text-[12px]',
-                                item.isSelected
-                                  ? 'bg-sidebar-selection text-sidebar-selection-foreground'
-                                  : 'text-sidebar-foreground-muted hover:bg-sidebar-hover hover:text-sidebar-hover-foreground'
-                              )}
-                            >
-                              <span className="h-2 w-2 rounded-full bg-sidebar-border" />
-                              <span className="min-w-0 flex-1 truncate">{item.title}</span>
-                              {item.ageLabel ? (
-                                <span className="shrink-0 text-[11px] text-sidebar-foreground-muted">
-                                  {item.ageLabel}
-                                </span>
-                              ) : null}
-                              {item.lineChange ? (
-                                <span className="shrink-0">
-                                  <LineChangeBadge lineChange={item.lineChange} />
-                                </span>
-                              ) : null}
-                            </div>
-                          </li>
-                        ))}
-                      </ul>
-                    </GlassSurface>
+                    {/* A project with no sessions yet is its header alone, not an empty tray. */}
+                    {section.items.length > 0 ? (
+                      <GlassSurface className="p-1">
+                        <ul className="space-y-1">
+                          {section.items.map((item) => (
+                            <li key={item.id}>
+                              <div
+                                className={cn(
+                                  SIDEBAR_ROW_TEXT_CLASS,
+                                  'flex items-center gap-2 rounded-lg px-2 py-2',
+                                  item.isSelected
+                                    ? 'bg-sidebar-selection text-sidebar-selection-foreground'
+                                    : 'text-sidebar-foreground-muted hover:bg-sidebar-hover hover:text-sidebar-hover-foreground'
+                                )}
+                              >
+                                <span className="h-2 w-2 rounded-full bg-sidebar-border" />
+                                <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                                {item.ageLabel ? (
+                                  <span
+                                    className={cn(
+                                      SIDEBAR_CAPTION_TEXT_CLASS,
+                                      'shrink-0 text-sidebar-foreground-muted'
+                                    )}
+                                  >
+                                    {item.ageLabel}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </GlassSurface>
+                    ) : null}
                   </div>
                 ))}
 
@@ -1290,40 +1602,76 @@ export const LoroSidebar = memo(function LoroSidebar({
           </div>
         ) : null}
 
-        <div className={getLoroSidebarFooterClassName(isMobile)}>
-          <div className="flex items-center gap-1">
-            <IconButton label="Settings" onClick={onSettingsClicked}>
-              <Settings className="h-4 w-4" />
-            </IconButton>
-
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <IconButton label="Help">
-                  <CircleHelp className="h-4 w-4" />
-                </IconButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start" className="min-w-[140px]">
-                <DropdownMenuItem onSelect={() => onDocsClicked?.()}>
-                  <BookOpen className="h-4 w-4" />
+        <div
+          className={cn(
+            getLoroSidebarFooterClassName(isMobile),
+            !isMobile && stylex.props(footerStyles.desktop).className
+          )}
+          data-sidebar-footer
+        >
+          {!isMobile ? renderWorkspaceControl('top') : null}
+          <div {...stylex.props(footerStyles.actions)}>
+            <Menu.Root>
+              <Menu.Trigger
+                render={
+                  <IconButton label={t('menu.help', 'Help')}>
+                    <CircleHelp className="size-full" strokeWidth={1.5} />
+                  </IconButton>
+                }
+              />
+              <Menu.Content side="top" align="end" className="min-w-[160px]">
+                <Menu.Item icon={BookOpen} onClick={() => onDocsClicked?.()}>
                   {mergedLabels.docs}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onJoinCommunityClicked?.()}>
-                  <Users className="h-4 w-4" />
+                </Menu.Item>
+                <Menu.Item icon={Github} onClick={() => onGithubClicked?.()}>
+                  {t('sidebar.github', 'GitHub')}
+                </Menu.Item>
+                <Menu.Item icon={Users} onClick={() => onJoinCommunityClicked?.()}>
                   {mergedLabels.joinCommunity}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onFeedbackClicked?.()}>
-                  <MessageSquareMore className="h-4 w-4" />
+                </Menu.Item>
+                <Menu.Item icon={MessageSquareMore} onClick={() => onFeedbackClicked?.()}>
                   {mergedLabels.feedback}
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => onBugReportClicked?.()}>
-                  <Bug className="h-4 w-4" />
+                </Menu.Item>
+                <Menu.Item icon={Bug} onClick={() => onBugReportClicked?.()}>
                   {mergedLabels.bugReport}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                </Menu.Item>
+              </Menu.Content>
+            </Menu.Root>
 
-            <IconButton label="Archive" active={activeNav === 'archive'} onClick={onArchiveClicked}>
-              <Archive className="h-4 w-4" />
+            {/* While Archive is open, its button returns to the previous page
+                (Home when there is no history). */}
+            {activeNav === 'archive' ? (
+              <IconButton
+                label={t('archive.leave', 'Leave Archive')}
+                title={t('archive.leave', 'Leave Archive')}
+                active
+                className="group"
+                onClick={() => {
+                  if (canGoBack && commands.execute('nav.back')) return;
+                  if (canGoBack) {
+                    window.history.back();
+                    return;
+                  }
+                  onHomeClicked?.();
+                }}
+              >
+                <Archive
+                  strokeWidth={1.5}
+                  className="size-full group-hover:hidden group-focus-visible:hidden"
+                />
+                <ArrowLeft
+                  strokeWidth={1.5}
+                  className="hidden size-full group-hover:block group-focus-visible:block"
+                />
+              </IconButton>
+            ) : (
+              <IconButton label={t('archive.title', 'Archive')} onClick={onArchiveClicked}>
+                <Archive className="size-full" strokeWidth={1.5} />
+              </IconButton>
+            )}
+
+            <IconButton label={t('settings.title', 'Settings')} onClick={onSettingsClicked}>
+              <Settings className="size-full" strokeWidth={1.5} />
             </IconButton>
           </div>
 
@@ -1333,6 +1681,8 @@ export const LoroSidebar = memo(function LoroSidebar({
               scope={chatScope}
               onOrganizeChange={onOrganizeModeChange}
               onScopeChange={onChatScopeChange}
+              showUpdatedProjectNames={showUpdatedProjectNames}
+              onShowUpdatedProjectNamesChange={onShowUpdatedProjectNamesChange}
               labels={mergedLabels.filter}
             />
           ) : null}

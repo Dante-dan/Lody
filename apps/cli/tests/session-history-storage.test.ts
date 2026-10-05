@@ -1,3 +1,4 @@
+import { buildAgentMessageAuthor } from '@lody/shared';
 import { createSessionAgentWrites } from '../src/lib/loro/session-agent-writes';
 import { describe, expect, it, vi } from 'vitest';
 import { Loro, isContainer, LoroList, LoroMap } from 'loro-crdt';
@@ -312,12 +313,26 @@ describe('stored history operations', () => {
     const harness = makeHarness();
     const { data } = harness;
 
+    const author = buildAgentMessageAuthor({
+      sessionId: 'source',
+      turnId: 'user-new',
+      name: 'Original Agent',
+    });
     const created = await data.commands.openAssistantTurn({
       turnId: 'assistant-new',
+      author,
       userTurnId: 'user-1',
       timestamp: '2026-01-01T00:00:02.000Z',
     });
     expect(created).toBeUndefined();
+    await data.commands.openAssistantTurn({
+      turnId: 'assistant-new',
+      timestamp: '2026-01-01T00:00:03.000Z',
+      author: { ...author, name: 'Changed Agent' },
+    });
+    expect(harness.readStored().find((turn) => turn.id === 'assistant-new')?.author).toEqual(
+      author
+    );
     expect(harness.readStored().filter((turn) => turn.id === 'assistant-new')).toHaveLength(1);
 
     await data.commands.appendTurn(assistantTurn('assistant-1'));
@@ -338,42 +353,6 @@ describe('stored history operations', () => {
     expect((turn as Record<string, unknown>).legacyFlag).toBe('kept');
     // Reopening never overwrites existing provenance.
     expect(turn.userTurnId).toBe('user-1');
-  });
-
-  it('resolves a task proposal against the live notice and rejects a miss', async () => {
-    const harness = makeHarness();
-    const { data } = harness;
-    await data.commands.appendTurn({
-      ...assistantTurn('assistant-1'),
-      items: [
-        {
-          type: 'system_notice',
-          name: 'task_proposal',
-          meta: { proposalId: 'p1', title: 'Ship it' },
-        },
-      ],
-    });
-
-    const resolved = await data.commands.resolveTaskProposal('assistant-1', 'p1', {
-      outcome: 'created',
-      taskId: 'task-1',
-    });
-    expect(resolved).toBe(true);
-    const stored = harness.readStored().find((turn) => turn.id === 'assistant-1')!;
-    const item = (stored.items as Array<Record<string, unknown>> | undefined)?.[0];
-    expect(item?.type === 'system_notice' && (item.meta as Record<string, unknown>)?.outcome).toBe(
-      'created'
-    );
-    expect(item?.type === 'system_notice' && (item.meta as Record<string, unknown>)?.taskId).toBe(
-      'task-1'
-    );
-    // Unrelated fields survive the targeted edit.
-    expect(stored.endedAt).toBe(1234);
-
-    const missing = await data.commands.resolveTaskProposal('assistant-1', 'nope', {
-      outcome: 'dismissed',
-    });
-    expect(missing).toBe(false);
   });
 
   it('answers permissions by request id and rejects a scoped miss', async () => {

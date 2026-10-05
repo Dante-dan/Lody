@@ -12,12 +12,13 @@
 | `mcp-catalog.steps.ts`               | Carries an explicit MCP selection through catalog, composer, and dispatch                        |
 | `project-lifecycle.steps.ts`         | Adds, selects, removes, and verifies a synthetic local project                                   |
 | `project-reopen.steps.ts`            | Switches between two projects and rejects a duplicate folder registration                        |
+| `session-follow-up.steps.ts`         | Sends follow-ups after completed Turns and proves ordered single dispatch                        |
 | `session-queue.steps.ts`             | Removes one queued follow-up and proves only the retained message dispatches                     |
 | `session-management.steps.ts`        | Exercises metadata, Archive restore, history, and deletion                                       |
 | `session-read-state.steps.ts`        | Exercises unread marking, navigation-based clearing, and UI cleanup                              |
 | `session-fork.steps.ts`              | Forks a completed Session to a worktree and verifies origin and cleanup                          |
 | `session-goal.steps.ts`              | Drives isolated goal update, Pause, Resume, Clear, UI revisit, Archive, and cleanup              |
 | `settings-appearance.steps.ts`       | Commits, previews, cancels, and reopens a desktop theme selection                                |
-| `shortcuts.steps.ts`                 | Verifies default shortcuts, cross-window rebinding, and renderer reload                          |
+| `shortcuts.steps.ts`                 | Verifies default shortcuts, cross-window rebinding, renderer reload, and digit tab switching     |
 | `sidebar-search.steps.ts`            | Drives three Sessions through query variants, rename, UI revisit, Archive, and cleanup           |
 | `text-attachment.steps.ts`           | Drives picker cancel, attachment and plain turns, UI revisit, isolation, and cleanup             |

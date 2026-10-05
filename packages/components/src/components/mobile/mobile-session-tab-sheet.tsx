@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import {
+  ArchiveRestore,
   ChevronDown,
   File as FileIcon,
   FileDiff,
@@ -8,9 +9,12 @@ import {
   Hand,
   MonitorPlay,
   Plus,
+  Smartphone,
   Undo2,
+  X,
 } from 'lucide-react';
-import { Spinner } from '@/ui/spinner';
+import { Spinner } from '@lody/ui/spinner';
+import { Badge } from '@lody/ui/badge';
 import { useTranslation } from 'react-i18next';
 import { getServerNow } from '@lody/shared';
 
@@ -54,17 +58,22 @@ export type ConversationTabEntry = {
   lastActivityAt: number | null;
 };
 
-/** Archived child conversation, shown behind a collapsed disclosure row. */
+/** Closed conversation, shown behind a collapsed disclosure row. */
 export type ArchivedConversationEntry = {
   id: string;
   title: string;
   lastActivityAt: number | null;
+  running?: boolean;
+  waitingPermission?: boolean;
+  unread?: boolean;
+  /** An archived child of a live workspace: tapping restores it instead of reopening. */
+  restoresArchive?: boolean;
 };
 
 export type ViewerTabEntry = {
   id: string;
   label: string;
-  kind: 'file' | 'diff' | 'pr' | 'browser' | 'files';
+  kind: 'file' | 'diff' | 'pr' | 'browser' | 'ios-simulator' | 'files';
   active: boolean;
 };
 
@@ -76,10 +85,12 @@ export type MobileSessionTabSheetProps = {
   archivedConversations?: ArchivedConversationEntry[];
   viewers: ViewerTabEntry[];
   onSelectConversation: (id: string) => void;
-  onNewConversation: () => void;
+  /** Omitted for a review-only (archived) workspace: no New Chat row. */
+  onNewConversation?: () => void;
   onSelectViewer: (id: string) => void;
-  /** Tapping an archived row restores it (and switches to it). */
+  /** Tapping a closed row reopens (or, for `restoresArchive`, restores) it and switches to it. */
   onRestoreConversation?: (id: string) => void;
+  onCloseConversation?: (id: string) => void;
 };
 
 /** Relative "Xm ago" of the last activity, task-list style; '' when unknown. */
@@ -113,6 +124,7 @@ const VIEWER_ICON: Record<ViewerTabEntry['kind'], typeof FileIcon> = {
   diff: FileDiff,
   pr: GitPullRequest,
   browser: MonitorPlay,
+  'ios-simulator': Smartphone,
   files: FolderOpen,
 };
 
@@ -126,6 +138,7 @@ export function MobileSessionTabSheet({
   onNewConversation,
   onSelectViewer,
   onRestoreConversation,
+  onCloseConversation,
 }: MobileSessionTabSheetProps) {
   const { t } = useTranslation();
   const title = t('sessions.tabs.sheetTitle', 'Tabs');
@@ -147,33 +160,51 @@ export function MobileSessionTabSheet({
           <GroupLabel>{t('sessions.tabs.conversationsGroup', 'Conversations')}</GroupLabel>
           <GroupCard>
             {conversations.map((c) => (
-              <ConversationRow
-                key={c.id}
-                active={c.active}
-                running={c.running}
-                waitingPermission={c.waitingPermission === true}
-                unread={c.unread}
-                label={c.title || t('sessions.untitled', 'Untitled')}
-                mainChip={c.main ? t('sessions.tabs.mainTab', 'Main') : null}
-                elapsed={formatRelativeTime(c.lastActivityAt, t)}
-                unreadLabel={t('sessions.unreadMessages', 'Unread messages')}
-                waitingPermissionLabel={t('sessions.waitingPermission', 'Waiting for permission')}
-                onSelect={() => select(() => onSelectConversation(c.id))}
-              />
+              <div key={c.id} className="flex items-center">
+                <div className="min-w-0 flex-1">
+                  <ConversationRow
+                    active={c.active}
+                    running={c.running}
+                    waitingPermission={c.waitingPermission === true}
+                    unread={c.unread}
+                    label={c.title || t('sessions.untitled', 'Untitled')}
+                    mainChip={c.main ? t('sessions.tabs.mainTab', 'Main') : null}
+                    elapsed={formatRelativeTime(c.lastActivityAt, t)}
+                    unreadLabel={t('sessions.unreadMessages', 'Unread messages')}
+                    waitingPermissionLabel={t(
+                      'sessions.waitingPermission',
+                      'Waiting for permission'
+                    )}
+                    onSelect={() => select(() => onSelectConversation(c.id))}
+                  />
+                </div>
+                {onCloseConversation && (
+                  <button
+                    type="button"
+                    className="shrink-0 p-3 text-muted-foreground"
+                    aria-label={t('sessions.tabs.closeTab', 'Close tab')}
+                    onClick={() => onCloseConversation(c.id)}
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
             ))}
-            <button
-              type="button"
-              onClick={() => select(onNewConversation)}
-              className={cn(
-                rowClassName,
-                'font-medium text-muted-foreground transition-colors hover:text-foreground'
-              )}
-            >
-              <span className="flex h-4 w-4 shrink-0 items-center justify-center">
-                <Plus className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
-              </span>
-              <span>{t('sessions.tabs.newChat', 'New Chat')}</span>
-            </button>
+            {onNewConversation ? (
+              <button
+                type="button"
+                onClick={() => select(onNewConversation)}
+                className={cn(
+                  rowClassName,
+                  'font-medium text-muted-foreground transition-colors hover:text-foreground'
+                )}
+              >
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                  <Plus className="h-4 w-4" strokeWidth={1.8} aria-hidden="true" />
+                </span>
+                <span>{t('sessions.tabs.newChat', 'New Chat')}</span>
+              </button>
+            ) : null}
             {showArchived ? (
               <>
                 <button
@@ -193,7 +224,7 @@ export function MobileSessionTabSheet({
                     />
                   </span>
                   <span className="min-w-0 flex-1 truncate">
-                    {t('sessions.tabs.archivedCount', 'Archived ({{count}})', {
+                    {t('sessions.tabs.closedCount', 'Closed ({{count}})', {
                       count: archivedConversations.length,
                     })}
                   </span>
@@ -204,24 +235,50 @@ export function MobileSessionTabSheet({
                         key={a.id}
                         type="button"
                         onClick={() => select(() => onRestoreConversation(a.id))}
-                        aria-label={t('sessions.tabs.restoreTab', 'Restore tab')}
+                        aria-label={
+                          a.restoresArchive
+                            ? t('archive.restore', 'Restore session')
+                            : t('sessions.tabs.reopenTab', 'Reopen conversation')
+                        }
                         className={cn(
                           rowClassName,
                           'transition-colors hover:bg-muted-foreground/5'
                         )}
                       >
-                        <span className="h-4 w-4 shrink-0" />
+                        <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                          {a.waitingPermission ? (
+                            <Hand
+                              className="h-4 w-4 text-status-warning"
+                              aria-label={t('sessions.waitingPermission', 'Waiting for permission')}
+                            />
+                          ) : a.running ? (
+                            <Spinner className="h-4 w-4" />
+                          ) : a.unread ? (
+                            <span
+                              className="h-2 w-2 rounded-full bg-primary"
+                              aria-label={t('sessions.unreadMessages', 'Unread messages')}
+                            />
+                          ) : null}
+                        </span>
                         <span className="min-w-0 flex-1 truncate text-muted-foreground">
                           {a.title || t('sessions.untitled', 'Untitled')}
                         </span>
                         <span className="shrink-0 text-xs tabular-nums text-muted-foreground/70">
                           {formatRelativeTime(a.lastActivityAt, t)}
                         </span>
-                        <Undo2
-                          className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70"
-                          strokeWidth={1.8}
-                          aria-hidden="true"
-                        />
+                        {a.restoresArchive ? (
+                          <ArchiveRestore
+                            className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70"
+                            strokeWidth={1.8}
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <Undo2
+                            className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70"
+                            strokeWidth={1.8}
+                            aria-hidden="true"
+                          />
+                        )}
                       </button>
                     ))
                   : null}
@@ -331,11 +388,7 @@ function ConversationRow({
         >
           {label}
         </span>
-        {mainChip ? (
-          <span className="shrink-0 rounded border border-border/70 px-1 py-px text-[0.62rem] font-medium leading-none text-muted-foreground">
-            {mainChip}
-          </span>
-        ) : null}
+        {mainChip ? <Badge>{mainChip}</Badge> : null}
       </span>
       {elapsed ? (
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{elapsed}</span>

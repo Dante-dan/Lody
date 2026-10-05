@@ -2,6 +2,8 @@ import { LoroDoc, LoroMap } from 'loro-crdt';
 import { createHistoryWriter } from '@lody/shared';
 import { createLoroSessionData } from '@lody/shared/session-data';
 import path from 'path';
+import os from 'node:os';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
@@ -9,10 +11,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AGENT_ROLE_VERSION,
   SESSION_FILE_MAX_COUNT,
-  TASK_LABEL_MAX_COUNT,
+  getStaticBuiltinAcpCapabilities,
   getSessionRoomId,
   workspaceFlockKeys,
   type AgentConfigId,
+  type AcpCapabilityCacheEntry,
   type AgentRole,
   type AgentRoleId,
   type MachineId,
@@ -28,8 +31,15 @@ import {
 import type { LoroDocumentManager } from '@/lib/loro/doc';
 import {
   getLodyOperationStorePath,
+  LodyOperationStore,
   LodyOperationStoreError,
 } from '@/orchestration/operation-store';
+import {
+  applyAgentRunConfigSelection,
+  resolveEffectiveSessionCreateDispatchConfig,
+  validateTurnConfigOptionValues,
+  validateTurnModeAndModel,
+} from '@/commands/session';
 
 import {
   __lodyMcpServerInternals,
@@ -38,17 +48,6 @@ import {
 } from './lody-mcp-server';
 
 const {
-  TaskListToolInputSchema,
-  TaskGetToolInputSchema,
-  TaskCreateToolInputSchema,
-  TaskProposeToolInputSchema,
-  TaskUpdateToolInputSchema,
-  TaskEditBodyToolInputSchema,
-  TaskCommentToolInputSchema,
-  resolveTaskPrProvider,
-  buildTaskListFilter,
-  buildTaskUpdateInput,
-  toTaskProjectRef,
   FeedbackToolInputSchema,
   FileUploadToolInputSchema,
   SessionCreateOptionsToolInputSchema,
@@ -84,7 +83,7 @@ const {
   buildInvocationIdentity,
   summarizeProjectRefForMcp,
   resolveSessionExecutionSnapshot,
-  makeMachineOnlineLookupForMcp,
+  makeMachineLivenessLookupForMcp,
   truncateUtf8HeadTail,
 } = __lodyMcpServerInternals;
 
@@ -94,7 +93,6 @@ const createMcpContext = (): ReturnType<typeof getSessionContext> => ({
   sessionId: 'current-session-id',
   localControlSocketPath: '/tmp/lody-control.sock',
   workdir: '/tmp/workspace',
-  taskToolsEnabled: false,
 });
 
 const agentRole = (overrides: Partial<AgentRole> = {}): AgentRole => ({
@@ -111,6 +109,26 @@ const agentRole = (overrides: Partial<AgentRole> = {}): AgentRole => ({
   updatedAt: 1,
   ...overrides,
 });
+
+const createCapability = (agentType: 'codex' | 'grok' | 'claude'): AcpCapabilityCacheEntry => {
+  const capability = getStaticBuiltinAcpCapabilities('builtin', agentType);
+  if (!capability) throw new Error('Missing synthetic capability fixture');
+  return { ...capability, cliType: 'builtin', agentType, fetchedAt: 1 };
+};
+
+const resolveCreateConfig = (
+  input: Parameters<typeof buildMcpTurnDispatchConfig>[0],
+  capability: AcpCapabilityCacheEntry
+) => {
+  const requested = applyAgentRunConfigSelection(buildMcpTurnDispatchConfig(input), capability);
+  validateTurnModeAndModel(requested.config, capability);
+  validateTurnConfigOptionValues(
+    requested.config.configOptionValues,
+    capability,
+    requested.validatedConfigIds
+  );
+  return requested.config;
+};
 
 describe('shared Operation store path', () => {
   // Regression: the daemon-hosted HTTP MCP transport carries its session
@@ -143,9 +161,9 @@ describe('shared Operation store path', () => {
   });
 });
 
-const listPublishedToolNames = async (taskToolsEnabled: boolean): Promise<string[]> => {
-  const server = buildLodyMcpServer({ taskToolsEnabled });
-  const client = new Client({ name: 'task-gate-test-client', version: '1.0.0' });
+const listPublishedToolNames = async (): Promise<string[]> => {
+  const server = buildLodyMcpServer();
+  const client = new Client({ name: 'mcp-catalog-test-client', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
   try {
@@ -155,30 +173,28 @@ const listPublishedToolNames = async (taskToolsEnabled: boolean): Promise<string
   }
 };
 
-describe('Lody Task MCP tool gate', () => {
-  const taskToolNames = [
-    'lody_task_list',
-    'lody_task_get',
-    'lody_task_create',
-    'lody_task_propose',
-    'lody_task_update',
-    'lody_task_edit_body',
-    'lody_task_comment',
-    'lody_task_upload_images',
-  ];
-
-  it('omits every Task tool while leaving the rest of Lody MCP available when disabled', async () => {
-    const names = await listPublishedToolNames(false);
+describe('Lody MCP tool catalog', () => {
+  it('publishes session tools and never advertises a Task family', async () => {
+    const names = await listPublishedToolNames();
     expect(names).toContain('lody_feedback');
     expect(names).toEqual(
-      expect.arrayContaining(['lody_session_rename', 'lody_session_rename_many'])
+      expect.arrayContaining([
+        'lody_session_rename',
+        'lody_session_rename_many',
+        'lody_ios_simulator_preview',
+      ])
     );
     expect(names.filter((name) => name.startsWith('lody_task_'))).toEqual([]);
   });
 
-  it('publishes the complete Task tool family when enabled', async () => {
-    const names = await listPublishedToolNames(true);
-    expect(names).toEqual(expect.arrayContaining(taskToolNames));
+  it('always advertises only the bounded Schedule family', async () => {
+    const names = await listPublishedToolNames();
+    expect(names.filter((name) => name.startsWith('lody_schedule_')).sort()).toEqual([
+      'lody_schedule_get',
+      'lody_schedule_list',
+      'lody_schedule_pause',
+      'lody_schedule_propose',
+    ]);
   });
 });
 
@@ -483,7 +499,7 @@ describe('session MCP input schemas', () => {
     });
   });
 
-  it('accepts semantic run config on single and batch creates and rejects raw ACP ids', () => {
+  it('accepts semantic controls and explicit ACP selectors on single and batch creates', () => {
     expect(
       SessionCreateToolInputSchema.safeParse({
         operationId: 'review-1',
@@ -492,6 +508,8 @@ describe('session MCP input schemas', () => {
         reasoningEffort: 'high',
         fastMode: true,
         planMode: false,
+        modeId: 'read-only',
+        configOptionValues: { permission_mode: 'ask' },
       }).success
     ).toBe(true);
     expect(
@@ -500,7 +518,7 @@ describe('session MCP input schemas', () => {
         prompt: 'review this',
         configOptionValues: { reasoning_effort: 'high' },
       }).success
-    ).toBe(false);
+    ).toBe(true);
     expect(
       SessionCreateToolInputSchema.safeParse({
         operationId: 'review-1',
@@ -511,8 +529,19 @@ describe('session MCP input schemas', () => {
     expect(
       SessionCreateManyToolInputSchema.safeParse({
         operationId: 'review-batch-1',
-        defaults: { reasoningEffort: 'high' },
-        items: [{ prompt: 'review this', planMode: true }],
+        defaults: {
+          reasoningEffort: 'high',
+          modeId: 'default',
+          configOptionValues: { permission_mode: 'ask' },
+        },
+        items: [
+          {
+            prompt: 'review this',
+            planMode: true,
+            modeId: 'plan',
+            configOptionValues: { permission_mode: 'always-approve' },
+          },
+        ],
       }).success
     ).toBe(true);
     expect(
@@ -600,6 +629,8 @@ describe('session MCP input schemas', () => {
         agentConfigId: 'manual-agent',
         modelId: 'manual-model',
         reasoningEffort: 'high',
+        modeId: 'unadvertised-manual-mode',
+        configOptionValues: { unknown: 'unadvertised' },
         useCurrentSessionAsParent: false,
       },
       { chainDepth: 0, frozenInputConfig },
@@ -624,11 +655,12 @@ describe('session MCP input schemas', () => {
     });
     expect(resolved.input).not.toHaveProperty('modelId');
     expect(resolved.input).not.toHaveProperty('reasoningEffort');
+    expect(resolved.input).not.toHaveProperty('modeId');
+    expect(resolved.input).not.toHaveProperty('configOptionValues');
     expect(resolved.dispatchConfig).toEqual({
       modeId: 'default',
       modelId: 'opus',
       configOptionValues: { reasoning_effort: 'medium' },
-      taskToolsEnabled: false,
       inheritSessionDefaults: false,
     });
     expect(buildResolvedMcpCreateCanonicalCommand(resolved)).toMatchObject({
@@ -638,6 +670,23 @@ describe('session MCP input schemas', () => {
       machineId: 'remote-machine',
       agentConfigId: 'claude-opus',
     });
+    const withoutOverrides = resolveMcpSessionCreate(
+      {
+        operationId: 'role-review-1',
+        prompt: 'Review the current diff.',
+        agentRoleId: 'reviewer',
+        useCurrentSessionAsParent: false,
+      },
+      { chainDepth: 0, frozenInputConfig },
+      {
+        machineId: 'current-machine',
+        project: { kind: 'github', repoFullName: 'loro-dev/lody-oss', branch: 'feature/roles' },
+      },
+      role
+    );
+    expect(buildResolvedMcpCreateCanonicalCommand(resolved)).toEqual(
+      buildResolvedMcpCreateCanonicalCommand(withoutOverrides)
+    );
   });
 
   it('loads Role rows from the workspace catalog without a Turn authorization record', async () => {
@@ -665,7 +714,24 @@ describe('session MCP input schemas', () => {
     });
   });
 
-  it('keeps Local Project Role execution on its Machine and defaults to a child Session', () => {
+  it('runs a Role on its own Machine from a chat Session on another Machine', () => {
+    const resolved = resolveMcpSessionCreate(
+      { operationId: 'role-remote-1', prompt: 'Pair on this.', agentRoleId: 'reviewer' },
+      { chainDepth: 0, frozenInputConfig: {} as SessionTurnInputConfig },
+      { machineId: 'current-machine', project: undefined },
+      agentRole()
+    );
+
+    expect(resolved.input).toMatchObject({
+      machineId: 'remote-machine',
+      agentConfigId: 'claude-opus',
+    });
+    expect(resolved.input).not.toHaveProperty('useCurrentSessionAsParent');
+    expect(resolved.input).not.toHaveProperty('workContext');
+    expect(resolved.role?.id).toBe('reviewer');
+  });
+
+  it('defaults a same-Machine Local Project Role to a child Session and a remote one to its own Machine', () => {
     const frozenInputConfig = {} as SessionTurnInputConfig;
     const role = agentRole({
       id: 'implementer' as AgentRoleId,
@@ -690,17 +756,20 @@ describe('session MCP input schemas', () => {
         role
       ).input.useCurrentSessionAsParent
     ).toBe(true);
-    expect(() =>
-      resolveMcpSessionCreate(
-        input,
-        { chainDepth: 0, frozenInputConfig },
-        {
-          machineId: 'different-machine',
-          project: { kind: 'local', localProjectId: 'project-id', useWorktree: true },
-        },
-        role
-      )
-    ).toThrow(/Local Project's Machine/);
+    // The Local Project's filesystem is not on the Role's Machine, so the
+    // Role cannot be its child; it starts independently where it is bound.
+    const remote = resolveMcpSessionCreate(
+      input,
+      { chainDepth: 0, frozenInputConfig },
+      {
+        machineId: 'different-machine',
+        project: { kind: 'local', localProjectId: 'project-id', useWorktree: true },
+      },
+      role
+    ).input;
+    expect(remote).toMatchObject({ machineId: 'local-machine', agentConfigId: 'codex' });
+    expect(remote).not.toHaveProperty('useCurrentSessionAsParent');
+    expect(remote).not.toHaveProperty('workContext');
     expect(composeAgentRolePrompt('  ', 'Implement this.')).toBe('Implement this.');
   });
 
@@ -718,6 +787,286 @@ describe('session MCP input schemas', () => {
       )
     ).toThrow(/does not exist in the workspace catalog/);
   });
+
+  it('keeps explicit permission options alongside semantic model, reasoning, Fast and independent Plan', () => {
+    const config = resolveCreateConfig(
+      {
+        modeId: 'default',
+        modelId: 'grok-4.6',
+        reasoningEffort: 'high',
+        planMode: true,
+        configOptionValues: { permission_mode: 'ask' },
+      },
+      createCapability('grok')
+    );
+    expect(config).toEqual({
+      modeId: 'default',
+      modelId: 'grok-4.6',
+      configOptionValues: { permission_mode: 'ask', reasoning_effort: 'high', plan_mode: true },
+    });
+    expect(
+      resolveCreateConfig(
+        { modeId: 'read-only', reasoningEffort: 'high', fastMode: false, planMode: true },
+        createCapability('codex')
+      )
+    ).toMatchObject({
+      modeId: 'read-only',
+      configOptionValues: { reasoning_effort: 'high', 'fast-mode': false, plan_mode: true },
+    });
+  });
+
+  it('retains semantic precedence over raw controls and accepts uncategorized permission options', () => {
+    const capability = createCapability('grok');
+    capability.configOptions = capability.configOptions?.map((option) => {
+      if (option.id !== 'permission_mode') return option;
+      const { category: _category, ...uncategorized } = option;
+      return uncategorized;
+    });
+    expect(
+      resolveCreateConfig(
+        {
+          modelId: 'grok-4.6',
+          reasoningEffort: 'high',
+          planMode: true,
+          configOptionValues: {
+            permission_mode: 'always-approve',
+            reasoning_effort: 'low',
+            plan_mode: false,
+          },
+        },
+        capability
+      )
+    ).toEqual({
+      modelId: 'grok-4.6',
+      configOptionValues: {
+        permission_mode: 'always-approve',
+        reasoning_effort: 'high',
+        plan_mode: true,
+      },
+    });
+  });
+
+  it('preserves omitted create defaults but lets raw selectors replace inherited scalar selectors', async () => {
+    const capability = createCapability('codex');
+    const manager = {
+      repo: {
+        openFlockDoc: async () => ({
+          flock: { scan: () => [{ key: ['acpCapability', 'agent-1'], value: capability }] },
+        }),
+      },
+    } as unknown as LoroDocumentManager;
+    const inherited = {
+      cliType: 'builtin' as const,
+      agentType: 'codex',
+      modeId: 'agent',
+      modelId: 'gpt-5.6-sol',
+      configOptionValues: { 'fast-mode': true },
+    };
+    const resolve = (input: Parameters<typeof buildMcpTurnDispatchConfig>[0]) =>
+      resolveEffectiveSessionCreateDispatchConfig({
+        manager,
+        workspaceId: 'workspace-1' as WorkspaceId,
+        agentConfig: {
+          id: 'agent-1' as AgentConfigId,
+          machineId: 'machine-1' as MachineId,
+          name: 'Synthetic Codex',
+          cliType: 'builtin',
+          agentType: 'codex',
+          createdAt: '2026-10-02T00:00:00Z',
+        },
+        localOnly: true,
+        dispatchConfig: {
+          ...buildMcpTurnDispatchConfig(input),
+          frozenInheritedInputConfig: inherited,
+        },
+      });
+    await expect(resolve({})).resolves.toEqual({
+      modeId: 'agent',
+      modelId: 'gpt-5.6-sol',
+      configOptionValues: { 'fast-mode': true },
+      inheritSessionDefaults: false,
+    });
+    await expect(
+      resolve({ configOptionValues: { mode: 'read-only', model: 'gpt-5.5' } })
+    ).resolves.toEqual({
+      modeId: undefined,
+      modelId: undefined,
+      configOptionValues: { mode: 'read-only', model: 'gpt-5.5' },
+      inheritSessionDefaults: false,
+    });
+    await expect(
+      resolve({
+        modeId: 'read-only',
+        modelId: 'gpt-5.5',
+        reasoningEffort: 'high',
+        planMode: true,
+        configOptionValues: { 'fast-mode': false },
+      })
+    ).resolves.toEqual({
+      modeId: 'read-only',
+      modelId: 'gpt-5.5',
+      configOptionValues: { 'fast-mode': false, reasoning_effort: 'high', plan_mode: true },
+      inheritSessionDefaults: false,
+    });
+  });
+
+  it('validates semantic reasoning against a model selected by a raw option', () => {
+    const capability = createCapability('grok');
+    capability.modelReasoningEfforts = { 'grok-4.6': ['high'], 'grok-4.5': ['low'] };
+    expect(() =>
+      resolveCreateConfig(
+        { configOptionValues: { model: 'grok-4.5' }, reasoningEffort: 'high' },
+        capability
+      )
+    ).toThrow(/Invalid reasoning effort for model grok-4.5/);
+    expect(
+      resolveCreateConfig(
+        {
+          configOptionValues: { model: 'grok-4.5', permission_mode: 'ask' },
+          reasoningEffort: 'low',
+        },
+        capability
+      )
+    ).toMatchObject({
+      modelId: 'grok-4.5',
+      configOptionValues: { model: 'grok-4.5', permission_mode: 'ask', reasoning_effort: 'low' },
+    });
+    expect(
+      resolveCreateConfig(
+        { modelId: 'grok-4.6', configOptionValues: { model: 'grok-4.5' }, reasoningEffort: 'high' },
+        capability
+      ).modelId
+    ).toBe('grok-4.6');
+  });
+
+  it.each([
+    { modeId: 'unsupported' },
+    { configOptionValues: { unknown: true } },
+    { configOptionValues: { permission_mode: 'unsupported' } },
+    { configOptionValues: { permission_mode: false } },
+    { configOptionValues: { plan_mode: 'true' } },
+  ])('rejects unadvertised or mistyped selectors before dispatch: %j', (input) => {
+    expect(() => resolveCreateConfig(input, createCapability('grok'))).toThrow();
+  });
+
+  it('rejects only legacy Plan selectors that cannot coexist with the explicit mode', () => {
+    const capability = createCapability('claude');
+    expect(() => resolveCreateConfig({ modeId: 'auto', planMode: true }, capability)).toThrow(
+      /conflicts with explicit mode auto/
+    );
+    expect(() =>
+      resolveCreateConfig({ configOptionValues: { mode: 'auto' }, planMode: true }, capability)
+    ).toThrow(/conflicts with explicit mode auto/);
+    expect(resolveCreateConfig({ modeId: 'plan', planMode: true }, capability)).toEqual({
+      modeId: 'plan',
+    });
+    expect(resolveCreateConfig({ modeId: 'auto', planMode: false }, capability)).toEqual({
+      modeId: 'auto',
+    });
+  });
+
+  it.each(['session_create', 'session_create_many'] as const)(
+    'freezes explicit create permissions across a store reopen and binds retries to the selections (%s)',
+    async (kind) => {
+      const root = await mkdtemp(path.join(os.tmpdir(), 'lody-mcp-create-config-'));
+      const storePath = path.join(root, 'operations.sqlite3');
+      let store = new LodyOperationStore(storePath, () => 1000);
+      const input = SessionCreateToolInputSchema.parse({
+        operationId: 'explicit-config',
+        prompt: 'Review synthetic code.',
+        modeId: 'default',
+        configOptionValues: { permission_mode: 'ask', plan_mode: true },
+      });
+      if (!('prompt' in input) || !input.operationId)
+        throw new Error('Expected an asynchronous create');
+      const resolved = resolveMcpSessionCreate(
+        input,
+        undefined,
+        { machineId: 'machine-1' },
+        undefined
+      );
+      const dispatchConfig = {
+        ...resolveCreateConfig(input, createCapability('grok')),
+        inheritSessionDefaults: false as const,
+      };
+      const command = buildResolvedMcpCreateCanonicalCommand(resolved);
+      const acceptance = {
+        workspaceId: 'workspace-1' as WorkspaceId,
+        ownerMachineId: 'machine-1' as MachineId,
+        requesterSessionId: 'requester-1' as SessionId,
+        requesterUserId: 'user-1',
+        operationId: input.operationId,
+        kind,
+        canonicalCommand: kind === 'session_create' ? command : { items: [command] },
+        frozenContinuationConfig: {
+          inputConfig: {},
+          sourceTurnId: 'source-1',
+          targetDispatchConfigs: [dispatchConfig],
+        },
+        initiatorChainDepth: 0,
+        createdAt: '2026-10-02T00:00:00Z',
+        deadlineAt: '2026-10-02T01:00:00Z',
+        items: [
+          {
+            status: 'active' as const,
+            target: { sessionId: 'target-1' as SessionId, userTurnId: 'turn-1' },
+            inputDurable: false,
+          },
+        ],
+      };
+      try {
+        store.accept(acceptance);
+        store.close();
+        store = new LodyOperationStore(storePath, () => 2000);
+        const retryCommand = buildResolvedMcpCreateCanonicalCommand(
+          resolveMcpSessionCreate(
+            { ...input, configOptionValues: { plan_mode: true, permission_mode: 'ask' } },
+            undefined,
+            { machineId: 'machine-1' },
+            undefined
+          )
+        );
+        const retry = store.findMatchingRetry(
+          acceptance.requesterSessionId,
+          input.operationId,
+          kind,
+          kind === 'session_create' ? retryCommand : { items: [retryCommand] },
+          'user-1',
+          'source-1'
+        );
+        expect(retry?.frozenContinuationConfig.targetDispatchConfigs).toEqual([dispatchConfig]);
+        expect(retry?.items[0]).toMatchObject({
+          target: { sessionId: 'target-1', userTurnId: 'turn-1' },
+        });
+        for (const changed of [
+          { modeId: 'plan' },
+          { configOptionValues: { permission_mode: 'always-approve', plan_mode: true } },
+        ]) {
+          const changedCommand = buildResolvedMcpCreateCanonicalCommand(
+            resolveMcpSessionCreate(
+              { ...input, ...changed },
+              undefined,
+              { machineId: 'machine-1' },
+              undefined
+            )
+          );
+          expect(() =>
+            store.findMatchingRetry(
+              acceptance.requesterSessionId,
+              input.operationId,
+              kind,
+              kind === 'session_create' ? changedCommand : { items: [changedCommand] },
+              'user-1',
+              'source-1'
+            )
+          ).toThrowError(expect.objectContaining({ code: 'OPERATION_ID_REUSED' }));
+        }
+      } finally {
+        store.close();
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+  );
 
   it('defers run config to capability resolution instead of guessing ACP option ids', () => {
     expect(
@@ -777,6 +1126,23 @@ describe('session MCP input schemas', () => {
         }
       ).runConfig
     ).toEqual({
+      modes: [],
+      configOptions: [
+        {
+          id: 'model',
+          name: 'Model',
+          category: 'model',
+          type: 'select',
+          options: [{ value: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
+        },
+        {
+          id: 'reasoning_effort',
+          name: 'Reasoning effort',
+          category: 'thought_level',
+          type: 'select',
+          options: [{ value: 'high', name: 'High' }],
+        },
+      ],
       models: [{ id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' }],
       reasoningEffortValues: ['high'],
       measuredForModelId: 'gpt-5.6-sol',
@@ -1145,19 +1511,39 @@ describe('session MCP input schemas', () => {
 
   it('shares one remote Machine presence read across a batch', async () => {
     const getOnlineMachineIds = vi.fn(async () => new Set(['remote-a', 'remote-b']));
-    const isMachineOnline = makeMachineOnlineLookupForMcp(
+    const machineLiveness = makeMachineLivenessLookupForMcp(
       { getOnlineMachineIds } as never,
       createMcpContext()
     );
 
     await expect(
       Promise.all([
-        isMachineOnline('machine-id'),
-        isMachineOnline('remote-a'),
-        isMachineOnline('remote-b'),
+        machineLiveness('machine-id'),
+        machineLiveness('remote-a'),
+        machineLiveness('remote-b'),
       ])
-    ).resolves.toEqual([true, true, true]);
+    ).resolves.toEqual(['online', 'online', 'online']);
     expect(getOnlineMachineIds).toHaveBeenCalledTimes(1);
+  });
+
+  it('separates a Machine absent from a joined presence room from one it could not check', async () => {
+    const joined = makeMachineLivenessLookupForMcp(
+      { getOnlineMachineIds: vi.fn(async () => new Set(['remote-a'])) } as never,
+      createMcpContext()
+    );
+    // A joined room that simply lacks the entry is real evidence of an offline Machine.
+    await expect(joined('remote-b')).resolves.toBe('offline');
+
+    const unavailable = makeMachineLivenessLookupForMcp(
+      { getOnlineMachineIds: vi.fn(async () => null) } as never,
+      createMcpContext()
+    );
+    // A null snapshot is "presence room unavailable" and must never read as offline:
+    // every dispatch guard blocks on 'offline' alone, so this is what kept a healthy
+    // remote Machine usable while presence was still joining.
+    await expect(unavailable('remote-b')).resolves.toBe('unknown');
+    // The local Machine never depends on the presence room to prove its own liveness.
+    await expect(unavailable('machine-id')).resolves.toBe('online');
   });
 
   it('truncates history text on Unicode boundaries with exact omitted bytes', () => {
@@ -1169,218 +1555,5 @@ describe('session MCP input schemas', () => {
       Buffer.byteLength(original, 'utf8') -
         Buffer.byteLength(result.text.replace('\n…\n', ''), 'utf8')
     );
-  });
-});
-
-describe('lody task MCP input schemas', () => {
-  it('requires a task id and rejects extra fields', () => {
-    expect(TaskGetToolInputSchema.safeParse({ taskId: 't1' }).success).toBe(true);
-    expect(TaskGetToolInputSchema.safeParse({ taskId: '  ' }).success).toBe(false);
-    expect(TaskGetToolInputSchema.safeParse({}).success).toBe(false);
-    expect(TaskGetToolInputSchema.safeParse({ taskId: 't1', extra: 1 }).success).toBe(false);
-  });
-
-  it('requires a stable proposal id and a title', () => {
-    expect(
-      TaskProposeToolInputSchema.safeParse({ proposalId: 'p1', title: 'Do the thing' }).success
-    ).toBe(true);
-    expect(TaskProposeToolInputSchema.safeParse({ title: 'Do the thing' }).success).toBe(false);
-    expect(TaskProposeToolInputSchema.safeParse({ proposalId: 'p1', title: '' }).success).toBe(
-      false
-    );
-    expect(
-      TaskProposeToolInputSchema.safeParse({
-        proposalId: 'p1',
-        title: 'x',
-        body: '# Details',
-      }).success
-    ).toBe(true);
-  });
-
-  it('does not let an agent update a task with nothing to change', () => {
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1' }).success).toBe(false);
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', status: 'done' }).success).toBe(
-      true
-    );
-    expect(
-      TaskUpdateToolInputSchema.safeParse({
-        taskId: 't1',
-        pullRequestUrl: 'https://github.com/o/r/pull/1',
-      }).success
-    ).toBe(true);
-  });
-
-  it('rejects unknown statuses and non-URL pull requests', () => {
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', status: 'shipped' }).success).toBe(
-      false
-    );
-    expect(
-      TaskUpdateToolInputSchema.safeParse({ taskId: 't1', pullRequestUrl: 'o/r#1' }).success
-    ).toBe(false);
-  });
-
-  it('accepts every writable scalar property', () => {
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', title: 'new' }).success).toBe(true);
-    // Empty string is the unassign path, so it must not be rejected as blank.
-    // (Naming an owner is human-only; covered separately below.)
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', ownerId: '' }).success).toBe(true);
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', priority: 'high' }).success).toBe(
-      true
-    );
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', priority: 'none' }).success).toBe(
-      true
-    );
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', labels: [] }).success).toBe(true);
-    expect(
-      TaskUpdateToolInputSchema.safeParse({
-        taskId: 't1',
-        project: { kind: 'github', repo: 'o/r' },
-      }).success
-    ).toBe(true);
-  });
-
-  it('keeps the body and the entrusted agent out of the update tool', () => {
-    // The body goes through the exact-match edit so a content change carries its
-    // size delta; `agent` is the automation consent and only a person sets it.
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', body: 'new' }).success).toBe(false);
-    expect(
-      TaskUpdateToolInputSchema.safeParse({ taskId: 't1', agent: { agentConfigId: 'a1' } }).success
-    ).toBe(false);
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', agentConfigId: 'a1' }).success).toBe(
-      false
-    );
-  });
-
-  it('rejects an unknown priority and an oversized label set', () => {
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', priority: 'blocker' }).success).toBe(
-      false
-    );
-    expect(
-      TaskUpdateToolInputSchema.safeParse({
-        taskId: 't1',
-        labels: Array.from({ length: TASK_LABEL_MAX_COUNT + 1 }, (_, index) => `l${index}`),
-      }).success
-    ).toBe(false);
-  });
-
-  it('requires a title to create a task and never accepts an agent', () => {
-    expect(TaskCreateToolInputSchema.safeParse({ title: 'Fix the header' }).success).toBe(true);
-    expect(TaskCreateToolInputSchema.safeParse({ body: 'no title' }).success).toBe(false);
-    expect(TaskCreateToolInputSchema.safeParse({ title: '   ' }).success).toBe(false);
-    expect(
-      TaskCreateToolInputSchema.safeParse({ title: 'x', agent: { agentConfigId: 'a1' } }).success
-    ).toBe(false);
-    expect(
-      TaskCreateToolInputSchema.safeParse({
-        title: 'x',
-        body: '## Why',
-        status: 'todo',
-        priority: 'low',
-        labels: ['Bug'],
-        project: { kind: 'local', projectId: 'p1', worktree: true },
-      }).success
-    ).toBe(true);
-  });
-
-  it('bounds the task list page and rejects an unknown status filter', () => {
-    expect(TaskListToolInputSchema.safeParse({}).success).toBe(true);
-    expect(TaskListToolInputSchema.safeParse({ status: ['todo', 'done'] }).success).toBe(true);
-    expect(TaskListToolInputSchema.safeParse({ status: [] }).success).toBe(false);
-    expect(TaskListToolInputSchema.safeParse({ status: ['shipped'] }).success).toBe(false);
-    expect(TaskListToolInputSchema.safeParse({ limit: 101 }).success).toBe(false);
-    expect(TaskListToolInputSchema.safeParse({ limit: 0 }).success).toBe(false);
-  });
-
-  it('lets an agent unassign an owner but never name one', () => {
-    // Unassigning is the one direction that can only reduce automation
-    // eligibility; naming an owner points the predicate somewhere new.
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', ownerId: '' }).success).toBe(true);
-    expect(TaskCreateToolInputSchema.safeParse({ title: 'x', ownerId: '' }).success).toBe(true);
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', ownerId: 'user-2' }).success).toBe(
-      false
-    );
-    expect(TaskCreateToolInputSchema.safeParse({ title: 'x', ownerId: 'user-2' }).success).toBe(
-      false
-    );
-    // `me` is a list filter, not a user id — it must not sneak through either.
-    expect(TaskUpdateToolInputSchema.safeParse({ taskId: 't1', ownerId: 'me' }).success).toBe(
-      false
-    );
-    expect(TaskListToolInputSchema.safeParse({ ownerId: 'me' }).success).toBe(true);
-    expect(TaskListToolInputSchema.safeParse({ ownerId: 'user-2' }).success).toBe(true);
-  });
-
-  it('resolves "me" in the list filter against the signed-in operator', () => {
-    expect(buildTaskListFilter({ ownerId: 'me' }, 'user-1')).toEqual({
-      ownerId: 'user-1',
-      limit: 20,
-    });
-    // Empty string means unassigned and must survive as itself.
-    expect(buildTaskListFilter({ ownerId: '' }, 'user-1')).toEqual({ ownerId: '', limit: 20 });
-    // An omitted owner must not become the operator: that would silently hide
-    // every task belonging to a teammate.
-    expect(buildTaskListFilter({}, 'user-1')).toEqual({ limit: 20 });
-  });
-
-  it('maps the update input onto the document patch', () => {
-    expect(
-      buildTaskUpdateInput(
-        {
-          taskId: 't1',
-          priority: 'none',
-          labels: ['Bug', 'bug'],
-          project: { kind: 'github', repo: 'o/r' },
-          pullRequestUrl: 'https://github.com/o/r/pull/1',
-        },
-        'session-1' as SessionId
-      )
-    ).toEqual({
-      // 'none' is how a caller clears a priority; null is what the document takes.
-      priority: null,
-      labels: ['Bug', 'bug'],
-      projects: [{ kind: 'github', repoFullName: 'o/r', branch: 'main' }],
-      pullRequest: {
-        url: 'https://github.com/o/r/pull/1',
-        provider: 'github',
-        originSessionId: 'session-1',
-      },
-    });
-    // An untouched field must stay absent rather than be written as undefined,
-    // or a no-op update would clear it.
-    expect(
-      buildTaskUpdateInput({ taskId: 't1', status: 'done' }, 'session-1' as SessionId)
-    ).toEqual({ status: 'done' });
-  });
-
-  it('keeps a local project worktree flag and drops it when unset', () => {
-    expect(toTaskProjectRef({ kind: 'local', projectId: 'p1', worktree: true })).toEqual({
-      kind: 'local',
-      localProjectId: 'p1',
-      useWorktree: true,
-    });
-    expect(toTaskProjectRef({ kind: 'local', projectId: 'p1' })).toEqual({
-      kind: 'local',
-      localProjectId: 'p1',
-    });
-  });
-
-  it('allows an empty oldString so an agent can append a section', () => {
-    expect(
-      TaskEditBodyToolInputSchema.safeParse({ taskId: 't1', oldString: '', newString: '## New' })
-        .success
-    ).toBe(true);
-    expect(TaskEditBodyToolInputSchema.safeParse({ taskId: 't1', oldString: 'a' }).success).toBe(
-      false
-    );
-  });
-
-  it('requires comment text', () => {
-    expect(TaskCommentToolInputSchema.safeParse({ taskId: 't1', body: 'done' }).success).toBe(true);
-    expect(TaskCommentToolInputSchema.safeParse({ taskId: 't1', body: '   ' }).success).toBe(false);
-  });
-
-  it('derives the provider from the pull request URL', () => {
-    expect(resolveTaskPrProvider('https://github.com/o/r/pull/1')).toBe('github');
-    expect(resolveTaskPrProvider('https://gitlab.com/o/r/-/merge_requests/1')).toBe('gitlab');
   });
 });

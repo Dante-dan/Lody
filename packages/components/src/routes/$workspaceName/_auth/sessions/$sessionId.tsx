@@ -12,6 +12,8 @@ export type SessionDetailSearch = {
   pr?: number;
   /** When true, opens the full-screen Browser view on mobile. */
   browser?: boolean;
+  /** When true, opens the full-screen iOS Simulator view on mobile. */
+  simulator?: boolean;
 };
 
 const SessionDetailRoute = () => {
@@ -46,6 +48,7 @@ const SessionDetailRoute = () => {
         urlTab={search.tab}
         urlPrNumber={search.pr}
         urlBrowser={search.browser}
+        urlSimulator={search.simulator}
       />
     </AppThemeShell>
   );
@@ -76,6 +79,7 @@ export const Route = createFileRoute('/$workspaceName/_auth/sessions/$sessionId'
     tab: typeof search.tab === 'string' ? search.tab : undefined,
     pr: parsePrNumber(search.pr),
     browser: parseBrowserFlag(search.browser),
+    simulator: parseBrowserFlag(search.simulator),
   }),
   /* Entry-scoped last-active-tab restoration. An ABSENT `?tab` means "no
      explicit choice" (external entries: sidebar rows, notifications, pasted
@@ -84,8 +88,8 @@ export const Route = createFileRoute('/$workspaceName/_auth/sessions/$sessionId'
      always writes an explicit value — the parent tab included
      (`formatExplicitSessionTabSearch`) — so a user's return to the parent is
      never re-restored, and the replace keeps tab-less entries out of the
-     history stack. This is the only non-user `?tab` writer; `SessionDetail`
-     itself never rewrites the URL from derived state. */
+     history stack. SessionDetail may also replace a positively closed current
+     tab with an open neighbour or `empty`; missing metadata never redirects. */
   beforeLoad: ({ params, search }) => {
     if (search.tab !== undefined) {
       return;

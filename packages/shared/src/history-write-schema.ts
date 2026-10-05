@@ -1,10 +1,12 @@
 import { z } from 'zod';
+import { MessageAuthorSchema } from './message-author';
 import {
   SessionHistoryInputConfigSchema,
   MessageContentSchema,
   PlanEntrySchema,
   normalizeLegacyAcpSessionConfig,
 } from './message-schemas';
+import { SessionTurnTokenUsageSchema } from './session-data/token-usage';
 
 /** New writes only. Never parse/rewrite the stored history through this schema. */
 export const HistoryEntryWriteSchema = z.object({
@@ -20,6 +22,7 @@ export const HistoryEntryWriteSchema = z.object({
   permissionWaitMs: z.number().optional(),
   status: z
     .enum([
+      'prepared',
       'pending',
       'pending_apply',
       'delivery_unknown',
@@ -35,6 +38,7 @@ export const HistoryEntryWriteSchema = z.object({
     .optional(),
   read: z.boolean().optional(),
   userId: z.string().optional(),
+  author: MessageAuthorSchema.optional(),
   modelInfo: z
     .object({
       modelId: z.string(),
@@ -43,6 +47,7 @@ export const HistoryEntryWriteSchema = z.object({
       _meta: z.record(z.string(), z.unknown()).nullable().optional(),
     })
     .optional(),
+  tokenUsage: SessionTurnTokenUsageSchema.optional(),
   fileDiff: z
     .array(
       z.object({

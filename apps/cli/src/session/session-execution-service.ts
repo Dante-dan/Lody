@@ -1,6 +1,5 @@
-import { readSessionHistory } from '@lody/shared/session-data';
-import { readLatestTurn } from '@lody/shared/session-data';
 import {
+  type AcpModelControls,
   type ACPSessionId,
   type AgentConfigId,
   type AgentConfigCliType,
@@ -23,6 +22,7 @@ import {
   type MachineAcpAuthenticateResponse,
   type MachineAcpAuthenticationProgressMessage,
   type MachineId,
+  type MachinePiExtensionsResponse,
   type MachinePingRequestValidated,
   type MachinePingResponse,
   type MachineLifecycleCapability,
@@ -35,6 +35,8 @@ import {
   resolveBaseBranchPreference,
   resolveProjectGitHubRepo,
   getSessionRoomId,
+  type AcpCapabilityCacheEntry,
+  decideAcpCapabilityRefreshCache,
   getServerNow,
   SessionCreateRequestValidated,
   SessionHistoryInput,
@@ -42,6 +44,7 @@ import {
   type SessionInputBlock,
   type SessionTurnInputConfig,
   type SessionMeta,
+  type SessionSteerOperationRecord,
   SessionStatusFactory,
   SessionChatRequestValidated,
   SessionCancelRequestValidated,
@@ -61,7 +64,7 @@ import {
   serializeCustomAcpLaunchSpec,
 } from '@lody/shared';
 import type { ContentBlock } from '@agentclientprotocol/sdk';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { ModelInfo } from '@lody/shared';
 import { Cause, Data, Effect, Exit, Fiber, type Scope } from 'effect';
 import {
@@ -92,6 +95,7 @@ import {
 } from '@/agent/managed-agent-runtime';
 import type { FetchAcpCapabilitiesOptions } from '@/agent/acp-capabilities';
 import { AcpAuthenticationRequiredError, type SteerOutcomeResult } from '@/agent/agent-client';
+import { discoverManagedPiExtensions } from '@/agent/pi-extensions';
 import type { GoalPromptControl } from '@/agent/goal-control';
 import {
   AcpAuthenticationManager,
@@ -101,11 +105,15 @@ import { formatErrorMessage } from '@/utils/format-error';
 import type { Logger } from '@/utils/logger';
 import { startTraceSpan, traceAsync } from '@/utils/trace-span';
 import { captureCli } from '@/lib/analytics/posthog';
-import type { SessionActivePresencePhase } from '@/lib/loro/session-active-presence';
+import type {
+  SessionActivePresencePhase,
+  SessionInitializationStall,
+} from '@/lib/loro/session-active-presence';
 import type { SessionConfig } from './types';
 import type { ISession, SessionManager } from './session-manager';
 import type { LoroDocumentManager, SessionDocument } from '@/lib/loro/doc';
 import { subscribeSessionChanges } from '@/lib/loro/doc';
+import { createSessionBackend, getSteerOperationId, type SessionBackend } from './session-backend';
 import { buildPrompt, normalizeSessionInputBlocks } from './session-execution-helpers';
 import type { MemoryPressureEvictionResult } from '@/lib/session-gc-manager';
 import {
@@ -185,14 +193,9 @@ const SILENT_TURN_FAILURE_MESSAGE =
   'new session if this conversation has grown too long.';
 
 type TurnFinalizationEffects = {
-  finalizeACPState: (
-    sessionId: SessionId,
-    turnId?: string,
-    options?: { settleContextCompactionAsFailed?: boolean }
-  ) => Promise<void>;
+  finalizeACPState: (sessionId: SessionId, turnId?: string) => Promise<void>;
   persistCodeCollabTurnDiffs?: (sessionId: SessionId, turnId: string) => Promise<boolean>;
   flushSessionUsage: (sessionId: SessionId) => Promise<void>;
-  syncSessionBranchName: (sessionId: SessionId, session: ISession) => Promise<string | null>;
   updateSessionDiffStats: (
     sessionId: SessionId,
     session: ISession,
@@ -290,6 +293,8 @@ type TurnRuntimeState = {
   /** One drain deadline shared by Stop and the cancellation finalizer. */
   cancellationDrain?: Promise<void>;
   steerWaitController?: AbortController;
+  /** Submitted handoff steer whose verdict may trail the yielded prompt's answer. */
+  pendingHandoffSteerOutcome?: Promise<SteerOutcomeResult>;
   pendingSteerConfig?: Set<Promise<void>>;
   interruptRequested: boolean;
   terminateSessionOnCancel: boolean;
@@ -303,6 +308,14 @@ type TurnRuntimeState = {
   /** Serialized ancillary finalization for yielded logical turns. */
   yieldedFinalization: Promise<void>;
   pendingSession?: Promise<ISession>;
+  /**
+   * Latched when the initialization stall watchdog halted this turn. The halt is
+   * a FAILURE, not a cancellation, so the scope finalizer takes
+   * `finalizeStalledInitializationEffect` instead of
+   * `finalizeCancelledTurnEffect` — the race interrupts the losing body fiber,
+   * which would otherwise read as a user cancellation.
+   */
+  initializationStalled: boolean;
   fiber?: Fiber.RuntimeFiber<unknown, unknown>;
 };
 
@@ -450,6 +463,20 @@ class SessionTurnCancelled extends Data.TaggedError('SessionTurnCancelled')<{
   turnId: string;
 }> {}
 
+/**
+ * User-visible copy for a turn stopped by the initialization stall watchdog.
+ * Names the stage that went silent and how long it was given, so the message is
+ * actionable rather than a bare "initialization failed".
+ */
+const formatInitializationStallMessage = (stall: SessionInitializationStall): string => {
+  const seconds = (ms: number) => Math.round(ms / 1000);
+  return (
+    `Session initialization stopped making progress while ${stall.description}: ` +
+    `no change for ${seconds(stall.stalledMs)}s (limit ${seconds(stall.budgetMs)}s). ` +
+    'The turn was stopped instead of waiting indefinitely; send it again to retry.'
+  );
+};
+
 class SessionTurnHalted extends Data.TaggedError('SessionTurnHalted')<{
   sessionId: SessionId;
   reason: ChatFailedReason;
@@ -567,6 +594,7 @@ export type SessionExecutionServiceDeps = {
     modelInfo: ModelInfo | undefined,
     userTurnId?: string
   ) => Promise<void>;
+  syncSessionBranchName: (sessionId: SessionId, session: ISession) => Promise<string | null>;
   turnFinalization: TurnFinalizationEffects;
   recordChatFailure: (
     sessionDoc: SessionDocument,
@@ -613,10 +641,24 @@ export type SessionExecutionServiceDeps = {
     availableCommands?: AcpCommandSummary[];
     sessionFork: boolean;
     acknowledgedSteer: boolean;
+    sessionTitle?: boolean;
     goalActions?: SessionGoalAction[];
     modelReasoningEfforts?: Record<string, string[]>;
+    modelCapabilities?: Record<string, AcpModelControls>;
     capabilitySourceVersion?: string;
   }>;
+  /**
+   * The `capabilitySourceVersion` a probe would stamp right now, resolved without
+   * starting an agent. `undefined` when it cannot be known without that work, in
+   * which case the persisted entry is never reused.
+   */
+  resolveAcpCapabilitySourceVersion: (input: {
+    cliType: AgentConfigCliType;
+    agentType: string;
+    customAcp?: CustomAcpLaunchSpec;
+    runtimeOverrides?: BuiltinRuntimeOverrides;
+    env?: Record<string, string>;
+  }) => Promise<string | undefined>;
   /** Evict idle sessions if system memory is under pressure */
   evictForMemoryPressure: (excludeSessionId?: SessionId) => Promise<MemoryPressureEvictionResult>;
 };
@@ -693,7 +735,10 @@ type AcpAuthenticationOptions = {
 };
 
 type ResolvedMachineAcpCapabilitiesRefreshRequest = MachineAcpCapabilitiesRefreshRequestValidated &
-  Pick<AgentConfigMeta, 'cliType' | 'agentType' | 'customAcp' | 'runtimeOverrides' | 'env'>;
+  Pick<
+    AgentConfigMeta,
+    'cliType' | 'agentType' | 'customAcp' | 'runtimeOverrides' | 'env' | 'codexAuth'
+  >;
 
 const summarizeAcpAuthMethod = (method: unknown): MachineAcpAuthMethodSummary => {
   const record =
@@ -751,6 +796,15 @@ export class SessionExecutionService {
   private readonly canceledTurnBySession = new Map<SessionId, string>();
   private readonly currentTurnBySession = new Map<SessionId, string>();
   private readonly turnRuntimeBySession = new Map<SessionId, TurnRuntimeState>();
+  /**
+   * One waiter per session while a visible turn is initializing; see
+   * {@link awaitInitializationStall}. Registered for the whole turn because the
+   * watchdog only ever fires while the published status is `initializing`.
+   */
+  private readonly initializationStallWaiters = new Map<
+    SessionId,
+    (stall: SessionInitializationStall) => void
+  >();
   private readonly rewriteBarrierSessions = new Set<SessionId>();
   private readonly rewriteConflictLeaseSessions = new Set<SessionId>();
   private readonly turnReleaseWaiters = new Map<SessionId, Map<string, Set<() => void>>>();
@@ -775,6 +829,14 @@ export class SessionExecutionService {
   // a fresh CLI subprocess and wait a few seconds; running it twice in parallel
   // doubles process cost and races the final `updateAcpCapabilities` write.
   private readonly inFlightAcpRefresh = new Map<string, InFlightAcpRefreshEntry>();
+  /**
+   * Fingerprint of the launch inputs — env included — behind each capability
+   * entry this process wrote. Memory only, on purpose: the entry itself lives in
+   * the Machine Flock document, which syncs to the cloud, and even a hash of a
+   * token is a credential derivative a low-entropy token can be recovered from.
+   * An empty map after restart just means each config probes once.
+   */
+  private readonly acpCapabilityLaunchInputFingerprints = new Map<AgentConfigId, string>();
 
   // Coalesce concurrent install requests for the same agent so the user clicking
   // "download" twice (or a refresh racing an install) triggers a single download.
@@ -816,7 +878,15 @@ export class SessionExecutionService {
         run.promptOutcome.then((outcome) => ({ type: 'prompt' as const, outcome })),
         run.successorReady.then(() => ({ type: 'successor' as const })),
       ]);
-      if (settled.type === 'prompt' && !run.successor) runtime.steerWaitController?.abort();
+      // A handoff adapter answers the yielded prompt BEFORE it confirms the
+      // steer. Keep that steer's wait alive: the decision below queues behind
+      // the steer, so `applied` hands off to its successor and a refusal falls
+      // through to completion. Draining here would wait on the next turn.
+      const handoffVerdictPending =
+        !!runtime.pendingHandoffSteerOutcome && !runtime.cancelRequested;
+      if (settled.type === 'prompt' && !run.successor && !handoffVerdictPending) {
+        runtime.steerWaitController?.abort();
+      }
       const decision = await this.steerMutationQueue.enqueue(runtime.sessionId, async () => {
         if (
           this.turnRuntimeBySession.get(runtime.sessionId) !== runtime ||
@@ -1038,7 +1108,8 @@ export class SessionExecutionService {
         // Best-effort: missing meta should not break turn completion.
       }
       try {
-        const latestAssistant = await readLatestTurn(sessionDoc.sessionData.history, 'assistant');
+        const backend = await createSessionBackend(sessionDoc, await sessionDoc.getMetaState());
+        const latestAssistant = await backend.readLatestTurn('assistant');
         diffFileCount = Array.isArray(latestAssistant?.fileDiff)
           ? latestAssistant.fileDiff.length
           : 0;
@@ -1447,7 +1518,12 @@ export class SessionExecutionService {
       error?: string
     ): Promise<SessionSteerResponse> => {
       try {
-        await this.requeueUndeliveredSteer(options.sessionId, options.userTurnId, preparedDoc);
+        await this.requeueUndeliveredSteer(
+          options.sessionId,
+          options.userTurnId,
+          options.expectedTurnId,
+          preparedDoc
+        );
       } catch (promotionError) {
         // Delivery is known even when its recovery write fails. Do not let the
         // provider-submission catch below reclassify it as delivery-unknown.
@@ -1455,6 +1531,36 @@ export class SessionExecutionService {
       }
       return reject(disposition, error);
     };
+    const preserveUndeliveredSteer = async (): Promise<void> => {
+      await this.updateSteerTurnStatus(options.sessionId, options.userTurnId, undefined, {
+        ...(preparedDoc ? { sessionDoc: preparedDoc } : {}),
+        operation: {
+          operationId: getSteerOperationId(options.userTurnId),
+          userTurnId: options.userTurnId,
+          expectedTurnId: options.expectedTurnId,
+          cancellationPolicy: 'preserve',
+          phase: 'settled',
+          delivery: 'not_applied',
+          status: 'pending',
+          updatedAt: Date.now(),
+        },
+      });
+    };
+    const preserveAndReject = async (): Promise<SessionSteerResponse> => {
+      try {
+        await preserveUndeliveredSteer();
+        return reject(
+          'stale-turn',
+          'The target turn was cancelled without promoting pending input'
+        );
+      } catch (error) {
+        return reject('error', formatErrorMessage(error));
+      }
+    };
+    // Resolve cancellation and ownership fences before opening the session doc.
+    // A steer canceled before any provider work has started must remain
+    // `pending_apply`; opening the doc here would make the recovery path rewrite
+    // it to `pending` and turn a canceled steer into an ordinary follow-up.
     const runtime = this.turnRuntimeBySession.get(options.sessionId);
     if (!runtime || !runtime.session) {
       return await rejectAndPromote('no-active-turn');
@@ -1465,13 +1571,11 @@ export class SessionExecutionService {
     if (runtime.cancelRequested) {
       return runtime.pendingInputOnCancel === 'promote'
         ? await rejectAndPromote('no-active-turn')
-        : reject('stale-turn', 'The target turn was cancelled without promoting pending input');
+        : await preserveAndReject();
     }
     if (!runtime.promptInFlight) {
       return await rejectAndPromote('no-active-turn');
     }
-    const waitController = (runtime.steerWaitController ??= new AbortController());
-    const wait = <T>(work: Promise<T>) => waitForSteer(work, waitController.signal);
     if (runtime.userTurnId === options.userTurnId) {
       return {
         type: 'session/steer_response',
@@ -1480,6 +1584,133 @@ export class SessionExecutionService {
         applied: true,
         disposition: 'applied',
       };
+    }
+    const waitController = (runtime.steerWaitController ??= new AbortController());
+    const wait = <T>(work: Promise<T>) => waitForSteer(work, waitController.signal);
+    type ProviderSubmissionRejection =
+      | 'stale-turn'
+      | 'no-active-turn'
+      | 'preserve'
+      | 'owner-transition';
+    const getProviderSubmissionRejection = (
+      expectedPromptRun?: PromptHandoffRun
+    ): ProviderSubmissionRejection | null => {
+      if (
+        this.turnRuntimeBySession.get(options.sessionId) !== runtime ||
+        runtime.turnId !== options.expectedTurnId
+      ) {
+        return 'stale-turn';
+      }
+      if (runtime.cancelRequested) {
+        return runtime.pendingInputOnCancel === 'promote' ? 'no-active-turn' : 'preserve';
+      }
+      // No provider request has been submitted yet, so this guide is still
+      // ours to run as an ordinary follow-up turn.
+      if (!runtime.promptInFlight) {
+        return 'no-active-turn';
+      }
+      if (expectedPromptRun !== undefined && runtime.activePromptRun !== expectedPromptRun) {
+        return 'owner-transition';
+      }
+      return null;
+    };
+    const resolveProviderSubmissionRejection = async (
+      rejection: ProviderSubmissionRejection
+    ): Promise<SessionSteerResponse> => {
+      if (rejection === 'stale-turn') {
+        return await rejectAndPromote('stale-turn');
+      }
+      if (rejection === 'preserve') {
+        return await preserveAndReject();
+      }
+      if (rejection === 'owner-transition') {
+        return await rejectAndPromote(
+          'busy',
+          'Prompt owner is transitioning between logical turns'
+        );
+      }
+      return await rejectAndPromote('no-active-turn');
+    };
+    const rejectBeforeProviderSubmission = async (
+      expectedPromptRun?: PromptHandoffRun
+    ): Promise<SessionSteerResponse | null> => {
+      const rejection = getProviderSubmissionRejection(expectedPromptRun);
+      if (rejection === null) return null;
+      return await resolveProviderSubmissionRejection(rejection);
+    };
+    try {
+      preparedDoc = await wait(
+        this.deps.workspaceDocument.getOrCreateSessionDoc(options.sessionId)
+      );
+      const backend = await wait(createSessionBackend(preparedDoc));
+      const previousOperation = await backend.getSteerOperationRecord(
+        getSteerOperationId(options.userTurnId)
+      );
+      if (previousOperation && previousOperation.phase !== 'prepared') {
+        if (previousOperation.delivery === 'applied') {
+          return {
+            type: 'session/steer_response',
+            sessionId: options.sessionId,
+            userTurnId: options.userTurnId,
+            applied: true,
+            disposition: 'applied',
+          };
+        }
+        if (
+          previousOperation.delivery === 'not_applied' ||
+          previousOperation.delivery === 'not_submitted'
+        ) {
+          if (
+            previousOperation.delivery === 'not_applied' &&
+            previousOperation.status === 'pending' &&
+            previousOperation.cancellationPolicy === 'promote'
+          ) {
+            await this.updateSteerTurnStatus(options.sessionId, options.userTurnId, 'pending', {
+              sessionDoc: preparedDoc,
+              expectedTurnId: previousOperation.expectedTurnId,
+              cancellationPolicy: previousOperation.cancellationPolicy,
+              phase: 'settled',
+              delivery: 'not_applied',
+            });
+          }
+          if (previousOperation.cancellationPolicy === 'preserve') {
+            return reject(
+              'stale-turn',
+              'The target turn was cancelled without promoting pending input'
+            );
+          }
+          await this.reconcileSteerHistory(options.sessionId, preparedDoc);
+          return reject('no-active-turn');
+        }
+        return reject('delivery-unknown', 'This steer operation already has an unknown outcome.');
+      }
+      if (previousOperation && previousOperation.expectedTurnId !== options.expectedTurnId) {
+        return reject('stale-turn', 'The steer operation id was reused for another turn.');
+      }
+      if (
+        previousOperation &&
+        (previousOperation.delivery !== 'not_submitted' ||
+          previousOperation.status !== 'processing')
+      ) {
+        return reject(
+          'delivery-unknown',
+          'This steer operation has an inconsistent prepared state.'
+        );
+      }
+    } catch (error) {
+      if (error instanceof SteerWaitEnded) {
+        if (runtime.cancelRequested) {
+          return runtime.pendingInputOnCancel === 'promote'
+            ? await rejectAndPromote('no-active-turn')
+            : await preserveAndReject();
+        }
+        // The prompt completed while the steer was still preparing. The
+        // handoff queue may not have published `promptInFlight = false` yet,
+        // so this local wait ending is itself the proof that the target turn
+        // is no longer accepting the steer.
+        return await rejectAndPromote('no-active-turn');
+      }
+      return reject('error', formatErrorMessage(error));
     }
     const { agentClient, acpSessionId } = runtime.session;
     const steerCapability = agentClient?.getAcknowledgedSteerCapability();
@@ -1495,35 +1726,17 @@ export class SessionExecutionService {
         );
       }
     }
-    const rejectBeforeProviderSubmission = async (): Promise<SessionSteerResponse | null> => {
-      if (
-        this.turnRuntimeBySession.get(options.sessionId) !== runtime ||
-        runtime.turnId !== options.expectedTurnId
-      ) {
-        return await rejectAndPromote('stale-turn');
-      }
-      if (runtime.cancelRequested) {
-        return runtime.pendingInputOnCancel === 'promote'
-          ? await rejectAndPromote('no-active-turn')
-          : reject('stale-turn', 'The target turn was cancelled without promoting pending input');
-      }
-      // No provider request has been submitted yet, so this guide is still
-      // ours to run as an ordinary follow-up turn.
-      if (!runtime.promptInFlight) {
-        return await rejectAndPromote('no-active-turn');
-      }
-      return null;
-    };
-
     // Everything up to `steerPrompt` returning is provably undelivered; after
     // that only the agent's own inject-or-refuse verdict can say so.
     let providerSubmissionStarted = false;
     let providerApplicationConfirmed = false;
     try {
-      const sessionDoc = await wait(
-        this.deps.workspaceDocument.getOrCreateSessionDoc(options.sessionId)
-      );
+      const sessionDoc =
+        preparedDoc ??
+        (await wait(this.deps.workspaceDocument.getOrCreateSessionDoc(options.sessionId)));
       preparedDoc = sessionDoc;
+      const queuedRejection = await rejectBeforeProviderSubmission();
+      if (queuedRejection) return queuedRejection;
       const inputBlocks = normalizeSessionInputBlocks(
         options.inputConfig.inputBlocks,
         options.inputConfig.prompt ?? ''
@@ -1540,6 +1753,22 @@ export class SessionExecutionService {
       if (preConfigRejection) {
         return preConfigRejection;
       }
+      const operationId = getSteerOperationId(options.userTurnId);
+      await this.updateSteerTurnStatus(options.sessionId, options.userTurnId, 'processing', {
+        sessionDoc,
+        expectedTurnId: options.expectedTurnId,
+        projectStatus: false,
+        operation: {
+          operationId,
+          userTurnId: options.userTurnId,
+          expectedTurnId: options.expectedTurnId,
+          cancellationPolicy: runtime.cancelRequested ? runtime.pendingInputOnCancel : 'promote',
+          phase: 'prepared',
+          delivery: 'not_submitted',
+          status: 'processing',
+          updatedAt: Date.now(),
+        },
+      });
       if (steerCapability.configPolicy === 'apply') {
         const configuring = this.deps.applyAcpModeAndModel(runtime.session, options.inputConfig, {
           sessionDoc,
@@ -1572,13 +1801,41 @@ export class SessionExecutionService {
               'busy',
               'Prompt owner is cancelling or transitioning between logical turns'
             )
-          : reject('stale-turn', 'Prompt owner is cancelling without promoting pending input');
+          : await preserveAndReject();
       }
 
       const previousTurnId = runtime.turnId;
       const previousUserTurnId = runtime.userTurnId;
-      const steerRun = agentClient.steerPrompt(acpSessionId, promptBlocks);
+      await this.updateSteerTurnStatus(options.sessionId, options.userTurnId, 'processing', {
+        sessionDoc,
+        expectedTurnId: options.expectedTurnId,
+        projectStatus: false,
+        phase: 'submitted',
+        delivery: 'unknown',
+      });
+      // The durable submission marker is asynchronous. Stop can win while that
+      // write is in flight, and the wait wrapper cannot abort this particular
+      // operation. Re-check ownership immediately before handing the steer to
+      // the provider so a canceled input is never submitted after the marker.
+      // Keep this final read synchronous: once it passes there must be no
+      // suspension point before `steerPrompt`, or Stop could win in between
+      // the fence and the provider call.
+      const postStatusRejection = getProviderSubmissionRejection(ownedPromptRun);
+      if (postStatusRejection !== null) {
+        return await resolveProviderSubmissionRejection(postStatusRejection);
+      }
       providerSubmissionStarted = true;
+      const steerRun = agentClient.steerPrompt(acpSessionId, promptBlocks);
+      if (steerCapability.upstreamTurn === 'handoff') {
+        const pendingOutcome = steerRun.outcome;
+        runtime.pendingHandoffSteerOutcome = pendingOutcome;
+        const clear = () => {
+          if (runtime.pendingHandoffSteerOutcome === pendingOutcome) {
+            runtime.pendingHandoffSteerOutcome = undefined;
+          }
+        };
+        void pendingOutcome.then(clear, clear);
+      }
       let steerOutcome: SteerOutcomeResult;
       try {
         steerOutcome = await wait(steerRun.outcome);
@@ -1606,7 +1863,8 @@ export class SessionExecutionService {
                     ? 'delivery_unknown'
                     : runtime.cancelRequested
                       ? 'canceled'
-                      : 'handled'
+                      : 'handled',
+                  outcome.outcome === 'applied' ? 'applied' : 'unknown'
                 );
                 if (outcome.outcome === 'unknown')
                   return reject('delivery-unknown', formatErrorMessage(outcome.error));
@@ -1634,10 +1892,7 @@ export class SessionExecutionService {
         if (!runtime.cancelRequested || runtime.pendingInputOnCancel === 'promote') {
           return await rejectAndPromote('no-active-turn', formatErrorMessage(steerOutcome.error));
         }
-        return reject(
-          'stale-turn',
-          'The provider declined the steer after an internal cancellation'
-        );
+        return await preserveAndReject();
       }
       if (steerOutcome.outcome === 'unknown') {
         await this.setSteerHistoryStatus(
@@ -1651,6 +1906,12 @@ export class SessionExecutionService {
       const { application } = steerOutcome;
       providerApplicationConfirmed = true;
       try {
+        await this.updateSteerTurnStatus(options.sessionId, options.userTurnId, 'processing', {
+          sessionDoc,
+          expectedTurnId: options.expectedTurnId,
+          phase: 'submitted',
+          delivery: 'applied',
+        });
         if (
           runtime.cancelRequested ||
           this.turnRuntimeBySession.get(options.sessionId) !== runtime ||
@@ -1678,6 +1939,14 @@ export class SessionExecutionService {
           requesterUserId: options.userId,
           inputConfig: options.inputConfig,
         };
+        const githubSession =
+          runtime.session ?? this.deps.sessionManager.getSession(options.sessionId);
+        if (githubSession)
+          await this.deps.sessionManager.refreshGhTokenForSession(
+            githubSession,
+            undefined,
+            options.userId
+          );
         // Provider acceptance hands the original dispatch forward. A later
         // user-owned steer turn must not cancel or reopen that responsibility.
         await this.settleVisibleTurn(runtime, 'handled', { force: true });
@@ -1772,10 +2041,7 @@ export class SessionExecutionService {
         );
       }
       if (runtime.cancelRequested && runtime.pendingInputOnCancel !== 'promote') {
-        return reject(
-          'stale-turn',
-          'The target turn was cancelled without promoting pending input'
-        );
+        return await preserveAndReject();
       }
       // Failures before `steerPrompt` returns are local and therefore
       // provably unsubmitted. Provider-side ambiguity is represented only by
@@ -1796,6 +2062,7 @@ export class SessionExecutionService {
   private async requeueUndeliveredSteer(
     sessionId: SessionId,
     userTurnId: string,
+    expectedTurnId: string,
     sessionDoc?: SessionDocument
   ): Promise<void> {
     try {
@@ -1815,7 +2082,13 @@ export class SessionExecutionService {
       if (sessionDoc && !(await this.markSteerTurnPending(sessionDoc, userTurnId))) {
         return;
       }
-      await this.updateSteerTurnStatus(sessionId, userTurnId, 'pending');
+      await this.updateSteerTurnStatus(sessionId, userTurnId, 'pending', {
+        sessionDoc,
+        expectedTurnId,
+        cancellationPolicy: 'promote',
+        phase: 'settled',
+        delivery: 'not_applied',
+      });
       this.deps.logger.info(
         `[${sessionId}] Undelivered steer ${userTurnId} requeued as a follow-up turn`
       );
@@ -1842,8 +2115,9 @@ export class SessionExecutionService {
     sessionDoc: SessionDocument,
     userTurnId: string
   ): Promise<boolean> {
+    const backend = await createSessionBackend(sessionDoc);
     let queueable = true;
-    await sessionDoc.sessionData.commands
+    await backend
       .applyHistoryAction({
         kind: 'user-status',
         turnId: userTurnId,
@@ -1859,15 +2133,93 @@ export class SessionExecutionService {
   private async updateSteerTurnStatus(
     sessionId: SessionId,
     userTurnId: string,
-    status: NonNullable<SessionMeta['steerTurnStatuses']>[string] | undefined
+    status: NonNullable<SessionMeta['steerTurnStatuses']>[string] | undefined,
+    options: {
+      sessionDoc?: SessionDocument;
+      expectedTurnId?: string;
+      cancellationPolicy?: SessionSteerOperationRecord['cancellationPolicy'];
+      phase?: SessionSteerOperationRecord['phase'];
+      delivery?: SessionSteerOperationRecord['delivery'];
+      projectStatus?: boolean;
+      operation?: SessionSteerOperationRecord;
+    } = {}
   ): Promise<void> {
     await this.steerStatusQueue.enqueue(sessionId, async () => {
-      const meta = await this.getSessionMeta(sessionId);
-      const statuses = { ...meta?.steerTurnStatuses };
-      if (statuses[userTurnId] === status) return;
+      const sessionDoc = options.sessionDoc;
+      const meta = sessionDoc ? undefined : await this.getSessionMeta(sessionId);
+      const backend = sessionDoc ? await createSessionBackend(sessionDoc) : undefined;
+      const statuses = {
+        ...(backend ? await backend.getSteerTurnStatuses() : meta?.steerTurnStatuses),
+      };
+      const statusChanged = statuses[userTurnId] !== status;
       if (status === undefined) delete statuses[userTurnId];
       else statuses[userTurnId] = status;
-      await this.upsertSessionMeta(sessionId, { steerTurnStatuses: statuses });
+
+      const operationId = getSteerOperationId(userTurnId);
+      const existing = backend
+        ? await backend.getSteerOperationRecord(operationId)
+        : meta?.steerOperationLedger?.[operationId];
+      let operation = options.operation ?? existing;
+      if (status === undefined) {
+        operation = options.operation ?? existing;
+      } else if (operation) {
+        operation = {
+          ...operation,
+          status,
+          cancellationPolicy: options.cancellationPolicy ?? operation.cancellationPolicy,
+          phase:
+            options.operation?.phase ??
+            options.phase ??
+            (status === 'processing' ? 'submitted' : 'settled'),
+          delivery:
+            options.operation?.delivery ??
+            options.delivery ??
+            (status === 'pending'
+              ? 'not_applied'
+              : status === 'delivery_unknown'
+                ? 'unknown'
+                : status === 'processing'
+                  ? operation.delivery === 'applied'
+                    ? 'applied'
+                    : 'unknown'
+                  : operation.delivery),
+          updatedAt: Date.now(),
+        };
+      } else if (options.expectedTurnId) {
+        operation = {
+          operationId,
+          userTurnId,
+          expectedTurnId: options.expectedTurnId,
+          cancellationPolicy: options.cancellationPolicy ?? 'promote',
+          phase: options.phase ?? 'settled',
+          delivery: options.delivery ?? (status === 'pending' ? 'not_applied' : 'unknown'),
+          status,
+          updatedAt: Date.now(),
+        };
+      }
+
+      if (!statusChanged && !existing && !operation) return;
+      if (backend) {
+        await backend.setSteerOperationRecord(operationId, operation);
+        if (statusChanged && options.projectStatus !== false) {
+          await backend.replaceSteerTurnStatuses(statuses);
+        }
+        return;
+      }
+
+      // A steer can be canceled while opening the history document is stalled.
+      // Keep its control-plane recovery state durable without waiting for the
+      // history backend; the next reconciliation pass will project it through
+      // the bound backend once the document is available.
+      const operationLedger = { ...(meta?.steerOperationLedger ?? {}) };
+      if (operation) operationLedger[operationId] = operation;
+      else delete operationLedger[operationId];
+      await this.upsertSessionMeta(sessionId, {
+        ...(statusChanged && options.projectStatus !== false
+          ? { steerTurnStatuses: statuses }
+          : {}),
+        steerOperationLedger: operationLedger,
+      });
     });
   }
 
@@ -1878,36 +2230,140 @@ export class SessionExecutionService {
 
   private async setSteerHistoryStatus(
     sessionId: SessionId,
-    sessionDoc: Pick<SessionDocument, 'sessionData'>,
+    sessionDoc: SessionDocument,
     userTurnId: string,
-    status: 'processing' | 'handled' | 'failed' | 'canceled' | 'delivery_unknown'
+    status: 'processing' | 'handled' | 'failed' | 'canceled' | 'delivery_unknown',
+    delivery?: SessionSteerOperationRecord['delivery']
   ): Promise<void> {
-    await this.updateSteerTurnStatus(sessionId, userTurnId, status);
+    await this.updateSteerTurnStatus(sessionId, userTurnId, status, {
+      sessionDoc,
+      ...(delivery ? { delivery } : {}),
+    });
     await this.reconcileSteerHistory(sessionId, sessionDoc);
   }
 
   /** Results can arrive before the producer's history; metadata retains only their identity/state. */
-  async reconcileSteerHistory(
-    sessionId: SessionId,
-    sessionDoc: Pick<SessionDocument, 'sessionData'>
-  ): Promise<void> {
+  async reconcileSteerHistory(sessionId: SessionId, sessionDoc: SessionDocument): Promise<void> {
     await this.steerStatusQueue.enqueue(sessionId, async () => {
       const meta = await this.getSessionMeta(sessionId);
-      const statuses = { ...meta?.steerTurnStatuses };
+      const backend = await createSessionBackend(sessionDoc, meta);
+      const statuses = { ...(await backend.getSteerTurnStatuses()) };
       let changed = false;
+      const hasActiveTurn = this.getExecutionSnapshot(sessionId).hasActiveTurn;
+      const ledger = { ...((await backend.getSteerOperationLedger()) ?? {}) };
+      for (const [operationId, existing] of Object.entries(ledger)) {
+        if (hasActiveTurn) continue;
+        if (existing.phase === 'prepared' && existing.delivery === 'not_submitted') {
+          const operation: SessionSteerOperationRecord = {
+            ...existing,
+            phase: 'settled',
+            delivery: 'not_applied',
+            status: 'pending',
+            updatedAt: Date.now(),
+          };
+          await backend.setSteerOperationRecord(operationId, operation);
+          ledger[operationId] = operation;
+          if (existing.cancellationPolicy === 'promote') {
+            statuses[existing.userTurnId] = 'pending';
+          } else {
+            delete statuses[existing.userTurnId];
+          }
+          changed = true;
+          continue;
+        }
+        if (existing.phase === 'submitted' && existing.delivery === 'applied') {
+          const operation: SessionSteerOperationRecord = {
+            ...existing,
+            phase: 'settled',
+            status: 'handled',
+            updatedAt: Date.now(),
+          };
+          await backend.setSteerOperationRecord(operationId, operation);
+          ledger[operationId] = operation;
+          statuses[existing.userTurnId] = 'handled';
+          changed = true;
+          continue;
+        }
+        if (existing.phase === 'submitted' && existing.delivery === 'not_applied') {
+          const operation: SessionSteerOperationRecord = {
+            ...existing,
+            phase: 'settled',
+            status: existing.cancellationPolicy === 'promote' ? 'pending' : 'canceled',
+            updatedAt: Date.now(),
+          };
+          await backend.setSteerOperationRecord(operationId, operation);
+          ledger[operationId] = operation;
+          if (existing.cancellationPolicy === 'promote') {
+            statuses[existing.userTurnId] = 'pending';
+          } else {
+            delete statuses[existing.userTurnId];
+          }
+          changed = true;
+          continue;
+        }
+        if (existing.phase === 'submitted' && existing.delivery === 'unknown') {
+          const operation: SessionSteerOperationRecord = {
+            ...existing,
+            phase: 'settled',
+            delivery: 'unknown',
+            status: 'delivery_unknown',
+            updatedAt: Date.now(),
+          };
+          await backend.setSteerOperationRecord(operationId, operation);
+          ledger[operationId] = operation;
+          statuses[existing.userTurnId] = 'delivery_unknown';
+          changed = true;
+        }
+      }
       for (const [turnId, status] of Object.entries(statuses)) {
-        const turn = await sessionDoc.sessionData.history.readTurn(turnId);
+        const turn = await backend.readTurn(turnId);
         if (turn.state !== 'ready' || turn.turn.role !== 'user') continue;
+        const operationId = getSteerOperationId(turnId);
+        const operation = ledger[operationId];
+        const currentStatus = turn.turn.status;
+        if (
+          status === 'pending' &&
+          currentStatus !== 'pending_apply' &&
+          currentStatus !== 'pending' &&
+          currentStatus !== 'seen'
+        ) {
+          // The exact history row already crossed the requeue fence (for
+          // example, another worker started it). Do not leave a durable
+          // pending mirror that can resurrect an input after that point.
+          delete statuses[turnId];
+          changed = true;
+          continue;
+        }
         const terminal =
           !!turn.turn.status &&
           !['pending_apply', 'pending', 'seen', 'processing'].includes(turn.turn.status);
         const projectedStatus =
-          status === 'processing' && !this.getExecutionSnapshot(sessionId).hasActiveTurn
-            ? 'canceled'
+          status === 'processing' && !hasActiveTurn
+            ? operation?.delivery === 'applied'
+              ? 'handled'
+              : operation?.phase === 'settled' &&
+                  operation.delivery === 'not_applied' &&
+                  operation.status === 'pending'
+                ? 'pending'
+                : 'delivery_unknown'
             : status;
+        if (projectedStatus !== status) {
+          statuses[turnId] = projectedStatus;
+          changed = true;
+        }
+        if (status === 'processing' && !hasActiveTurn && operation?.delivery === 'applied') {
+          const recovered: SessionSteerOperationRecord = {
+            ...operation,
+            phase: 'settled',
+            status: 'handled',
+            updatedAt: Date.now(),
+          };
+          await backend.setSteerOperationRecord(operationId, recovered);
+          ledger[operationId] = recovered;
+        }
         let matched = false;
         if (!terminal) {
-          const result = await sessionDoc.sessionData.commands.applyHistoryAction({
+          const result = await backend.applyHistoryAction({
             kind: 'user-status',
             turnId,
             status: projectedStatus,
@@ -1925,7 +2381,7 @@ export class SessionExecutionService {
           changed = true;
         }
       }
-      if (changed) await this.upsertSessionMeta(sessionId, { steerTurnStatuses: statuses });
+      if (changed) await backend.replaceSteerTurnStatuses(statuses);
     });
   }
 
@@ -2043,6 +2499,7 @@ export class SessionExecutionService {
       cancelFinalized: false,
       interruptRequested: false,
       terminateSessionOnCancel: false,
+      initializationStalled: false,
       ...(options.onTurnSettled
         ? { settlement: { callback: options.onTurnSettled, completed: false } }
         : {}),
@@ -2224,6 +2681,58 @@ export class SessionExecutionService {
       });
   }
 
+  /**
+   * Release what a stalled initialization was holding.
+   *
+   * The stall is a failure, not a cancellation, so it must not go through
+   * `finalizeCancelledTurnEffect` — that would mark the user's turn cancelled.
+   * But that finalizer also owned the pending-create cleanup, and the stall is
+   * the first halt that can land WHILE `SessionManager.createSession` is still
+   * in flight, so the release has to happen here instead.
+   *
+   * Detaching matters more than terminating: the create is cached in
+   * `pendingSessionCreates` keyed by session id, so leaving it there hands the
+   * user's retry the very same wedged promise and stalls it again — the
+   * documented retry path would not actually recover. Nothing here awaits the
+   * wedged promise; if it ever settles, the manager's reaper terminates the
+   * Session it produced.
+   */
+  private finalizeStalledInitializationEffect(
+    runtime: TurnRuntimeState
+  ): Effect.Effect<void, never, never> {
+    const self = this;
+    return Effect.gen(function* () {
+      self.deps.clearActiveTurnId(runtime.sessionId, runtime.turnId);
+
+      // A Session that already materialized is owned by this turn and nobody
+      // else will stop it.
+      const session = runtime.session;
+      if (session) {
+        yield* self.ignoreWithWarning(
+          runtime.sessionId,
+          'Failed to terminate session after initialization stalled',
+          self.tryPromise(() => session.terminate(true))
+        );
+        return;
+      }
+
+      const detached = self.deps.sessionManager.abandonPendingSessionCreate(
+        runtime.sessionId,
+        'initialization-stalled'
+      );
+      if (detached || !runtime.pendingSession) {
+        return;
+      }
+      // The pending promise did not come from the dedupe map (nothing to
+      // detach), so reap it directly rather than leaving a possible orphan.
+      self.terminatePendingSessionWhenReady({
+        sessionId: runtime.sessionId,
+        turnId: runtime.turnId,
+        pendingSession: runtime.pendingSession,
+      });
+    });
+  }
+
   private drainCancelledPrompt(session: ISession, runtime?: TurnRuntimeState): Promise<void> {
     if (runtime?.cancellationDrain) return runtime.cancellationDrain;
     const requests = () =>
@@ -2289,6 +2798,67 @@ export class SessionExecutionService {
       ).pipe(Effect.asVoid),
       release,
     };
+  }
+
+  /**
+   * Fail a visible turn whose initialization stopped making progress.
+   *
+   * Called by `SessionActivePresenceController`'s stall watchdog. Resolving the
+   * waiter makes {@link awaitInitializationStall} win its race against the turn
+   * body, which records a user-visible `session_init_failed` and closes the turn
+   * scope — releasing presence, the ACP replay suppression, and the runtime
+   * registration that would otherwise keep the session un-collectable forever.
+   */
+  notifyInitializationStalled(sessionId: SessionId, stall: SessionInitializationStall): void {
+    const runtime = this.turnRuntimeBySession.get(sessionId);
+    if (runtime) {
+      runtime.initializationStalled = true;
+    }
+    const waiter = this.initializationStallWaiters.get(sessionId);
+    if (!waiter) {
+      // Presence is only ever started inside a visible turn, so this means the
+      // turn settled between the watchdog tick and this call. Nothing to fail.
+      this.deps.logger.debug(
+        `[${sessionId}] Initialization stall reported with no owning turn; ignoring`
+      );
+      return;
+    }
+    waiter(stall);
+  }
+
+  /**
+   * Never completes unless the initialization stall watchdog fires, at which
+   * point it records the user-visible failure and halts the turn. Raced against
+   * the turn body so a dependency that never returns — the observed case was a
+   * cloud identity lookup that hung for 1h51m — cannot pin the turn open.
+   */
+  private awaitInitializationStall(
+    sessionId: SessionId,
+    sessionDoc: SessionDocument,
+    runtime: TurnRuntimeState
+  ): Effect.Effect<never, unknown, never> {
+    return Effect.async<SessionInitializationStall, never>((resume) => {
+      const waiter = (stall: SessionInitializationStall): void => {
+        resume(Effect.succeed(stall));
+      };
+      this.initializationStallWaiters.set(sessionId, waiter);
+      return Effect.sync(() => {
+        // A newer turn may already own the slot; only retract our own waiter.
+        if (this.initializationStallWaiters.get(sessionId) === waiter) {
+          this.initializationStallWaiters.delete(sessionId);
+        }
+      });
+    }).pipe(
+      Effect.flatMap((stall) =>
+        this.recordKnownChatFailureAndHaltEffect({
+          sessionId,
+          sessionDoc,
+          userTurnId: runtime.userTurnId,
+          reason: 'session_init_failed',
+          message: formatInitializationStallMessage(stall),
+        })
+      )
+    );
   }
 
   private acquireSessionActivePresence(
@@ -2409,9 +2979,7 @@ export class SessionExecutionService {
           options.sessionId,
           'Failed to settle context compaction after cancelled ACP prompt stopped',
           self.tryPromise(async () => {
-            await self.deps.turnFinalization.finalizeACPState(options.sessionId, options.turnId, {
-              settleContextCompactionAsFailed: true,
-            });
+            await self.deps.turnFinalization.finalizeACPState(options.sessionId, options.turnId);
             await self.persistTurnDiffsAndFlushUsage(options.sessionId, options.turnId);
           })
         );
@@ -2629,13 +3197,15 @@ export class SessionExecutionService {
       );
     }
 
+    if (options.runtime.session) {
+      // A best-effort observation must not delay publishing the turn failure.
+      void this.deps.syncSessionBranchName(options.sessionId, options.runtime.session);
+    }
     this.deps.logger.error(options.describe(options.error), options.error);
     if (options.userTurnId) {
       await this.markTurnFailed(options.sessionId, options.sessionDoc, options.userTurnId);
     }
-    await this.handleTurnError(options.sessionId, options.sessionDoc, options.error, {
-      providerPromptSettled: options.runtime.promptStarted && !options.runtime.promptInFlight,
-    });
+    await this.handleTurnError(options.sessionId, options.sessionDoc, options.error);
     await options.onUnhandledError?.(options.error);
   }
 
@@ -2738,18 +3308,13 @@ export class SessionExecutionService {
   private async handleTurnError(
     sessionId: SessionId,
     sessionDoc: SessionDocument,
-    error?: unknown,
-    options?: { providerPromptSettled?: boolean }
+    error?: unknown
   ): Promise<void> {
     const acpError = error ? parseACPError(error) : null;
     const providerDisconnected = error ? isAgentDisconnectedError(error) : false;
     await this.deps.turnFinalization.finalizeACPState(
       sessionId,
-      this.currentTurnBySession.get(sessionId),
-      {
-        settleContextCompactionAsFailed:
-          options?.providerPromptSettled === true || acpError !== null || providerDisconnected,
-      }
+      this.currentTurnBySession.get(sessionId)
     );
     await this.persistCodeCollabTurnDiffsAfterACPFinalization(
       sessionId,
@@ -2895,6 +3460,7 @@ export class SessionExecutionService {
       runtime.workspaceGitStateSynced = true;
     }
     await this.runTurnFinalizationStage(sessionId, turnId, 'syncWorkspaceGitState', async () => {
+      await this.deps.syncSessionBranchName(sessionId, session);
       await this.deps.turnFinalization.syncWorkspaceGitState(sessionId, session);
     });
   }
@@ -3007,25 +3573,24 @@ export class SessionExecutionService {
       return;
     }
 
-    let branchName: string | null = null;
     let preferredStatsBaseBranch = project?.branch;
     if (project?.kind === 'local') {
       preferredStatsBaseBranch =
         (await sessionDoc.getMetaState())?.baseBranch?.trim() || preferredStatsBaseBranch;
     }
 
+    const branchName = await this.runTurnFinalizationStage(
+      sessionId,
+      turnId,
+      'syncSessionBranchName',
+      async () => await this.deps.syncSessionBranchName(sessionId, session)
+    );
+
+    if (await stopIfTurnCancelled('branch synchronization')) {
+      return;
+    }
+
     if (githubProject) {
-      branchName = await this.runTurnFinalizationStage(
-        sessionId,
-        turnId,
-        'syncSessionBranchName',
-        async () => await this.deps.turnFinalization.syncSessionBranchName(sessionId, session)
-      );
-
-      if (await stopIfTurnCancelled('branch synchronization')) {
-        return;
-      }
-
       try {
         const detectedPr = await this.runTurnFinalizationStage(
           sessionId,
@@ -3195,7 +3760,9 @@ export class SessionExecutionService {
             turnRuntime.cancelRequested ||
             self.isTurnCancelled(sessionId, turnRuntime.turnId) ||
             wasInterrupted;
-          if (wasCancelled) {
+          if (turnRuntime.initializationStalled) {
+            yield* self.finalizeStalledInitializationEffect(turnRuntime);
+          } else if (wasCancelled) {
             yield* self.finalizeCancelledTurnEffect({
               sessionId,
               sessionDoc,
@@ -3220,7 +3787,13 @@ export class SessionExecutionService {
               effectiveErrorContext = context;
             };
 
+            let branchObservedSession: ISession | undefined;
             const bindSession = (nextSession: ISession): void => {
+              if (branchObservedSession !== nextSession) {
+                branchObservedSession = nextSession;
+                // Presentation metadata never gates the first agent prompt.
+                void self.deps.syncSessionBranchName(sessionId, nextSession);
+              }
               runtime.session = nextSession;
               runtime.pendingSession = undefined;
             };
@@ -3438,16 +4011,23 @@ export class SessionExecutionService {
                 return undefined;
               });
 
-            yield* body({
-              turnId: runtime.turnId,
-              runtime,
-              setUnhandledErrorContext,
-              bindSession,
-              trackPendingSession,
-              abortIfCancelled,
-              openAssistantEntry,
-              prompt,
-            });
+            // Bound the whole turn against the initialization stall watchdog.
+            // The watchdog only ever fires while the published presence status
+            // is `initializing`, so a turn that reaches `running` races against
+            // an effect that never completes and pays nothing.
+            yield* Effect.raceFirst(
+              body({
+                turnId: runtime.turnId,
+                runtime,
+                setUnhandledErrorContext,
+                bindSession,
+                trackPendingSession,
+                abortIfCancelled,
+                openAssistantEntry,
+                prompt,
+              }),
+              self.awaitInitializationStall(sessionId, sessionDoc, runtime)
+            );
           })
         )
       )
@@ -3559,12 +4139,12 @@ export class SessionExecutionService {
    * entry is repaired instead of re-dispatched.
    */
   private async setUserTurnStatus(
-    sessionDoc: SessionDocument,
+    backend: SessionBackend,
     userTurnId: string,
     status: 'pending' | 'seen' | 'processing' | 'handled' | 'failed' | 'canceled'
   ): Promise<boolean> {
     let matched = false;
-    await sessionDoc.sessionData.commands
+    await backend
       .applyHistoryAction({ kind: 'user-status', turnId: userTurnId, status })
       .then((result) => {
         matched = result.matched ?? false;
@@ -3605,11 +4185,12 @@ export class SessionExecutionService {
     status: 'handled' | 'failed' | 'canceled'
   ): Promise<void> {
     const meta = await this.getSessionMeta(sessionId);
+    const backend = await createSessionBackend(sessionDoc, meta);
     if (meta?.steerTurnStatuses?.[userTurnId] === 'processing') {
       await this.setSteerHistoryStatus(sessionId, sessionDoc, userTurnId, status);
       return;
     }
-    const matched = await this.setUserTurnStatus(sessionDoc, userTurnId, status);
+    const matched = await this.setUserTurnStatus(backend, userTurnId, status);
     if (!matched) {
       this.recordTerminalTurnWithoutEntry(sessionId, userTurnId, status);
     }
@@ -3676,7 +4257,8 @@ export class SessionExecutionService {
     sessionDoc: SessionDocument,
     userTurnId: string
   ): Promise<void> {
-    await this.setUserTurnStatus(sessionDoc, userTurnId, 'processing');
+    const backend = await this.getSessionBackend(sessionDoc, sessionDoc.sessionId);
+    await this.setUserTurnStatus(backend, userTurnId, 'processing');
     await this.upsertSessionMeta(sessionId, {
       // Dispatch producers own `latestUserMsgId`. Execution only claims its
       // own processing slot, so an awaited status write can never overwrite a
@@ -3704,7 +4286,8 @@ export class SessionExecutionService {
       options.sessionId,
       options.sessionDoc,
       options.nextUserTurnId,
-      'processing'
+      'processing',
+      'applied'
     );
     await this.upsertSessionMeta(options.sessionId, {
       ...(options.previousUserTurnId ? { lastHandledUserMsgId: options.previousUserTurnId } : {}),
@@ -3739,7 +4322,15 @@ export class SessionExecutionService {
   }
 
   private async getSessionHistory(sessionDoc: SessionDocument): Promise<SessionHistoryInput[]> {
-    return readSessionHistory(sessionDoc.sessionData.history);
+    const backend = await this.getSessionBackend(sessionDoc, sessionDoc.sessionId);
+    return await backend.readHistory();
+  }
+
+  private async getSessionBackend(
+    sessionDoc: SessionDocument,
+    sessionId: SessionId
+  ): Promise<SessionBackend> {
+    return await createSessionBackend(sessionDoc, await this.getSessionMeta(sessionId));
   }
 
   /**
@@ -4219,12 +4810,13 @@ export class SessionExecutionService {
         const restoreBranch = project?.branch?.trim() || undefined;
         const restoreConfig: SessionConfig = {
           sessionId,
+          agentConfigId: meta?.agentConfigId,
+          codexAuth: storedLaunchConfig.config?.codexAuth,
           workspaceId: message.workspaceId,
           agentCliType: acpSessionConfig.cliType,
           agentType: acpSessionConfig.agentType,
           configOptionValues: acpSessionConfig.configOptionValues,
           mcpServerIds: acpSessionConfig.mcpServerIds ?? [],
-          taskToolsEnabled: acpSessionConfig.taskToolsEnabled === true,
           customAcp: resumeCustomAcp,
           runtimeOverrides: resumeRuntimeOverrides,
           requesterUserId: userId,
@@ -4279,10 +4871,11 @@ export class SessionExecutionService {
             // to resume, even though the user turn is durable in Loro history.
             // This freshly created ACP session has no knowledge of that turn,
             // so reconstruct its context before sending the current request.
-            const history = readSessionHistory(sessionDoc.sessionData.history);
-            if (history.length > 0) {
+            const history = self.getSessionHistory(sessionDoc);
+            const historySnapshot = yield* self.tryPromise(() => history);
+            if (historySnapshot.length > 0) {
               replayPromptResult = buildReplayPromptFromHistory({
-                history,
+                history: historySnapshot,
                 excludeTurnId: message.userTurnId,
               });
               if (replayPromptResult.stats.messagesIncluded > 0) {
@@ -4439,13 +5032,20 @@ export class SessionExecutionService {
         let baseCommitHash: string | null = null;
         let turnStartWorkingTreeDiff: GitWorkingTreeDiffBaseline | null = null;
 
+        // A requester switch re-derives commit identity for this turn only;
+        // the policy lookup never blocks the turn (falls back to owner rules).
+        const gitIdentityOptions = yield* self.tryPromise(async () => {
+          try {
+            return await self.deps.sessionManager.resolveGitIdentityOptions(message.userId);
+          } catch {
+            return { preferMachineIdentity: message.userId === self.deps.userId };
+          }
+        });
         const bindReadySession = (nextSession: ISession): void => {
           activeSession = nextSession;
           session = nextSession;
           ctx.bindSession(nextSession);
-          nextSession.updateGitIdentity(userName, userEmail, message.userId, {
-            preferMachineIdentity: message.userId === self.deps.userId,
-          });
+          nextSession.updateGitIdentity(userName, userEmail, message.userId, gitIdentityOptions);
         };
 
         const sessionInputBlocks = normalizeSessionInputBlocks(
@@ -4475,7 +5075,7 @@ export class SessionExecutionService {
             if (!usedHistoryReplay || !replayPromptResult) {
               return undefined;
             }
-            const history = readSessionHistory(sessionDoc.sessionData.history);
+            const history = yield* self.tryPromise(() => self.getSessionHistory(sessionDoc));
             if (hasRecentResumeNotice(history)) {
               return undefined;
             }
@@ -4505,8 +5105,11 @@ export class SessionExecutionService {
               fileDiff: [],
               items: [noticeItem],
             };
+            const backend = yield* self.tryPromise(() =>
+              self.getSessionBackend(sessionDoc, sessionId)
+            );
             yield* self.tryPromise(() =>
-              sessionDoc.sessionData.commands.applyHistoryAction({
+              backend.applyHistoryAction({
                 kind: 'upsert-turn',
                 turn: systemNotice,
                 beforeLastUser: true,
@@ -4552,9 +5155,6 @@ export class SessionExecutionService {
               project = self.resolveProjectFromMeta(meta, message.project?.branch);
             }
             const githubRepo = resolveProjectGitHubRepo(project);
-            if (!githubRepo) {
-              return undefined;
-            }
             yield* self.tryPromise(() =>
               traceAsync(
                 self.deps.logger,
@@ -5046,7 +5646,6 @@ export class SessionExecutionService {
       agentType: acpSessionConfig.agentType,
       configOptionValues: acpSessionConfig.configOptionValues,
       mcpServerIds: acpSessionConfig.mcpServerIds ?? [],
-      taskToolsEnabled: acpSessionConfig.taskToolsEnabled === true,
       agentConfigId: existingMeta?.agentConfigId,
       customAcp: acpSessionConfig.customAcp,
       runtimeOverrides: acpSessionConfig.runtimeOverrides,
@@ -5104,16 +5703,6 @@ export class SessionExecutionService {
       { tier: 'A' }
     );
     const startSessionStartedAtMs = getServerNow();
-
-    void this.deps.maybeGenerateAndStoreSessionTitle(
-      sessionId,
-      sessionConfig.agentCliType,
-      sessionConfig.agentType,
-      agentConfig.prompt,
-      env,
-      acpSessionConfig.customAcp,
-      acpSessionConfig.runtimeOverrides
-    );
 
     const self = this;
     const turnErrorContext: VisibleSessionTurnUnhandledErrorContext = {
@@ -5267,6 +5856,18 @@ export class SessionExecutionService {
           bindSession(session);
           self.scheduleCreatedSessionCapabilityUpdate(session, sessionConfig);
           yield* abortIfCancelled({ terminateSession: true });
+          // Use the live initialize result, including on the first uncached launch.
+          if (session.getAcpCapabilities?.()?.sessionTitle !== true) {
+            void self.deps.maybeGenerateAndStoreSessionTitle(
+              sessionId,
+              sessionConfig.agentCliType,
+              sessionConfig.agentType,
+              agentConfig.prompt,
+              env,
+              acpSessionConfig.customAcp,
+              acpSessionConfig.runtimeOverrides
+            );
+          }
           // First-turn attachments are materialized under the session workspace.
           // Start this as soon as createSession has registered the workspace, but
           // do not start it earlier or attachments fall back to "unavailable".
@@ -5513,7 +6114,11 @@ export class SessionExecutionService {
               this.currentTurnBySession.get(sessionId) ??
               this.turnRuntimeBySession.get(sessionId)?.turnId;
             if (liveTurnId == null) {
-              const history = readSessionHistory(sessionDoc.sessionData.history);
+              const backend = await createSessionBackend(
+                sessionDoc,
+                await sessionDoc.getMetaState()
+              );
+              const history = await backend.readHistory();
               const hasUnfinishedRequestedTurn = history.some(
                 (entry) =>
                   entry.id === turnId &&
@@ -5532,12 +6137,15 @@ export class SessionExecutionService {
                   `[${sessionId}] Finalizing stale unfinished turn ${turnId} after stop request found no live runtime`
                 );
                 this.deps.clearSessionActivePresence(sessionId);
-                await sessionDoc.sessionData.commands.applyHistoryAction({
+                const finishBackend = await createSessionBackend(
+                  sessionDoc,
+                  await sessionDoc.getMetaState()
+                );
+                await finishBackend.applyHistoryAction({
                   kind: 'finish-assistant',
                   turnId,
                   endedAt: getServerNow(),
                   force: true,
-                  settleContextCompactionAsFailed: true,
                 });
 
                 await this.finalizeCancelledTurn({
@@ -5768,7 +6376,22 @@ export class SessionExecutionService {
         sourceVersion,
         capabilities.modelReasoningEfforts,
         capabilities.acknowledgedSteer,
-        capabilities.goalActions
+        capabilities.goalActions,
+        {
+          sessionTitle: capabilities.sessionTitle,
+          modelCapabilities: capabilities.modelCapabilities,
+        }
+      );
+      this.acpCapabilityLaunchInputFingerprints.set(
+        agentConfigId,
+        fingerprintAcpLaunchInputs({
+          configId: agentConfigId,
+          cliType: config.agentCliType,
+          agentType: config.agentType,
+          env: config.env,
+          customAcp: config.customAcp,
+          runtimeOverrides: config.runtimeOverrides,
+        })
       );
     })().catch((error: unknown) => {
       this.deps.logger.debug(
@@ -5841,6 +6464,8 @@ export class SessionExecutionService {
       };
     }
     const resolvedBase = { ...base, agentType: config.agentType };
+    const profileStore = getCodexProfileStore();
+    const codexProfile = await profileStore.resolve(this.deps.workspaceId, config, true);
 
     const onProgress = (event: AcpAuthenticationProgressEvent): void => {
       if (event.status === 'auth-methods') {
@@ -5871,6 +6496,52 @@ export class SessionExecutionService {
       runtimeOverrides: config.runtimeOverrides,
       env: config.env,
       onProgress,
+      codexProfile,
+      authenticateManagedProfile:
+        codexProfile?.profile.mode === 'api-key'
+          ? async ({ signal, requestInput }) => {
+              const frozenBinding = JSON.stringify(config.codexAuth);
+              const input = await requestInput(
+                {
+                  title: 'Codex API Key',
+                  description: `Confirm the destination: ${codexProfile.profile.mode === 'api-key' ? codexProfile.profile.baseUrl : ''}. The key is stored only on this machine.`,
+                  fields: [{ id: 'apiKey', type: 'secret', label: 'API Key', required: true }],
+                },
+                `Enter an API Key for ${codexProfile.profile.mode === 'api-key' ? codexProfile.profile.baseUrl : ''}`
+              );
+              const assertCurrent = async () => {
+                signal.throwIfAborted();
+                const current = await this.deps.workspaceDocument.getAgentConfigForMachineLaunch(
+                  config.id,
+                  this.deps.machineId
+                );
+                if (!current || JSON.stringify(current.codexAuth) !== frozenBinding)
+                  throw new Error('Provider changed during authentication; try again');
+                assertManagedCodexProfileConfig(current);
+              };
+              await assertCurrent();
+              await profileStore.withApiKeyCandidate(
+                codexProfile,
+                String(input.apiKey ?? ''),
+                async (candidateKey) => {
+                  await this.deps.fetchAcpCapabilities(
+                    config.cliType,
+                    config.agentType,
+                    config.env,
+                    config.customAcp,
+                    config.runtimeOverrides,
+                    {
+                      signal,
+                      codexProfile: { profile: codexProfile, candidateKey },
+                      verifyCodexCredential: true,
+                    }
+                  );
+                  await assertCurrent();
+                },
+                signal
+              );
+            }
+          : undefined,
     });
     if (result.success && result.disposition === 'authenticated') {
       const refreshController = new AbortController();
@@ -5896,6 +6567,12 @@ export class SessionExecutionService {
             customAcp: config.customAcp,
             runtimeOverrides: config.runtimeOverrides,
             env: config.env,
+            codexAuth: config.codexAuth,
+            // Authentication changes what the agent will advertise (models and
+            // config options gated on the account), and the persisted entry was
+            // stamped with the same launch inputs, so only a real probe can tell
+            // the caller whether the new credentials actually work.
+            force: true,
           },
           { signal: refreshController.signal }
         );
@@ -5970,9 +6647,33 @@ export class SessionExecutionService {
         customAcp: config.customAcp,
         runtimeOverrides: config.runtimeOverrides,
         env: config.env,
+        codexAuth: config.codexAuth,
       },
       options
     );
+  }
+
+  async listMachinePiExtensions(configId?: AgentConfigId): Promise<MachinePiExtensionsResponse> {
+    try {
+      let env: Record<string, string> | undefined;
+      if (configId !== undefined) {
+        const config = await this.deps.workspaceDocument.getAgentConfigForMachineLaunch(
+          configId,
+          this.deps.machineId
+        );
+        if (!config || config.cliType !== 'builtin' || config.agentType !== 'pi') {
+          return {
+            success: false,
+            error: 'Provider config is not a builtin Pi provider on this machine.',
+          };
+        }
+        env = config.env;
+      }
+      const discovery = await discoverManagedPiExtensions(env);
+      return { success: true, discovery };
+    } catch (error) {
+      return { success: false, error: formatErrorMessage(error) };
+    }
   }
 
   private async refreshMachineAcpCapabilitiesForConfig(
@@ -5991,10 +6692,26 @@ export class SessionExecutionService {
     );
 
     this.deps.logger.debug(
-      `[acp-capabilities] Refresh requested (cliType=${message.cliType} agentType=${message.agentType})`
+      `[acp-capabilities] Refresh requested (cliType=${message.cliType} agentType=${message.agentType} force=${message.force === true})`
     );
     if (options.signal?.aborted) {
       throw createAcpRefreshAbortError();
+    }
+
+    if (message.force !== true) {
+      let cached: AcpCapabilityCacheEntry | undefined;
+      try {
+        cached = await this.readFreshAcpCapabilityCacheEntry(message);
+      } catch (error) {
+        // Reading the entry opens the same Machine Flock document the probe would
+        // write back to, so a failure here is a failed refresh, reported the same
+        // way. Probing anyway would hide a broken document behind a process spawn.
+        return this.buildFailedAcpRefreshResponse(message, error);
+      }
+      if (cached) {
+        options.signal?.throwIfAborted();
+        return buildAcpCapabilitiesRefreshResponseFromCache(this.deps.machineId, message, cached);
+      }
     }
 
     let entry = this.inFlightAcpRefresh.get(dedupeKey);
@@ -6062,12 +6779,72 @@ export class SessionExecutionService {
     });
   }
 
+  /**
+   * The persisted entry when it still describes what a probe would return.
+   *
+   * A hit requires the exact `capabilitySourceVersion` the current launch inputs
+   * would produce, and that this process wrote the entry from the same launch
+   * inputs — env included, which the source version mostly does not cover — so
+   * editing a runtime override, a custom command, or any env value misses.
+   * Lookup failures propagate to the
+   * caller, which reports them as a failed refresh rather than probing: a broken
+   * Machine Flock document would fail the probe's write-back too.
+   */
+  private async readFreshAcpCapabilityCacheEntry(
+    message: ResolvedMachineAcpCapabilitiesRefreshRequest
+  ): Promise<AcpCapabilityCacheEntry | undefined> {
+    const expectedSourceVersion = await this.deps.resolveAcpCapabilitySourceVersion({
+      cliType: message.cliType,
+      agentType: message.agentType,
+      customAcp: message.customAcp,
+      runtimeOverrides: message.runtimeOverrides,
+      env: message.env,
+    });
+    const recordedFingerprint = this.acpCapabilityLaunchInputFingerprints.get(message.configId);
+    const decision = decideAcpCapabilityRefreshCache({
+      entry: await this.deps.workspaceDocument.getAcpCapabilities(
+        this.deps.machineId,
+        message.configId
+      ),
+      expectedSourceVersion,
+      launchInputs:
+        recordedFingerprint === undefined
+          ? 'unknown'
+          : recordedFingerprint === fingerprintAcpLaunchInputs(message)
+            ? 'matching'
+            : 'changed',
+      nowMs: getServerNow(),
+    });
+    if (!decision.hit) {
+      this.deps.logger.debug(
+        `[acp-capabilities] Cache miss (cliType=${message.cliType} agentType=${message.agentType} reason=${decision.reason})`
+      );
+      return undefined;
+    }
+    this.deps.logger.debug(
+      `[acp-capabilities] Served from cache without starting the agent (cliType=${message.cliType} agentType=${message.agentType} sourceVersion=${expectedSourceVersion})`
+    );
+    return decision.entry;
+  }
+
   private async executeAcpRefresh(
     message: ResolvedMachineAcpCapabilitiesRefreshRequest,
     options: AcpBinaryProgressOptions = {}
   ): Promise<MachineAcpCapabilitiesRefreshResponse> {
     try {
       options.signal?.throwIfAborted();
+      let codexProfile: ResolvedCodexProfile | undefined;
+      if (message.codexAuth) {
+        const config = await this.deps.workspaceDocument.getAgentConfigForMachineLaunch(
+          message.configId,
+          this.deps.machineId
+        );
+        if (!config || JSON.stringify(config.codexAuth) !== JSON.stringify(message.codexAuth))
+          throw new Error('Provider changed during verification');
+        codexProfile = await getCodexProfileStore().resolve(this.deps.workspaceId, config, true);
+        if (!codexProfile || !(await getCodexProfileStore().isReady(codexProfile)))
+          throw new AcpAuthenticationRequiredError([]);
+      }
       await this.emitBuiltinRuntimeStatusForRefresh(message, options.onAcpBinaryProgress);
       options.signal?.throwIfAborted();
       const {
@@ -6077,8 +6854,10 @@ export class SessionExecutionService {
         availableCommands,
         sessionFork,
         acknowledgedSteer,
+        sessionTitle,
         goalActions,
         modelReasoningEfforts,
+        modelCapabilities,
         capabilitySourceVersion,
       } = await this.deps.fetchAcpCapabilities(
         message.cliType,
@@ -6088,6 +6867,7 @@ export class SessionExecutionService {
         message.runtimeOverrides,
         {
           signal: options.signal,
+          codexProfile: codexProfile ? { profile: codexProfile } : undefined,
           onManagedRuntimeProgress: (event) => {
             if (options.signal?.aborted) return;
             options.onAcpBinaryProgress?.(
@@ -6119,7 +6899,11 @@ export class SessionExecutionService {
         modelReasoningEfforts,
         acknowledgedSteer,
         goalActions,
-        { signal: options.signal }
+        { signal: options.signal, sessionTitle, modelCapabilities }
+      );
+      this.acpCapabilityLaunchInputFingerprints.set(
+        message.configId,
+        fingerprintAcpLaunchInputs(message)
       );
 
       return {
@@ -6141,26 +6925,33 @@ export class SessionExecutionService {
         availableCommands,
       };
     } catch (error) {
-      const errorMessage = formatErrorMessage(error);
-      this.deps.logger.debug(
-        `[acp-capabilities] Refresh failed (cliType=${message.cliType} agentType=${message.agentType}): ${errorMessage}`
-      );
-      return {
-        type: 'machine/acp-capabilities-refresh_response',
-        machineId: this.deps.machineId,
-        configId: message.configId,
-        cliType: message.cliType,
-        agentType: message.agentType,
-        success: false,
-        ...(error instanceof AcpAuthenticationRequiredError
-          ? {
-              authRequired: true,
-              authMethods: error.authMethods.map(summarizeAcpAuthMethod),
-            }
-          : {}),
-        error: errorMessage,
-      };
+      return this.buildFailedAcpRefreshResponse(message, error);
     }
+  }
+
+  private buildFailedAcpRefreshResponse(
+    message: ResolvedMachineAcpCapabilitiesRefreshRequest,
+    error: unknown
+  ): MachineAcpCapabilitiesRefreshResponse {
+    const errorMessage = formatErrorMessage(error);
+    this.deps.logger.debug(
+      `[acp-capabilities] Refresh failed (cliType=${message.cliType} agentType=${message.agentType}): ${errorMessage}`
+    );
+    return {
+      type: 'machine/acp-capabilities-refresh_response',
+      machineId: this.deps.machineId,
+      configId: message.configId,
+      cliType: message.cliType,
+      agentType: message.agentType,
+      success: false,
+      ...(error instanceof AcpAuthenticationRequiredError
+        ? {
+            authRequired: true,
+            authMethods: error.authMethods.map(summarizeAcpAuthMethod),
+          }
+        : {}),
+      error: errorMessage,
+    };
   }
 
   private async emitBuiltinRuntimeStatusForRefresh(
@@ -6475,12 +7266,76 @@ export class SessionExecutionService {
   }
 }
 
+/**
+ * The refresh response a cache hit returns.
+ *
+ * It repeats the persisted entry rather than re-deriving anything, so a caller
+ * cannot tell a hit from a probe except by how fast it answered: the renderer
+ * writes `capability` straight into its Machine Flock rows either way.
+ */
+const buildAcpCapabilitiesRefreshResponseFromCache = (
+  machineId: MachineId,
+  message: ResolvedMachineAcpCapabilitiesRefreshRequest,
+  capability: AcpCapabilityCacheEntry
+): MachineAcpCapabilitiesRefreshResponse => ({
+  type: 'machine/acp-capabilities-refresh_response',
+  machineId,
+  configId: message.configId,
+  cliType: message.cliType,
+  agentType: message.agentType,
+  success: true,
+  modes: capability.modes.map((mode) => ({
+    id: mode.id,
+    name: mode.name,
+    description: mode.description ?? undefined,
+  })),
+  models: capability.models.map((model) => ({
+    modelId: model.modelId,
+    name: model.name ?? undefined,
+    description: model.description ?? undefined,
+  })),
+  configOptions: capability.configOptions?.map((option) => ({
+    id: option.id,
+    name: option.name,
+    category: option.category,
+    optionCount: option.options.length,
+  })),
+  capability,
+  availableCommands: capability.availableCommands,
+});
+
 const findRegistryAcpAgent = (agentType: string): RegistryAcpAgent | undefined =>
   REGISTRY_ACP_AGENTS.find((agent) => agent.id === agentType);
 
 // NUL separates field segments and \x01 separates env pairs so equivalent
 // env maps produce identical keys and ambiguous separators in values can't
 // collide. Env vars on POSIX cannot contain either control character.
+/**
+ * In-memory identity of everything a capability probe is launched with. Hashed
+ * only so the long-lived map does not retain another plaintext copy of the env;
+ * it is never persisted, synced, or logged.
+ */
+const fingerprintAcpLaunchInputs = (inputs: {
+  configId: AgentConfigId;
+  cliType: AgentConfigCliType;
+  agentType: string;
+  env?: Record<string, string>;
+  customAcp?: CustomAcpLaunchSpec;
+  runtimeOverrides?: BuiltinRuntimeOverrides;
+}): string =>
+  createHash('sha256')
+    .update(
+      computeAcpRefreshDedupeKey(
+        inputs.configId,
+        inputs.cliType,
+        inputs.agentType,
+        inputs.env,
+        inputs.customAcp,
+        inputs.runtimeOverrides
+      )
+    )
+    .digest('hex');
+
 const computeAcpRefreshDedupeKey = (
   configId: AgentConfigId,
   cliType: AgentConfigCliType,
@@ -6494,10 +7349,16 @@ const computeAcpRefreshDedupeKey = (
   const customSerialized = customAcp ? serializeCustomAcpLaunchSpec(customAcp) : '';
   const runtimeOverrideSerialized = runtimeOverrides
     ? Object.entries(runtimeOverrides)
-        .filter(([, value]) => typeof value === 'string' && value.trim().length > 0)
+        .filter(([, value]) =>
+          Array.isArray(value)
+            ? value.length > 0
+            : typeof value === 'string' && value.trim().length > 0
+        )
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([key, value]) => `${key}=${value}`)
+        .map(([key, value]) => `${key}=${Array.isArray(value) ? JSON.stringify(value) : value}`)
         .join('\x01')
     : '';
   return `${configId}\x00${cliType}\x00${agentType}\x00${envSerialized}\x00${customSerialized}\x00${runtimeOverrideSerialized}`;
 };
+import { getCodexProfileStore, type ResolvedCodexProfile } from '../agent/codex-profile-store';
+import { assertManagedCodexProfileConfig } from '@lody/shared';

@@ -114,6 +114,24 @@ describe('buildChatVirtualRows per-turn row identity', () => {
     });
   });
 
+  it('updates the round boundary when a following user arrives while keeping row keys', () => {
+    const assistant = wrap(makeMessage('boundary-answer', 'assistant', [text('done')], true));
+    const before = build([assistant]);
+    const user = wrap(makeMessage('boundary-followup', 'user', [text('continue')]));
+    const after = build([assistant, user]).filter((row) => row.type === 'assistant');
+    const first = after[0]!;
+    const last = after[after.length - 1]!;
+    expect(first.isFirstRowForMessage).toBe(true);
+    expect(last.endsRound).toBe(true);
+    expect(after.slice(0, -1).every((row) => !row.endsRound)).toBe(true);
+    expect(after.map((row) => row.key)).toEqual(before.map((row) => row.key));
+    expect(areAssistantChatVirtualRowsEqual(before[before.length - 1]!, last)).toBe(false);
+    const unchanged = build([assistant, user]);
+    after.forEach((row, index) => expect(unchanged[index]).toBe(row));
+    const removed = build([assistant]);
+    expect(removed[removed.length - 1]).toMatchObject({ endsRound: false });
+  });
+
   it('a streaming delta rebuilds only the changed turn', () => {
     const { finishedTurn, items } = makeConversation();
     const first = build(items);
@@ -173,7 +191,7 @@ describe('buildChatVirtualRows per-turn row identity', () => {
   });
 });
 
-it('exposes copying during streaming and invalidates only when availability changes', () => {
+it('does not create an empty live footer without a copy action', () => {
   const item = wrap(makeMessage('stream-copy', 'assistant', [text('partial')], false));
   const args = { items: [item], lastAssistantMessageId: 'stream-copy', expansionVersion: 0 };
   const before = buildChatVirtualRows(args);
@@ -181,17 +199,24 @@ it('exposes copying during streaming and invalidates only when availability chan
     false
   );
   const withCopy = buildChatVirtualRows({ ...args, copyContextAvailable: true });
-  expect(withCopy.some((row) => row.type === 'assistant' && row.content.kind === 'footer')).toBe(
-    true
+  expect(withCopy).toContainEqual(
+    expect.objectContaining({
+      content: expect.objectContaining({ kind: 'footer', isLive: true }),
+    })
   );
   const unchanged = buildChatVirtualRows({ ...args, copyContextAvailable: true });
   expect(unchanged.every((row, index) => row === withCopy[index])).toBe(true);
+
+  const displaced = buildChatVirtualRows({ ...args, lastAssistantMessageId: 'newer-turn' });
+  expect(displaced.some((row) => row.type === 'assistant' && row.content.kind === 'footer')).toBe(
+    false
+  );
 });
 
-/* The live duration label is bound to ONE row by `isLive`. That bound is only as
-   good as the memo: a displaced turn's rebuilt row differs from the mounted one
-   by this flag alone, so if the comparison ignores it the old footer never
-   re-renders and keeps counting beside the new one. */
+/* An active copy action is bound to ONE footer by `isLive`. That bound is only
+   as good as the memo: a displaced turn's rebuilt row differs from the mounted
+   one by this flag alone, so if the comparison ignores it the old footer keeps
+   its active action state beside the new turn. */
 it('reports a displaced turn footer as changed when it stops being the live one', () => {
   const abandoned = wrap(makeMessage('turn-abandoned', 'assistant', [toolCall()], false));
   const footerOf = (rows: ReturnType<typeof build>, messageId: string) =>
@@ -211,4 +236,151 @@ it('reports a displaced turn footer as changed when it stops being the live one'
   expect(whileLive).toBeDefined();
   expect(afterDisplaced).toBeDefined();
   expect(areAssistantChatVirtualRowsEqual(whileLive!, afterDisplaced!)).toBe(false);
+});
+
+describe('DSH thought visibility', () => {
+  const thought: MessageContent = { type: 'thought', text: 'Synthetic reasoning.' };
+
+  const fixture = (id: string, content: MessageContent[], finished = false) => {
+    const item = wrap(makeMessage(id, 'assistant', content, finished));
+    return {
+      items: [item],
+      lastAssistantMessageId: id,
+      expansionVersion: 0,
+      selectionLayouts: new Map([
+        [
+          id,
+          {
+            finished,
+            activeSearchBlockId: null,
+            expandState: {
+              expandedWorkedGroups: {},
+              expandedGroups: { [`activity-group:${id}:0:0`]: true },
+              expandedByIndex: {},
+              planOpen: false,
+            },
+          },
+        ],
+      ]),
+    };
+  };
+
+  it('renders a thought-only group and invalidates cached rows when visibility changes', () => {
+    const args = fixture('dsh-thought-only', [thought]);
+    const hidden = buildChatVirtualRows(args);
+    expect(
+      hidden.some((row) => row.type === 'assistant' && row.content.kind === 'activity_detail')
+    ).toBe(false);
+    const visible = buildChatVirtualRows({ ...args, showThoughts: true });
+    expect(
+      visible.flatMap((row) =>
+        row.type === 'assistant' && row.content.kind === 'activity_detail'
+          ? [row.content.entry.content]
+          : []
+      )
+    ).toEqual([thought]);
+    expect(buildChatVirtualRows({ ...args, showThoughts: true })[0]).toBe(visible[0]);
+    expect(buildChatVirtualRows({ ...args, showThoughts: false })).toEqual(hidden);
+  });
+
+  it('keeps thoughts and tools in order for interrupted DSH turns without exposing them elsewhere', () => {
+    const tool = toolCall();
+    const args = fixture('dsh-mixed', [thought, tool, thought], true);
+    const details = (showThoughts: boolean) =>
+      buildChatVirtualRows({ ...args, showThoughts }).flatMap((row) =>
+        row.type === 'assistant' && row.content.kind === 'activity_detail'
+          ? [row.content.entry.content]
+          : []
+      );
+    expect(details(true)).toEqual([thought, tool, thought]);
+    expect(details(false)).toEqual([tool]);
+  });
+
+  it('opens pure thoughts by default inside expanded work and respects an explicit collapse', () => {
+    const id = 'dsh-default-expanded';
+    const args = fixture(id, [thought, text('Answer')], true);
+    const selection = args.selectionLayouts.get(id)!;
+    const withExpansion = (expandedGroups: Record<string, boolean>) => ({
+      ...args,
+      showThoughts: true,
+      selectionLayouts: new Map([
+        [
+          id,
+          {
+            ...selection,
+            expandState: {
+              ...selection.expandState,
+              expandedWorkedGroups: { [`segment:${id}:0`]: true },
+              expandedGroups,
+            },
+          },
+        ],
+      ]),
+    });
+    const thoughtRows = (rows: ReturnType<typeof buildChatVirtualRows>) =>
+      rows.flatMap((row) =>
+        row.type === 'assistant' && row.content.kind === 'activity_detail'
+          ? [row.content.entry.content]
+          : []
+      );
+    expect(thoughtRows(buildChatVirtualRows(withExpansion({})))).toEqual([thought]);
+    expect(
+      thoughtRows(
+        buildChatVirtualRows(
+          withExpansion({
+            [`activity-group:${id}:0:0`]: false,
+          })
+        )
+      )
+    ).toEqual([]);
+    expect(
+      thoughtRows(
+        buildChatVirtualRows(
+          withExpansion({
+            [`activity-group:${id}:0:0`]: true,
+          })
+        )
+      )
+    ).toEqual([thought]);
+
+    const mixed = fixture('dsh-default-mixed', [thought, toolCall()]);
+    expect(
+      thoughtRows(
+        buildChatVirtualRows({
+          ...mixed,
+          selectionLayouts: undefined,
+          showThoughts: true,
+        })
+      )
+    ).toEqual([]);
+    expect(
+      thoughtRows(
+        buildChatVirtualRows({
+          ...fixture('dsh-default-live', [thought]),
+          selectionLayouts: undefined,
+          showThoughts: true,
+        })
+      )
+    ).toEqual([thought]);
+  });
+
+  it('keeps DSH thought groups collapsible and the completed answer outside folded work', () => {
+    const args = fixture('dsh-folded', [thought, toolCall(), text('Answer')], true);
+    const rows = buildChatVirtualRows({ ...args, selectionLayouts: undefined, showThoughts: true });
+    expect(
+      rows.some((row) => row.type === 'assistant' && row.content.kind === 'worked_group_header')
+    ).toBe(true);
+    expect(
+      rows.some((row) => row.type === 'assistant' && row.content.kind === 'activity_detail')
+    ).toBe(false);
+    expect(
+      rows.flatMap((row) =>
+        row.type === 'assistant' &&
+        row.content.kind === 'content' &&
+        row.content.block.kind === 'content'
+          ? [row.content.block.entry.content]
+          : []
+      )
+    ).toEqual([text('Answer')]);
+  });
 });

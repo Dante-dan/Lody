@@ -6,13 +6,19 @@
   diff, legacy representation, stored-copy and conditional rollback rules.
   Shared business rules live in the planners, not in UI or CLI copies.
 - Directory reads contain identities, scalars and input configuration, never
-  bodies. Targeted reads materialize only the selected turn. Status queries use
+  bodies. Model summary reads use the narrow scalar/count reader, including legacy
+  rows; never serialize items, plans, or provider extension metadata. Input configuration projects on first read and memoizes: the
+  projection is a schema parse per user turn, and a directory read covers the
+  whole conversation to answer a question about its tail. Targeted reads materialize only the selected turn. Status queries use
   the directory; explicit export/replay uses one consistent `readAll` observation.
   `readTurnOutput` reads the selected assistant and relevant failure notices in
   one observation instead of serializing the transcript on every token.
 - Repeated identity lookups reuse an unchanged pending transaction. Reads must not
   commit writes; uncommitted structural/ID edits and checkout still invalidate lookup.
-- Subscribe and capture the initial directory without a gap. Notifications carry structural ranges or changed turn ids. The display
+- Subscribe and capture the initial directory without a gap. Notifications carry
+  structural ranges or changed turn ids. A content batch reports the EXACT
+  positions it touched, never the span between the lowest and highest: one batch
+  routinely carries an early status write plus the streaming tail. The display
   cache rejects stale async reads. Turn ID edits (including deletion) are structural:
   notify by position so readers can remove the old identity before re-keying. CLI reads in-process synchronously; auto-seen
   scans directory scalars only and permission checks have no await gap.
@@ -36,8 +42,20 @@
   Compare only same-version hashes, recomputing from the replay when versions differ;
   unknown versions or missing replay data refuse before any write. A metadata-only
   conflict marker never upgrades the stored cursor by implication.
+- `user-status` writes every stored copy of a duplicated user turn through
+  `updateCopies`: the last copy gates guarded writes, settled copies never regress,
+  and any started or settled copy vetoes a requeue.
 - Legacy inline rows and unchanged unknown fields survive updates. Never rewrite
   history while opening or reading. Auto-seen is a separately attached CLI policy
   with a commit-time guard against regressing an advanced execution status.
 - Test the real Loro reader and writer. Delayed reads use small injected Promise
   gates; there is no test-only implementation of the complete command API.
+- Normalized subagent events persist inside `subagent_task.run`, keyed by root ACP
+  session plus run id. Bind the initiating turn once; child output never changes root
+  turn identity, plan, tools, or accounting. Ignore unregistered/terminal output,
+  reject lineage cycles, and retain incomplete observation across snapshots. Declare
+  nested transcript streaming fields in `schema.ts`; legacy rows stay unchanged.
+
+- Submissions append on the live doc as local commits; transports upload only
+  local events. Never author on a fork and import the export: it misses upload,
+  copies the whole doc and adds a permanent peer.

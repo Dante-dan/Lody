@@ -4,7 +4,7 @@ import './session-monaco-text-viewer.css';
 import { useEffect, useMemo, useRef } from 'react';
 import { useAtomValue } from 'jotai';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api.js';
-import { fileViewerWordWrapAtom } from '@/atoms/settings';
+import { extendedCodeLanguagesEnabledAtom, fileViewerWordWrapAtom } from '@/atoms/settings';
 import { cn } from '@/lib/utils';
 import { configureSessionMonacoWorkers } from '@/lib/session-monaco-workers';
 import { ensureSessionMonacoLanguages } from '@/lib/session-monaco-languages';
@@ -26,7 +26,6 @@ import type { LodyResolvedVSCodeTheme } from '@/lib/vscode-theme';
 import { useKeyScope } from '@/lib/commands';
 
 configureSessionMonacoWorkers();
-ensureSessionMonacoLanguages();
 
 export type SessionMonacoExternalTextUpdate = {
   // Monotonic counter; the viewer fires when this changes, even when
@@ -119,6 +118,7 @@ export function SessionMonacoTextViewer({
   // here so every SessionMonacoTextViewer mount — session file viewer, mobile
   // file browser — shares the same wrap state without prop threading.
   const wordWrap = useAtomValue(fileViewerWordWrapAtom);
+  const extendedCodeLanguagesEnabled = useAtomValue(extendedCodeLanguagesEnabledAtom);
 
   // Lazily register / look up the VSCode-derived Monaco theme name. When
   // no VSCode theme is active we fall back to Monaco's built-in vs/vs-dark.
@@ -188,11 +188,24 @@ export function SessionMonacoTextViewer({
   }, [onContentChange, onSelectionChange, onGoToDefinition, onFindReferences, onScrollChange]);
 
   useEffect(() => {
+    let cancelled = false;
+    void ensureSessionMonacoLanguages(language, extendedCodeLanguagesEnabled)
+      .then(() => {
+        if (!cancelled) controllerRef.current?.setLanguage(language);
+      })
+      .catch(() => {
+        if (!cancelled) controllerRef.current?.setLanguage('plaintext');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [extendedCodeLanguagesEnabled, language]);
+
+  useEffect(() => {
     const controller = controllerRef.current;
     if (!controller) return;
     controller.applyText(text, readOnly);
-    controller.setLanguage(language);
-  }, [language, readOnly, text]);
+  }, [readOnly, text]);
 
   useEffect(() => {
     controllerRef.current?.setTheme(
@@ -243,10 +256,7 @@ export function SessionMonacoTextViewer({
 
   return (
     <div
-      className={cn(
-        'lody-session-monaco h-full min-h-[240px] w-full overflow-hidden',
-        className
-      )}
+      className={cn('lody-session-monaco h-full min-h-[240px] w-full overflow-hidden', className)}
     >
       <div ref={containerRef} className="h-full w-full" />
     </div>

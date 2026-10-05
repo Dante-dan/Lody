@@ -1,12 +1,13 @@
-import { createFileRoute, Navigate } from '@tanstack/react-router';
+import { createFileRoute } from '@tanstack/react-router';
+import { BootNavigate } from '@/components/boot-navigate';
 import { useTranslation } from 'react-i18next';
 import { useOrganization } from '@/hooks/useOrganization';
 import { getPreferredWorkspaceSlug, readPreferredWorkspaceSlug } from '@/lib/workspace';
+import { isWarmWindow } from '@/lib/desktop-window';
 import { RouteMessage } from '@/components/route-message';
 import { useEffect, useState } from 'react';
 import { useStableSession } from '@/hooks/useStableSession';
 import { getAppCurrentPathWithSearch } from '@/lib/app-location';
-import { readLastAppRoutePath } from '@/lib/last-app-route';
 import { LoadingPlaceholder } from '@/components/loading-placeholder';
 import { isLocalAppPlatform } from '@/lib/app-platform';
 import {
@@ -19,6 +20,9 @@ export const Route = createFileRoute('/')({
 });
 
 export function HomeRoute() {
+  // The spare stays natively hidden on `/` while RuntimeProvider prepares the
+  // local workspace. Target UI mounts only after the window is claimed.
+  if (isWarmWindow()) return null;
   // Local (open-source) platform: no login route exists. Land straight on the
   // single implicit workspace once the CLI has provisioned it.
   if (isLocalAppPlatform()) {
@@ -45,6 +49,7 @@ function LocalHomeRoute() {
   if (!workspace) {
     return (
       <LoadingPlaceholder
+        variant="boot"
         title={t('workspace.route.localStartingTitle')}
         description={t('workspace.route.localStartingDescription')}
       />
@@ -52,7 +57,7 @@ function LocalHomeRoute() {
   }
 
   return (
-    <Navigate
+    <BootNavigate
       to="/$workspaceName/chat"
       params={{ workspaceName: getLocalWorkspaceSlug(workspace) }}
       replace
@@ -72,15 +77,10 @@ function CloudHomeRoute() {
   // Returning user with cached workspace: redirect immediately without waiting
   // for session network queries. The _auth route guard handles the rest.
   if (hasLocalToken) {
-    const lastRoutePath = readLastAppRoutePath();
-    if (lastRoutePath) {
-      return <Navigate to={lastRoutePath} replace />;
-    }
-
     const preferredSlug = readPreferredWorkspaceSlug();
     if (preferredSlug) {
       return (
-        <Navigate to="/$workspaceName/chat" params={{ workspaceName: preferredSlug }} replace />
+        <BootNavigate to="/$workspaceName/chat" params={{ workspaceName: preferredSlug }} replace />
       );
     }
     return <AuthedHomeRoute />;
@@ -89,6 +89,7 @@ function CloudHomeRoute() {
   if (isPending || isRetrying) {
     return (
       <LoadingPlaceholder
+        variant="boot"
         title={t('workspace.route.signingInTitle')}
         description={t('workspace.route.signingInDescription')}
       />
@@ -98,7 +99,7 @@ function CloudHomeRoute() {
   // Redirect based on auth state. Do not mount organization fetching when unauthenticated.
   if (!session?.user || sessionError) {
     const redirectPath = typeof window === 'undefined' ? '/' : getAppCurrentPathWithSearch();
-    return <Navigate to="/login" search={{ redirect: redirectPath }} replace />;
+    return <BootNavigate to="/login" search={{ redirect: redirectPath }} replace />;
   }
 
   return <AuthedHomeRoute />;
@@ -106,13 +107,14 @@ function CloudHomeRoute() {
 
 function AuthedHomeRoute() {
   const { t } = useTranslation();
-  const lastRoutePath = readLastAppRoutePath();
   const preferredWorkspaceSlug = readPreferredWorkspaceSlug();
   const {
     activeOrganization,
     organizations,
     organizationsLoading,
     error: organizationsError,
+    refetchOrganizations,
+    refetchActiveOrganization,
   } = useOrganization();
   const [orgSettled, setOrgSettled] = useState(!organizationsLoading);
 
@@ -123,6 +125,7 @@ function AuthedHomeRoute() {
   if (!orgSettled) {
     return (
       <LoadingPlaceholder
+        variant="boot"
         title={t('workspace.route.loadingWorkspacesTitle')}
         description={t('workspace.route.loadingWorkspacesDescription')}
       />
@@ -134,6 +137,10 @@ function AuthedHomeRoute() {
       <RouteMessage
         title={t('workspace.route.loadingWorkspacesErrorTitle')}
         description={t('workspace.route.loadingWorkspacesErrorDescription')}
+        onRetry={() => {
+          void refetchOrganizations();
+          void refetchActiveOrganization();
+        }}
       />
     );
   }
@@ -141,6 +148,7 @@ function AuthedHomeRoute() {
   if (organizationsLoading || organizations === undefined) {
     return (
       <LoadingPlaceholder
+        variant="boot"
         title={t('workspace.route.loadingWorkspacesTitle')}
         description={t('workspace.route.loadingWorkspacesDescription')}
       />
@@ -148,11 +156,7 @@ function AuthedHomeRoute() {
   }
 
   if (organizations.length === 0) {
-    return <Navigate to="/workspace/create" replace />;
-  }
-
-  if (lastRoutePath) {
-    return <Navigate to={lastRoutePath} replace />;
+    return <BootNavigate to="/workspace/create" replace />;
   }
 
   const targetSlug = getPreferredWorkspaceSlug(
@@ -161,8 +165,8 @@ function AuthedHomeRoute() {
     preferredWorkspaceSlug
   );
   if (!targetSlug) {
-    return <Navigate to="/workspace/create" replace />;
+    return <BootNavigate to="/workspace/create" replace />;
   }
 
-  return <Navigate to="/$workspaceName/chat" params={{ workspaceName: targetSlug }} replace />;
+  return <BootNavigate to="/$workspaceName/chat" params={{ workspaceName: targetSlug }} replace />;
 }

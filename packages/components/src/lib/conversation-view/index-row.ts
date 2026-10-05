@@ -21,9 +21,11 @@ export function pickIndexInputConfig(value: unknown): TurnIndexInputConfig | und
   return {
     ...out,
     ...normalizeSessionTurnInputConfig({
+      agentRoleId: value.agentRoleId,
+      agentRoleRevision: value.agentRoleRevision,
+      agentRoleSnapshot: value.agentRoleSnapshot,
       mcpServerIds: value.mcpServerIds,
       configOptionValues: value.configOptionValues,
-      taskToolsEnabled: value.taskToolsEnabled,
     }),
   };
 }

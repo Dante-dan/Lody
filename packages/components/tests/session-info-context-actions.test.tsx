@@ -11,7 +11,7 @@ vi.mock('../src/lib/clipboard', () => ({
   writeTextToClipboard: vi.fn(() => Promise.resolve(true)),
 }));
 
-vi.mock('sonner', () => ({
+vi.mock('@/lib/toast', () => ({
   toast: { success: vi.fn() },
 }));
 
@@ -147,9 +147,7 @@ describe('ContextChip actions', () => {
     // Light theme uses a soft hairline border + faint fill; dark keeps muted fill only.
     expect(createPrButton?.parentElement?.className).toContain('border-foreground/[0.08]');
     expect(createPrButton?.parentElement?.className).toContain('bg-foreground/[0.03]');
-    expect(createPrButton?.parentElement?.className).toContain(
-      'dark:bg-muted-foreground/[0.08]'
-    );
+    expect(createPrButton?.parentElement?.className).toContain('dark:bg-muted-foreground/[0.08]');
 
     await act(async () => createPrButton?.click());
 
@@ -158,12 +156,13 @@ describe('ContextChip actions', () => {
 
     await act(async () => {
       menuButton?.dispatchEvent(
-        new TestPointerEvent('pointerdown', {
+        new TestPointerEvent('mousedown', {
           bubbles: true,
           button: 0,
           pointerType: 'mouse',
         })
       );
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
 
     const menuItems = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'));
@@ -172,6 +171,7 @@ describe('ContextChip actions', () => {
     await act(async () => {
       menuItems[0]?.focus();
       menuItems[0]?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
 
     expect(onCommitAndPush).toHaveBeenCalledTimes(1);
@@ -248,12 +248,13 @@ describe('ContextChip actions', () => {
     );
     await act(async () => {
       menuButton?.dispatchEvent(
-        new TestPointerEvent('pointerdown', {
+        new TestPointerEvent('mousedown', {
           bubbles: true,
           button: 0,
           pointerType: 'mouse',
         })
       );
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
 
     const mergeItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
@@ -310,16 +311,17 @@ describe('ContextChip actions', () => {
 
     await act(async () => {
       methodButton?.dispatchEvent(
-        new TestPointerEvent('pointerdown', {
+        new TestPointerEvent('mousedown', {
           bubbles: true,
           button: 0,
           pointerType: 'mouse',
         })
       );
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
-    const squashItem = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(
-      (item) => item.textContent?.includes('Squash and merge')
-    );
+    const squashItem = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="menuitemradio"]')
+    ).find((item) => item.textContent?.includes('Squash and merge'));
     expect(squashItem).toBeInstanceOf(HTMLElement);
     await act(async () => squashItem?.click());
     expect(onSelectMethod).toHaveBeenCalledWith('squash');

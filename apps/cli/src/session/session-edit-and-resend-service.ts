@@ -1,4 +1,3 @@
-import { readSessionHistory } from '@lody/shared/session-data';
 import {
   buildPendingUserHistoryEntry,
   getServerNow,
@@ -26,6 +25,7 @@ import { formatErrorMessage } from '@/utils/format-error';
 import type { SessionExecutionService } from './session-execution-service';
 import type { ISession, SessionManager } from './session-manager';
 import type { SessionUserResolver } from './session-user-resolver';
+import { createSessionBackend } from './session-backend';
 
 export type SessionEditAndResendInput = Omit<SessionEditAndResendSpec, 'inputConfig'> & {
   inputConfig: SessionTurnInputConfig;
@@ -105,7 +105,8 @@ export class SessionEditAndResendService {
       );
     }
 
-    const history = readSessionHistory(sessionDoc.sessionData.history);
+    const backend = await createSessionBackend(sessionDoc, meta);
+    const history = await backend.readHistory();
     const lastUser = lastUserIndex(history);
     if (history[lastUser]?.id === spec.replacementUserTurnId) {
       return this.success(spec);
@@ -157,8 +158,7 @@ export class SessionEditAndResendService {
       runtime = await this.getOrRestoreRuntime(
         meta,
         spec.requestedByUserId,
-        resolveSessionMcpSelection(history),
-        spec.inputConfig.taskToolsEnabled === true
+        resolveSessionMcpSelection(history)
       );
       const agentClient = runtime.agentClient;
       oldAcpSessionId = runtime.acpSessionId;
@@ -183,7 +183,7 @@ export class SessionEditAndResendService {
 
         const [freshMeta, freshHistory] = await Promise.all([
           sessionDoc.getMetaState(),
-          readSessionHistory(sessionDoc.sessionData.history),
+          backend.readHistory(),
         ]);
         const freshEditable = resolveEditableTail(freshHistory, spec.expectedUserTurnId);
         if (!freshMeta || !freshEditable || freshEditable.forkTurnId !== editable.forkTurnId) {
@@ -309,7 +309,7 @@ export class SessionEditAndResendService {
           inputConfig.prompt ?? ''
         );
         const pending = buildPendingUserHistoryEntry({
-          userId: commitEditable.turn.userId ?? spec.requestedByUserId,
+          userId: spec.requestedByUserId,
           inputBlocks,
           timestamp: spec.timestamp,
           inputConfig,
@@ -331,7 +331,7 @@ export class SessionEditAndResendService {
         // One domain command re-runs the eligibility and active-goal rules against
         // the history read inside the store's commit; the caller cannot supply a
         // history array or a raw writer callback.
-        const rollbackResult = await sessionDoc.sessionData.commands.replaceEditableTail({
+        const rollbackResult = await backend.replaceEditableTail({
           expectedUserTurnId: spec.expectedUserTurnId,
           expectedForkTurnId: commitEditable.forkTurnId,
           replacement,
@@ -474,8 +474,7 @@ export class SessionEditAndResendService {
   private async getOrRestoreRuntime(
     meta: SessionMeta,
     requestedByUserId: string,
-    mcpServerIds: McpServerId[],
-    taskToolsEnabled: boolean
+    mcpServerIds: McpServerId[]
   ): Promise<ISession> {
     const existing = this.deps.sessionManager.getSession(meta.id);
     if (existing) return existing;
@@ -498,7 +497,6 @@ export class SessionEditAndResendService {
         agentCliType: meta.cliType,
         agentType: meta.agentType,
         mcpServerIds,
-        taskToolsEnabled,
         customAcp: agentConfig.customAcp,
         runtimeOverrides: agentConfig.runtimeOverrides,
         env: agentConfig.env,

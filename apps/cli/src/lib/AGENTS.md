@@ -11,6 +11,11 @@ end-to-end map. The WS/DO control-plane path is DEPRECATED; do not add to it.
 
 ## Composition and transports
 
+- GitHub auth: conversation-owner personal → matching-owner machine → repo App,
+  once per source. Failures advance without a policy RPC; local context grants
+  machine eligibility. Never persist managed tokens or replay uncertain writes.
+  Checkout/LFS share the pinned helper context. Contract: [identity fallback](../../../../specs/github-identity-fallback.md).
+
 - `cloud-cli-port.ts` is the sole official-build composition root for cloud clients and
   endpoint-derived adapters. Daemon runtime modules must not construct cloud SDK
   clients or read `LODY_AUTH_URL` / `LODY_AUTH_SITE_URL` / `LODY_SERVER_URL`. The local
@@ -40,6 +45,9 @@ end-to-end map. The WS/DO control-plane path is DEPRECATED; do not add to it.
   reintroduce a proxy-authoring path (invariants in `specs/local-first-two-plane.md`).
   Local dispatch triggers off the renderer-authored `latestUserMsgId` doc-meta write
   plus the local Machine RPC fast path.
+
+- INVARIANT: agent PATH merges keep the session's `gh` shim dir first
+  ([note](../../../../.agents/notes/implemented/bug-fix/2026-09-26-gh-shim-broker-and-path.md)).
 
 ## Local Loro data plane
 
@@ -87,6 +95,12 @@ never pushed to renderers as local room health.
   Bind the baseline to the doc cursor, not metadata; compare existing content exactly,
   never sanitize it to hide edits. Write history and capture its baseline without an
   async gap, before publishing meta. Legacy history without a baseline is not migrated.
+- History import validates the selected Provider machine/id/type; never fall back
+  from a missing selection. Legacy requests use the sole same-type Provider. Catalogs
+  are Provider-scoped; replay/import keys stay stable. Bind an earlier unbound import only when the selected Provider
+  lists its source; never replace a binding or merge another account's native ID.
+  Refresh loads through the import's own binding. Every import write records the
+  load-reported selection on the last imported user turn via `applyAcpRuntimeConfigPatch`.
 - Removing a local project archives every unarchived Session for that machine/project
   before deleting the project row, found through the existence and metadata indexes
   rather than by opening every Session document; a failed archive keeps the delete
@@ -101,20 +115,5 @@ never pushed to renderers as local room health.
   single publish commit, cancellation, when the queue may start in cloud versus OSS
   local mode, and the rule that a setup row never carries authorization URLs, codes,
   tokens, or raw provider output.
-- `task-doc.ts`: only creation passes `initialState` to the Mirror
-  (`seedEmptyDocument`); every other path must treat an absent document as absent, or
-  `readTask` answers with a placeholder meta and TASK_NOT_FOUND stops existing. Each
-  write republishes the index row from the document's post-write state. Persisted Task
-  documents get a repo `e/task-<id>` existence entry and no duplicated `m/*` business
-  meta. **Never write the agent field here**: it is the automation consent, so
-  `applyAgentTaskUpdate` covers every other scalar without an `agent` branch. Anything
-  needing every visible Task uses `listWorkspaceTaskIds`, which merges existence with
-  index rows, repairs a missing projection, and never revives an index tombstone.
-  `status`/`ownerId`/`projects` writes here can make a task automation-eligible and
-  start a session. Contract: specs/tasks.md.
-- `task-image-upload.ts` reads local images with `O_NOFOLLOW`.
-- `task-automation/`: an agent counts as busy while its task is **in progress**, not
-  merely while being dispatched, or one agent gets two concurrent sessions in one
-  working copy.
 - **A `file-preview/` preview must never activate Code Collab**: no workspace watch, no
   All Changes recompute, no Flock publish.

@@ -10,6 +10,7 @@ import { formatErrorMessage } from '@/utils/format-error';
  * These match the public GitHub token broker protocol in `@lody/cloud-api`.
  */
 export type GitHubTokenErrorCode =
+  | 'personal_unavailable'
   | 'unauthorized'
   | 'not_a_member'
   | 'repo_not_linked'
@@ -28,6 +29,7 @@ const GitHubTokenSuccessSchema = z.object({
 const GitHubTokenErrorSchema = z.object({
   success: z.literal(false),
   errorCode: z.enum([
+    'personal_unavailable',
     'unauthorized',
     'not_a_member',
     'repo_not_linked',
@@ -46,6 +48,16 @@ type GitHubTokenResponse = {
   tokenSource?: 'personal' | 'app';
   rateLimitScope?: string;
 };
+
+/**
+ * Result of a per-command candidate lookup. `null` means the repository is not
+ * linked at all; `available: false` means the requested source exists as a
+ * policy but cannot mint a token right now, with the backend's reason.
+ */
+export type GitHubCredentialCandidate =
+  | { token: string; tokenSource: 'personal' | 'app' }
+  | { available: false; reason: string }
+  | null;
 
 export type GitHubWriteTokenContext = {
   requesterUserId: string;
@@ -106,8 +118,81 @@ export class GitHubTokenManager {
   private readonly cliToken: string;
   private readonly workspaceId: string;
   private readonly states = new Map<RepoKey, RepoTokenState>();
+  private readonly candidates = new Map<
+    string,
+    { token: string; tokenSource: 'personal' | 'app'; expiresAt: number }
+  >();
   private refreshTimer: NodeJS.Timeout | null = null;
   private refreshAllInFlight: Promise<void> | null = null;
+
+  async getCredentialPolicy(
+    context: GitHubWriteTokenContext
+  ): Promise<{ personalEnabled: boolean }> {
+    return z.object({ personalEnabled: z.boolean() }).parse(
+      await this.client.action(api.github.getCredentialPolicyForCli, {
+        cliToken: this.cliToken,
+        workspaceId: this.workspaceId,
+        requesterUserId: context.requesterUserId,
+        machineId: context.machineId,
+      })
+    );
+  }
+
+  // Selection is per command. In particular, do not reuse an App candidate after
+  // the user enables personal identity, or mint App tokens to inspect preference.
+  async getCredentialCandidate(
+    repoFullName: string,
+    context: GitHubWriteTokenContext,
+    source: 'personal' | 'app',
+    invalidatedPersonalToken?: string
+  ): Promise<GitHubCredentialCandidate> {
+    const cacheKey = JSON.stringify([
+      repoFullName.toLowerCase(),
+      context.requesterUserId,
+      context.machineId,
+      source,
+    ]);
+    const cached = this.candidates.get(cacheKey);
+    if (!invalidatedPersonalToken && cached && cached.expiresAt > Date.now()) {
+      return { token: cached.token, tokenSource: cached.tokenSource };
+    }
+    this.candidates.delete(cacheKey);
+    const result = GitHubTokenResponseSchema.parse(
+      await this.client.action(api.github.getOperationAccessTokenByRepoNameForCli, {
+        cliToken: this.cliToken,
+        workspaceId: this.workspaceId,
+        requesterUserId: context.requesterUserId,
+        machineId: context.machineId,
+        repoFullName,
+        operation: 'write',
+        credentialSource: source,
+        invalidatedPersonalToken,
+      })
+    );
+    if (!result.success) {
+      if (result.errorCode === 'repo_not_linked') return null;
+      if (source === 'personal' && result.errorCode === 'personal_unavailable') {
+        // The message carries the backend fallback reason (auth missing, token
+        // expired, refresh rejected). It is not a secret; keep it for the helper's
+        // stderr so a silent App fallback can be explained and repaired.
+        this.logger.debug(
+          `[github-token] Personal GitHub identity unavailable for ${repoFullName} (requester ${context.requesterUserId}): ${result.errorMessage}`
+        );
+        return { available: false, reason: result.errorMessage };
+      }
+      throw new GitHubTokenFetchError(result.errorCode, result.errorMessage);
+    }
+    const tokenSource = result.tokenSource ?? 'app';
+    if (tokenSource !== source)
+      throw new GitHubTokenFetchError('token_generation_failed', 'Unexpected credential source');
+    const expiresAt = Math.min(
+      Date.now() + 60_000,
+      result.expiresAt ? Date.parse(result.expiresAt) - 5000 : Date.now() + 60_000
+    );
+    if (expiresAt > Date.now())
+      this.candidates.set(cacheKey, { token: result.token, tokenSource, expiresAt });
+    return { token: result.token, tokenSource };
+  }
 
   constructor(options: {
     serverUrl: string;
@@ -116,7 +201,10 @@ export class GitHubTokenManager {
     logger?: Logger;
   }) {
     this.logger = options.logger ?? getLogger('github-token');
-    this.client = new ConvexHttpClient(options.serverUrl);
+    this.client = new ConvexHttpClient(options.serverUrl, {
+      logger: false,
+      fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(2500) }),
+    });
     this.cliToken = options.cliToken;
     this.workspaceId = options.workspaceId;
   }
@@ -231,6 +319,7 @@ export class GitHubTokenManager {
   async shutdown(): Promise<void> {
     this.stopAutoRefresh();
     this.states.clear();
+    this.candidates.clear();
   }
 
   /**
@@ -247,6 +336,15 @@ export class GitHubTokenManager {
       markPersonalTokenInvalid?: boolean;
     }
   ): void {
+    // Clear only matching repository/requester candidates, including rejected App tokens.
+    for (const key of this.candidates.keys()) {
+      const [repo, requester] = JSON.parse(key) as string[];
+      if (
+        repo === repoFullName.toLowerCase() &&
+        (!options?.requesterUserId || requester === options.requesterUserId)
+      )
+        this.candidates.delete(key);
+    }
     try {
       const repoKeyPrefix = `${normalizeGitHubRepo(repoFullName).toLowerCase()}:`;
       const requesterRepoKey = options?.requesterUserId
@@ -287,6 +385,7 @@ export class GitHubTokenManager {
    * Called when a global auth issue is detected (e.g., CLI token expired).
    */
   invalidateAll(): void {
+    this.candidates.clear();
     this.logger.debug('[github-token] Invalidating all cached tokens');
     for (const state of this.states.values()) {
       state.token = null;

@@ -36,3 +36,8 @@ Monaco、打开查找、悬停关闭操作，确认提示计算得到 `white-spa
 该规避依赖 Monaco 当前的 `.find-widget.visible`、`.workbench-hover-container` 和
 `.hover-contents` DOM class。它刻意保持局部；上游修复查找提示定位缺陷且去掉本规则后回归
 仍能通过时，应删除它。它不改变其他 Monaco 使用方的窄版提示。
+
+## 当前 main 集成
+
+10 月 6 日与 main `0ab7526` 集成时，同一 Storybook 套件保留原 Find 回归及
+上游新增的撤销、保存覆盖。Viewer JSX 按当前格式化工具调整，局部 workaround 行为不变。

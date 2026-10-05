@@ -11,21 +11,29 @@ this page is the full text of the rules summarised there.
   with `leftSlot` (sidebar expand + macOS traffic-light inset via `className`)
   and `rightSlot` = a `SessionChatInterface headerVariant="toolbar"` instance
   (IDE launcher / Browser / "…" menu / sidebar toggle — no title, no PR badge).
-  All macOS traffic-light insets (sidebar `h-[72px] pt-7` header, this bar's
+  All macOS traffic-light insets (sidebar `h-11 pt-[2px]` header, this bar's
   `pl-[4.5rem]`, `reserveMacTrafficLightInset`, landing `left-[96px]`, and the
   root drag strip) are gated on `!useElectronFullscreen()` — the main process
   pushes `lody:window-fullscreen-changed` and the lights auto-hide in native
   fullscreen, so no inset is reserved there. The traffic-light CENTERLINE is
-  y=23px (`trafficLightPosition {x:20, y:16}` in `apps/electron/src/main/window.ts`
+  y=23px (`trafficLightPosition {x:16, y:16}` in `apps/electron/src/main/window.ts`
   - 7px button radius); every h-7 chrome button beside the lights centers on it
-    (sidebar collapse `-top-0.5` in `loro-sidebar.tsx`, landing expand `top-[9px]`
+    (sidebar header's `pt-[2px]` in `loro-sidebar.tsx`, landing expand `top-[9px]`
     in `web-chat-landing-screen.tsx`) — re-derive those offsets if the Electron
-    position or the card `mt-2`/border/`p-[2px]` stack changes. On Windows the native title bar is
+    position or the 44px top row changes. The equal macOS `x=16, y=16` frame
+    insets place the first light's optical centre at x=23, over the sidebar icons'
+    +23px centreline; their 16px boxes start at +15px. The sidebar's navigation,
+    project and repository icons share that line, while
+    navigation, project, repository and flat session labels share a +37px text
+    column (see the [baseline correction](../notes/implemented/bug-fix/2026-09-30-macos-traffic-light-baseline.md)).
+    On Windows the native title bar is
     hidden (`titleBarStyle: 'hidden'` + theme-tinted `titleBarOverlay`, see
-    `apps/electron/src/main/window-theme.ts`); the window instead reserves ONE
-    36px drag band at the top — root drag strip `h-9` in `routes/__root.tsx` +
-    `pt-9` in `web-workspace-layout.tsx`, both gated the same way — so no page
-    (this bar included) reserves its own right-side inset for the caption buttons.
+    `apps/electron/src/main/window-theme.ts`): the OS draws the caption buttons
+    in a 36px strip (centerline y=18) OVER the window-top rows. Rows reaching
+    the right edge pad `pr-[144px]` (`useWindowsCaptionPadClass`, ~3 × 46px
+    buttons), and `useWindowsCaptionRowPadClass` (`pb-2`, or `pb-[7px]` with a
+    bottom border) lifts every h-11 row's controls from y=22 onto the caption
+    centerline — the Windows analog of the traffic-light row pad.
     Mobile never renders `SessionTabBar`; it uses `MobileSessionTabSheet` instead.
     Desktop session tabs (not drafts or file/diff viewers) are mention drag
     sources: the parent tab uses HTML5 drag, child session tabs arm the
@@ -34,10 +42,15 @@ this page is the full text of the rules summarised there.
     still reorders. Pointer-over-conversation wins over closest-tab collision.
     A lone parent Session tab is not draggable; enable tab drag only once a
     second visible tab exists. On desktop, Cmd/Ctrl+W is the native Close
-    accelerator. Session-detail registers a tab closer: focused side panel or
-    child tab closes; the lone parent leaves for Chat Landing in the primary window
-    without archiving, and closes an auxiliary window.
-    A parent with siblings is not closeable and does not close the window. With
+    accelerator. The default-off Developer Mode beta can select its close scope
+    from pointer and keyboard intent; the [semantic targeting Spec](../../specs/semantic-action-targeting.md)
+    owns the experiment and empty-panel behavior. Session-detail registers a tab closer: focused side panel or
+    conversation tab closes, including the parent when siblings remain. With only
+    one conversation tab, the conversation region yields to window close without
+    changing shared tab state. Explicit tab × still closes the tab. Tab close writes shared `isTabClosed`,
+    selects the next open neighbour (right then left), or enters a local draft.
+    `?tab=empty` remains an entry sentinel: after hydration, reuse a local draft or
+    create one and replace the URL. Mobile viewers remain active. With
     no closer mounted (Chat Landing and other surfaces) the chord closes the
     window.
     Each Session tab has ONE leading status slot, priority-ordered
@@ -49,12 +62,38 @@ this page is the full text of the rules summarised there.
     both amber in the shipped themes, so an amber waiting dot beside a primary
     unread dot reads as the same marker. Unread comes from
     `sessionHasUnreadMessages` (`lib/session-read-receipt.ts`, the same
-    comparison `shouldMarkSessionRead` uses to DECIDE the receipt) and is
+    timestamp comparison as read receipts, excluding closed/archived conversations; only the
+    closed-list trigger and its rows surface theirs, via `closedSessionHasUnreadMessages`) and is
     suppressed on the ACTIVE tab, which is the surface clearing it. A child tab
     is the only place its own unread state can surface — sub-sessions get no
     sidebar row — so do not drop the marker from any tab renderer.
     Desktop tabs share width equally whenever all can reach `ACTIVE_TAB_MIN_WIDTH`;
-    below that threshold the active tab keeps that width and the others share the remainder.
+    below that threshold the active tab keeps that width and the others share the remainder,
+    provided the strip viewport is at least 366px wide. Narrower strips divide evenly.
+    Browser flex owns resting widths, including initial/restored tabs: these do not
+    run an opening width animation. Item margins alone own the 6px inter-tab gap.
+    A pointer-triggered close freezes every surviving tab at its current width
+    (Chromium's `in_tab_close_` rapid-close mode) so the next tab's close
+    button lands under the cursor; the freeze only arms on a pointerdown inside
+    the strip, so keyboard/programmatic closes relayout normally. The freeze
+    decision runs DURING RENDER (React's derived-state adjustment), so a
+    removal commit's first painted frame already carries the frozen widths —
+    deciding it in an effect let the unfrozen allocation commit first and
+    flashed survivors at the fresh width for a frame. The freeze
+    releases when the pointer leaves an EXPANDED region — 40px below the strip
+    and 60px toward the new-tab button, like Chromium's MouseWatcher — or on a
+    tab add, a viewport shrink below the captured width (a wider viewport keeps
+    it), or a single remaining tab. Widths freeze by role, not by tab: a
+    survivor that becomes active mid-freeze takes the captured active width
+    while the deselected tab drops back to the inactive width. Closing only the
+    LAST tab never enters the mode — the new last tab already ends at the right
+    edge — and closing the last tab while frozen re-spreads the survivors over
+    the occupied width instead of shrinking the budget, keeping that edge
+    under the cursor. Frozen removals slide closed (the survivor starts with the
+    freed width as an inline-start margin) over a 200ms transition that reduced-motion
+    users skip. Adding or restoring tabs and releasing the freeze return directly
+    to flex. See the [browser-width decision](../notes/implemented/architecture/2026-09-21-browser-owned-tab-widths.md)
+    for DOM capture and ResizeObserver update ordering.
     **The tab pills' top border shares one line with the sidebar and side-panel
     cards at y=8**, since every floating card is `mt-2` (sidebar in
     `loro-app-sidebar.tsx`, side panel + terminal dock in `session-detail.tsx` /
@@ -123,11 +162,21 @@ this page is the full text of the rules summarised there.
   has not delivered yet stays ACTIVE behind a pending surface, because
   treating a transient replica gap as "this tab does not exist" is what
   bounced a just-promoted draft back to the parent (#199 regression). Only
-  positive evidence resolves away from the named tab (an archived or
-  side-panel child, a device-local draft that is provably gone), and NOTHING
-  observes data to
-  rewrite the URL back — the `shouldClearSessionUrlTab` normalizer is
-  deliberately dead. Promotion keeps its `pendingDraftChildSessionIds` entry
+  positive evidence resolves away from the named tab (a closed conversation, which
+  includes an archived child of a live workspace but not the open tabs of an archived
+  workspace; a side-panel child; or a device-local draft that is provably gone). A confirmed
+  shared close replaces only the still-current URL choice with an open neighbour
+  or `empty` (materialized into a local draft); this narrow invalidation never reopens the parent or mirrors selection
+  into React state. The old broad `shouldClearSessionUrlTab` normalizer remains dead.
+  In-conversation created-Session cards can carry only the child Session id. When that id is
+  already a known tab in the mounted workspace, navigation stays local; a closed target goes
+  through the closed-list action (Reopen; Restore for an archived child of a live
+  workspace) and waits for its open metadata projection before
+  selection instead of routing through the child root URL or letting stale close metadata
+  redirect the explicit request to an open sibling.
+  The pending request is keyed by its source Session as well as its URL tab value, so
+  switching between two tabless Session routes cancels the old request.
+  Promotion keeps its `pendingDraftChildSessionIds` entry
   as a draft→child resolution alias through the send window. The ABSENT value
   means "no explicit choice" and is reserved for external entries: the session
   ROUTE's `beforeLoad` fills it from the last-active store as one replace

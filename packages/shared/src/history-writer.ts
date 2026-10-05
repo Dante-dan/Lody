@@ -80,9 +80,13 @@ function preserveUnknown(
     // A different union variant is a new value, not a carrier for the old one's extensions.
     if (
       record(old) &&
-      typeof old.type === 'string' &&
-      typeof parsed.type === 'string' &&
-      old.type !== parsed.type
+      Object.entries(schema.shape).some(
+        ([key, field]) =>
+          field instanceof z.ZodLiteral &&
+          record(old) &&
+          Object.hasOwn(old, key) &&
+          old[key] !== parsed[key]
+      )
     )
       old = undefined;
     const result: Record<string, unknown> = Object.create(null);
@@ -335,6 +339,12 @@ export interface HistoryWriter {
   update(updater: (history: SessionHistoryInput[]) => SessionHistoryInput[]): void;
   /** Mutate an existing turn without producing/planning the entire history. */
   updateEntry(id: string, updater: (entry: SessionHistoryInput) => SessionHistoryInput): boolean;
+  /**
+   * Mutate every stored row carrying `id`, oldest first. Concurrent producers
+   * can insert the same turn twice; this keeps those copies in step. Every
+   * replacement is prepared before the first CRDT mutation.
+   */
+  updateCopies(id: string, updater: (copies: SessionHistoryInput[]) => void): boolean;
   setField<K extends Exclude<keyof SessionHistoryInput, '$cid' | 'items' | 'id'>>(
     turnId: string,
     key: K,
@@ -351,13 +361,18 @@ export interface HistoryWriter {
 export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly SessionHistory[]) {
   const list = doc.getList('history');
   const readAll = () => readHistory?.() ?? (list.toJSON() as SessionHistory[]);
+  const rowWithId = (index: number, id: string) => {
+    const map = list.get(index);
+    if (isContainer(map) && map.kind() === 'Map' && (map as LoroMap).get('id') === id)
+      return { map: map as LoroMap, inline: undefined, index };
+    if (!isContainer(map) && record(map) && map.id === id)
+      return { map: undefined, inline: map as unknown as SessionHistoryInput, index };
+    return undefined;
+  };
   const locate = (id: string) => {
     for (let index = list.length - 1; index >= 0; index--) {
-      const map = list.get(index);
-      if (isContainer(map) && map.kind() === 'Map' && (map as LoroMap).get('id') === id)
-        return { map: map as LoroMap, inline: undefined, index };
-      if (!isContainer(map) && record(map) && map.id === id)
-        return { map: undefined, inline: map as unknown as SessionHistoryInput, index };
+      const found = rowWithId(index, id);
+      if (found) return found;
     }
     return undefined;
   };
@@ -607,6 +622,43 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
       doc.commit();
       return true;
     },
+    updateCopies(id, updater) {
+      const targets: NonNullable<ReturnType<typeof rowWithId>>[] = [];
+      for (let index = 0; index < list.length; index++) {
+        const found = rowWithId(index, id);
+        if (found) targets.push(found);
+      }
+      if (targets.length === 0) return false;
+      const projected = readHistory?.();
+      const previous = targets.map(({ map, inline, index }) => {
+        const read = projected?.[index];
+        if (record(read) && read.id === id) return read as SessionHistoryInput;
+        return map ? (map.toJSON() as SessionHistoryInput) : inline!;
+      });
+      const next = immer.produce(previous, (draft) => {
+        updater(draft);
+      });
+      if (next.length !== previous.length)
+        throw new HistoryWriteError([{ path: ['history'], code: 'unsupported_reorder' }]);
+      const prepared = next.map((entry, i) => {
+        if (entry.id !== id) throw new HistoryWriteError([{ path: ['id'], code: 'immutable_id' }]);
+        return historyValuesEqual(previous[i], entry)
+          ? undefined
+          : prepareReplacement(previous[i]!, entry);
+      });
+      if (prepared.every((value) => value === undefined)) return true;
+      targets.forEach(({ map, index }, i) => {
+        const value = prepared[i];
+        if (value === undefined) return;
+        if (map) diffHistoryContainer(map, sessionHistorySchema, previous[i], value, undefined);
+        else {
+          list.delete(index, 1);
+          list.insert(index, value as Parameters<LoroList['insert']>[1]);
+        }
+      });
+      doc.commit();
+      return true;
+    },
     setField(id, key, value) {
       const target = locate(id);
       if (!target) return false;
@@ -664,10 +716,16 @@ export function createHistoryWriter(doc: LoroDoc, readHistory?: () => readonly S
           // Only the matching turn enters the validated local-update path. The
           // "write the outcome" rule itself is the shared planner, so the Loro
           // and in-memory backends cannot drift.
-          return writer.updateEntry(id, (turn) => {
-            applyRespondPermission(turn as unknown as Record<string, unknown>, requestId, outcome);
+          let applied = false;
+          const updated = writer.updateEntry(id, (turn) => {
+            applied = applyRespondPermission(
+              turn as unknown as Record<string, unknown>,
+              requestId,
+              outcome
+            );
             return turn;
           });
+          return updated && applied;
         }
       }
       return false;

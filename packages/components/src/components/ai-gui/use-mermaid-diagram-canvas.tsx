@@ -17,40 +17,26 @@ import {
 /**
  * Diagram interaction for `markdown-renderer.tsx`.
  *
- * Streamdown owns the diagram markup, so everything here is applied to nodes it
- * rendered: the click target and its `role`/`tabindex` by observer, the canvas
- * transform on the `<svg>`, and the full-screen button by portal into the
- * block's own action bar.
+ * `MarkdownMermaidBlock` renders the diagram asynchronously, so everything here
+ * is applied to nodes it rendered: the click target and its `role`/`tabindex`
+ * by observer, the canvas transform on the `<svg>`, and the full-screen button
+ * by portal into the block's own action bar.
  *
  * A diagram in a message is a still preview. Clicking one with a pointer that
  * can pinch ACTIVATES it: that one diagram becomes a canvas until Escape, a
  * click elsewhere, or the full-screen viewer takes over. Touch never activates —
  * inline pinch would mean taking `touch-action` from the browser and
- * reimplementing inertial panning — so a tap opens the viewer instead, where the
- * control bar's buttons zoom.
+ * reimplementing inertial panning — so a tap opens the viewer instead, where
+ * touch can pan and pinch without stealing the conversation's scroll.
  */
 
-/** Streamdown's wrapper around one rendered diagram, inside a `mermaid-block`. */
+/** The frame around one rendered diagram, inside a `mermaid-block`. */
 export const MERMAID_DIAGRAM_SELECTOR = '[data-streamdown="mermaid"]';
 const MERMAID_BLOCK_SELECTOR = '[data-streamdown="mermaid-block"]';
 const MERMAID_BLOCK_ACTIONS_SELECTOR = '[data-streamdown="mermaid-block-actions"]';
 
 /** Marks the activated diagram; the grab cursor hangs off it in `index.css`. */
 const CANVAS_STATE_ATTRIBUTE = 'data-lody-canvas';
-
-/**
- * The ring is the only sign that a click did anything, and it cannot come from
- * a stylesheet: activating focuses the diagram, and `tailwind/index.css` carries
- * a global `*:focus, *:focus-visible { outline: none !important }`. No rule of
- * ours can outrank that — specificity does not beat `important` — so the ring is
- * written inline with `important` of its own. The element carries no
- * React-managed `style`, so nothing overwrites it.
- */
-const CANVAS_ACTIVE_STYLE = [
-  ['outline', '2px solid hsl(var(--ring))'],
-  ['outline-offset', '2px'],
-  ['border-radius', 'var(--radius-md)'],
-] as const;
 
 const BLOCK_ID_ATTRIBUTE = 'data-lody-diagram-id';
 
@@ -99,6 +85,7 @@ export function useMermaidDiagramCanvas({
   // Written before the state commit so the listeners below, which are not
   // re-registered per activation, always read the current canvas.
   const canvasRef = useRef<ActiveCanvas | null>(null);
+  const transformsRef = useRef(new WeakMap<SVGSVGElement, MermaidCanvasTransform>());
   const panRef = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null);
   const pannedRef = useRef(false);
   // A `click` does not say which device produced it in every engine, so the
@@ -110,13 +97,16 @@ export function useMermaidDiagramCanvas({
     if (!canvas) {
       return;
     }
-    applyCanvasTransform(canvas.svg, MERMAID_CANVAS_IDENTITY);
-    for (const [property] of CANVAS_ACTIVE_STYLE) {
-      canvas.diagram.style.removeProperty(property);
+    transformsRef.current.set(canvas.svg, canvas.transform);
+    canvas.svg.style.removeProperty('will-change');
+    const pan = panRef.current;
+    if (pan && canvas.diagram.hasPointerCapture?.(pan.pointerId)) {
+      canvas.diagram.releasePointerCapture(pan.pointerId);
     }
     canvas.diagram.removeAttribute(CANVAS_STATE_ATTRIBUTE);
     canvasRef.current = null;
     panRef.current = null;
+    pannedRef.current = false;
     setActiveDiagram(null);
   }, []);
 
@@ -131,10 +121,11 @@ export function useMermaidDiagramCanvas({
       }
       deactivate();
       diagram.setAttribute(CANVAS_STATE_ATTRIBUTE, 'active');
-      for (const [property, value] of CANVAS_ACTIVE_STYLE) {
-        diagram.style.setProperty(property, value, 'important');
-      }
-      canvasRef.current = { diagram, svg, transform: MERMAID_CANVAS_IDENTITY };
+      canvasRef.current = {
+        diagram,
+        svg,
+        transform: transformsRef.current.get(svg) ?? MERMAID_CANVAS_IDENTITY,
+      };
       setActiveDiagram(diagram);
     },
     [deactivate]
@@ -184,14 +175,16 @@ export function useMermaidDiagramCanvas({
       if (!svg) {
         return;
       }
-      // The rendered size of the copy in the message is the diagram's natural
-      // size, so an activated canvas is reset before it is measured.
       deactivate();
       const rect = svg.getBoundingClientRect();
+      const scale = transformsRef.current.get(svg)?.scale ?? 1;
+      const clone = svg.cloneNode(true) as SVGSVGElement;
+      // The viewer starts at natural size without changing the inline view.
+      applyCanvasTransform(clone, MERMAID_CANVAS_IDENTITY);
       setSelection({
-        svg: svg.cloneNode(true) as SVGSVGElement,
-        naturalWidth: rect.width,
-        naturalHeight: rect.height,
+        svg: clone,
+        naturalWidth: rect.width / scale,
+        naturalHeight: rect.height / scale,
       });
     },
     [deactivate]
@@ -199,9 +192,9 @@ export function useMermaidDiagramCanvas({
 
   const closeDiagram = useCallback(() => setSelection(null), []);
 
-  // Streamdown renders a diagram only after its lazily imported runtime
-  // resolves — long after this component commits — so the click target, the
-  // block ids, and the action-bar hosts are all applied by observer.
+  // A diagram renders only after its lazily imported runtime resolves — long
+  // after this component commits — so the click target, the block ids, and the
+  // action-bar hosts are all applied by observer.
   useEffect(() => {
     const root = containerRef.current;
     if (!root) {
@@ -289,7 +282,11 @@ export function useMermaidDiagramCanvas({
       // The portalled button below is itself a child-list mutation, so an
       // unconditional update would re-enter this observer forever.
       setBlocks((current) => (sameBlocks(current, found) ? current : found));
-      if (canvasRef.current && !root.contains(canvasRef.current.diagram)) {
+      if (
+        canvasRef.current &&
+        (!root.contains(canvasRef.current.diagram) ||
+          canvasRef.current.diagram.querySelector('svg') !== canvasRef.current.svg)
+      ) {
         deactivate();
       }
     };
@@ -303,20 +300,8 @@ export function useMermaidDiagramCanvas({
     };
   }, [canvasLabel, containerRef, deactivate, enabled]);
 
-  // Streamdown's pan/zoom canvas listens for `wheel` non-passively and calls
-  // `preventDefault()` on every one of them, so a page scroll that merely passes
-  // under a diagram is swallowed and becomes a zoom instead. Turning
-  // `controls.mermaid.panZoom` off only hides that canvas's buttons — the
-  // listener stays, and it sits on Streamdown's own element, so the gesture has
-  // to be taken from it in the capture phase above.
-  //
-  // Only a pinch over the ACTIVE diagram is consumed here. Everything else is
-  // handed back: the interceptor never calls `preventDefault()`, because the
-  // browser's own scrolling is the behaviour being restored. `stopPropagation()`
-  // alone would also hide the gesture from the conversation's wheel listeners
-  // further up (releasing stick-to-bottom, abandoning an outline jump), so an
-  // uncancelable copy is re-dispatched from the markdown root, whose path
-  // excludes the canvas.
+  // Only a pinch over the ACTIVE diagram is consumed. Every other wheel is left
+  // to the page, so a scroll that merely passes under a diagram still scrolls.
   useEffect(() => {
     const root = containerRef.current;
     if (!root || !enabled) {
@@ -324,52 +309,27 @@ export function useMermaidDiagramCanvas({
     }
 
     const handleWheel = (event: WheelEvent) => {
-      const target = event.target;
-      if (!(target instanceof Element)) {
+      if (!(event.ctrlKey || event.metaKey)) {
         return;
       }
-      const diagram = target.closest(MERMAID_DIAGRAM_SELECTOR);
-      if (!diagram) {
+      const diagram = canvasRef.current?.diagram;
+      if (!diagram || !(event.target instanceof Node) || !diagram.contains(event.target)) {
         return;
       }
-      event.stopPropagation();
-
-      if (canvasRef.current?.diagram === diagram && (event.ctrlKey || event.metaKey)) {
-        // A trackpad pinch, which Chromium would otherwise spend on zooming the
-        // whole window.
-        event.preventDefault();
-        zoomAt(event.clientX, event.clientY, computeCanvasPinchFactor(event.deltaY));
-        return;
-      }
-
-      root.dispatchEvent(
-        new WheelEvent('wheel', {
-          bubbles: true,
-          cancelable: false,
-          composed: true,
-          deltaX: event.deltaX,
-          deltaY: event.deltaY,
-          deltaZ: event.deltaZ,
-          deltaMode: event.deltaMode,
-          clientX: event.clientX,
-          clientY: event.clientY,
-          altKey: event.altKey,
-          ctrlKey: event.ctrlKey,
-          metaKey: event.metaKey,
-          shiftKey: event.shiftKey,
-        })
-      );
+      // A trackpad pinch, which Chromium would otherwise spend on zooming the
+      // whole window.
+      event.preventDefault();
+      zoomAt(event.clientX, event.clientY, computeCanvasPinchFactor(event.deltaY));
     };
 
-    root.addEventListener('wheel', handleWheel, { capture: true, passive: false });
+    root.addEventListener('wheel', handleWheel, { passive: false });
     return () => {
-      root.removeEventListener('wheel', handleWheel, { capture: true });
+      root.removeEventListener('wheel', handleWheel);
     };
   }, [containerRef, enabled, zoomAt]);
 
   // Which device is asking decides what a click means, so the pointer is
-  // recorded before the click arrives. Capture phase: Streamdown's canvas calls
-  // `setPointerCapture` on its own element for a drag it can no longer perform.
+  // recorded before the click arrives.
   useEffect(() => {
     const root = containerRef.current;
     if (!root || !enabled) {
@@ -587,11 +547,7 @@ export function useMermaidDiagramCanvas({
   };
 }
 
-/**
- * Sits in Streamdown's own action bar beside copy and download, which is
- * always visible rather than revealed on hover. It replaces the bundled
- * full-screen control, whose overlay a touch user cannot leave.
- */
+/** Sits in the diagram block's action bar beside copy and download. */
 export function MermaidFullscreenButton({
   label,
   onOpen,

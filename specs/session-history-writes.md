@@ -54,8 +54,35 @@ That tolerance must not authorize creating new malformed items locally.
   edits retain existing request information. Identity changes require complete item parsing;
   changed content blocks are parsed separately. Invalid new fields reject the command before any write.
 - New history accepts existing legacy built-in CLI selector normalization without rewriting
-  stored history. Steer config and same-identity task-proposal edits parse only changed fields.
+  stored history. Steer config edits parse only changed fields.
 - Queue promotion removes its queued row only after history acceptance; failed writes retain it.
+- Each buffered ACP notification keeps a stable operation ID across automatic retries. If a backend
+  commits only a batch prefix before a later write fails, retrying the buffered entries reuses those
+  IDs and the backend treats an already-accepted ID as idempotent. Filtering and batch splitting
+  preserve the ID-to-notification pairing. Separately enqueued provider notifications remain distinct
+  even when their payloads match.
+- Dispatch and activation checks resolve duplicate turn IDs to the last stored row,
+  matching targeted history reads and writes. Earlier copies cannot revive a terminal
+  last copy. Full history export preserves every stored row; this is not deduplication.
+  If an attempted terminal repair leaves that identity dispatchable, the current check
+  stops without replaying it or repeatedly materializing history.
+- A user-status write applies to every stored copy of that user turn. The last copy
+  decides whether a guarded write is accepted; earlier copies follow it without a settled
+  copy regressing. A steer verdict moves only copies still in steer states. Requeueing an
+  undelivered steer is refused when any copy has started or settled.
+- Before appending a queued turn that history does not contain, queue promotion rereads
+  session meta inside its lease. A refused steer for that turn holds the queued row until
+  the steer's own history arrives or missing-history recovery settles it. An applied or
+  settled steer, an active or handled turn, a settled activation, a missing-history
+  tombstone or completed assistant output removes the row without appending history;
+  that evidence takes precedence over a refused steer status.
+- Composer steering requires authoritative ACP support for acknowledged steering,
+  a live prompt, and a known unfinished assistant turn. During activity, a guide
+  preference or inverted queue submission without that support appends to the
+  regular Queue, including when capability information is unavailable or provisional.
+  It retains queue order and editing/removal until normal promotion; it creates no
+  pending-apply history entry and sends no steer request. This routing decision
+  precedes delivery; submitted native steers retain the outcome rules below.
 - Manual Codex compaction owns its native turn through completion. Stop interrupts
   that turn and retains the ACP prompt until `turn/completed` confirms its outcome
   or the provider connection closes. For an in-flight prompt with a ready ACP session,
@@ -67,8 +94,14 @@ That tolerance must not authorize creating new malformed items locally.
   This deadline does not wait for cancel acknowledgement or restart on repeated Stop.
   Failed termination retains ownership until ACP ends. Start and interrupt
   acknowledgements, like compaction-item completion, do not release execution ownership.
-  The CLI persists unresolved compaction as failed after confirmed cancellation,
-  before accepting another turn.
+  Finalizing an assistant turn settles the context-compaction markers it leaves
+  open, on every path and not only after confirmed cancellation: a marker the
+  provider never carried to a terminal status is persisted as failed before
+  another turn is accepted. Markers superseded by a later compaction marker in
+  the same turn are duplicate identities for one compaction episode — an adapter
+  re-announcing a compaction already in flight — and are removed instead, so one
+  episode renders as one row. A provider update that later arrives for the same
+  `toolCallId` still wins.
   Opening a Session does not trigger a history-repair RPC or rewrite old outcomes.
 - A steer adapter reports one final delivery outcome: `applied`, `not-applied`, or
   `unknown`. Only `not-applied` may return the same user turn to ordinary dispatch;
@@ -79,7 +112,9 @@ That tolerance must not authorize creating new malformed items locally.
   from Stop, transport failure, or local ownership state.
 - Stop and target-prompt completion end local document/preparation/configuration/verdict
   waits, releasing the steer queue and rewrite lease. This does not cancel the raw request
-  or discard its verdict. Already-applied ownership transfer finishes atomically; queued
+  or discard its verdict. Exception: a handoff adapter may answer the yielded prompt before
+  reporting a submitted steer's verdict, so its completion waits for that verdict; the
+  steered prompt is the next turn, never cancellation-drain work. Already-applied ownership transfer finishes atomically; queued
   steers must not begin preparation for a stopped target. Failed outcome persistence must
   still release the application lease and permit cancellation cleanup.
 - Execution owns steer status and exact-id recovery activations in `steerTurnStatuses`.
@@ -98,9 +133,9 @@ That tolerance must not authorize creating new malformed items locally.
   retain the process that owns its prepared replacement. Create/restore fences remain.
 - Proven non-delivery survives a promotion write failure. The CLI returns `promotion-failed`
   with the error instead of implying successful recovery or unknown delivery. A daemon's
-  `recoveryOwned` response keeps recovery with that daemon: the renderer retries a proven
-  promotion failure once through the same RPC and surfaces persistent failure. Legacy
-  responses retain the pending_apply/pending/seen dispatch repair. Active, terminal, and
+  `recoveryOwned` response keeps recovery with that daemon: the renderer neither retries
+  nor repairs that turn. Legacy responses (no `recoveryOwned`) retain the
+  pending_apply/pending/seen dispatch repair. Active, terminal, and
   removed turns cannot be revived. Timeout or unknown delivery never authorizes retry.
 - Foreground run configuration belongs to its turn's Effect signal. Once that turn is
   interrupted, an in-flight configuration request may finish, but it must not issue a

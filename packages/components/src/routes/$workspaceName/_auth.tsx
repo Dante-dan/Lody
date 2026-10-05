@@ -1,5 +1,6 @@
-import { createFileRoute, Navigate, Outlet, useLocation } from '@tanstack/react-router';
-import { lazy, useEffect, useMemo, useRef, useState } from 'react';
+import { createFileRoute, Outlet } from '@tanstack/react-router';
+import { BootNavigate } from '@/components/boot-navigate';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useOrganization } from '@/hooks/useOrganization';
 import { useAtomValue, useSetAtom } from 'jotai';
@@ -27,24 +28,19 @@ import {
 } from '@/lib/posthog-analytics';
 import { identifyPostHogUser } from '@/lib/posthog-identity';
 import { scheduleOneSignalTask } from '@/lib/onesignal';
-import { RouteSuspense } from '@/components/route-suspense';
+import { PreloadedMainLayout } from '@/components/preloaded-main-layout';
 import { RouteMessage } from '@/components/route-message';
 import { LoadingPlaceholder } from '@/components/loading-placeholder';
 import { useVisibleMachineMetas } from '@/hooks/use-visible-machine-metas';
 import { useFireOncePerKey } from '@/hooks/use-fire-once';
-import { writeLastAppRoutePath } from '@/lib/last-app-route';
 import { type LodyLiveActivityBridge, useLodyLiveActivity } from '@/hooks/use-lody-live-activity';
 import { isNativeIOSAppShell } from '@/lib/native-platform';
 import { isLocalAppPlatform } from '@/lib/app-platform';
 import { useResolvedWorkspaceScope } from '../../hooks/use-resolved-workspace-scope';
+import { WorkspaceSyncStuckReporter } from '@/components/workspace-sync-stuck-reporter';
 import { useBillingOverviewPreload } from '../../hooks/use-billing-overview-preload';
 
 const AUTH_ROUTE_ONESIGNAL_LOGIN_IDLE_TIMEOUT_MS = 10_000;
-
-const LazyMainLayout = lazy(async () => {
-  const module = await import('@/components/main-layout');
-  return { default: module.MainLayout };
-});
 
 function normalizeConvexSiteUrl(rawUrl: string | undefined): string | null {
   const trimmed = rawUrl?.trim();
@@ -76,15 +72,15 @@ function MainLayoutComponent() {
 }
 
 function LocalPlatformLayoutContent({ workspaceName }: { workspaceName: string }) {
-  // Same dock-badge / live-activity wiring as the cloud layout.
-  useLodyLiveActivity({ workspaceName });
-
   return (
-    <RouteSuspense>
-      <LazyMainLayout>
+    <>
+      {/* Same dock-badge / live-activity wiring as the cloud layout. */}
+      <LodyLiveActivityHost workspaceName={workspaceName} />
+      <WorkspaceSyncStuckReporter />
+      <PreloadedMainLayout>
         <AuthenticatedWorkspaceContent />
-      </LazyMainLayout>
-    </RouteSuspense>
+      </PreloadedMainLayout>
+    </>
   );
 }
 
@@ -274,7 +270,7 @@ function CloudMainLayoutComponent({ workspaceName }: { workspaceName: string }) 
 
   if (confirmedUnauthenticated) {
     const currentPath = getAppCurrentPathWithSearch();
-    return <Navigate to="/login" search={{ redirect: currentPath }} replace />;
+    return <BootNavigate to="/login" search={{ redirect: currentPath }} replace />;
   }
 
   if (hasLocalToken) {
@@ -284,6 +280,7 @@ function CloudMainLayoutComponent({ workspaceName }: { workspaceName: string }) 
   if (!sessionSettled) {
     return (
       <LoadingPlaceholder
+        variant="boot"
         title={t('workspace.route.signingInTitle')}
         description={t('workspace.route.signingInDescription')}
       />
@@ -293,6 +290,7 @@ function CloudMainLayoutComponent({ workspaceName }: { workspaceName: string }) 
   if (isPending || isRetrying) {
     return (
       <LoadingPlaceholder
+        variant="boot"
         title={t('workspace.route.signingInTitle')}
         description={t('workspace.route.signingInDescription')}
       />
@@ -310,13 +308,39 @@ function CloudMainLayoutComponent({ workspaceName }: { workspaceName: string }) 
 
   if (!session?.user) {
     const currentPath = getAppCurrentPathWithSearch();
-    return <Navigate to="/login" search={{ redirect: currentPath }} replace />;
+    return <BootNavigate to="/login" search={{ redirect: currentPath }} replace />;
   }
 
   return <AuthedLayoutContent hasLocalToken={false} workspaceName={workspaceName} />;
 }
 
+/**
+ * Owns the dock-badge / Live Activity subscriptions (every session, presence and
+ * its clock). A leaf that renders nothing, so their frequent updates re-render
+ * only this component instead of the whole workspace layout.
+ */
+function LodyLiveActivityHost({ workspaceName }: { workspaceName: string }) {
+  useLodyLiveActivity({ workspaceName });
+  return null;
+}
+
 function AuthedLayoutContent({
+  hasLocalToken,
+  workspaceName,
+}: {
+  hasLocalToken: boolean;
+  workspaceName: string;
+}) {
+  return (
+    <>
+      <LodyLiveActivityHost workspaceName={workspaceName} />
+      <WorkspaceSyncStuckReporter />
+      <AuthedLayoutRoutes hasLocalToken={hasLocalToken} workspaceName={workspaceName} />
+    </>
+  );
+}
+
+function AuthedLayoutRoutes({
   hasLocalToken,
   workspaceName,
 }: {
@@ -328,17 +352,14 @@ function AuthedLayoutContent({
     organizations,
     organizationsLoading,
     error: organizationsError,
+    refetchOrganizations,
+    refetchActiveOrganization,
   } = useOrganization({ targetSlug: workspaceName });
   const user = useAtomValue(userAtom);
   const { workspaceId: currentWorkspaceId } = useResolvedWorkspaceScope();
   useBillingOverviewPreload(user ? currentWorkspaceId : null);
   const [orgSettled, setOrgSettled] = useState(!organizationsLoading);
   const [userSettled, setUserSettled] = useState(Boolean(user) && Boolean(currentWorkspaceId));
-
-  // Push this workspace's owned-by-me unread/waiting counts to the Electron
-  // dock badge. No-op on web. Mounted at the workspace layout so it lives
-  // for the entire authenticated session (one subscriber per window).
-  useLodyLiveActivity({ workspaceName });
 
   useEffect(() => {
     if (!organizationsLoading) {
@@ -354,35 +375,32 @@ function AuthedLayoutContent({
 
   if (hasLocalToken) {
     if (orgSettled && organizations !== undefined && organizations.length === 0) {
-      return <Navigate to="/workspace/create" replace />;
+      return <BootNavigate to="/workspace/create" replace />;
     }
 
     if (!currentWorkspaceId) {
       return (
-        <RouteSuspense>
-          <LazyMainLayout workspaceReady={false}>
-            <LoadingPlaceholder
-              variant="content"
-              title={t('workspace.route.switchingTitle')}
-              description={t('workspace.route.switchingDescription')}
-            />
-          </LazyMainLayout>
-        </RouteSuspense>
+        <PreloadedMainLayout workspaceReady={false}>
+          <LoadingPlaceholder
+            variant="content"
+            title={t('workspace.route.switchingTitle')}
+            description={t('workspace.route.switchingDescription')}
+          />
+        </PreloadedMainLayout>
       );
     }
 
     return (
-      <RouteSuspense>
-        <LazyMainLayout>
-          <AuthenticatedWorkspaceContent showWorkspaceCheckout />
-        </LazyMainLayout>
-      </RouteSuspense>
+      <PreloadedMainLayout>
+        <AuthenticatedWorkspaceContent showWorkspaceCheckout />
+      </PreloadedMainLayout>
     );
   }
 
   if (!orgSettled || !userSettled) {
     return (
       <LoadingPlaceholder
+        variant="boot"
         title={t('workspace.route.loadingTitle')}
         description={t('workspace.route.setupLoadingDescription')}
       />
@@ -394,6 +412,10 @@ function AuthedLayoutContent({
       <RouteMessage
         title={t('workspace.route.loadingWorkspacesErrorTitle')}
         description={t('workspace.route.loadingWorkspacesErrorDescription')}
+        onRetry={() => {
+          void refetchOrganizations();
+          void refetchActiveOrganization();
+        }}
       />
     );
   }
@@ -401,6 +423,7 @@ function AuthedLayoutContent({
   if (organizationsLoading) {
     return (
       <LoadingPlaceholder
+        variant="boot"
         title={t('workspace.route.loadingWorkspacesTitle')}
         description={t('workspace.route.loadingWorkspacesDescription')}
       />
@@ -412,17 +435,22 @@ function AuthedLayoutContent({
       <RouteMessage
         title={t('workspace.route.loadingWorkspacesErrorTitle')}
         description={t('workspace.route.loadingWorkspacesErrorDescription')}
+        onRetry={() => {
+          void refetchOrganizations();
+          void refetchActiveOrganization();
+        }}
       />
     );
   }
 
   if (organizations.length === 0) {
-    return <Navigate to="/workspace/create" replace />;
+    return <BootNavigate to="/workspace/create" replace />;
   }
 
   if (!user || !currentWorkspaceId) {
     return (
       <LoadingPlaceholder
+        variant="boot"
         title={t('workspace.route.loadingTitle')}
         description={t('workspace.route.setupLoadingDescription')}
       />
@@ -430,11 +458,9 @@ function AuthedLayoutContent({
   }
 
   return (
-    <RouteSuspense>
-      <LazyMainLayout>
-        <AuthenticatedWorkspaceContent showWorkspaceCheckout />
-      </LazyMainLayout>
-    </RouteSuspense>
+    <PreloadedMainLayout>
+      <AuthenticatedWorkspaceContent showWorkspaceCheckout />
+    </PreloadedMainLayout>
   );
 }
 
@@ -445,7 +471,6 @@ function AuthenticatedWorkspaceContent({
 }) {
   return (
     <>
-      <AuthedWorkspaceRouteTracker />
       <Outlet />
       <ElectronSessionCompletionNotifier />
       <ElectronMenuHandler />
@@ -455,40 +480,4 @@ function AuthenticatedWorkspaceContent({
       {showWorkspaceCheckout && <WorkspaceCheckoutPendingDialog />}
     </>
   );
-}
-
-function AuthedWorkspaceRouteTracker() {
-  const location = useLocation();
-  const routeHref = location.href;
-  const routeHrefRef = useRef(routeHref);
-  routeHrefRef.current = routeHref;
-
-  useEffect(() => {
-    writeLastAppRoutePath(routeHref);
-  }, [routeHref]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      return undefined;
-    }
-
-    const persistCurrentRoute = () => {
-      writeLastAppRoutePath(routeHrefRef.current);
-    };
-    const persistWhenHidden = () => {
-      if (document.visibilityState === 'hidden') {
-        persistCurrentRoute();
-      }
-    };
-
-    window.addEventListener('pagehide', persistCurrentRoute);
-    document.addEventListener('visibilitychange', persistWhenHidden);
-
-    return () => {
-      window.removeEventListener('pagehide', persistCurrentRoute);
-      document.removeEventListener('visibilitychange', persistWhenHidden);
-    };
-  }, []);
-
-  return null;
 }

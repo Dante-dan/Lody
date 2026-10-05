@@ -94,13 +94,10 @@ for (const leading of ['empty', 'visible']) {
   });
 }
 
-for (const { story, label, colorVariable } of [
-  { story: 'starting-activity', label: 'Starting…', colorVariable: '--primary' },
-  {
-    story: 'permission-activity',
-    label: 'Waiting for permission',
-    colorVariable: '--status-warning',
-  },
+for (const { story, label, working } of [
+  // Live work shimmers; waiting on the user keeps a still, warning-toned label.
+  { story: 'starting-activity', label: 'Starting…', working: true },
+  { story: 'permission-activity', label: 'Waiting for permission', working: false },
 ]) {
   test(`agent activity stays visible across empty history hydration: ${story}`, async ({
     page,
@@ -114,13 +111,13 @@ for (const { story, label, colorVariable } of [
     await expect(activity).toBeVisible();
     await expect(activity).toBeInViewport();
     await expect(page.locator('[data-message-selection-scroll]')).toHaveCount(0);
-    const activityColor = () =>
-      page
-        .locator('.agent-activity-dot')
-        .evaluate((element) =>
-          (element as HTMLElement).style.getPropertyValue('--agent-activity-color')
-        );
-    expect(await activityColor()).toBe(`hsl(var(${colorVariable}, 199 89% 72%))`);
+    const activityPresentation = () =>
+      activity.evaluate((element) => ({
+        shimmer:
+          window.getComputedStyle(element, '::after').animationName === 'agent-shimmer-sweep',
+        warning: element.classList.contains('text-status-warning'),
+      }));
+    expect(await activityPresentation()).toEqual({ shimmer: working, warning: !working });
 
     const toggleActivity = page.getByRole('button', { name: 'Toggle activity', exact: true });
     await toggleActivity.click();
@@ -134,69 +131,97 @@ for (const { story, label, colorVariable } of [
     ).toBeInViewport();
     await expect(activity).toHaveCount(1);
     await expect(activity).toBeInViewport();
-    expect(await activityColor()).toBe(`hsl(var(${colorVariable}, 199 89% 72%))`);
+    expect(await activityPresentation()).toEqual({ shimmer: working, warning: !working });
     await toggleActivity.click();
     await expect(activity).toHaveCount(0);
   });
 }
 
-test('opening and reopening never reveals an unmeasured tail', async ({ page }) => {
+/**
+ * Holds the ResizeObserver deliveries for conversation rows until released.
+ * The scroll engine must not depend on them: it reads the rows it mounts in
+ * the commit that mounts them, so the first painted frame is already placed.
+ */
+async function holdRowMeasurements(page: import('@playwright/test').Page) {
   await page.addInitScript(() => {
     const NativeResizeObserver = window.ResizeObserver;
-    let held: (() => void)[] = [];
     let paused = true;
+    let held: (() => void)[] = [];
     Object.assign(window, {
-      pauseTailMeasurement: () => {
-        paused = true;
-      },
-      releaseTailMeasurement: () => {
+      releaseRowMeasurements: () => {
         paused = false;
         const callbacks = held;
         held = [];
-        for (const callback of callbacks) callback();
+        callbacks.forEach((callback) => callback());
       },
-      hasHeldTailMeasurement: () => held.length > 0,
     });
     window.ResizeObserver = class extends NativeResizeObserver {
       constructor(callback: ResizeObserverCallback) {
         super((entries, observer) => {
-          // Gate the real browser measurement of the destination row. Parent
-          // viewport/spacer observations keep running. No timing assumptions.
-          if (
-            paused &&
-            entries.some(
-              ({ target }) =>
-                target.parentElement?.parentElement?.hasAttribute(
-                  'data-message-selection-scroll'
-                ) && target.querySelector('[data-cold-tail]')
-            )
-          ) {
-            held.push(() => callback(entries, observer));
-          } else callback(entries, observer);
+          const rows = entries.filter(({ target }) => target.hasAttribute('data-virtual-index'));
+          const other = entries.filter(({ target }) => !target.hasAttribute('data-virtual-index'));
+          if (other.length) callback(other, observer);
+          if (rows.length) {
+            if (paused) held.push(() => callback(rows, observer));
+            else callback(rows, observer);
+          }
         });
       }
     };
   });
+}
+
+const releaseRowMeasurements = (page: import('@playwright/test').Page) =>
+  page.evaluate(() =>
+    (window as typeof window & { releaseRowMeasurements: () => void }).releaseRowMeasurements()
+  );
+
+test('opening and reopening lands on the tail without waiting for row measurements', async ({
+  page,
+}) => {
+  await holdRowMeasurements(page);
   await page.goto('/iframe.html?id=sessions-sessionchathydration--cold-tail&viewMode=story');
   const open = page.getByRole('button', { name: 'Open conversation', exact: true });
   await open.waitFor({ state: 'visible' });
   for (let i = 0; i < 2; i++) {
-    await page.evaluate(() =>
-      (window as typeof window & { pauseTailMeasurement: () => void }).pauseTailMeasurement()
-    );
     await open.click();
-    await page.waitForFunction(() =>
-      (window as typeof window & { hasHeldTailMeasurement: () => boolean }).hasHeldTailMeasurement()
-    );
     const viewport = page.locator('[data-message-selection-scroll]');
-    await expect(viewport).toHaveCSS('visibility', 'hidden');
-    await page.evaluate(() =>
-      (window as typeof window & { releaseTailMeasurement: () => void }).releaseTailMeasurement()
-    );
+    // Never hidden, and the tail is in place before any row observation arrives.
     await expect(viewport).toHaveCSS('visibility', 'visible');
     await expect(page.locator('[data-cold-tail]')).toBeInViewport();
     await expect
       .poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
       .toBeLessThanOrEqual(1);
   }
+  await releaseRowMeasurements(page);
+  const viewport = page.locator('[data-message-selection-scroll]');
+  await expect(page.locator('[data-cold-tail]')).toBeInViewport();
+  await expect
+    .poll(() => viewport.evaluate((el) => el.scrollHeight - el.clientHeight - el.scrollTop))
+    .toBeLessThanOrEqual(1);
+});
+
+test('a saved reading position opens at its row without waiting for row measurements', async ({
+  page,
+}) => {
+  await holdRowMeasurements(page);
+  await page.goto(
+    '/iframe.html?id=sessions-sessionchathydration--cold-cached-offset&viewMode=story'
+  );
+  const open = page.getByRole('button', { name: 'Open conversation', exact: true });
+  await open.waitFor({ state: 'visible' });
+  await open.click();
+  const viewport = page.locator('[data-message-selection-scroll]');
+  await expect(viewport).toHaveCSS('visibility', 'visible');
+  // Distance of the saved row's top from the viewport's top edge.
+  const rowDistance = () =>
+    viewport.evaluate((el) => {
+      const row = el.querySelector('[data-conversation-turn-id="cold-4"]');
+      if (!row) return Number.POSITIVE_INFINITY;
+      return Math.abs(row.getBoundingClientRect().top - el.getBoundingClientRect().top);
+    });
+  // The saved row is at the top edge before and after the held measurements arrive.
+  await expect.poll(rowDistance).toBeLessThanOrEqual(1);
+  await releaseRowMeasurements(page);
+  await expect.poll(rowDistance).toBeLessThanOrEqual(1);
 });

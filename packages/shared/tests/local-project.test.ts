@@ -3,12 +3,13 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   checkoutLocalProjectBranchAtRootPath,
   createLocalProjectId,
   getLocalProjectGitStateAtRootPath,
+  getLocalProjectGitHubRepoAtRootPath,
   getLocalProjectWorkingTreeAtRootPath,
   normalizeLocalProjectRootPath,
   parseLocalProjectBranchRefAtRootPath,
@@ -22,12 +23,14 @@ const require = createRequire(import.meta.url);
 const {
   checkoutLocalProjectBranchAtRootPath: checkoutLocalProjectBranchAtRootPathCjs,
   getLocalProjectGitStateAtRootPath: getLocalProjectGitStateAtRootPathCjs,
+  getLocalProjectGitHubRepoAtRootPath: getLocalProjectGitHubRepoAtRootPathCjs,
   resolveLocalProjectBranchAtRootPath: resolveLocalProjectBranchAtRootPathCjs,
   parseLocalProjectBranchRefAtRootPath: parseLocalProjectBranchRefAtRootPathCjs,
   resolveLocalProjectBranchRefAtRootPath: resolveLocalProjectBranchRefAtRootPathCjs,
   resolveLocalProjectLegacyBaseBranchAtRootPath: resolveLocalProjectLegacyBaseBranchAtRootPathCjs,
   selectLocalProjectBranchSelector: selectLocalProjectBranchSelectorCjs,
 } = require('../src/node/local-project.cjs') as {
+  getLocalProjectGitHubRepoAtRootPath: typeof getLocalProjectGitHubRepoAtRootPath;
   checkoutLocalProjectBranchAtRootPath: (
     rootPath: string,
     branchName: string
@@ -149,6 +152,16 @@ function createGitProjectWithRemotes(
 }
 
 describe('local-project helpers', () => {
+  beforeEach(() => {
+    // Keep fixture URLs and repository selection independent of host Git rewrites.
+    for (const key of Object.keys(process.env)) {
+      if (/^(GIT_|SSH_|LODY_GIT_)/.test(key)) vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    vi.stubEnv('GIT_CONFIG_GLOBAL', os.devNull);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
   let tempDir: string | null = null;
 
   afterEach(() => {
@@ -1233,6 +1246,7 @@ describe('local-project helpers', () => {
       expect(gitState.git).toBe(true);
       if (gitState.git) {
         expect(gitState.githubRepoFullName).toBe('loro-dev/lody');
+        expect(await getLocalProjectGitHubRepoAtRootPath(projectDir)).toBe('loro-dev/lody');
       }
     },
     GIT_HELPER_TEST_TIMEOUT_MS
@@ -1246,6 +1260,7 @@ describe('local-project helpers', () => {
         { name: 'origin', url: 'git@github.com:loro-dev/lody.git' },
       ]);
 
+      expect(await getLocalProjectGitHubRepoAtRootPathCjs(projectDir)).toBe('loro-dev/lody');
       expect(await getLocalProjectGitStateAtRootPathCjs(projectDir)).toMatchObject({
         git: true,
         githubRepoFullName: 'loro-dev/lody',

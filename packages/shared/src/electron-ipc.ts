@@ -30,6 +30,17 @@ export type RendererFatalErrorReport = {
 
 export type WindowBadgeInput = { unread: number; waiting: number };
 
+/**
+ * Route a product window should show. Sent to a pre-warmed auxiliary window
+ * when it is reused, so the renderer can bind the target without a reload.
+ */
+export type ElectronWindowTarget = {
+  workspace: string;
+  sessionId?: string;
+};
+
+export type PreparedWindowTarget = ElectronWindowTarget & { preparationId: string };
+
 export type SessionControlSendInput = {
   requestId: string;
   message: LocalSessionControlRequest;
@@ -88,7 +99,7 @@ export const ElectronPublicBrowserBoundsInputSchema = ElectronPublicBrowserIdInp
 }).strict();
 
 export const ElectronPublicBrowserVisibilityInputSchema = ElectronPublicBrowserIdInputSchema.extend(
-  { visible: z.boolean() }
+  { visible: z.boolean(), trackInteraction: z.boolean().optional() }
 ).strict();
 
 export type ElectronPublicBrowserCreateInput = z.infer<
@@ -123,6 +134,11 @@ export type ElectronPublicBrowserResult =
   | { ok: false; error: string };
 
 export const ELECTRON_PUBLIC_BROWSER_STATE_CHANNEL = 'publicBrowser.state';
+
+export type ElectronPublicBrowserInteraction = {
+  browserId: string;
+  source: 'pointer' | 'keyboard';
+};
 
 const LocalPathLauncherStringSchema = z
   .string()
@@ -401,6 +417,24 @@ export const ElectronAuthCallbackSessionSchema = z
   .strict();
 
 export type ElectronAuthCallbackSession = z.infer<typeof ElectronAuthCallbackSessionSchema>;
+
+export type ElectronLoginState = {
+  revision: number;
+  attemptId: string | null;
+  phase: 'idle' | 'waiting' | 'exchanging' | 'authenticated' | 'error';
+  session: ElectronAuthCallbackSession | null;
+  error:
+    | 'browser_open_failed'
+    | 'authorization_expired'
+    | 'exchange_failed'
+    | 'exchange_rejected'
+    | 'exchange_timeout'
+    | 'secure_storage_unavailable'
+    | 'restart_required'
+    | null;
+  /** Credential-free failure summary (HTTP status/server code or local error) for support. */
+  errorDetail: string | null;
+};
 
 export type ElectronUpdaterPhase =
   | 'idle'

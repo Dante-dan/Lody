@@ -123,6 +123,7 @@ describe('maybeClearLodyCacheOnBoot', () => {
     );
     localStorage.setItem('lody:githubReposCache', '{}');
     localStorage.setItem('lody:githubBranchesCache', '{}');
+    localStorage.setItem('lody:usageDayDetails', '{}');
     localStorage.setItem('lody:auth-bootstrap', '{}');
     markCacheClearPending();
 
@@ -133,6 +134,7 @@ describe('maybeClearLodyCacheOnBoot', () => {
     expect(localStorage.getItem('lody:workspaceInfo')).toBeNull();
     expect(localStorage.getItem('lody:githubReposCache')).toBeNull();
     expect(localStorage.getItem('lody:githubBranchesCache')).toBeNull();
+    expect(localStorage.getItem('lody:usageDayDetails')).toBeNull();
     expect(localStorage.getItem('lody:auth-bootstrap')).toBeNull();
     // The user stays signed in and keeps preferences.
     expect(localStorage.getItem('lody_auth_token')).toBe('token');
@@ -171,6 +173,43 @@ describe('maybeClearLodyCacheOnBoot', () => {
 
     expect(deletedDatabases).toEqual([]);
   });
+
+  it.each([
+    ['enumerated', ['lody-session-send-v1']],
+    ['not enumerable', []],
+  ])('removes the retired session-send journal database (%s)', async (_label, present) => {
+    presentDatabases = present;
+    localStorage.setItem('lody_auth_token', 'token');
+    markCacheClearPending();
+
+    await maybeClearLodyCacheOnBoot();
+
+    expect(deletedDatabases).toContain('lody-session-send-v1');
+    expect(localStorage.getItem('lody_auth_token')).toBe('token');
+    expect(readPendingLocalClearMode()).toBeNull();
+  });
+
+  it.each([
+    ['force-cache', 'cache'],
+    ['force-all', 'hard'],
+  ] as const)(
+    'completes a %s clear armed by a build that had the send journal',
+    async (flag, mode) => {
+      presentDatabases = ['lody-session-send-v1', 'lody-loro-repo-db-ws1', 'someone-elses-db'];
+      localStorage.setItem('lody_auth_token', 'token');
+      localStorage.setItem(CACHE_CLEAR_FLAG, flag);
+      expect(readPendingLocalClearMode()).toBe(mode);
+
+      await maybeClearLodyCacheOnBoot();
+
+      expect(deletedDatabases).toEqual(
+        expect.arrayContaining(['lody-session-send-v1', 'lody-loro-repo-db-ws1'])
+      );
+      expect(deletedDatabases.includes('someone-elses-db')).toBe(mode === 'hard');
+      expect(localStorage.getItem('lody_auth_token')).toBe(mode === 'hard' ? null : 'token');
+      expect(localStorage.getItem(CACHE_CLEAR_FLAG)).toBeNull();
+    }
+  );
 });
 
 describe('a clear armed from the CLI', () => {
