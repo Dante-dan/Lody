@@ -67,3 +67,15 @@ SDP answer 通过独立通知返回。此结果只验证结构，不证明账户
 即使原生实时 handoff 创建语音线程中的 turn，也必须隔离工作目录、禁用 startup context，
 并拒绝工具和代码执行；
 不能把静默 prompt 或 clientManagedHandoffs 当成禁止模型启动执行的强制边界。
+
+## 未解决的原生安全边界
+
+官方 `rust-v0.159.2` 源码 `ff6aec96948b70d94983af2641a6b67c94faeff5`
+即使启用 `clientManagedHandoffs`，仍把 `HandoffRequested` 路由到语音线程的普通
+文字输入路径。此标记限制向外的 handoff 转发，不限制原生 turn 准入。实时启动
+结构没有禁用工具字段。独立线程和只读权限不足以证明提议的无工具保证。
+在受支持的原生配置或协议能够强制建立该边界前，采集保持不可用；不能用静默
+prompt 或 turn 启动后的客户端中断替代。
+
+Core WIP 合同使用调用方生成的采集标识、start/stop 请求和 SDP/生命周期通知。
+尚无适配器声明此能力，本版本没有桌面麦克风集成。

@@ -72,3 +72,15 @@ shape only, not account access or event behavior. The voice thread must also
 isolate its working directory, omit startup context, and deny any tool/coding
 execution; a silent prompt or clientManagedHandoffs is not an enforced boundary
 against the model starting execution.
+
+## Same-version safety finding
+
+The inspected official rust-v0.159.2 source routes `HandoffRequested` into
+`route_realtime_text_input` regardless of `client_managed_handoffs`. That flag
+only controls outbound forwarding. The start request has no tool-denial field;
+read-only mode and refusing approvals do not prove that every tool is denied.
+Do not wire the proposed capability into desktop capture until the native
+boundary is established. The Core WIP types compile and pass the existing
+suite, but no adapter advertises them and no microphone behavior was exercised.
+
+[Pinned native handoff implementation](https://github.com/openai/codex/blob/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/core/src/realtime_conversation.rs)

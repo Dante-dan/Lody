@@ -85,3 +85,18 @@ isolate its working directory, omit startup context, and deny any tool/coding
 execution, even if a native realtime handoff creates a voice-thread turn;
 a silent prompt or clientManagedHandoffs is not an enforced boundary
 against the model starting execution.
+
+## Unresolved native safety boundary
+
+Official `rust-v0.159.2` source at `ff6aec96948b70d94983af2641a6b67c94faeff5`
+routes `HandoffRequested` into the voice thread's normal text-input path even
+when `clientManagedHandoffs` is enabled. That flag gates outbound handoff
+forwarding, not admission of native turns. The realtime start schema has no
+tool-denial field. An isolated thread and read-only permissions do not establish
+the proposed tool-free guarantee. Keep capture unavailable until a supported
+native configuration or protocol can enforce that boundary; do not substitute
+a silent prompt or client-side interruption after a turn has started.
+
+The Core WIP contract uses caller-generated capture identities with start/stop
+requests and SDP/lifecycle notifications. No adapter advertises this capability,
+and there is no desktop microphone integration in this revision.

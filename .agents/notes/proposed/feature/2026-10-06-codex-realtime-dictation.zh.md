@@ -56,3 +56,13 @@ Lody 没有语音输入，#1263 作者报告内置 Codex 支持订阅登录的 W
 SDP answer 通过独立通知返回。此结果只验证结构，不证明账户权限或事件行为。
 语音线程还需隔离工作目录、禁用 startup context，并拒绝任何工具/代码执行；
 不能把静默 prompt 或 clientManagedHandoffs 当成禁止模型启动执行的强制边界。
+
+## 同版本安全发现
+
+已检查官方 rust-v0.159.2 源码：`HandoffRequested` 无论
+`client_managed_handoffs` 如何设置，都会进入 `route_realtime_text_input`。
+该标记只控制向外转发。启动请求没有工具禁用字段；只读权限和拒绝审批不证明
+所有工具都被拒绝。原生边界成立前不接入桌面采集。Core WIP 类型已构建、
+类型检查并通过既有测试，但没有适配器声明此能力，也没有验证麦克风行为。
+
+[固定版本原生 handoff 实现](https://github.com/openai/codex/blob/ff6aec96948b70d94983af2641a6b67c94faeff5/codex-rs/core/src/realtime_conversation.rs)
