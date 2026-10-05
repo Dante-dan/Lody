@@ -11,11 +11,11 @@ import {
 import { atom, useAtom, useAtomValue, useSetAtom, type PrimitiveAtom } from 'jotai';
 import { atomFamily } from 'jotai/utils';
 import { useTranslation } from 'react-i18next';
-import { getServerNow } from '@lody/shared';
+import { comparePinnedSessions, getServerNow } from '@lody/shared';
 import {
   buildOpenedBySessionTree,
   countOpenedByTreeRoots,
-  pinnedFirstRootRank,
+  durablePinnedRootRank,
 } from '@/lib/session-opened-by-tree';
 import {
   sidebarCollapsedOpenedBySessionsAtom,
@@ -486,7 +486,8 @@ export function MobileChatListCard({
         /* Bucket order is pinned-first then latest activity; rank an opener by
            its freshest opened Session so nesting cannot bury a just-updated
            row under a stale opener. */
-        rootRank: (chat) => pinnedFirstRootRank(chat.latestMessageAt ?? 0, chat.isPinned),
+        rootRank: (chat) =>
+          durablePinnedRootRank(chat.latestMessageAt ?? 0, chat.isPinned, chat.pinnedAt),
         ...(capped ? { maxRoots: MOBILE_CHAT_PREVIEW_MAX_ROOTS } : {}),
       }),
     [capped, chats, collapsedOpeners]
@@ -704,7 +705,7 @@ function MobileChatPreviewToggle({
  * - `none`: one unlabeled flat tail
  * - `project` / `date`: normal buckets
  *
- * Item order inside each bucket matches the input order.
+ * Pinned items use durable pin order; unpinned buckets retain input order.
  * `nowMs` is injectable for tests.
  */
 export function groupChats(
@@ -721,7 +722,7 @@ export function groupChats(
 
   const ordered: Array<{ id: string; items: MobileConversationItem[] }> = [];
   if (pinned.length > 0) {
-    ordered.push({ id: PINNED_BUCKET_ID, items: pinned });
+    ordered.push({ id: PINNED_BUCKET_ID, items: pinned.sort(comparePinnedSessions) });
   }
 
   if (groupBy === 'none') {

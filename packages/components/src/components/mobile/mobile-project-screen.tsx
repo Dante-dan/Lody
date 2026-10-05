@@ -125,6 +125,7 @@ export type MobileConversationItem = {
   isOffline?: boolean;
   hasUnreadMessages?: boolean;
   isPinned?: boolean;
+  pinnedAt?: number;
   /** Machine id the conversation lives on. Powers the machine filter. */
   machineId?: string | null;
   /** PRECISE Session that created this one — `lody session create` with a

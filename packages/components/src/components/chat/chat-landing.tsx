@@ -4866,6 +4866,7 @@ function WorkspaceChatLanding({
           isOffline: !isOnline,
           hasUnreadMessages: activity.hasUnreadMessages,
           isPinned: Boolean(session.isPinned),
+          pinnedAt: session.pinnedAt,
           machineId: session.machineId,
           /* Provenance for the list's opened-by tree. TWO fields, never
              merged: the precise opener drives navigation, the row id drives
@@ -5768,6 +5769,7 @@ function WorkspaceChatLanding({
           isOffline: !isOnline,
           hasUnreadMessages: activity.hasUnreadMessages,
           isPinned: Boolean(session.isPinned),
+          pinnedAt: session.pinnedAt,
           machineId: session.machineId,
           /* See the home Chat-tab builder: precise opener for navigation, row
              id for nesting. An opener outside this project simply leaves the

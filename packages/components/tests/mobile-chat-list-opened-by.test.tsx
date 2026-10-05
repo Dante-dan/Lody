@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createStore, Provider } from 'jotai';
-import { MobileChatListCard } from '../src/components/mobile/mobile-chat-list';
+import { MobileChatListCard, groupChats } from '../src/components/mobile/mobile-chat-list';
 import type { MobileConversationItem } from '../src/components/mobile/mobile-project-screen';
 import { sidebarCollapsedOpenedBySessionsAtom } from '../src/atoms/focus-layer';
 import { initI18n } from '../src/i18n';
@@ -139,9 +139,9 @@ describe('mobile chat list opened-by tree', () => {
     // just because the feature exists.
     const list = await render([makeItem({ id: 'a' }), makeItem({ id: 'b' })]);
     expect(list[0]?.className).toContain('px-4');
-    expect(
-      list[0]?.querySelector('[data-conversation-row-leading-slot]')?.className
-    ).toContain('w-4');
+    expect(list[0]?.querySelector('[data-conversation-row-leading-slot]')?.className).toContain(
+      'w-4'
+    );
     expect(toggleFor(list[0]!)).toBeNull();
   });
 
@@ -167,9 +167,9 @@ describe('mobile chat list opened-by tree', () => {
     expect(isNested(list[1]!)).toBe(false);
     expect(isNested(list[2]!)).toBe(true);
     // It still indents — losing the lines must not also lose the hierarchy.
-    expect(
-      list[1]?.querySelector('[data-conversation-row-leading-slot]')?.className
-    ).toContain('w-8');
+    expect(list[1]?.querySelector('[data-conversation-row-leading-slot]')?.className).toContain(
+      'w-8'
+    );
   });
 
   it('gives an ACTIVE opener its status instead of the fold control', async () => {
@@ -285,5 +285,22 @@ describe('mobile chat list opened-by tree', () => {
       }),
     ]);
     expect(titles(list)).toEqual(['Session pinned', 'Session unpinned', 'Session unpinned-child']);
+  });
+});
+
+describe('mobile durable pin grouping', () => {
+  it('keeps newest-pin-first across activity and title changes in every grouping mode', () => {
+    const rows = [
+      makeItem({ id: 'older-pin', isPinned: true, pinnedAt: 100, latestMessageAt: NOW }),
+      makeItem({ id: 'newer-pin', isPinned: true, pinnedAt: 200, latestMessageAt: NOW - HOUR }),
+      makeItem({ id: 'legacy-pin', isPinned: true }),
+      makeItem({ id: 'unpinned' }),
+    ];
+    for (const mode of ['none', 'project', 'date'] as const) {
+      const ids = () => groupChats(rows, mode, NOW)[0]?.items.map((row) => row.id);
+      expect(ids()).toEqual(['newer-pin', 'older-pin', 'legacy-pin']);
+      rows[0] = { ...rows[0], latestMessageAt: NOW + HOUR, title: 'Updated conversation' };
+      expect(ids()).toEqual(['newer-pin', 'older-pin', 'legacy-pin']);
+    }
   });
 });
