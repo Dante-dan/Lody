@@ -2575,6 +2575,7 @@ export function LoroAppSidebar({
         machineName: task.machineName ?? null,
         latestMessageAt: task.latestMessageAt,
         isPinned: task.isPinned,
+        pinnedAt: task.pinnedAt,
         isWorking: task.isWorking,
         isWorktree: task.isWorktree,
         hasUnreadMessages: task.hasUnreadMessages,
@@ -2601,6 +2602,7 @@ export function LoroAppSidebar({
         machineName: task.machineName ?? null,
         latestMessageAt: task.latestMessageAt,
         isPinned: task.isPinned,
+        pinnedAt: task.pinnedAt,
         isWorking: task.isWorking,
         isWorktree: task.isWorktree,
         hasUnreadMessages: task.hasUnreadMessages,
@@ -2650,6 +2652,7 @@ export function LoroAppSidebar({
             owner: resolveSessionAuthor(session),
             latestMessageAt: activity.latestMessageAt,
             isPinned: Boolean(session.isPinned),
+            pinnedAt: session.pinnedAt,
             isWorking: activity.isWorking,
             isWorktree: Boolean(session.isWorktree),
             externalHistoryProvider:

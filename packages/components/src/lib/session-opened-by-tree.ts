@@ -98,6 +98,17 @@ export function pinnedFirstRootRank(latestMessageAtMs: number, isPinned?: boolea
   return isPinned ? PINNED_ROOT_RANK_OFFSET + latestMessageAtMs : latestMessageAtMs;
 }
 
+/** Desktop pins rank their opener group by pin transitions, never activity. */
+export function durablePinnedRootRank(
+  latestMessageAtMs: number,
+  isPinned?: boolean,
+  pinnedAt?: number
+): number {
+  const pinRank =
+    pinnedAt !== undefined && Number.isFinite(pinnedAt) && pinnedAt >= 0 ? pinnedAt : -1;
+  return isPinned ? PINNED_ROOT_RANK_OFFSET + pinRank : latestMessageAtMs;
+}
+
 /**
  * Visible opener each item attaches to, or null when it is a top-level row.
  * `null` for the whole map means no item in the list has an opener at all.

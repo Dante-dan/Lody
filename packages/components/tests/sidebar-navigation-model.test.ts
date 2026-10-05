@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ONLY_CHATS_KEY, type SidebarNavItem } from '../src/atoms/focus-layer';
 import { buildSidebarNavigationItems } from '../src/components/sidebar-navigation-model';
-import type { SidebarUpdatedItem } from '../src/components/sidebar-updated-task-list';
+import type { SidebarUpdatedItem } from '../src/components/sidebar-updated-session-list';
 import type { SessionListRow } from '../src/components/session-list';
 
 function sessionRow(
@@ -285,6 +285,23 @@ describe('sidebar navigation model opened-by tree', () => {
       '__updated__',
     ]);
     expect(sessionIds(items)).toEqual(['opener', 'opened', 'other']);
+  });
+
+  it('matches rendered pin-group order after a child is pinned more recently', () => {
+    const items = buildSidebarNavigationItems({
+      ...baseOptions,
+      pinnedItems: [
+        { ...updatedItem('opener', '2026-04-22T10:00:00.000Z'), isPinned: true, pinnedAt: 100 },
+        { ...updatedItem('unrelated', '2026-04-22T09:00:00.000Z'), isPinned: true, pinnedAt: 200 },
+        {
+          ...updatedItem('opened', '2026-04-22T08:00:00.000Z'),
+          isPinned: true,
+          pinnedAt: 300,
+          openedBySessionId: 'opener',
+        },
+      ],
+    });
+    expect(sessionIds(items)).toEqual(['opener', 'opened', 'unrelated']);
   });
 
   it('nests inside the Pinned section when both rows are pinned', () => {

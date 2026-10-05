@@ -1,3 +1,4 @@
+import { comparePinnedSessions } from '@lody/shared';
 import { isElectronRenderer } from '@/lib/electron';
 import { openSessionOnModifiedClick } from '@/lib/desktop-window';
 import { SessionWindowMenuItem } from './session-window-menu-item';
@@ -67,7 +68,7 @@ import {
   countOpenedByTreeRoots,
   hasOpenedByTreeNesting,
   normalizeSessionRowId,
-  pinnedFirstRootRank,
+  durablePinnedRootRank,
   type OpenedBySessionTreeNode,
 } from '@/lib/session-opened-by-tree';
 import { startSessionMentionDrag } from '@/lib/session-mention-drag';
@@ -154,6 +155,7 @@ export type SessionListRow = {
   isOffline: boolean;
   isWaitingPermission: boolean;
   isPinned?: boolean;
+  pinnedAt?: number;
   isWorktree?: boolean;
   externalHistoryProvider?: LocalProjectHistoryProvider | null;
   owner?: SessionListRowOwner | null;
@@ -249,10 +251,10 @@ export const SESSION_ROW_OPENED_BY_TREE_ACCESSORS = {
 
 /**
  * Group ranking key. Matches `sortSessionRowsByLatestMessage` (pinned first,
- * then latest activity) so the tree's root ranking cannot undo that order.
+ * then pin transitions or unpinned activity) so the tree's root ranking cannot undo that order.
  */
 function sessionRowRootRank(session: SessionListRow): number {
-  return pinnedFirstRootRank(getSortKey(session), session.isPinned);
+  return durablePinnedRootRank(getSortKey(session), session.isPinned, session.pinnedAt);
 }
 
 /** Stable identity for a collapsed group's (absent) rows. */
@@ -333,6 +335,11 @@ export function sortSessionRowsByLatestMessage(sessions: SessionListRow[]): Sess
     const aPinned = a.isPinned ? 1 : 0;
     const bPinned = b.isPinned ? 1 : 0;
     if (aPinned !== bPinned) return bPinned - aPinned;
+    if (aPinned)
+      return comparePinnedSessions(
+        { id: a.sessionId, pinnedAt: a.pinnedAt },
+        { id: b.sessionId, pinnedAt: b.pinnedAt }
+      );
     const byTime = getSortKey(b) - getSortKey(a);
     if (byTime !== 0) return byTime;
     const byTitle = a.title.localeCompare(b.title);

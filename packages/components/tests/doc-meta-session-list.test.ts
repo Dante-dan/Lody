@@ -25,6 +25,14 @@ const session: SessionMeta = {
 };
 
 describe('sessionListAtom', () => {
+  it('publishes a changed pin rank even when the pin flag stays true', () => {
+    const store = createStore();
+    store.set(sessionMetaCacheAtom, { [roomId]: { ...session, isPinned: true, pinnedAt: 100 } });
+    expect(store.get(sessionListAtom)[0]?.pinnedAt).toBe(100);
+    store.set(sessionMetaCacheAtom, { [roomId]: { ...session, isPinned: true, pinnedAt: 200 } });
+    expect(store.get(sessionListAtom)[0]?.pinnedAt).toBe(200);
+  });
+
   it('updates unread presentation when only the tab closure changes', () => {
     const store = createStore();
     const unread = { ...session, lastMessageAt: 200, lastReadAt: 100 };

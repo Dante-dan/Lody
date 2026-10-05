@@ -24,6 +24,7 @@ import {
   getMachineFlockDeleteLocalProjectIds,
   getMachineFlockLocalProjects,
   getSessionRoomId,
+  getSessionPinUpdate,
   machineFlockKeys,
   SessionStatusFactory,
   getLocalProjectHistoryProviderKey,
@@ -846,9 +847,14 @@ export function useSessionActions(): SessionActions {
       const roomId = getSessionRoomId(sessionId);
       const existing = await runtime.repo.getDocMeta(roomId);
       if (isLoroRepoDocDeleted(existing)) return;
-      await runtime.writer.upsertDocMeta(roomId, {
-        isPinned,
-      } as Partial<SessionMeta>);
+      await runtime.writer.upsertDocMeta(
+        roomId,
+        getSessionPinUpdate(
+          (existing?.meta ?? {}) as Partial<SessionMeta>,
+          isPinned,
+          getServerNow()
+        )
+      );
     },
     [runtime]
   );

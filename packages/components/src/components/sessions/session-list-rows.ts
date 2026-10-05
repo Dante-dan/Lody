@@ -341,6 +341,7 @@ export function mapSessionMetaToSessionListRow(
     isOffline,
     isWaitingPermission: liveStatus?.type === 'requestPermission',
     isPinned: Boolean(session.isPinned),
+    pinnedAt: session.pinnedAt,
     isWorktree: Boolean(session.isWorktree),
     externalHistoryProvider,
     owner,

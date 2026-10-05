@@ -53,6 +53,23 @@ function makeOpenerItems(): SidebarUpdatedItem[] {
 }
 
 describe('updated bucket opened-by tree', () => {
+  it('keeps pinned groups stable when a pinned child receives new messages', () => {
+    const rows = [
+      makeItem({ id: 'opener', isPinned: true, pinnedAt: 100 }),
+      makeItem({ id: 'child', isPinned: true, pinnedAt: 200, openedBySessionId: 'opener' }),
+      makeItem({ id: 'newest-pin', isPinned: true, pinnedAt: 300 }),
+      makeItem({ id: 'legacy', isPinned: true }),
+    ];
+    const visibleIds = () =>
+      getVisibleUpdatedItems(sortUpdatedItems(rows), false, true).map((row) => row.id);
+    expect(visibleIds()).toEqual(['newest-pin', 'opener', 'child', 'legacy']);
+    rows[1] = { ...rows[1], title: 'Changed title', latestMessageAt: 9_999_999 };
+    rows[3] = { ...rows[3], latestMessageAt: 99_999_999 };
+    expect(visibleIds()).toEqual(['newest-pin', 'opener', 'child', 'legacy']);
+    rows[0] = { ...rows[0], pinnedAt: 400 };
+    expect(visibleIds()).toEqual(['opener', 'child', 'newest-pin', 'legacy']);
+  });
+
   it('renders opened sessions directly after their opener', () => {
     const ordered = sortUpdatedItems(makeOpenerItems());
     expect(getVisibleUpdatedItems(ordered, true, false).map((item) => item.id)).toEqual([

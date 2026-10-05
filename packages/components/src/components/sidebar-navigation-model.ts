@@ -13,7 +13,6 @@ import { buildOpenedBySessionTree, countOpenedByTreeRoots } from '@/lib/session-
 import {
   getVisibleUpdatedItems,
   sortUpdatedItems,
-  SIDEBAR_UPDATED_OPENED_BY_TREE_ACCESSORS,
   type SidebarUpdatedItem,
 } from '@/components/sidebar-updated-session-list';
 
@@ -139,12 +138,14 @@ export function buildSidebarNavigationItems({
     // The Pinned section renders through the same list component, so it gets the
     // same opened-by tree — resolved inside the pinned items ONLY, which is what
     // keeps a pinned opener from swallowing an unpinned row (and vice versa).
-    const pinnedNodes = buildOpenedBySessionTree(sortUpdatedItems(pinnedItems), {
-      ...SIDEBAR_UPDATED_OPENED_BY_TREE_ACCESSORS,
-      isCollapsed: (openerId) => collapsedOpenedBySessions[openerId] === true,
-    });
-    for (const node of pinnedNodes) {
-      items.push({ kind: 'session', sessionId: node.item.id, groupKey: '__pinned__' });
+    const visiblePins = getVisibleUpdatedItems(
+      sortUpdatedItems(pinnedItems),
+      false,
+      true,
+      collapsedOpenedBySessions
+    );
+    for (const item of visiblePins) {
+      items.push({ kind: 'session', sessionId: item.id, groupKey: '__pinned__' });
     }
   }
 

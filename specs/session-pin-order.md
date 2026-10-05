@@ -17,8 +17,12 @@ Opening a document never migrates legacy pins. Ordinary unpinned rows retain the
 existing message-activity ordering. Mixed older clients may still use message
 activity and do not acquire this guarantee until their consumers are adapted.
 
-This is a reference contract, not a completed sidebar feature. Consumer adapters,
-manual drag ordering, and private client implementation are outside this patch.
+The public desktop pin action writes the transition timestamp through its existing
+metadata writer. Metadata caches and chat, GitHub, and local-project row projections
+carry the rank into both flat sorting and opened-by group ranking. Group rank uses
+the freshest pin transition, so messages in an opened conversation cannot reorder
+pinned groups. Mobile, manual drag ordering, and private client implementation
+remain outside this patch.
 Wall-clock skew can affect a new pin's relative rank; this proposal deliberately
 avoids claiming a total causal order across offline peers. Human approval of this
 revision remains pending.

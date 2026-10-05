@@ -1,3 +1,4 @@
+import { comparePinnedSessions } from '@lody/shared';
 import { isElectronRenderer } from '@/lib/electron';
 import { openSessionOnModifiedClick } from '@/lib/desktop-window';
 import { SessionWindowMenuItem } from './session-window-menu-item';
@@ -64,7 +65,7 @@ import {
   countOpenedByTreeRoots,
   hasOpenedByTreeNesting,
   normalizeSessionRowId,
-  pinnedFirstRootRank,
+  durablePinnedRootRank,
   type OpenedBySessionTreeNode,
 } from '@/lib/session-opened-by-tree';
 import { SessionInfoHoverCard } from '@/components/session-info-hover-card';
@@ -128,6 +129,7 @@ export type SidebarUpdatedItem = {
   machineName?: string | null;
   latestMessageAt: Date | number | string;
   isPinned?: boolean;
+  pinnedAt?: number;
   isWorking?: boolean;
   hasUnreadMessages?: boolean;
   isOffline?: boolean;
@@ -219,6 +221,11 @@ export function sortUpdatedItems(items: SidebarUpdatedItem[]): SidebarUpdatedIte
     const aPinned = a.isPinned ? 1 : 0;
     const bPinned = b.isPinned ? 1 : 0;
     if (aPinned !== bPinned) return bPinned - aPinned;
+    if (aPinned)
+      return comparePinnedSessions(
+        { id: a.id, pinnedAt: a.pinnedAt },
+        { id: b.id, pinnedAt: b.pinnedAt }
+      );
     const byTime = getSortKey(b) - getSortKey(a);
     if (byTime !== 0) return byTime;
     const byTitle = a.title.localeCompare(b.title);
@@ -247,9 +254,9 @@ export function resolveUpdatedItemProjectLabel(item: SidebarUpdatedItem): string
  */
 export const SHOW_FULL_BUCKET_THRESHOLD = 20;
 
-/** Group ranking key: pinned first, then latest activity. */
+/** Pinned groups use pin transitions; unpinned groups use latest activity. */
 function updatedItemRootRank(item: SidebarUpdatedItem): number {
-  return pinnedFirstRootRank(getSortKey(item), item.isPinned);
+  return durablePinnedRootRank(getSortKey(item), item.isPinned, item.pinnedAt);
 }
 
 /** Stable identity for a collapsed bucket's (absent) rows. */

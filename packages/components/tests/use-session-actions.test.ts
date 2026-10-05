@@ -1498,6 +1498,24 @@ describe('useSessionActions', () => {
     expect(metaRepo.getSession(tree.openedSession.id)).toEqual(tree.openedSession);
   });
 
+  it('persists pin transitions without changing repeated-pin rank', async () => {
+    const tree = createContainmentSessions('pin-order', false);
+    const metaRepo = createSessionMetaRepo([tree.rootSession]);
+    const actions = await renderActions(createRuntime({ repo: metaRepo.repo }));
+    vi.spyOn(Date, 'now').mockReturnValue(1000);
+    await actions.setSessionPinned(tree.rootSession.id, true);
+    const first = metaRepo.getSession(tree.rootSession.id)?.pinnedAt;
+    expect(first).toBeTypeOf('number');
+    expect(metaRepo.getSession(tree.rootSession.id)?.isPinned).toBe(true);
+    vi.mocked(Date.now).mockReturnValue(2000);
+    await actions.setSessionPinned(tree.rootSession.id, true);
+    expect(metaRepo.getSession(tree.rootSession.id)?.pinnedAt).toBe(first);
+    await actions.setSessionPinned(tree.rootSession.id, false);
+    expect(metaRepo.getSession(tree.rootSession.id)?.pinnedAt).toBe(first);
+    await actions.setSessionPinned(tree.rootSession.id, true);
+    expect(metaRepo.getSession(tree.rootSession.id)?.pinnedAt).toBeGreaterThan(first!);
+  });
+
   it('restores root containment without changing any close flag', async () => {
     const tree = createContainmentSessions('root-restore', true);
     const archivedRoot = { ...tree.rootSession, isTabClosed: true };

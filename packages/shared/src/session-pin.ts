@@ -16,8 +16,8 @@ export function getSessionPinUpdate(
 
 /** Compare two pinned rows only. Legacy pins sort last, by stable session id. */
 export function comparePinnedSessions(
-  a: Pick<SessionMeta, 'id' | 'pinnedAt'>,
-  b: Pick<SessionMeta, 'id' | 'pinnedAt'>
+  a: { id: string; pinnedAt?: number },
+  b: { id: string; pinnedAt?: number }
 ): number {
   const timestamp = (value: number | undefined) =>
     value !== undefined && Number.isFinite(value) && value >= 0 ? value : -1;
