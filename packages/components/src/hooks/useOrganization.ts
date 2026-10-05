@@ -10,7 +10,6 @@ import {
   clearCachedWorkspaceInfo,
   getCachedWorkspaceId,
 } from '@/lib/local-storage-cache';
-import { clearLastAppRoutePathIfWorkspaceMatch } from '@/lib/last-app-route';
 import { useSetAtom, useStore } from 'jotai';
 import {
   setWorkspaceContextAtRevisionAtom,
@@ -225,8 +224,22 @@ function useCloudOrganizationState(options?: UseOrganizationOptions) {
     data: activeOrganization,
     isPending: activeOrganizationIsPending,
     refetch: refetchActiveOrganization,
-    error: activeOrganizationError,
+    error: activeOrganizationQueryError,
   } = authClient.useActiveOrganization();
+
+  // A partial response is not a full organization. Keep membership-dependent
+  // consumers gated and expose a retryable error instead of inventing an empty roster.
+  const activeOrganizationDataError = useMemo(
+    () =>
+      activeOrganization && !Array.isArray(activeOrganization.members)
+        ? new Error('Incomplete organization response: members are missing')
+        : null,
+    [activeOrganization]
+  );
+  const activeOrganizationMatchesTarget = !targetSlug || activeOrganization?.slug === targetSlug;
+  const activeOrganizationError =
+    activeOrganizationQueryError ??
+    (activeOrganizationMatchesTarget ? activeOrganizationDataError : null);
 
   const setWorkspaceContext = useSetAtom(setWorkspaceContextAtom);
   const setWorkspaceContextAtRevision = useSetAtom(setWorkspaceContextAtRevisionAtom);
@@ -379,9 +392,10 @@ function useCloudOrganizationState(options?: UseOrganizationOptions) {
 
   // If the active org was deleted/left, or still points at a previous workspace while a target
   // route is opening, treat it as unavailable to avoid reusing a stale workspace.
-  const activeOrganizationMatchesTarget = !targetSlug || activeOrganization?.slug === targetSlug;
   const resolvedActiveOrganization =
-    activeOrganizationInList && activeOrganizationMatchesTarget ? activeOrganization : null;
+    activeOrganizationInList && activeOrganizationMatchesTarget && !activeOrganizationDataError
+      ? activeOrganization
+      : null;
 
   const role = useMemo(() => {
     return resolvedActiveOrganization?.members.find((member) => member.userId === user?.id)?.role;
@@ -498,19 +512,22 @@ function useCloudOrganizationState(options?: UseOrganizationOptions) {
       if (!targetOrganization) {
         return;
       }
-      if (!resolvedActiveOrganization || resolvedActiveOrganization.id !== targetOrganization.id) {
+      if (activeOrganizationDataError && activeOrganization?.id === targetOrganization.id) return;
+      if (resolvedActiveOrganization?.id !== targetOrganization.id) {
         void switchOrganization(targetOrganization.id);
       }
       return;
     }
 
-    if (!resolvedActiveOrganization) {
+    if (!resolvedActiveOrganization && !activeOrganizationDataError) {
       const first = organizations[0];
       if (first) {
         void switchOrganization(first.id);
       }
     }
   }, [
+    activeOrganization?.id,
+    activeOrganizationDataError,
     activeOrganizationIsPending,
     organizations,
     resolvedActiveOrganization,
@@ -622,14 +639,13 @@ function useCloudOrganizationState(options?: UseOrganizationOptions) {
         if (data) {
           didDelete = true;
           // Drop per-slug caches up front so the post-delete `/` redirect
-          // doesn't bounce back into the deleted workspace via lastAppRoute /
-          // preferredSlug, and so `optimisticWorkspaceId` stops resolving the
+          // doesn't bounce back into the deleted workspace via preferredSlug,
+          // and so `optimisticWorkspaceId` stops resolving the
           // stale workspaceId — both routes triggered listVisibleMachines for
           // a workspace the user no longer belongs to (Convex 403 → error
           // boundary "Something went wrong").
           if (removalTransition.removedSlug) {
             clearCachedWorkspaceInfo(removalTransition.removedSlug);
-            clearLastAppRoutePathIfWorkspaceMatch(removalTransition.removedSlug);
             clearPreferredWorkspaceSlugIfMatch(removalTransition.removedSlug);
           }
           if (removalTransition.isActiveOrganization) {
@@ -741,7 +757,6 @@ function useCloudOrganizationState(options?: UseOrganizationOptions) {
           didLeave = true;
           if (removalTransition.removedSlug) {
             clearCachedWorkspaceInfo(removalTransition.removedSlug);
-            clearLastAppRoutePathIfWorkspaceMatch(removalTransition.removedSlug);
             clearPreferredWorkspaceSlugIfMatch(removalTransition.removedSlug);
           }
           if (removalTransition.isActiveOrganization) {

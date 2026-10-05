@@ -46,12 +46,15 @@ import {
   SidebarListSkeleton,
   SidebarSectionHeader,
   summarizeSidebarGroupActivity,
+  withSessionSendStates,
+  SidebarSessionTitleText,
   SessionRowOpenedByMenuItems,
   buildSessionRowOpenedByTreeSlot,
   type SidebarRowKind,
   type SessionRowOpenedByTreeSlot,
   SIDEBAR_ROW_LIST_CLASS,
 } from '@/components/sidebar-row-shared';
+import { sessionSendStatesAtom } from '@/atoms/session-send-status';
 import {
   sidebarCollapsedOpenedBySessionsAtom,
   toggleSidebarCollapsedOpenedBySessionAtom,
@@ -474,6 +477,7 @@ export const SidebarUpdatedSessionList = memo(function SidebarUpdatedSessionList
     return [{ key: 'all', label: merged.heading, items: sortUpdatedItems(items) }];
   }, [items, merged.heading]);
 
+  const sendStates = useAtomValue(sessionSendStatesAtom);
   // Updated mode is a flat firehose, so a bucket can hold the whole workspace
   // while showing 20 rows. Resolving the tree per render would re-scan all of
   // it on every message/status tick; a collapsed bucket renders no rows at all.
@@ -485,7 +489,9 @@ export const SidebarUpdatedSessionList = memo(function SidebarUpdatedSessionList
             overflows: updatedBucketOverflowsPreview(bucket.items),
             nodes: EMPTY_TREE_NODES,
             // A folded bucket still says whether anything inside needs the user.
-            collapsedActivity: summarizeSidebarGroupActivity(bucket.items),
+            collapsedActivity: summarizeSidebarGroupActivity(
+              withSessionSendStates(bucket.items, (item) => item.id, sendStates)
+            ),
           };
         }
         return {
@@ -499,7 +505,14 @@ export const SidebarUpdatedSessionList = memo(function SidebarUpdatedSessionList
           ),
         };
       }),
-    [buckets, canToggleFullBucket, collapsedBuckets, collapsedOpenedBySessionIds, showFullBuckets]
+    [
+      buckets,
+      canToggleFullBucket,
+      collapsedBuckets,
+      collapsedOpenedBySessionIds,
+      sendStates,
+      showFullBuckets,
+    ]
   );
 
   if (isLoading && items.length === 0) {
@@ -854,14 +867,16 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
   const showProjectLine = showProjectContext && !isNestedChild;
   const projectLabel = showProjectLine ? resolveUpdatedItemProjectLabel(item) : null;
   const titleNode = (
-    <span
+    <SidebarSessionTitleText
+      sessionId={item.id}
+      selected={showSelectedState}
       className={cn(
         'min-w-0 flex-1 truncate font-normal',
         showSelectedState ? 'text-sidebar-selection-foreground' : 'text-sidebar-row-foreground'
       )}
     >
       {item.title}
-    </span>
+    </SidebarSessionTitleText>
   );
   const rowAriaLabel = projectLabel ? `${item.title}, ${projectLabel}` : item.title;
 
@@ -940,7 +955,9 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         />
       ) : null}
 
-      <div className="flex w-full min-w-0 items-start gap-1.5 text-sm">
+      <div
+        className={cn('flex w-full min-w-0 items-start text-sm', isMobile ? 'gap-1.5' : 'gap-2')}
+      >
         <div className="flex h-5 shrink-0 items-center">
           <SessionRowLeadingSlot
             showMenuButton={hasMenuActions}
@@ -984,6 +1001,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         {/* Keep PR at the right edge. Line totals stay in the hover card. */}
         <div className="flex h-5 shrink-0 items-center">
           <SidebarRowEndSlot
+            sessionId={item.id}
             isWaitingPermission={item.isWaitingPermission}
             isWorking={item.isWorking}
             hasUnreadMessages={item.hasUnreadMessages}
@@ -1065,7 +1083,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         />
         {canTogglePin ? (
           <ContextMenu.Item
-            icon={item.isPinned ? <PinOff /> : <Pin />}
+            icon={item.isPinned ? PinOff : Pin}
             onClick={() => {
               onTogglePin?.(item.id, !item.isPinned);
             }}
@@ -1075,7 +1093,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {canMarkUnread ? (
           <ContextMenu.Item
-            icon={<Mail />}
+            icon={Mail}
             onClick={() => {
               onMarkUnread?.(item.id);
             }}
@@ -1085,7 +1103,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {canRename ? (
           <ContextMenu.Item
-            icon={<Pencil />}
+            icon={Pencil}
             onClick={() => {
               onBeginRename(item.id, item.title);
             }}
@@ -1099,7 +1117,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {canCopyUrl ? (
           <ContextMenu.Item
-            icon={<Link2 />}
+            icon={Link2}
             onClick={() => {
               onCopyUrl?.(item.id);
             }}
@@ -1109,7 +1127,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {branchName ? (
           <ContextMenu.Item
-            icon={<GitBranch />}
+            icon={GitBranch}
             onClick={() => {
               void navigator.clipboard.writeText(branchName).catch(() => {});
             }}
@@ -1122,11 +1140,11 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
             disabled={shareMenuState !== 'share'}
             icon={
               shareMenuState === 'share' ? (
-                <Users />
+                Users
               ) : shareMenuState === 'loading' ? (
-                <Spinner />
+                <Spinner size="small" label={null} />
               ) : (
-                <LockKeyhole />
+                LockKeyhole
               )
             }
             onClick={() => {
@@ -1154,7 +1172,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {handlePrOpen ? (
           <ContextMenu.Item
-            icon={<GitPullRequest />}
+            icon={GitPullRequest}
             onClick={() => {
               handlePrOpen();
             }}
@@ -1186,7 +1204,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {canArchive ? (
           <ContextMenu.Item
-            icon={<Archive />}
+            icon={Archive}
             onClick={() => {
               onArchive?.(item.id);
             }}

@@ -1,3 +1,4 @@
+import { useIosSimulatorPreviewRequest } from './ios-simulator/use-ios-simulator-preview-request';
 import { SessionPendingMessages } from '@/components/chat/session-pending-messages';
 import {
   buildDraftUserHistoryEntry,
@@ -34,7 +35,6 @@ import {
   ArrowUp,
   Archive,
   ArchiveRestore,
-  Check,
   ChevronDown,
   Copy,
   CornerLeftUp,
@@ -49,6 +49,7 @@ import {
   LockKeyhole,
   MessageCircle,
   Monitor,
+  MoveHorizontal,
   Pencil,
   Play,
   Plus,
@@ -61,6 +62,7 @@ import {
 } from 'lucide-react';
 import { useRouter } from '@tanstack/react-router';
 import { Spinner } from '@lody/ui/spinner';
+import { Switch } from '@lody/ui/switch';
 import { Button } from '@lody/ui/button';
 import { isMacOSElectronRenderer, useElectronFullscreen } from '@/lib/electron';
 import { getIpcServices } from '@/lib/electron-ipc-client';
@@ -76,7 +78,12 @@ import {
   type SessionTurnAgentRoleSelection,
 } from './session-chat-input-area';
 import { useSessionMcpSelection } from '@/hooks/use-session-mcp-selection';
-import { MessageQueueDisplay, shouldRequestNativeQueueSteer } from './message-queue';
+import { useSessionMentionSource } from '@/hooks/use-session-mention-source';
+import {
+  MessageQueueDisplay,
+  shouldRequestNativeQueueSteer,
+  useHasPendingQueueRecords,
+} from './message-queue';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import type {
@@ -92,6 +99,7 @@ import type {
   SessionInputBlock,
   SessionLegacyMetaFields,
   SessionMeta,
+  SessionPreviewDocState,
   SessionStatus,
   SessionTurnInputConfig,
   CommentReferencePayload,
@@ -137,6 +145,7 @@ import { SessionShareDialog } from '@/components/sharing/session-share-dialog';
 import { useSessionShareStatus } from '@/hooks/use-session-share-management';
 import {
   conversationFontSizeAtom,
+  conversationWideModeAtom,
   currentWorkspaceIdAtom,
   currentWorkspaceSlugAtom,
   getAllAgentConfigAtom,
@@ -170,6 +179,8 @@ import SessionChatStream, {
   type GoalCommand,
   type MessageFileDiffEntriesByTurn,
   type SessionChatStreamHandle,
+  type UserMessageEditMentionContext,
+  type UserMessageEditSubmission,
 } from '../ai-gui';
 import { MessageSendStatusContext } from '../ai-gui/message-send-status-context';
 import { format, formatDistanceToNow } from 'date-fns';
@@ -190,12 +201,13 @@ import {
   writeStoredPathLauncherPreference,
   type PathLauncherOption,
 } from '@/lib/session-path-launchers';
-import { cn } from '@/lib/utils';
+import { withClassName } from '@/lib/stylex';
+import { colors } from '@lody/ui/tokens/colors.stylex';
+import * as stylex from '@stylexjs/stylex';
 import type { SessionSharingState } from '@/lib/session-sharing';
 import {
   SessionAccessControl,
   SessionArchivedBadge,
-  SESSION_HEADER_STATUS_PILL_CLASS,
   getSessionSharingDescription,
   getSessionSharingLabel,
   type SessionSharingTranslator,
@@ -207,6 +219,7 @@ import { Input } from '@lody/ui/input';
 import { Separator } from '@lody/ui/separator';
 import { Tooltip } from '@lody/ui/tooltip';
 import { useSessionDoc } from '@/hooks/use-session-doc';
+import { useSessionPendingConfig } from '@/hooks/use-session-pending-config';
 import { useSessionActions } from '@/hooks/use-session-actions';
 import { useWorkspaceMembers, type WorkspaceMember } from '@/hooks/use-workspace-members';
 import { UserAvatar } from '@/components/user-avatar';
@@ -215,6 +228,7 @@ import { RenameSessionDialog, type RenameSessionDialogTarget } from './rename-se
 import { useResolvedTheme } from '../../theme-provider';
 import { PullRequestBadge } from './pull-request-badge';
 import { SessionInfoBar } from './session-info-bar';
+import { SessionPreviewPreload } from './session-preview-preload';
 import { CurrentSessionRelationsChip, useHasSessionRelations } from './session-relations-chip';
 import {
   mapGitHubCheckRunToPrCiRun,
@@ -239,6 +253,7 @@ import { buildFixCiErrorsPrompt, buildResolvePrConflictsPrompt } from './session
 import { resolveConflictsActionAtomFamily } from './session-pr-agent-action';
 import { setPreferredPrMergeMethod, usePreferredPrMergeMethod } from './pr-merge-method';
 import { PrLinkProvider } from '@/components/ai-gui/pr-link-context';
+import { SessionLinkProvider } from '@/components/ai-gui/session-link-context';
 import {
   COMMIT_AND_PUSH_PROMPT,
   CREATE_DRAFT_PR_BASE_PROMPT,
@@ -292,11 +307,11 @@ import { SessionPin } from './session-pin';
 import { SessionPinContext, type SessionPinContextValue } from './session-pin-context';
 import { SessionSyncingIndicator } from './session-syncing-indicator';
 import { ConversationSkeleton } from '@/components/ai-gui/conversation-sync-placeholders';
+import { sessionUnsentNewConversationAtomFamily } from '@/atoms/session-send-status';
 import { useDisplayedContentSyncState } from '@/hooks/use-displayed-content-sync-state';
 import { resolveSessionContentSyncState } from '@/lib/session-content-sync-state';
 import { ChildTabEmptyState } from './child-tab-empty-state';
 import {
-  SESSION_PAGE_HEADER_PILLS_CLASS,
   SessionConversationPage,
   SessionConversationPageHeader,
 } from './session-conversation-page';
@@ -337,6 +352,378 @@ import {
 } from './session-turn-facts';
 import { AlertDialog } from '@/ui/dialog';
 import { resolveSessionHtmlAttachmentAction } from './session-html-attachment-action';
+
+const styles = stylex.create({
+  historyTriggerIcon: { width: 'calc(var(--spacing) * 4)', height: 'calc(var(--spacing) * 4)' },
+  historyTriggerIconSpaced: { marginRight: 'calc(var(--spacing) * 2)' },
+  historySubtitle: {
+    color: colors.secondaryLabel,
+    fontSize: '0.875rem',
+    lineHeight: '1.25rem',
+  },
+  historyList: { marginTop: 'calc(var(--spacing) * 6)' },
+  historyEmpty: {
+    color: colors.secondaryLabel,
+    fontSize: '0.875rem',
+    lineHeight: '1.25rem',
+  },
+  historyRow: {
+    width: '100%',
+    paddingBlock: 'calc(var(--spacing) * 2)',
+    paddingInline: 'calc(var(--spacing) * 3)',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: colors.separator,
+    borderRadius: 'var(--radius-lg)',
+    backgroundColor: {
+      default: 'transparent',
+      '@media (hover: hover)': {
+        ':hover': 'hsl(var(--hover))',
+      },
+    },
+    color: 'inherit',
+    textAlign: 'left',
+    transitionProperty:
+      'color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to',
+    transitionDuration: 'var(--default-transition-duration, 150ms)',
+    transitionTimingFunction:
+      'var(--default-transition-timing-function, cubic-bezier(0.4, 0, 0.2, 1))',
+    marginBlockStart: {
+      default: null,
+      ':not(:last-child)': 0,
+    },
+    marginBlockEnd: {
+      default: null,
+      ':not(:last-child)': 'calc(var(--spacing) * 2)',
+    },
+  },
+  historyRowSelected: {
+    borderColor: 'hsl(var(--border) / 0.7)',
+    backgroundColor: 'hsl(var(--selection))',
+    color: 'hsl(var(--selection-foreground))',
+  },
+  historyRowBody: { display: 'flex', alignItems: 'flex-start', gap: 'calc(var(--spacing) * 3)' },
+  historyStatusDot: {
+    width: 'calc(var(--spacing) * 2.5)',
+    height: 'calc(var(--spacing) * 2.5)',
+    marginTop: 'calc(var(--spacing) * 1)',
+    borderRadius: '9999px',
+  },
+  statusDotInfo: { backgroundColor: colors.accent },
+  statusDotWarning: { backgroundColor: colors.warning },
+  statusDotSuccess: { backgroundColor: colors.success },
+  statusDotError: { backgroundColor: colors.destructive },
+  statusDotNeutral: { backgroundColor: colors.secondaryLabel },
+  historyTextColumn: { minWidth: 0, flex: '1 1 0%' },
+  historyTitle: {
+    overflow: 'hidden',
+    fontSize: '0.875rem',
+    lineHeight: '1.25rem',
+    fontWeight: 500,
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  historyMeta: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 'calc(var(--spacing) * 2)',
+    marginTop: 'calc(var(--spacing) * 1)',
+    color: colors.secondaryLabel,
+    fontSize: '0.75rem',
+    lineHeight: '1rem',
+  },
+  historyMetaText: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  historySeparator: {
+    width: 'var(--spacing)',
+    height: 'var(--spacing)',
+    borderRadius: '9999px',
+    backgroundColor: colors.separator,
+  },
+  projectRoot: { minWidth: 0 },
+  projectLine: {
+    display: 'flex',
+    minWidth: 0,
+    alignItems: 'center',
+    gap: 'calc(var(--spacing) * 1.5)',
+    fontSize: '0.875rem',
+    lineHeight: 1.25,
+  },
+  projectIcon: {
+    display: 'inline-flex',
+    flexShrink: 0,
+    alignItems: 'center',
+    color: colors.secondaryLabel,
+  },
+  projectIconGlyph: { width: 'calc(var(--spacing) * 3.5)', height: 'calc(var(--spacing) * 3.5)' },
+  projectTitle: {
+    overflow: 'hidden',
+    fontWeight: 500,
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  projectStatus: {
+    display: 'inline-flex',
+    flexShrink: 0,
+    alignItems: 'center',
+    gap: 'calc(var(--spacing) * 1)',
+    color: colors.secondaryLabel,
+    fontSize: '0.75rem',
+    lineHeight: '1rem',
+  },
+  openedByColumn: {
+    paddingBlock: {
+      default: 'calc(var(--spacing) * 2)',
+      '@media (min-width: 640px)': 'calc(var(--spacing) * 3)',
+    },
+  },
+  pageOutlineOverlay: {
+    position: 'absolute',
+    inset: 0,
+    pointerEvents: 'none',
+    containerType: 'inline-size',
+  },
+  toolbarHeader: {
+    display: 'flex',
+    height: '100%',
+    flexShrink: 0,
+    alignItems: 'center',
+    gap: 'calc(var(--spacing) * 1)',
+    paddingLeft: 'calc(var(--spacing) * 1)',
+    paddingRight: 'calc(var(--spacing) * 2)',
+  },
+  desktopHeaderActions: {
+    display: 'flex',
+    flexShrink: 0,
+    alignItems: 'center',
+    gap: 'calc(var(--spacing) * 2)',
+  },
+  hiddenHeaderActions: { display: 'none' },
+  messageArea: { position: 'relative', minHeight: 0, flex: '1 1 0%' },
+  stream: { height: '100%' },
+  shareRequestsScroller: { maxHeight: '35vh', flexShrink: 0, overflowY: 'auto' },
+  shareRequestsColumn: { paddingInline: 'calc(var(--spacing) * 3)' },
+  reviewStatusColumn: {
+    paddingInline: 'calc(var(--spacing) * 3)',
+    paddingBottom: 'calc(var(--spacing) * 1.5)',
+  },
+  headerMenuStaticRow: {
+    display: 'flex',
+    width: '100%',
+    minWidth: 0,
+    minHeight: 'calc(var(--spacing) * 8)',
+    alignItems: 'center',
+    gap: 'calc(var(--spacing) * 2)',
+    overflow: 'hidden',
+    paddingBlock: 'calc(var(--spacing) * 1.5)',
+    paddingInline: 'calc(var(--spacing) * 2)',
+    borderRadius: 'var(--radius-md)',
+    cursor: 'default',
+    userSelect: 'none',
+    fontSize: '13px',
+    lineHeight: 'calc(var(--spacing) * 4)',
+  },
+  menuIcon: { width: 'calc(var(--spacing) * 3.5)', height: 'calc(var(--spacing) * 3.5)' },
+  menuIconFixed: { flexShrink: 0 },
+  menuIconMuted: { color: colors.secondaryLabel },
+  menuTrailingIcon: { marginLeft: 'auto' },
+  menuCopyIcon: { width: 'calc(var(--spacing) * 3)', height: 'calc(var(--spacing) * 3)' },
+  menuBranchIcon: { marginTop: 'calc(var(--spacing) * 0.5)' },
+  menuText: { minWidth: 0, flex: '1 1 0%' },
+  menuTextTruncated: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  menuTextNormal: { fontWeight: 400 },
+  menuBranchValue: {
+    display: 'block',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  menuBaseBranch: {
+    fontSize: '0.68rem',
+    lineHeight: 'calc(var(--spacing) * 4)',
+    color: colors.secondaryLabel,
+  },
+  menuForkStatus: {
+    flexShrink: 0,
+    fontSize: '0.75rem',
+    lineHeight: '1rem',
+    color: colors.secondaryLabel,
+  },
+  machineAccessibleLabel: {
+    position: 'absolute',
+    width: '1px',
+    height: '1px',
+    padding: 0,
+    margin: '-1px',
+    overflow: 'hidden',
+    clip: 'rect(0, 0, 0, 0)',
+    whiteSpace: 'nowrap',
+    borderWidth: 0,
+  },
+  searchShortcut: {
+    borderRadius: 'var(--radius-sm)',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: 'hsl(var(--border) / 0.7)',
+    backgroundColor: 'hsl(var(--muted))',
+    paddingInline: 'var(--spacing)',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '10px',
+    lineHeight: 1,
+    color: colors.secondaryLabel,
+  },
+  searchOverlay: {
+    pointerEvents: 'auto',
+    position: 'absolute',
+    right: {
+      default: 'calc(var(--spacing) * 3)',
+      '@media (min-width: 640px)': 'calc(var(--spacing) * 4)',
+    },
+    top: {
+      default: 'calc(var(--spacing) * 3)',
+      '@media (min-width: 640px)': 'calc(var(--spacing) * 4)',
+    },
+    zIndex: 20,
+    width: {
+      default: 'min(360px, calc(100% - 1.5rem))',
+      '@media (min-width: 640px)': 'min(360px, calc(100% - 2rem))',
+    },
+  },
+  searchSurface: {
+    display: 'flex',
+    height: 'calc(var(--spacing) * 9)',
+    alignItems: 'center',
+    gap: 'calc(var(--spacing) * 0.5)',
+    borderRadius: 'var(--radius-lg)',
+    borderWidth: '0.5px',
+    borderStyle: 'solid',
+    borderColor: colors.separator,
+    backgroundColor: {
+      default: 'hsl(var(--background) / 0.95)',
+      '@supports (backdrop-filter: var(--tw))': 'hsl(var(--background) / 0.85)',
+    },
+    paddingLeft: 'calc(var(--spacing) * 2.5)',
+    paddingRight: 'var(--spacing)',
+    boxShadow: '0 4px 12px -4px rgba(15,23,42,0.16), 0 1px 2px rgba(15,23,42,0.06)',
+    backdropFilter: 'blur(var(--blur-md))',
+    transitionProperty:
+      'color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to',
+    transitionDuration: 'var(--default-transition-duration, 150ms)',
+    transitionTimingFunction:
+      'var(--default-transition-timing-function, cubic-bezier(0.4, 0, 0.2, 1))',
+    ':focus-within': { borderColor: 'hsl(var(--ring) / 0.6)' },
+  },
+  searchSurfaceNoResults: {
+    borderColor: {
+      default: 'hsl(var(--destructive) / 0.3)',
+      ':focus-within': 'hsl(var(--destructive) / 0.6)',
+    },
+  },
+  searchIcon: {
+    color: 'hsl(var(--muted-foreground) / 0.8)',
+    transitionProperty:
+      'color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to',
+    transitionDuration: 'var(--default-transition-duration, 150ms)',
+    transitionTimingFunction:
+      'var(--default-transition-timing-function, cubic-bezier(0.4, 0, 0.2, 1))',
+  },
+  searchIconQuery: { color: colors.label },
+  searchIconNoResults: { color: 'hsl(var(--destructive) / 0.8)' },
+  searchCount: {
+    flexShrink: 0,
+    userSelect: 'none',
+    paddingInline: 'var(--spacing)',
+    fontSize: '11.5px',
+    fontWeight: 500,
+    fontVariantNumeric: 'tabular-nums',
+    letterSpacing: 'var(--tracking-tight)',
+    color: colors.secondaryLabel,
+    transitionProperty:
+      'color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to',
+    transitionDuration: 'var(--default-transition-duration, 150ms)',
+    transitionTimingFunction:
+      'var(--default-transition-timing-function, cubic-bezier(0.4, 0, 0.2, 1))',
+  },
+  searchCountNoResults: { color: 'hsl(var(--destructive) / 0.9)' },
+  searchActions: { display: 'flex', alignItems: 'center', gap: '1px' },
+  headerPills: {
+    display: {
+      default: 'none',
+      '@container session-page (min-width: 800px)': 'flex',
+    },
+    alignItems: 'center',
+  },
+  headerLauncher: {
+    display: 'inline-flex',
+    height: 'calc(var(--spacing) * 6)',
+    flexShrink: 0,
+    userSelect: 'none',
+    alignItems: 'center',
+    gap: 'calc(var(--spacing) * 1.5)',
+    borderRadius: 'var(--radius-md)',
+    borderWidth: 1,
+    borderStyle: 'solid',
+    borderColor: {
+      default: 'hsl(var(--foreground) / 0.16)',
+      '@media (hover: hover)': {
+        ':hover': 'hsl(var(--foreground) / 0.28)',
+      },
+    },
+    backgroundColor: 'transparent',
+    paddingInline: 'calc(var(--spacing) * 2)',
+    fontSize: '0.7rem',
+    fontWeight: 500,
+    lineHeight: 'normal',
+    color: {
+      default: 'hsl(var(--foreground) / 0.8)',
+      '@media (hover: hover)': {
+        ':hover': colors.label,
+      },
+    },
+    outlineStyle: 'none',
+    transitionProperty:
+      'color, background-color, border-color, outline-color, text-decoration-color, fill, stroke, --tw-gradient-from, --tw-gradient-via, --tw-gradient-to',
+    transitionDuration: 'var(--default-transition-duration, 150ms)',
+    transitionTimingFunction:
+      'var(--default-transition-timing-function, cubic-bezier(0.4, 0, 0.2, 1))',
+    outline: {
+      default: null,
+      '@media (forced-colors: active)': '2px solid transparent',
+    },
+    outlineOffset: {
+      default: null,
+      '@media (forced-colors: active)': '2px',
+    },
+    '--tw-ring-shadow': {
+      default: null,
+      ':focus-visible':
+        'var(--tw-ring-inset,) 0 0 0 calc(2px + var(--tw-ring-offset-width)) var(--tw-ring-color, currentcolor)',
+    },
+    '--tw-ring-color': {
+      default: null,
+      ':focus-visible': 'hsl(var(--ring) / 0.5)',
+    },
+    boxShadow: {
+      default: null,
+      ':focus-visible':
+        'var(--tw-inset-shadow), var(--tw-inset-ring-shadow), var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow)',
+    },
+  },
+  headerLauncherPrimary: {
+    gap: 'var(--spacing)',
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+    borderRightWidth: 0,
+  },
+  headerLauncherSelect: {
+    borderTopLeftRadius: 0,
+    borderBottomLeftRadius: 0,
+    paddingInline: 'var(--spacing)',
+  },
+  headerLauncherLabel: { fontSize: '0.75rem', lineHeight: '1rem' },
+  composerContents: { display: 'contents' },
+  composerHidden: { display: 'none' },
+});
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -561,26 +948,11 @@ const isTrackableRunningStatusType = (statusType: SessionStatus['type'] | undefi
 };
 
 const STATUS_TONE_STYLES = {
-  info: {
-    text: 'text-primary',
-    dot: 'bg-primary',
-  },
-  warn: {
-    text: 'text-status-warning',
-    dot: 'bg-status-warning',
-  },
-  success: {
-    text: 'text-status-success',
-    dot: 'bg-status-success',
-  },
-  error: {
-    text: 'text-destructive',
-    dot: 'bg-destructive',
-  },
-  neutral: {
-    text: 'text-muted-foreground',
-    dot: 'bg-muted-foreground',
-  },
+  info: styles.statusDotInfo,
+  warn: styles.statusDotWarning,
+  success: styles.statusDotSuccess,
+  error: styles.statusDotError,
+  neutral: styles.statusDotNeutral,
 } as const;
 
 type ToolCallMessage = Extract<MessageContent, { type: 'tool_call' }>;
@@ -718,7 +1090,9 @@ export function SessionHistoryButton({
       className="shrink-0"
       disabled={historySessions.length === 0}
     >
-      <History className={cn('h-4 w-4', compact ? '' : 'mr-2')} />
+      <History
+        {...stylex.props(styles.historyTriggerIcon, !compact && styles.historyTriggerIconSpaced)}
+      />
       {!compact && <span>{t('sessions.history', 'History')}</span>}
     </Button>
   );
@@ -729,11 +1103,11 @@ export function SessionHistoryButton({
       <Drawer.Content side={isMobile ? 'bottom' : 'end'} className="sm:max-w-md">
         <Drawer.Header>
           <Drawer.Title>{t('sessions.history', 'History')}</Drawer.Title>
-          <p className="text-sm text-muted-foreground">{t('sessions.newSession.title')}</p>
+          <p {...stylex.props(styles.historySubtitle)}>{t('sessions.newSession.title')}</p>
         </Drawer.Header>
-        <div className="mt-6 space-y-2">
+        <div {...stylex.props(styles.historyList)}>
           {historySessions.length === 0 ? (
-            <div className="text-sm text-muted-foreground">{t('sessions.noSessions')}</div>
+            <div {...stylex.props(styles.historyEmpty)}>{t('sessions.noSessions')}</div>
           ) : (
             historySessions.map((session) => {
               const sessionTitle = (session.title ?? '').trim() || defaultSessionTitle;
@@ -754,25 +1128,19 @@ export function SessionHistoryButton({
               return (
                 <button
                   key={session.id}
-                  className={cn(
-                    'w-full rounded-lg border px-3 py-2 text-left transition-colors hover:bg-hover',
-                    isActive && 'border-border/70 bg-selection text-selection-foreground'
-                  )}
+                  {...stylex.props(styles.historyRow, isActive && styles.historyRowSelected)}
                   onClick={() => handleSelect(session.id as SessionId)}
                 >
-                  <div className="flex items-start gap-3">
+                  <div {...stylex.props(styles.historyRowBody)}>
                     <div
-                      className={cn(
-                        'mt-1 h-2.5 w-2.5 rounded-full',
-                        STATUS_TONE_STYLES[tone ?? 'info'].dot
-                      )}
+                      {...stylex.props(styles.historyStatusDot, STATUS_TONE_STYLES[tone ?? 'info'])}
                     />
-                    <div className="flex-1 min-w-0">
-                      <p className="truncate text-sm font-medium">{sessionTitle}</p>
-                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                        <span className="truncate">{createdAtLabel}</span>
-                        <span className="h-1 w-1 rounded-full bg-border" />
-                        <span className="truncate">{statusLabel}</span>
+                    <div {...stylex.props(styles.historyTextColumn)}>
+                      <p {...stylex.props(styles.historyTitle)}>{sessionTitle}</p>
+                      <div {...stylex.props(styles.historyMeta)}>
+                        <span {...stylex.props(styles.historyMetaText)}>{createdAtLabel}</span>
+                        <span {...stylex.props(styles.historySeparator)} />
+                        <span {...stylex.props(styles.historyMetaText)}>{statusLabel}</span>
                       </div>
                     </div>
                     {isActive && <Badge>{t('common.current', 'Current')}</Badge>}
@@ -819,24 +1187,22 @@ export function SessionProjectInfo({
 
   if (!hasProjectInfo) {
     return (
-      <div className="min-w-0">
-        <div className="flex min-w-0 items-center gap-1.5 text-sm leading-tight">
-          <span className="inline-flex shrink-0 items-center text-muted-foreground">
-            <MessageCircle className="h-3.5 w-3.5" />
+      <div {...stylex.props(styles.projectRoot)}>
+        <div {...stylex.props(styles.projectLine)}>
+          <span {...stylex.props(styles.projectIcon)}>
+            <MessageCircle {...stylex.props(styles.projectIconGlyph)} />
           </span>
-          <span className="truncate font-medium">{t('sessions.chat', 'Chat')}</span>
+          <span {...stylex.props(styles.projectTitle)}>{t('sessions.chat', 'Chat')}</span>
           {isLoading && (
-            <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-              {t('common.loading', 'Loading')}
-            </span>
+            <span {...stylex.props(styles.projectStatus)}>{t('common.loading', 'Loading')}</span>
           )}
           {isSyncing && <SessionSyncingIndicator />}
           {isMachineOffline && (
             <span
-              className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+              {...stylex.props(styles.projectStatus)}
               title={t('sessions.machineOffline', 'Machine is offline')}
             >
-              <FamiconsCloudOfflineOutline className="h-3.5 w-3.5" />
+              <FamiconsCloudOfflineOutline {...stylex.props(styles.projectIconGlyph)} />
             </span>
           )}
         </div>
@@ -845,26 +1211,28 @@ export function SessionProjectInfo({
   }
 
   return (
-    <div className="min-w-0">
-      <div className="flex min-w-0 items-center gap-1.5 text-sm leading-tight">
+    <div {...stylex.props(styles.projectRoot)}>
+      <div {...stylex.props(styles.projectLine)}>
         {(projectLabel || localProjectName) && (
-          <span className="inline-flex shrink-0 items-center text-muted-foreground">
-            {isGitHub ? <Github className="h-3.5 w-3.5" /> : <Folder className="h-3.5 w-3.5" />}
+          <span {...stylex.props(styles.projectIcon)}>
+            {isGitHub ? (
+              <Github {...stylex.props(styles.projectIconGlyph)} />
+            ) : (
+              <Folder {...stylex.props(styles.projectIconGlyph)} />
+            )}
           </span>
         )}
-        <span className="truncate font-medium">{projectLabel || localProjectName || ''}</span>
+        <span {...stylex.props(styles.projectTitle)}>{projectLabel || localProjectName || ''}</span>
         {isLoading && (
-          <span className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
-            {t('common.loading', 'Loading')}
-          </span>
+          <span {...stylex.props(styles.projectStatus)}>{t('common.loading', 'Loading')}</span>
         )}
         {isSyncing && <SessionSyncingIndicator />}
         {isMachineOffline && (
           <span
-            className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground"
+            {...stylex.props(styles.projectStatus)}
             title={t('sessions.machineOffline', 'Machine is offline')}
           >
-            <FamiconsCloudOfflineOutline className="h-3.5 w-3.5" />
+            <FamiconsCloudOfflineOutline {...stylex.props(styles.projectIconGlyph)} />
           </span>
         )}
       </div>
@@ -907,9 +1275,6 @@ export type SessionOpenedByMenuState = {
 
 const SESSION_HEADER_MENU_CONTENT_CLASS =
   'min-w-[200px] max-w-[290px] [&_[role=menuitem]]:min-h-8 [&_[role=menuitem]]:py-1.5';
-const SESSION_HEADER_MENU_STATIC_ROW_CLASS =
-  'flex min-h-8 w-full min-w-0 cursor-default select-none items-center gap-2 overflow-hidden rounded-md px-2 py-1.5 text-[13px] leading-4';
-
 /** Session header "···" menu — context, visibility, sharing, and session actions. */
 export function SessionHeaderMenu({
   session,
@@ -1004,6 +1369,8 @@ export function SessionHeaderMenu({
     (sharing?.visibility === 'private' &&
       (sharing.privateReason === 'machine-not-registered' || !sharing.canManage));
   const [reviewSetupOpen, setReviewSetupOpen] = useState(false);
+  const conversationWide = useAtomValue(conversationWideModeAtom);
+  const setConversationWide = useSetAtom(conversationWideModeAtom);
 
   const openedBySession = openedByRelations?.openedBy ?? null;
   const openedSessions = openedByRelations?.opened ?? [];
@@ -1019,20 +1386,15 @@ export function SessionHeaderMenu({
               }
             }}
             title={openedBySession.title}
+            icon={CornerLeftUp}
           >
-            <CornerLeftUp className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">
-              {t('sessions.openedBy.openOpener', 'Opened by')}: {openedBySession.title}
-            </span>
+            {t('sessions.openedBy.openOpener', 'Opened by')}: {openedBySession.title}
           </Menu.Item>
         ) : null}
         {openedSessions.length > 0 ? (
           <Menu.Submenu>
-            <Menu.SubmenuTrigger>
-              <GitBranchPlus className="h-3.5 w-3.5 shrink-0" />
-              <span className="min-w-0 flex-1 truncate">
-                {t('sessions.openedBy.openedSessions', 'Opened sessions')} ({openedSessions.length})
-              </span>
+            <Menu.SubmenuTrigger icon={GitBranchPlus}>
+              {t('sessions.openedBy.openedSessions', 'Opened sessions')} ({openedSessions.length})
             </Menu.SubmenuTrigger>
             <Menu.Content className="max-h-72 min-w-[200px] max-w-[280px] overflow-y-auto">
               {openedSessions.map((opened) => (
@@ -1043,7 +1405,7 @@ export function SessionHeaderMenu({
                   }}
                   title={opened.title}
                 >
-                  <span className="min-w-0 flex-1 truncate">{opened.title}</span>
+                  {opened.title}
                 </Menu.Item>
               ))}
             </Menu.Content>
@@ -1061,32 +1423,40 @@ export function SessionHeaderMenu({
     });
     if (openInIde.options.length === 1) {
       return (
-        <Menu.Item onClick={openInIde.onOpen}>
-          <SelectedIcon className="h-3.5 w-3.5 shrink-0" />
+        <Menu.Item icon={SelectedIcon} onClick={openInIde.onOpen}>
           {openLabel}
         </Menu.Item>
       );
     }
     return (
       <Menu.Submenu>
-        <Menu.SubmenuTrigger>
-          <SelectedIcon className="h-3.5 w-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">{openLabel}</span>
-        </Menu.SubmenuTrigger>
+        <Menu.SubmenuTrigger icon={SelectedIcon}>{openLabel}</Menu.SubmenuTrigger>
         <Menu.Content>
-          {openInIde.options.map((launcher) => {
-            const launcherId = getPathLauncherId(launcher);
-            const LauncherIcon = getPathLauncherIcon(launcher);
-            return (
-              <Menu.Item key={launcherId} onClick={() => openInIde.onSelect(launcher)}>
-                <LauncherIcon className="h-3.5 w-3.5 shrink-0" />
-                {launcher.label}
-                {launcherId === getPathLauncherId(openInIde.selected) ? (
-                  <Check className="ml-auto h-3.5 w-3.5 shrink-0" />
-                ) : null}
-              </Menu.Item>
-            );
-          })}
+          <Menu.RadioGroup
+            value={getPathLauncherId(openInIde.selected)}
+            onValueChange={(launcherId) => {
+              const target = openInIde.options.find(
+                (option) => getPathLauncherId(option) === launcherId
+              );
+              if (target) openInIde.onSelect(target);
+            }}
+          >
+            {openInIde.options.map((launcher) => {
+              const launcherId = getPathLauncherId(launcher);
+              const LauncherIcon = getPathLauncherIcon(launcher);
+              return (
+                <Menu.RadioItem
+                  key={launcherId}
+                  value={launcherId}
+                  icon={LauncherIcon}
+                  indicator="check"
+                  indicatorSide="end"
+                >
+                  {launcher.label}
+                </Menu.RadioItem>
+              );
+            })}
+          </Menu.RadioGroup>
         </Menu.Content>
       </Menu.Submenu>
     );
@@ -1120,7 +1490,7 @@ export function SessionHeaderMenu({
               className="h-7 w-7 shrink-0 text-muted-foreground"
               aria-label={t('sessions.moreActions', 'More actions')}
             >
-              <Ellipsis className="h-4 w-4" />
+              <Ellipsis {...stylex.props(styles.historyTriggerIcon)} />
             </Button>
           }
         >
@@ -1130,7 +1500,7 @@ export function SessionHeaderMenu({
             className="h-7 w-7 shrink-0 text-muted-foreground"
             aria-label={t('sessions.moreActions', 'More actions')}
           >
-            <Ellipsis className="h-4 w-4" />
+            <Ellipsis {...stylex.props(styles.historyTriggerIcon)} />
           </Button>
         </Menu.Trigger>
         <Menu.Content align="end" className={SESSION_HEADER_MENU_CONTENT_CLASS}>
@@ -1149,10 +1519,10 @@ export function SessionHeaderMenu({
                   }
                   title={repoFullName}
                   aria-label={`${t('sessions.copyRepository', 'Copy repository')}: ${repoFullName}`}
+                  icon={Github}
+                  endContent={<Copy className="h-3 w-3 text-muted-foreground" />}
                 >
-                  <Github className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">{repoFullName}</span>
-                  <Copy className="ml-auto h-3 w-3 shrink-0 text-muted-foreground" />
+                  {repoFullName}
                 </Menu.Item>
               ) : null}
 
@@ -1183,17 +1553,17 @@ export function SessionHeaderMenu({
                       ? t('sessions.copyCurrentBranch', 'Copy current branch')
                       : t('sessions.copyBaseBranch', 'Copy base branch')
                   }: ${branchDisplayValue}`}
+                  icon={GitBranch}
+                  endContent={<Copy className="h-3 w-3 text-muted-foreground" />}
                 >
-                  <GitBranch className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate">{branchDisplayValue}</span>
                     {showBaseBranchContext ? (
-                      <span className="block truncate text-[0.68rem] leading-4 text-muted-foreground">
+                      <span {...stylex.props(styles.menuBranchValue, styles.menuBaseBranch)}>
                         {t('sessions.baseBranch', 'Base branch')}: {baseBranch}
                       </span>
                     ) : null}
                   </span>
-                  <Copy className="ml-auto mt-0.5 h-3 w-3 shrink-0 text-muted-foreground" />
                 </Menu.Item>
               ) : showProjectPath ? (
                 <Menu.Item
@@ -1205,18 +1575,24 @@ export function SessionHeaderMenu({
                   }
                   title={localPath}
                   aria-label={`${t('sessions.copyProjectPath', 'Copy project path')}: ${localPath}`}
+                  icon={Folder}
+                  endContent={<Copy className="h-3 w-3 text-muted-foreground" />}
                 >
-                  <Folder className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">{localPath}</span>
-                  <Copy className="ml-auto h-3 w-3 shrink-0 text-muted-foreground" />
+                  {localPath}
                 </Menu.Item>
               ) : null}
 
               {machineName ? (
-                <div className={SESSION_HEADER_MENU_STATIC_ROW_CLASS}>
-                  <Monitor className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                  <span className="sr-only">{t('sessions.machineLabel', 'Machine')}: </span>
-                  <span className="min-w-0 flex-1 truncate">{machineName}</span>
+                <div {...stylex.props(styles.headerMenuStaticRow)}>
+                  <Monitor
+                    {...stylex.props(styles.menuIcon, styles.menuIconFixed, styles.menuIconMuted)}
+                  />
+                  <span {...stylex.props(styles.machineAccessibleLabel)}>
+                    {t('sessions.machineLabel', 'Machine')}:{' '}
+                  </span>
+                  <span {...stylex.props(styles.menuText, styles.menuTextTruncated)}>
+                    {machineName}
+                  </span>
                   {project?.kind === 'local' ? (
                     <Badge className="ml-auto">
                       {session.isWorktree
@@ -1232,15 +1608,33 @@ export function SessionHeaderMenu({
                   <Tooltip.Trigger
                     delay={300}
                     render={
-                      <div className={SESSION_HEADER_MENU_STATIC_ROW_CLASS}>
+                      <div {...stylex.props(styles.headerMenuStaticRow)}>
                         {sharing.visibility === 'team' ? (
-                          <Users className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <Users
+                            {...stylex.props(
+                              styles.menuIcon,
+                              styles.menuIconFixed,
+                              styles.menuIconMuted
+                            )}
+                          />
                         ) : sharing.visibility === 'private' ? (
-                          <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <LockKeyhole
+                            {...stylex.props(
+                              styles.menuIcon,
+                              styles.menuIconFixed,
+                              styles.menuIconMuted
+                            )}
+                          />
                         ) : (
                           <Spinner className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                         )}
-                        <span className="min-w-0 flex-1 truncate font-normal">
+                        <span
+                          {...stylex.props(
+                            styles.menuText,
+                            styles.menuTextTruncated,
+                            styles.menuTextNormal
+                          )}
+                        >
                           {getSessionSharingLabel(t, sharing)}
                         </span>
                       </div>
@@ -1256,39 +1650,55 @@ export function SessionHeaderMenu({
             </>
           ) : null}
 
+          {/* View preference, not a session action: device-local toggle mirrored
+              from Settings > Appearance. It leads the action block — the page's
+              own display option, right after identity, like Notion's page
+              controls. A trailing Switch, not a checkmark; the row stays open
+              so the flip is visible. */}
+          <Menu.Item
+            closeOnClick={false}
+            onClick={() => setConversationWide(!conversationWide)}
+            icon={MoveHorizontal}
+            endContent={
+              <Switch
+                checked={conversationWide}
+                onCheckedChange={(checked) => setConversationWide(checked === true)}
+                onClick={(event) => event.stopPropagation()}
+                aria-label={t('sessions.fullWidth', 'Full width')}
+                className="shrink-0"
+              />
+            }
+          >
+            {t('sessions.fullWidth', 'Full width')}
+          </Menu.Item>
+
           {openedByRelationRows}
 
           {openInIdeMenu}
 
           {onOpenPublicShare && (
-            <Menu.Item onClick={onOpenPublicShare}>
-              <Share2 className="h-3.5 w-3.5 shrink-0" />
+            <Menu.Item icon={Share2} onClick={onOpenPublicShare}>
               {t('sharing.manager.title', 'Share')}
             </Menu.Item>
           )}
 
           {onOpenSearch && (
             <Menu.Item
+              icon={Search}
               onClick={() => {
                 void onOpenSearch();
               }}
             >
-              <Search className="h-3.5 w-3.5 shrink-0" />
               {t('sessions.findInConversation', 'Find in session')}
             </Menu.Item>
           )}
 
           {onFork || onCopyConversationHistory ? (
             <Menu.Submenu>
-              <Menu.SubmenuTrigger>
-                {isForking ? (
-                  <Spinner className="h-3.5 w-3.5 shrink-0" />
-                ) : (
-                  <GitFork className="h-3.5 w-3.5 shrink-0" />
-                )}
-                <span className="min-w-0 flex-1 truncate">
-                  {t('sessions.forkSession', 'Fork session')}
-                </span>
+              <Menu.SubmenuTrigger
+                icon={isForking ? <Spinner size="small" label={null} /> : GitFork}
+              >
+                {t('sessions.forkSession', 'Fork session')}
               </Menu.SubmenuTrigger>
               <Menu.Content className="min-w-[13rem]">
                 {onFork &&
@@ -1302,18 +1712,22 @@ export function SessionHeaderMenu({
                         onClick={() => {
                           void onFork(option.id);
                         }}
+                        icon={
+                          option.id === 'new-worktree' ? (
+                            <WorktreeIcon className="h-full w-full" />
+                          ) : (
+                            <Folder size="100%" />
+                          )
+                        }
+                        endContent={
+                          option.status ? (
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {option.status}
+                            </span>
+                          ) : undefined
+                        }
                       >
-                        {option.id === 'new-worktree' ? (
-                          <WorktreeIcon className="h-3.5 w-3.5 shrink-0" />
-                        ) : (
-                          <Folder className="h-3.5 w-3.5 shrink-0" />
-                        )}
-                        <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                        {option.status ? (
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {option.status}
-                          </span>
-                        ) : null}
+                        {option.label}
                       </Menu.Item>
                     );
                     // The submenu usually opens toward the conversation, so the
@@ -1332,11 +1746,11 @@ export function SessionHeaderMenu({
                   })}
                 {onCopyConversationHistory && (
                   <Menu.Item
+                    icon={Copy}
                     onClick={() => {
                       void onCopyConversationHistory();
                     }}
                   >
-                    <Copy className="h-3.5 w-3.5" />
                     {t('sessions.copyContextMarkdown', 'Copy context as Markdown')}
                   </Menu.Item>
                 )}
@@ -1346,53 +1760,54 @@ export function SessionHeaderMenu({
 
           {onRename && !isArchived && (
             <Menu.Item
+              icon={Pencil}
               onClick={() => {
                 void onRename();
               }}
             >
-              <Pencil className="h-3.5 w-3.5 shrink-0" />
               {t('sidebar.renameChat.title', 'Rename Chat')}
             </Menu.Item>
           )}
 
           {owner && !isArchived ? (
             <Menu.Submenu>
-              <Menu.SubmenuTrigger>
-                <UserRoundCog className="h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 flex-1 truncate">
-                  {t('sessions.owner.change', 'Change owner')}
-                </span>
+              <Menu.SubmenuTrigger icon={UserRoundCog}>
+                {t('sessions.owner.change', 'Change owner')}
               </Menu.SubmenuTrigger>
               <Menu.Content className="max-h-72 min-w-[200px] max-w-[280px] overflow-y-auto">
-                {owner.members.map((member) => {
-                  const isOwner = member.userId === owner.ownerUserId;
-                  const isPending = owner.pendingUserId === member.userId;
-                  return (
-                    <Menu.Item
-                      key={member.userId}
-                      disabled={owner.pendingUserId != null}
-                      onClick={() => {
-                        // Guard in the handler, not just via `disabled`: the
-                        // menu stays mounted while the write is in flight.
-                        if (isOwner || owner.pendingUserId != null) return;
-                        void owner.onChangeOwner(member.userId);
-                      }}
-                      title={member.email ?? member.name}
-                    >
-                      <UserAvatar
-                        user={{ id: member.userId, name: member.name, image: member.image }}
-                        size="mini"
-                        className="shrink-0"
-                      />
-                      <span className="min-w-0 flex-1 truncate">{member.name}</span>
-                      {isPending ? (
-                        <Spinner className="ml-auto h-3.5 w-3.5 shrink-0" />
-                      ) : isOwner ? (
-                        <Check className="ml-auto h-3.5 w-3.5 shrink-0" />
-                      ) : null}
-                    </Menu.Item>
-                  );
-                })}
+                <Menu.RadioGroup
+                  value={owner.ownerUserId}
+                  onValueChange={(userId) => {
+                    // Guard in the handler, not just via `disabled`: the
+                    // menu stays mounted while the write is in flight.
+                    if (userId === owner.ownerUserId || owner.pendingUserId != null) return;
+                    void owner.onChangeOwner(userId);
+                  }}
+                >
+                  {owner.members.map((member) => {
+                    const isPending = owner.pendingUserId === member.userId;
+                    return (
+                      <Menu.RadioItem
+                        key={member.userId}
+                        value={member.userId}
+                        disabled={owner.pendingUserId != null}
+                        title={member.email ?? member.name}
+                        indicator="check"
+                        indicatorSide="end"
+                        endContent={
+                          isPending ? <Spinner className="h-3.5 w-3.5 shrink-0" /> : undefined
+                        }
+                      >
+                        <UserAvatar
+                          user={{ id: member.userId, name: member.name, image: member.image }}
+                          size="mini"
+                          className="shrink-0"
+                        />
+                        {member.name}
+                      </Menu.RadioItem>
+                    );
+                  })}
+                </Menu.RadioGroup>
               </Menu.Content>
             </Menu.Submenu>
           ) : null}
@@ -1406,16 +1821,18 @@ export function SessionHeaderMenu({
               onClick={() => {
                 void onShareWithTeam?.();
               }}
+              icon={
+                sharing.visibility === 'unknown' ? (
+                  <Spinner size="small" label={null} />
+                ) : sharing.privateReason === 'machine-not-registered' ? (
+                  <Monitor size="100%" />
+                ) : sharing.canManage ? (
+                  Users
+                ) : (
+                  LockKeyhole
+                )
+              }
             >
-              {sharing.visibility === 'unknown' ? (
-                <Spinner className="h-3.5 w-3.5 shrink-0" />
-              ) : sharing.privateReason === 'machine-not-registered' ? (
-                <Monitor className="h-3.5 w-3.5 shrink-0" />
-              ) : sharing.canManage ? (
-                <Users className="h-3.5 w-3.5 shrink-0" />
-              ) : (
-                <LockKeyhole className="h-3.5 w-3.5 shrink-0" />
-              )}
               {sharing.visibility === 'unknown'
                 ? t('sessions.sharing.loadingAction', 'Checking sharing…')
                 : sharing.privateReason === 'machine-not-registered'
@@ -1430,10 +1847,7 @@ export function SessionHeaderMenu({
           ) : null}
 
           <Menu.Submenu>
-            <Menu.SubmenuTrigger>
-              <Copy className="h-3.5 w-3.5 shrink-0" />
-              {t('sessions.copy', 'Copy')}
-            </Menu.SubmenuTrigger>
+            <Menu.SubmenuTrigger icon={Copy}>{t('sessions.copy', 'Copy')}</Menu.SubmenuTrigger>
             <Menu.Content className="min-w-[200px]">
               {showBaseBranchContext ? (
                 <>
@@ -1445,8 +1859,8 @@ export function SessionHeaderMenu({
                       )
                     }
                     title={baseBranch}
+                    icon={GitBranch}
                   >
-                    <GitBranch className="h-3.5 w-3.5 shrink-0" />
                     {t('sessions.copyBaseBranch', 'Copy base branch')}
                   </Menu.Item>
                   <Menu.Separator />
@@ -1464,8 +1878,8 @@ export function SessionHeaderMenu({
                   trimmedWorkspacePath ||
                   t('sessions.copyPathUnavailable', 'Workspace path unavailable')
                 }
+                icon={Copy}
               >
-                <Copy className="h-3.5 w-3.5 shrink-0" />
                 {t('sessions.copyPath', 'Copy path')}
               </Menu.Item>
               <Menu.Item
@@ -1481,16 +1895,16 @@ export function SessionHeaderMenu({
                         'Conversation history is unavailable for this tab'
                       )
                 }
+                icon={Copy}
               >
-                <Copy className="h-3.5 w-3.5 shrink-0" />
                 {t('sessions.copyAsMarkdown', 'Copy as Markdown')}
               </Menu.Item>
               <Menu.Item
                 onClick={() => {
                   void onCopyUrl();
                 }}
+                icon={Copy}
               >
-                <Copy className="h-3.5 w-3.5 shrink-0" />
                 {t('sessions.copyUrl', 'Copy URL')}
               </Menu.Item>
             </Menu.Content>
@@ -1501,8 +1915,8 @@ export function SessionHeaderMenu({
             onClick={() => {
               onShareAsImage?.();
             }}
+            icon={Image}
           >
-            <Image className="h-3.5 w-3.5 shrink-0" />
             {t('sessions.shareAsImage', 'Share as image…')}
           </Menu.Item>
 
@@ -1522,19 +1936,19 @@ export function SessionHeaderMenu({
                       onClick={() => {
                         void onRestore();
                       }}
+                      icon={ArchiveRestore}
                     >
-                      <ArchiveRestore className="h-3.5 w-3.5 shrink-0" />
                       {t('archive.restore', 'Restore session')}
                     </Menu.Item>
                   )}
                   {onDelete && (
                     <Menu.Item
+                      tone="destructive"
                       onClick={() => {
                         void onDelete();
                       }}
-                      className="text-destructive focus:text-destructive"
+                      icon={Trash2}
                     >
-                      <Trash2 className="h-3.5 w-3.5 shrink-0" />
                       {t('archive.delete', 'Delete permanently')}
                     </Menu.Item>
                   )}
@@ -1547,8 +1961,8 @@ export function SessionHeaderMenu({
                     onClick={() => {
                       void onArchive();
                     }}
+                    icon={Archive}
                   >
-                    <Archive className="h-3.5 w-3.5 shrink-0" />
                     {t('sessions.archive', 'Archive session')}
                   </Menu.Item>
                 </>
@@ -1615,7 +2029,7 @@ export function SessionSearchBar({
         onClick={onClick}
         aria-label={label}
       >
-        <Icon className="h-3.5 w-3.5" strokeWidth={2} />
+        <Icon {...stylex.props(styles.menuIcon)} strokeWidth={2} />
       </Button>
     );
     if (!hasResults) return button;
@@ -1624,29 +2038,28 @@ export function SessionSearchBar({
         <Tooltip.Trigger delay={400} render={button} />
         <Tooltip.Content side="bottom" className="flex items-center gap-1.5 px-2 py-1 text-[11px]">
           <span>{label}</span>
-          <span className="rounded-sm border border-border/70 bg-muted px-1 font-mono text-[10px] leading-none text-muted-foreground">
-            {shortcut}
-          </span>
+          <span {...stylex.props(styles.searchShortcut)}>{shortcut}</span>
         </Tooltip.Content>
       </Tooltip.Root>
     );
   };
 
   return (
-    <div className="pointer-events-auto absolute right-3 top-3 z-20 w-[min(360px,calc(100%-1.5rem))] sm:right-4 sm:top-4 sm:w-[min(360px,calc(100%-2rem))]">
+    <div {...stylex.props(styles.searchOverlay)}>
       <div
         role="search"
-        className={cn(
-          'group/search flex h-9 items-center gap-0.5 rounded-lg border-[0.5px] bg-background/95 pl-2.5 pr-1 shadow-[0_4px_12px_-4px_rgba(15,23,42,0.16),0_1px_2px_rgba(15,23,42,0.06)] backdrop-blur-md transition-colors supports-[backdrop-filter]:bg-background/85',
-          'border-border focus-within:border-ring/60',
-          noResults && 'border-destructive/30 focus-within:border-destructive/60'
+        {...withClassName(
+          stylex.props(styles.searchSurface, noResults && styles.searchSurfaceNoResults),
+          'group/search'
         )}
       >
         <Search
-          className={cn(
-            'h-3.5 w-3.5 shrink-0 transition-colors',
-            hasQuery ? 'text-foreground' : 'text-muted-foreground/80',
-            noResults && 'text-destructive/80'
+          {...stylex.props(
+            styles.menuIcon,
+            styles.menuIconFixed,
+            styles.searchIcon,
+            hasQuery && styles.searchIconQuery,
+            noResults && styles.searchIconNoResults
           )}
           strokeWidth={2}
         />
@@ -1681,10 +2094,7 @@ export function SessionSearchBar({
 
         {hasQuery && (
           <span
-            className={cn(
-              'shrink-0 select-none px-1 text-[11.5px] font-medium tabular-nums tracking-tight transition-colors',
-              hasResults ? 'text-muted-foreground' : 'text-destructive/90'
-            )}
+            {...stylex.props(styles.searchCount, !hasResults && styles.searchCountNoResults)}
             aria-live="polite"
           >
             {countLabel}
@@ -1693,7 +2103,7 @@ export function SessionSearchBar({
 
         <Separator orientation="vertical" className="mx-0.5 h-4 bg-border/60" />
 
-        <div className="flex items-center gap-px">
+        <div {...stylex.props(styles.searchActions)}>
           {renderNavButton(
             ArrowUp,
             t('sessions.previousResult', 'Previous result'),
@@ -1713,7 +2123,7 @@ export function SessionSearchBar({
                   onClick={onClose}
                   aria-label={t('common.close', 'Close')}
                 >
-                  <X className="h-3.5 w-3.5" strokeWidth={2} />
+                  <X {...stylex.props(styles.menuIcon)} strokeWidth={2} />
                 </Button>
               }
             />
@@ -1722,9 +2132,7 @@ export function SessionSearchBar({
               className="flex items-center gap-1.5 px-2 py-1 text-[11px]"
             >
               <span>{t('common.close', 'Close')}</span>
-              <span className="rounded-sm border border-border/70 bg-muted px-1 font-mono text-[10px] leading-none text-muted-foreground">
-                Esc
-              </span>
+              <span {...stylex.props(styles.searchShortcut)}>Esc</span>
             </Tooltip.Content>
           </Tooltip.Root>
         </div>
@@ -1809,6 +2217,7 @@ interface SessionChatInterfaceProps {
   browserActionSession?: SessionMeta | null;
   /** Called when the user wants to open the Browser panel. */
   onOpenBrowser?: () => void;
+  onOpenIosSimulator?: () => void;
   /** Opens Browser without forcing a newly reported candidate navigation. */
   onOpenExistingBrowser?: () => void;
   /**
@@ -1853,6 +2262,11 @@ export type SessionChatInterfaceHandle = {
   toggleCommentReference: (reference: CommentReferencePayload) => boolean;
   addVisualAnnotationReference: (reference: VisualAnnotationReferencePayload) => boolean;
   toggleVisualAnnotationReference: (reference: VisualAnnotationReferencePayload) => boolean;
+  /**
+   * Adds files to the composer as attachments, the way a drop does. It never
+   * sends; false when the composer is not mounted to take them.
+   */
+  addAttachmentFiles: (files: File[]) => boolean;
   copyConversationHistory: () => Promise<void>;
   /** Plain-text conversation snapshot for the share-as-image card; null while
    * durable history has not loaded. */
@@ -1969,6 +2383,7 @@ export const SessionChatInterface = memo(
       onOpenPrTab,
       browserActionSession,
       onOpenBrowser,
+      onOpenIosSimulator,
       onOpenExistingBrowser,
       headerVariant = 'page',
       paintSessionMentionOverlay = true,
@@ -2085,6 +2500,7 @@ export const SessionChatInterface = memo(
       [postHog, sessionAnalyticsProperties]
     );
 
+    const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
     const localMachineId = useAtomValue(localMachineIdAtom);
     const localHomeDir = useAtomValue(localHomeDirAtom);
     const liveSessionPresence = useAtomValue(sessionLivePresenceAtomFamily(session.id));
@@ -2134,14 +2550,26 @@ export const SessionChatInterface = memo(
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [conversationVersion, conversationView, sessionTailFrom]
     );
-    const sessionConversationConfig = useMemo(
+    const durableConversationConfig = useMemo(
       () => resolveSessionConversationConfig(conversationConfigSources, sessionDoc?.mq ?? []),
       [conversationConfigSources, sessionDoc?.mq]
     );
-    const sessionConversationSourceFence = useMemo(
+    const durableConversationSourceFence = useMemo(
       () => resolveSessionConversationSourceFence(conversationConfigSources, sessionDoc?.mq ?? []),
       [conversationConfigSources, sessionDoc?.mq]
     );
+    const {
+      config: sessionConversationConfig,
+      sourceFence: sessionConversationSourceFence,
+      hasPendingConfig,
+    } = useSessionPendingConfig({
+      sessionId: session.id,
+      pendingSends: runtime?.pendingSends,
+      history: conversationView,
+      config: durableConversationConfig,
+      sourceFence: durableConversationSourceFence,
+      documentReady: sessionDocReady,
+    });
     const sessionRuntimeConfig = useMemo(
       () =>
         resolveSessionAcpRuntimeConfig(
@@ -2151,10 +2579,10 @@ export const SessionChatInterface = memo(
         ),
       [sessionDoc?.acpRuntimeConfig, sessionTailHistory, sessionDoc?.mq]
     );
-    // `sourceConfigKey` identifies the durable turn selected by the resolver,
-    // so there is no need to hash its mode/model/option values separately.
+    // A local send and its history/queue row share one fence, so landing the
+    // send cannot consume edits made for the next draft during its upload.
     const sessionConversationConfigRevision = `${session.id}:${
-      sessionConversationConfig.sourceConfigKey ?? ''
+      sessionConversationSourceFence.currentTurnKey ?? ''
     }`;
     const sessionConfigPreferences = useMemo(
       () => ({
@@ -2181,11 +2609,11 @@ export const SessionChatInterface = memo(
       selectModel: handleModelChange,
       selectConfigOption: handleConfigOptionChange,
     } = useAcpSessionConfigSelectionState({
-      enabled: !hideMessageArea && sessionDocReady,
+      enabled: !hideMessageArea && (sessionDocReady || hasPendingConfig),
       targetKey: `${session.id}:${session.cliType}:${session.agentType}`,
       preferenceRevision: sessionConversationConfigRevision,
       preferences: sessionConfigPreferences,
-      runtimePreferences: sessionRuntimeConfig,
+      runtimePreferences: hasPendingConfig ? null : sessionRuntimeConfig,
       preserveUnsentUserEdits: true,
     });
     const {
@@ -2193,11 +2621,10 @@ export const SessionChatInterface = memo(
       capabilityAuthority,
       configOptionSelectors,
       defaultModeId,
-      defaultModelId,
       machineFlockRows,
       modeOptions,
       modelOptions,
-      modelReasoningEfforts,
+      selectorOptions,
       sessionMachine,
     } = useSessionAcpSelectorContext({
       machineId: session.machineId,
@@ -2215,28 +2642,8 @@ export const SessionChatInterface = memo(
       capabilityAuthority,
       steerCapability
     );
-    const sessionSelectorOptions = useMemo(
-      () => ({
-        capabilityAuthority,
-        configOptionSelectors,
-        defaultModeId,
-        defaultModelId,
-        modeOptions,
-        modelOptions,
-        modelReasoningEfforts,
-      }),
-      [
-        capabilityAuthority,
-        configOptionSelectors,
-        defaultModeId,
-        defaultModelId,
-        modeOptions,
-        modelOptions,
-        modelReasoningEfforts,
-      ]
-    );
     const { selectedModeId, selectedModelId, configOptionValues } =
-      useResolvedAcpSessionConfigSelection(sessionConfigSelection, sessionSelectorOptions, {
+      useResolvedAcpSessionConfigSelection(sessionConfigSelection, selectorOptions, {
         cliType: session.cliType,
         agentType: session.agentType,
       });
@@ -2417,6 +2824,37 @@ export const SessionChatInterface = memo(
       >
     >(new Map());
     const isArchivedSession = session.isArchived === true;
+    /* The edit-and-resend editor shares the composer's mention pipeline: same
+       `@`/`$`/`/` sources, same before-send expansion. The provider is always
+       enabled here (unlike the composer, which gates on the draft containing
+       `@`) because the editor opens with the previous text already loaded and
+       must resolve its tokens on first paint. */
+    const editMentionSource = useSessionMentionSource({
+      session,
+      sessionLocalProjectRootPath: resolvedLocalProjectMeta?.rootPath ?? null,
+      isRepoPublic,
+      enableCodeCollabProvider: true,
+      debugLabel: 'session-edit:mention-provider',
+    });
+    const editSkillAgent = useMemo(
+      () =>
+        !isArchivedSession && session.cliType && session.agentType
+          ? {
+              cliType: session.cliType,
+              agentType: session.agentType,
+              machineId: session.machineId,
+            }
+          : undefined,
+      [isArchivedSession, session.agentType, session.cliType, session.machineId]
+    );
+    const editMentionContext = useMemo<UserMessageEditMentionContext>(
+      () => ({
+        mentionSource: isArchivedSession ? undefined : editMentionSource,
+        availableCommands,
+        skillAgent: editSkillAgent,
+      }),
+      [availableCommands, editMentionSource, editSkillAgent, isArchivedSession]
+    );
     const [pendingGoalCommand, setPendingGoalCommand] = useState<{
       threadId: string;
       command: GoalCommand;
@@ -2434,7 +2872,6 @@ export const SessionChatInterface = memo(
     const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
     const lastSearchAnalyticsKeyRef = useRef<string | null>(null);
 
-    const runtime = useAtomValue(activeWorkspaceRuntimeAtom);
     const queuedMessageBehavior = useAtomValue(queuedMessageBehaviorAtom);
     const {
       markSessionRead,
@@ -2905,6 +3342,7 @@ export const SessionChatInterface = memo(
       () => (sessionDoc?.mq ?? []) as MessageQueueItem[],
       [sessionDoc?.mq]
     );
+    const hasPendingQueueRecords = useHasPendingQueueRecords(session.id, messageQueue);
     const billableSessionTurnCount = useMemo(
       () =>
         (conversationView ? countUserTurns(conversationView) : 0) +
@@ -3066,8 +3504,15 @@ export const SessionChatInterface = memo(
       sessionMachine?.acpCapabilities,
     ]);
     const handleEditLastUser = useCallback(
-      async (message: SessionHistoryParsed, text: string): Promise<boolean> => {
-        const nextText = text.trim();
+      async (
+        message: SessionHistoryParsed,
+        submission: UserMessageEditSubmission
+      ): Promise<boolean> => {
+        // `submission.text` is already expanded (session/skill/agent-role tokens
+        // rewritten to their agent-facing forms) and trimmed; `submission.spans`
+        // records where each mention landed so the transcript paints the user's
+        // own wording back over it — identical to a fresh send.
+        const nextText = submission.text;
         const requesterUserId = currentUser?.id ?? session.userId;
         if (
           !runtime ||
@@ -3085,7 +3530,11 @@ export const SessionChatInterface = memo(
         for (const block of originalBlocks) {
           if (block.type === 'text') {
             if (!replacedText) {
-              inputBlocks.push({ type: 'text', text: nextText });
+              inputBlocks.push({
+                type: 'text',
+                text: nextText,
+                ...(submission.spans ? { spans: submission.spans } : {}),
+              });
               replacedText = true;
             }
             continue;
@@ -3093,7 +3542,11 @@ export const SessionChatInterface = memo(
           inputBlocks.push(block);
         }
         if (!replacedText) {
-          inputBlocks.push({ type: 'text', text: nextText });
+          inputBlocks.push({
+            type: 'text',
+            text: nextText,
+            ...(submission.spans ? { spans: submission.spans } : {}),
+          });
         }
 
         const originalConfig = normalizeSessionTurnInputConfig(message.inputConfig) ?? {};
@@ -4132,12 +4585,9 @@ export const SessionChatInterface = memo(
           agentRole: options?.agentRole,
           attachments: options?.attachments,
         });
-        if (
-          accepted &&
-          runtime?.sendJournal
-            ?.getSnapshot()
-            .some((record) => record.sessionId === session.id && record.stage === 'saved')
-        ) {
+        // A held send (attachments still preparing) dispatches itself later;
+        // the composer is free again now.
+        if (accepted && runtime?.pendingSends?.hasSession(session.id)) {
           directDispatchInFlightRef.current = false;
           setInputActionState('ready');
         }
@@ -4153,7 +4603,7 @@ export const SessionChatInterface = memo(
         return accepted;
       },
       [
-        runtime?.sendJournal,
+        runtime?.pendingSends,
         session.id,
         captureSessionEvent,
         configOptionValues,
@@ -4239,11 +4689,6 @@ export const SessionChatInterface = memo(
     // NEW message — the old turn is never revived.
     const handleResendUndelivered = useCallback(
       async (userTurnId: string, inputBlocks: SessionInputBlock[]): Promise<boolean> => {
-        const pending = await runtime?.sendJournal?.read(userTurnId);
-        if (pending && pending.stage !== 'delivered') {
-          await runtime!.sendJournal!.retry(session.id);
-          return true;
-        }
         // This is a new Turn with the old content, not a replay of the old run:
         // freeze the currently committed composer Role beside the current run
         // config. Copying only the original Role would pair it with unrelated
@@ -4276,8 +4721,6 @@ export const SessionChatInterface = memo(
         return accepted;
       },
       [
-        runtime,
-        session.id,
         handleSendMessage,
         sessionConversationConfig.agentRoleId,
         sessionConversationConfig.agentRoleRevision,
@@ -4436,16 +4879,48 @@ export const SessionChatInterface = memo(
     const handleChildEmptyStateSuggest = useCallback((text: string) => {
       inputAreaRef.current?.setInputText(text);
     }, []);
+    // The sender the delivered user row resolves (same query, same cache), so
+    // the pending row it replaces draws the same avatar.
+    const pendingSender = useCloudQuery(
+      cloudOperations.auth.getUserById,
+      currentUser?.id && workspaceId ? { userId: currentUser.id, workspaceId } : 'skip'
+    );
+    const pendingMessages = useMemo(
+      () => (
+        <SessionPendingMessages
+          sessionId={session.id}
+          history={conversationView}
+          user={pendingSender}
+          conversationFontSize={conversationFontSize}
+        />
+      ),
+      [conversationFontSize, conversationView, pendingSender, session.id]
+    );
+    // A first message still uploading is the conversation's only content: it
+    // takes the top of the empty stream (where its committed turn will land)
+    // instead of a loading skeleton with the pending row pinned under it.
+    const hasUnsentNewConversation = useAtomValue(
+      sessionUnsentNewConversationAtomFamily(session.id)
+    );
+    const unsentFirstMessage = hasUnsentNewConversation && sessionHistoryLength === 0;
     const chatStreamEmptyState = useMemo(
       () =>
-        contentSyncState === 'cold' ? (
+        unsentFirstMessage ? (
+          pendingMessages
+        ) : contentSyncState === 'cold' ? (
           <ConversationSkeleton />
         ) : isChildSession ? (
           <ChildTabEmptyState onSuggest={handleChildEmptyStateSuggest} />
         ) : (
           EMPTY_CHAT_STREAM_EMPTY_STATE
         ),
-      [contentSyncState, handleChildEmptyStateSuggest, isChildSession]
+      [
+        contentSyncState,
+        handleChildEmptyStateSuggest,
+        isChildSession,
+        pendingMessages,
+        unsentFirstMessage,
+      ]
     );
     const handleAgentConfigChange = useCallback(
       (selection: AgentSelection) => {
@@ -4811,7 +5286,7 @@ export const SessionChatInterface = memo(
       if (!openedBy) return undefined;
       const target = openedBy.target;
       return (
-        <ConversationColumn className="py-2 sm:py-3">
+        <ConversationColumn {...stylex.props(styles.openedByColumn)}>
           <SessionRelationCard
             relation="opened-by"
             label={t(
@@ -4962,6 +5437,13 @@ export const SessionChatInterface = memo(
       sessionDocReady,
     ]);
 
+    useIosSimulatorPreviewRequest(
+      session.id,
+      session.iosSimulatorPreviewRequestId,
+      isVisible && !hideMessageArea && !isMobile && Boolean(onOpenIosSimulator),
+      onOpenIosSimulator
+    );
+
     const headerBrowserSession =
       browserActionSession === undefined ? session : browserActionSession;
     // Agent-driven action: it appears only once the session actually has a
@@ -5047,6 +5529,12 @@ export const SessionChatInterface = memo(
         },
         toggleVisualAnnotationReference: (reference) => {
           return inputAreaRef.current?.toggleVisualAnnotationReference(reference) ?? false;
+        },
+        addAttachmentFiles: (files) => {
+          const inputArea = inputAreaRef.current;
+          if (!inputArea) return false;
+          inputArea.handleImageDrop(files);
+          return true;
         },
         copyConversationHistory: handleCopyConversationHistory,
         getShareImageData: async () => {
@@ -5335,22 +5823,11 @@ export const SessionChatInterface = memo(
             throw new Error('Queued message is empty');
           }
           const queuedUserTurnId = item.userTurnId?.trim() || `queued-${item.$cid}`;
-          // Queue admission owns this ID, but its delivered operation only
-          // inserted the queue row. Promote that record back to saved work so
-          // the journal appends the matching history turn before queue removal.
-          const promoted = await runtime?.sendJournal?.promoteQueuedTurn(
-            queuedUserTurnId,
+          // History first, then the queue row: the input is never absent from both.
+          const { entry: historyEntry } = await addSessionHistory(
             { ...pendingHistoryEntry, id: queuedUserTurnId },
-            { kind: 'guide', expectedTurnId: activeAssistantTurnId }
+            { guideExpectedTurnId: activeAssistantTurnId }
           );
-          const historyEntry =
-            promoted?.entry ??
-            (
-              await addSessionHistory({
-                ...pendingHistoryEntry,
-                id: queuedUserTurnId,
-              })
-            ).entry;
           await removeMessageQueueItem(item.$cid);
           trackMessageSend(historyEntry.id);
           touchSessionActivity(session.id).catch((error: unknown) => {
@@ -5384,7 +5861,6 @@ export const SessionChatInterface = memo(
         guideHistoryEntry,
         isExternalHistoryRefreshing,
         removeMessageQueueItem,
-        runtime,
         session.id,
         t,
         touchSessionActivity,
@@ -5889,50 +6365,60 @@ export const SessionChatInterface = memo(
     const headerLauncherActions = (
       <>
         {shouldShowOpenInIdeButton && isElectronRendererForPathLaunch && (
-          <div className={cn(SESSION_PAGE_HEADER_PILLS_CLASS, 'items-center')}>
+          <div {...stylex.props(styles.headerPills)}>
             <button
               type="button"
-              className={cn(SESSION_HEADER_STATUS_PILL_CLASS, 'gap-1 rounded-r-none border-r-0')}
+              {...stylex.props(styles.headerLauncher, styles.headerLauncherPrimary)}
               onClick={handleOpenInIde}
             >
-              <SelectedPathLauncherIcon className="h-3.5 w-3.5" />
-              <span className="text-xs">{selectedPathLauncher.label}</span>
+              <SelectedPathLauncherIcon {...stylex.props(styles.menuIcon)} />
+              <span {...stylex.props(styles.headerLauncherLabel)}>
+                {selectedPathLauncher.label}
+              </span>
             </button>
             <Menu.Root>
               <Menu.Trigger
                 render={
                   <button
                     type="button"
-                    className={cn(SESSION_HEADER_STATUS_PILL_CLASS, 'rounded-l-none px-1')}
+                    {...stylex.props(styles.headerLauncher, styles.headerLauncherSelect)}
                     aria-label={t('sessions.selectPathLauncher', 'Select launcher')}
                   >
-                    <ChevronDown className="h-3 w-3" />
+                    <ChevronDown {...stylex.props(styles.menuCopyIcon)} />
                   </button>
                 }
               />
               <Menu.Content align="end">
-                {pathLauncherOptions.map((launcher) => {
-                  const launcherId = getPathLauncherId(launcher);
-                  const LauncherIcon = getPathLauncherIcon(launcher);
-                  return (
-                    <Menu.Item
-                      key={launcherId}
-                      onClick={() => {
-                        void handleSelectPathLauncher(launcher);
-                      }}
-                    >
-                      <LauncherIcon className="h-3.5 w-3.5" />
-                      {launcher.label}
-                      {launcherId === getPathLauncherId(selectedPathLauncher) && (
-                        <Check className="ml-auto h-3.5 w-3.5" />
-                      )}
-                    </Menu.Item>
-                  );
-                })}
+                <Menu.RadioGroup
+                  value={getPathLauncherId(selectedPathLauncher)}
+                  onValueChange={(launcherId) => {
+                    const target = pathLauncherOptions.find(
+                      (option) => getPathLauncherId(option) === launcherId
+                    );
+                    if (target) void handleSelectPathLauncher(target);
+                  }}
+                >
+                  {pathLauncherOptions.map((launcher) => {
+                    const launcherId = getPathLauncherId(launcher);
+                    const LauncherIcon = getPathLauncherIcon(launcher);
+                    return (
+                      <Menu.RadioItem
+                        key={launcherId}
+                        value={launcherId}
+                        icon={LauncherIcon}
+                        indicator="check"
+                        indicatorSide="end"
+                      >
+                        {launcher.label}
+                      </Menu.RadioItem>
+                    );
+                  })}
+                </Menu.RadioGroup>
                 <Menu.Separator />
                 {ACTION_OPTIONS.map((action) => (
                   <Menu.Item
                     key={action.id}
+                    icon={action.Icon}
                     onClick={
                       action.id === 'copy-path'
                         ? () => {
@@ -5941,13 +6427,11 @@ export const SessionChatInterface = memo(
                         : undefined
                     }
                   >
-                    <action.Icon className="h-3.5 w-3.5" />
                     {t('sessions.copyPath', action.label)}
                   </Menu.Item>
                 ))}
                 {isElectronRendererForPathLaunch && (
-                  <Menu.Item onClick={handleOpenPathLauncherSettings}>
-                    <Plus className="h-3.5 w-3.5" />
+                  <Menu.Item icon={Plus} onClick={handleOpenPathLauncherSettings}>
                     {t('sessions.managePathLaunchers', 'Add more…')}
                   </Menu.Item>
                 )}
@@ -6024,7 +6508,7 @@ export const SessionChatInterface = memo(
       : undefined;
     const headerAccessNode =
       !isMobile && (sharing || headerPublicShare) ? (
-        <div className={cn(SESSION_PAGE_HEADER_PILLS_CLASS, 'items-center')}>
+        <div {...stylex.props(styles.headerPills)}>
           <SessionAccessControl
             state={sharing}
             onShareWithTeam={onShareWithTeam}
@@ -6036,469 +6520,494 @@ export const SessionChatInterface = memo(
 
     return (
       <PrLinkProvider prUrl={latestPr?.url} onOpenPrTab={prLinkHandler}>
-        {isVisible &&
-          sessionDocReady &&
-          (sessionHistory.length > 0 || (sessionHistoryLength === 0 && sessionDocSynced)) && (
-            <span
-              hidden
-              data-window-session-ready={session.id}
-              data-window-requires-stream={sessionHistoryLength > 0 ? 'true' : undefined}
-            />
-          )}
-        <SessionConversationPage
-          className={className}
-          dropActive={imageDropZone.isActive || sessionMentionOverlay}
-          dropKind={sessionMentionOverlay ? 'session-mention' : 'files'}
-          hideMessageArea={hideMessageArea}
-          {...pageDropHandlers}
-        >
-          {/* The outline must centre in the whole conversation page, not only
+        <SessionLinkProvider value={onNavigateSession ? handleOpenRelatedSession : null}>
+          {isVisible &&
+            !preparingWindow &&
+            onOpenBrowser &&
+            (!browserActionSession || browserActionSession.id === session.id) && (
+              <SessionPreviewPreload
+                session={session}
+                preview={sessionDoc.preview as SessionPreviewDocState | undefined}
+              />
+            )}
+          {isVisible &&
+            sessionDocReady &&
+            (sessionHistory.length > 0 || (sessionHistoryLength === 0 && sessionDocSynced)) && (
+              <span
+                hidden
+                data-window-session-ready={session.id}
+                data-window-requires-stream={sessionHistoryLength > 0 ? 'true' : undefined}
+              />
+            )}
+          <SessionConversationPage
+            className={className}
+            dropActive={imageDropZone.isActive || sessionMentionOverlay}
+            dropKind={sessionMentionOverlay ? 'session-mention' : 'files'}
+            hideMessageArea={hideMessageArea}
+            {...pageDropHandlers}
+          >
+            {/* The outline must centre in the whole conversation page, not only
               the flex area left after the composer takes its height. */}
-          <div
-            ref={setOutlineOverlayRoot}
-            className="pointer-events-none absolute inset-0 @container"
-          />
-          {!shouldHideHeader &&
-            (headerVariant === 'toolbar' ? (
-              /* Compact toolbar for the merged desktop tab row: right-side
+            <div ref={setOutlineOverlayRoot} {...stylex.props(styles.pageOutlineOverlay)} />
+            {!shouldHideHeader &&
+              (headerVariant === 'toolbar' ? (
+                /* Compact toolbar for the merged desktop tab row: right-side
                  controls only — no title (the context strip owns identity) and
                  no PR badge (the strip owns PR). */
-              <ErrorBoundary name="SessionChatHeader" variant="inline" resetKeys={[session.id]}>
-                <div className="flex h-full shrink-0 items-center gap-1 pl-1 pr-2">
-                  {headerLauncherActions}
-                  {headerArchivedNode}
-                  {headerAccessNode}
-                  {headerMenuNode}
-                  {headerEndSlot}
-                </div>
-              </ErrorBoundary>
-            ) : (
-              <ErrorBoundary name="SessionChatHeader" variant="inline" resetKeys={[session.id]}>
-                <SessionConversationPageHeader
-                  startSlot={headerStartSlot}
-                  titleSlot={
-                    <SessionProjectInfo
-                      session={session}
-                      isLoading={shouldShowTitleLoading}
-                      isSyncing={effectiveTitleSyncing}
-                      isMachineOffline={sessionMachineOnlineStatus === 'offline'}
-                      t={t}
-                      localProjectMeta={resolvedLocalProjectMeta}
-                    />
-                  }
-                  desktopActionsSlot={
-                    <div className={cn('flex shrink-0 items-center gap-2', isMobile && 'hidden')}>
-                      {headerLauncherActions}
-                      {headerGitHubActions}
-                      {headerArchivedNode}
-                      {headerAccessNode}
-                    </div>
-                  }
-                  menuSlot={headerMenuNode}
-                  endSlot={headerEndSlot}
-                  nativeApp={isNativeApp}
-                  reserveMacTrafficLightInset={
-                    !isNativeApp &&
-                    Boolean(headerStartSlot) &&
-                    isMacOSElectronRenderer() &&
-                    !isElectronFullscreen
-                  }
-                />
-              </ErrorBoundary>
-            ))}
-          {subHeader}
-          {hideMessageArea ? null : (
-            <>
-              <SessionPin
-                pinnedHistoryId={pinnedHistoryId}
-                pinnedMessage={pinnedMessage}
-                onUnpin={handleUnpin}
-                onScrollToMessage={handleScrollToMessage}
-              />
-              <SessionSearchProvider value={searchContextValue}>
-                <SessionPinContext.Provider value={pinContextValue}>
-                  {/* Message area */}
-                  <div ref={messageAreaRef} className="relative flex-1 min-h-0">
-                    {isSearchOpen ? (
-                      <SessionSearchBar
-                        query={searchQuery}
-                        currentIndex={activeSearchResultIndex}
-                        totalCount={searchResults.length}
-                        inputRef={searchInputRef}
-                        onQueryChange={handleSearchQueryChange}
-                        onPrevious={() => moveToSearchResult('previous')}
-                        onNext={() => moveToSearchResult('next')}
-                        onClose={closeSearch}
-                        t={t}
-                      />
-                    ) : null}
-                    <ErrorBoundary
-                      name="SessionChatStream"
-                      variant="section"
-                      resetKeys={[session.id]}
-                      fallbackRender={(props) => <MessageListErrorFallback {...props} />}
-                    >
-                      {/* Key forces remount on session change, preventing scroll state bleed between sessions */}
-                      <MessageSendStatusContext.Provider value={sendingMessageIds}>
-                        <MessageSelectionContext.Provider value={shareSelection.context}>
-                          <SessionAgentFileLinkMenuProvider session={session}>
-                            <SessionChatStream
-                              key={session.id}
-                              ref={chatStreamRef}
-                              sessionId={session?.id}
-                              workspaceId={workspaceId}
-                              showSenderIdentity={isMultiMember}
-                              view={conversationView}
-                              sessionCreatedAt={session?.createdAt}
-                              dividerLabel={sessionDividerLabel}
-                              className="h-full"
-                              leadingContent={openedByConversationStart}
-                              emptyState={chatStreamEmptyState}
-                              trailingContent={<SessionPendingMessages sessionId={session.id} />}
-                              agentActivityLabel={agentActivityLabel}
-                              agentActivityTone={agentActivityTone}
-                              agentActivityShimmer={agentActivityShimmer}
-                              onFileDiffClick={onFileDiffClick}
-                              onFilePathClick={onFilePathClick ? handleFilePathClick : undefined}
-                              onOpenHtmlFile={handleOpenHtmlAttachment}
-                              messageFileDiffEntriesByTurn={messageFileDiffEntriesByTurn}
-                              assistantActions={assistantQuickActions}
-                              assistantActionsMessageId={latestCompletedProposedPlan?.entryId}
-                              onCopyContext={(messageId) => {
-                                void handleCopyConversationHistory(messageId);
-                              }}
-                              onForkLastAssistant={onForkLastAssistant}
-                              forkWorktreeAvailability={forkWorktreeAvailability}
-                              onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
-                              onEditLastUser={
-                                editableLastUserMessageId ? handleEditLastUser : undefined
-                              }
-                              onResendUndelivered={handleResendUndelivered}
-                              capacityRetry={capacityRetry ?? undefined}
-                              forkingAssistantMessageId={forkingAssistantMessageId}
-                              onNavigateSession={onNavigateSession}
-                              onLastCompletedAssistantMessageIdChange={
-                                handleLastCompletedAssistantMessageIdChange
-                              }
-                              conversationFontSize={conversationFontSize}
-                              suppressStickyAutoScrollRef={suppressStickyAutoScrollRef}
-                              outlineOverlayRoot={outlineOverlayRoot}
-                            />
-                          </SessionAgentFileLinkMenuProvider>
-                        </MessageSelectionContext.Provider>
-                      </MessageSendStatusContext.Provider>
-                    </ErrorBoundary>
+                <ErrorBoundary name="SessionChatHeader" variant="inline" resetKeys={[session.id]}>
+                  <div {...stylex.props(styles.toolbarHeader)}>
+                    {headerLauncherActions}
+                    {headerArchivedNode}
+                    {headerAccessNode}
+                    {headerMenuNode}
+                    {headerEndSlot}
                   </div>
-
-                  {/* Requests and their editor must survive virtual row eviction. */}
-                  {workspaceId && (
-                    <div className="max-h-[35vh] shrink-0 overflow-y-auto">
-                      <ConversationColumn className="px-3">
-                        <SessionShareRequestCards
-                          workspaceId={workspaceId}
-                          session={session}
-                          isVisible={isVisible}
-                        />
-                      </ConversationColumn>
-                    </div>
-                  )}
-
-                  {/* The one place a pending permission request is answered; it stands in for the composer. */}
-                  <FloatingPermissionRequest
-                    sessionId={session.id}
-                    sessionStatus={liveSessionStatus ?? undefined}
-                    sessionHistory={permissionSessionHistory}
-                    onStop={() => {
-                      void handleStop();
-                    }}
+                </ErrorBoundary>
+              ) : (
+                <ErrorBoundary name="SessionChatHeader" variant="inline" resetKeys={[session.id]}>
+                  <SessionConversationPageHeader
+                    startSlot={headerStartSlot}
+                    titleSlot={
+                      <SessionProjectInfo
+                        session={session}
+                        isLoading={shouldShowTitleLoading}
+                        isSyncing={effectiveTitleSyncing}
+                        isMachineOffline={sessionMachineOnlineStatus === 'offline'}
+                        t={t}
+                        localProjectMeta={resolvedLocalProjectMeta}
+                      />
+                    }
+                    desktopActionsSlot={
+                      <div
+                        {...stylex.props(
+                          styles.desktopHeaderActions,
+                          isMobile && styles.hiddenHeaderActions
+                        )}
+                      >
+                        {headerLauncherActions}
+                        {headerGitHubActions}
+                        {headerArchivedNode}
+                        {headerAccessNode}
+                      </div>
+                    }
+                    menuSlot={headerMenuNode}
+                    endSlot={headerEndSlot}
+                    nativeApp={isNativeApp}
+                    reserveMacTrafficLightInset={
+                      !isNativeApp &&
+                      Boolean(headerStartSlot) &&
+                      isMacOSElectronRenderer() &&
+                      !isElectronFullscreen
+                    }
                   />
+                </ErrorBoundary>
+              ))}
+            {subHeader}
+            {hideMessageArea ? null : (
+              <>
+                <SessionPin
+                  pinnedHistoryId={pinnedHistoryId}
+                  pinnedMessage={pinnedMessage}
+                  onUnpin={handleUnpin}
+                  onScrollToMessage={handleScrollToMessage}
+                />
+                <SessionSearchProvider value={searchContextValue}>
+                  <SessionPinContext.Provider value={pinContextValue}>
+                    {/* Message area */}
+                    <div ref={messageAreaRef} {...stylex.props(styles.messageArea)}>
+                      {isSearchOpen ? (
+                        <SessionSearchBar
+                          query={searchQuery}
+                          currentIndex={activeSearchResultIndex}
+                          totalCount={searchResults.length}
+                          inputRef={searchInputRef}
+                          onQueryChange={handleSearchQueryChange}
+                          onPrevious={() => moveToSearchResult('previous')}
+                          onNext={() => moveToSearchResult('next')}
+                          onClose={closeSearch}
+                          t={t}
+                        />
+                      ) : null}
+                      <ErrorBoundary
+                        name="SessionChatStream"
+                        variant="section"
+                        resetKeys={[session.id]}
+                        fallbackRender={(props) => <MessageListErrorFallback {...props} />}
+                      >
+                        {/* Key forces remount on session change, preventing scroll state bleed between sessions */}
+                        <MessageSendStatusContext.Provider value={sendingMessageIds}>
+                          <MessageSelectionContext.Provider value={shareSelection.context}>
+                            <SessionAgentFileLinkMenuProvider session={session}>
+                              <SessionChatStream
+                                key={session.id}
+                                ref={chatStreamRef}
+                                sessionId={session?.id}
+                                workspaceId={workspaceId}
+                                showSenderIdentity={isMultiMember}
+                                view={conversationView}
+                                isVisible={isVisible}
+                                sessionCreatedAt={session?.createdAt}
+                                dividerLabel={sessionDividerLabel}
+                                {...stylex.props(styles.stream)}
+                                leadingContent={openedByConversationStart}
+                                emptyState={chatStreamEmptyState}
+                                trailingContent={unsentFirstMessage ? undefined : pendingMessages}
+                                agentActivityLabel={agentActivityLabel}
+                                agentActivityTone={agentActivityTone}
+                                agentActivityShimmer={agentActivityShimmer}
+                                onFileDiffClick={onFileDiffClick}
+                                onFilePathClick={onFilePathClick ? handleFilePathClick : undefined}
+                                onOpenHtmlFile={handleOpenHtmlAttachment}
+                                messageFileDiffEntriesByTurn={messageFileDiffEntriesByTurn}
+                                assistantActions={assistantQuickActions}
+                                assistantActionsMessageId={latestCompletedProposedPlan?.entryId}
+                                onCopyContext={(messageId) => {
+                                  void handleCopyConversationHistory(messageId);
+                                }}
+                                onForkLastAssistant={onForkLastAssistant}
+                                forkWorktreeAvailability={forkWorktreeAvailability}
+                                onForkWorktreeMenuOpen={onForkWorktreeMenuOpen}
+                                onEditLastUser={
+                                  editableLastUserMessageId ? handleEditLastUser : undefined
+                                }
+                                editMentionContext={editMentionContext}
+                                onResendUndelivered={handleResendUndelivered}
+                                capacityRetry={capacityRetry ?? undefined}
+                                forkingAssistantMessageId={forkingAssistantMessageId}
+                                onNavigateSession={onNavigateSession}
+                                onLastCompletedAssistantMessageIdChange={
+                                  handleLastCompletedAssistantMessageIdChange
+                                }
+                                conversationFontSize={conversationFontSize}
+                                suppressStickyAutoScrollRef={suppressStickyAutoScrollRef}
+                                outlineOverlayRoot={outlineOverlayRoot}
+                              />
+                            </SessionAgentFileLinkMenuProvider>
+                          </MessageSelectionContext.Provider>
+                        </MessageSendStatusContext.Provider>
+                      </ErrorBoundary>
+                    </div>
 
-                  {/* Notification permission prompt - shown when session becomes idle (turn completed) */}
-                  {/* TODO(analytics): session/notification_prompt_shown|_permission_granted|_permission_denied.
+                    {/* Requests and their editor must survive virtual row eviction. */}
+                    {workspaceId && (
+                      <div {...stylex.props(styles.shareRequestsScroller)}>
+                        <ConversationColumn {...stylex.props(styles.shareRequestsColumn)}>
+                          <SessionShareRequestCards
+                            workspaceId={workspaceId}
+                            session={session}
+                            isVisible={isVisible}
+                          />
+                        </ConversationColumn>
+                      </div>
+                    )}
+
+                    {/* The one place a pending permission request is answered; it stands in for the composer. */}
+                    <FloatingPermissionRequest
+                      sessionId={session.id}
+                      sessionStatus={liveSessionStatus ?? undefined}
+                      sessionHistory={permissionSessionHistory}
+                      onStop={() => {
+                        void handleStop();
+                      }}
+                    />
+
+                    {/* Notification permission prompt - shown when session becomes idle (turn completed) */}
+                    {/* TODO(analytics): session/notification_prompt_shown|_permission_granted|_permission_denied.
                       Visibility + enable/dismiss live inside NotificationPermissionPrompt (owned elsewhere)
                       and the actual grant/deny resolves on the settings page, so these must be emitted from
                       that component via onShown/onEnableClicked/onDismissed callbacks (see crossFileNeeds). */}
-                  <NotificationPermissionPrompt
-                    sessionCompleted={session.status?.type === 'idle' && !isSessionWorking}
-                  />
+                    <NotificationPermissionPrompt
+                      sessionCompleted={session.status?.type === 'idle' && !isSessionWorking}
+                    />
 
-                  {/* An active auto-review run states itself here rather than
+                    {/* An active auto-review run states itself here rather than
                       only in the "…" menu: the failure mode worth designing
                       against is a user who ticked the box days ago, forgot, and
                       then finds a pull request merged itself. */}
-                  {autoReview.run && autoReview.active ? (
-                    <ConversationColumn className="px-3 pb-1.5">
-                      <AutoReviewStatus
-                        run={autoReview.run}
-                        maxRounds={autoReview.run.policy.budget.reviewRounds}
-                        onDisable={() => {
-                          void autoReview.disable();
-                        }}
-                        onConfirmMerge={() => {
-                          void autoReview.confirmMerge();
-                        }}
-                        onResume={() => {
-                          void autoReview.resume();
-                        }}
-                        onFixFinding={(finding) => {
-                          void dispatchPrompt(
-                            buildAuthorFixPrompt([finding], {
-                              // Same reason as the engine's own dispatch: with a
-                              // PR open, a committed-but-unpushed fix is invisible
-                              // to everything that reads the PR head.
-                              hasPullRequest: hasExistingPr,
-                            }),
-                            executionTurnConfigOverrides
-                          );
-                        }}
-                      />
-                    </ConversationColumn>
-                  ) : null}
+                    {autoReview.run && autoReview.active ? (
+                      <ConversationColumn {...stylex.props(styles.reviewStatusColumn)}>
+                        <AutoReviewStatus
+                          run={autoReview.run}
+                          maxRounds={autoReview.run.policy.budget.reviewRounds}
+                          onDisable={() => {
+                            void autoReview.disable();
+                          }}
+                          onConfirmMerge={() => {
+                            void autoReview.confirmMerge();
+                          }}
+                          onResume={() => {
+                            void autoReview.resume();
+                          }}
+                          onFixFinding={(finding) => {
+                            void dispatchPrompt(
+                              buildAuthorFixPrompt([finding], {
+                                // Same reason as the engine's own dispatch: with a
+                                // PR open, a committed-but-unpushed fix is invisible
+                                // to everything that reads the PR head.
+                                hasPullRequest: hasExistingPr,
+                              }),
+                              executionTurnConfigOverrides
+                            );
+                          }}
+                        />
+                      </ConversationColumn>
+                    ) : null}
 
-                  {/* Session info bar (desktop AND mobile): the canonical
+                    {/* Session info bar (desktop AND mobile): the canonical
                       cluster + fixed stage row merging status, goal, schedule,
                       and work context, glued to the composer shell. It
                       replaced the mobile status strip / goal banner /
                       in-composer scheduled panel. */}
-                  <SessionInfoBar
-                    status={statusStripState}
-                    goal={latestGoal}
-                    goalCommands={goalCommands}
-                    goalPendingCommand={
-                      pendingGoalCommand && pendingGoalCommand.threadId === latestGoal?.threadId
-                        ? pendingGoalCommand.command
-                        : null
-                    }
-                    onGoalCommand={handleGoalCardCommand}
-                    onGoalDismiss={handleDismissGoalBanner}
-                    scheduleSource={
-                      session.scheduleId
-                        ? {
-                            title:
-                              scheduleRegistry.rows.find(
-                                (row) => row.scheduleId === session.scheduleId
-                              )?.title ?? t('schedules.source', 'Scheduled task'),
-                            onOpen: () => {
-                              if (workspaceSlug && session.scheduleId)
-                                void router.navigate({
-                                  to: '/$workspaceName/schedules/$scheduleId',
-                                  params: {
-                                    workspaceName: workspaceSlug,
-                                    scheduleId: session.scheduleId,
-                                  },
-                                });
-                            },
-                          }
-                        : null
-                    }
-                    scheduledTasks={pendingScheduledTasks}
-                    prCiRuns={infoBarPrCiRuns}
-                    onOpenPrCiRun={handleOpenPrCiRun}
-                    prCiState={latestPrState?.s}
-                    projectName={repoFullName || resolvedLocalProjectMeta?.name || null}
-                    branch={isMobile ? null : session.branchName?.trim() || null}
-                    workspaceLocation={
-                      session.isWorktree
-                        ? {
-                            // GitHub sessions are always worktrees, so surface the
-                            // GitHub identity rather than the redundant worktree mark.
-                            kind: repoFullName ? 'github-worktree' : 'worktree',
-                            path: sessionWorkspacePath,
-                          }
-                        : resolvedLocalProjectMeta
-                          ? { kind: 'folder', path: sessionWorkspacePath }
+                    <SessionInfoBar
+                      status={statusStripState}
+                      goal={latestGoal}
+                      goalCommands={goalCommands}
+                      goalPendingCommand={
+                        pendingGoalCommand && pendingGoalCommand.threadId === latestGoal?.threadId
+                          ? pendingGoalCommand.command
                           : null
-                    }
-                    pr={canShowGitHubActions ? effectiveLatestPr : null}
-                    onOpenPr={prLinkHandler}
-                    contextActions={infoBarContextActions}
-                    onOpenAllChanges={onOpenAllChanges}
-                    // Opener + every Session/Tab created here: the in-stream
-                    // creation cards scroll away with the conversation.
-                    relations={
-                      hasSessionRelations ? (
-                        <CurrentSessionRelationsChip
-                          sessionId={session.id}
-                          onOpenSession={handleOpenRelatedSession}
-                        />
-                      ) : undefined
-                    }
-                    onOpenBrowser={browserActionAvailable ? handleOpenBrowser : undefined}
-                    privateAccessStatus={
-                      isMobile && sharing?.visibility === 'private'
-                        ? {
-                            label: t('sharing.privateOnlyYou', 'Private · Only you'),
-                            description: getSessionSharingDescription(t, sharing),
-                            onAction:
-                              sharing.canManage && onShareWithTeam
-                                ? () => {
-                                    void onShareWithTeam();
-                                  }
-                                : undefined,
-                          }
-                        : undefined
-                    }
-                    diffStat={changesDiffStat}
-                    // Desktop only: mobile already shows catch-up in its header.
-                    syncStatus={
-                      isMobile
-                        ? null
-                        : contentSyncState === 'catching-up'
-                          ? 'updating'
-                          : effectiveTitleSyncing
-                            ? 'syncing'
+                      }
+                      onGoalCommand={handleGoalCardCommand}
+                      onGoalDismiss={handleDismissGoalBanner}
+                      scheduleSource={
+                        session.scheduleId
+                          ? {
+                              title:
+                                scheduleRegistry.rows.find(
+                                  (row) => row.scheduleId === session.scheduleId
+                                )?.title ?? t('schedules.source', 'Scheduled task'),
+                              onOpen: () => {
+                                if (workspaceSlug && session.scheduleId)
+                                  void router.navigate({
+                                    to: '/$workspaceName/schedules/$scheduleId',
+                                    params: {
+                                      workspaceName: workspaceSlug,
+                                      scheduleId: session.scheduleId,
+                                    },
+                                  });
+                              },
+                            }
+                          : null
+                      }
+                      scheduledTasks={pendingScheduledTasks}
+                      prCiRuns={infoBarPrCiRuns}
+                      onOpenPrCiRun={handleOpenPrCiRun}
+                      prCiState={latestPrState?.s}
+                      projectName={repoFullName || resolvedLocalProjectMeta?.name || null}
+                      branch={isMobile ? null : session.branchName?.trim() || null}
+                      workspaceLocation={
+                        session.isWorktree
+                          ? {
+                              // GitHub sessions are always worktrees, so surface the
+                              // GitHub identity rather than the redundant worktree mark.
+                              kind: repoFullName ? 'github-worktree' : 'worktree',
+                              path: sessionWorkspacePath,
+                            }
+                          : resolvedLocalProjectMeta
+                            ? { kind: 'folder', path: sessionWorkspacePath }
                             : null
-                    }
-                    // Mobile keeps the bar above the session drawer's z-30
-                    // edge-back strip so its leading chip stays tappable.
-                    protectFromEdgeBackZone={isMobile}
-                    // Queued turns stack on the bar (or on the composer when the
-                    // bar is empty). Hidden with the composer: a pending
-                    // permission bypasses the queue, as does share selection.
-                    queue={
-                      messageQueue.length > 0 &&
-                      !shouldReplaceComposerWithPermission &&
-                      !shareSelection.active ? (
-                        <MessageQueueDisplay
-                          sessionId={session.id}
-                          items={messageQueue}
-                          onRemove={handleRemoveQueueItem}
-                          onReorder={handleReorderQueueItem}
-                          onEditStart={handleStartQueueItemEdit}
-                          onEditCancel={handleCancelQueueItemEdit}
-                          onEditSave={handleSaveQueueItemEdit}
-                          onSteer={handleSteerQueuedMessage}
-                          showSteerAction={
-                            isSessionActive &&
-                            !!activeAssistantTurnId &&
-                            !isExternalHistoryRefreshing
-                          }
-                          nativeSteerAvailable={nativeSteerAvailable}
-                        />
-                      ) : undefined
-                    }
-                  />
+                      }
+                      pr={canShowGitHubActions ? effectiveLatestPr : null}
+                      onOpenPr={prLinkHandler}
+                      contextActions={infoBarContextActions}
+                      onOpenAllChanges={onOpenAllChanges}
+                      // Opener + every Session/Tab created here: the in-stream
+                      // creation cards scroll away with the conversation.
+                      relations={
+                        hasSessionRelations ? (
+                          <CurrentSessionRelationsChip
+                            sessionId={session.id}
+                            onOpenSession={handleOpenRelatedSession}
+                          />
+                        ) : undefined
+                      }
+                      onOpenBrowser={browserActionAvailable ? handleOpenBrowser : undefined}
+                      onOpenIosSimulator={
+                        session.iosSimulatorPreviewRequestId ? onOpenIosSimulator : undefined
+                      }
+                      privateAccessStatus={
+                        isMobile && sharing?.visibility === 'private'
+                          ? {
+                              label: t('sharing.privateOnlyYou', 'Private · Only you'),
+                              description: getSessionSharingDescription(t, sharing),
+                              onAction:
+                                sharing.canManage && onShareWithTeam
+                                  ? () => {
+                                      void onShareWithTeam();
+                                    }
+                                  : undefined,
+                            }
+                          : undefined
+                      }
+                      diffStat={changesDiffStat}
+                      // Desktop only: mobile already shows catch-up in its header.
+                      syncStatus={
+                        isMobile
+                          ? null
+                          : contentSyncState === 'catching-up'
+                            ? 'updating'
+                            : effectiveTitleSyncing
+                              ? 'syncing'
+                              : null
+                      }
+                      // Mobile keeps the bar above the session drawer's z-30
+                      // edge-back strip so its leading chip stays tappable.
+                      protectFromEdgeBackZone={isMobile}
+                      // Queued turns stack on the bar (or on the composer when the
+                      // bar is empty). Hidden with the composer: a pending
+                      // permission bypasses the queue, as does share selection.
+                      queue={
+                        (messageQueue.length > 0 || hasPendingQueueRecords) &&
+                        !shouldReplaceComposerWithPermission &&
+                        !shareSelection.active ? (
+                          <MessageQueueDisplay
+                            sessionId={session.id}
+                            items={messageQueue}
+                            onRemove={handleRemoveQueueItem}
+                            onReorder={handleReorderQueueItem}
+                            onEditStart={handleStartQueueItemEdit}
+                            onEditCancel={handleCancelQueueItemEdit}
+                            onEditSave={handleSaveQueueItemEdit}
+                            onSteer={handleSteerQueuedMessage}
+                            showSteerAction={
+                              isSessionActive &&
+                              !!activeAssistantTurnId &&
+                              !isExternalHistoryRefreshing
+                            }
+                            nativeSteerAvailable={nativeSteerAvailable}
+                          />
+                        ) : undefined
+                      }
+                    />
 
-                  {/* Input area - isolated component to prevent full re-renders on typing.
+                    {/* Input area - isolated component to prevent full re-renders on typing.
                       Hidden while a permission is pending so the response buttons claim
                       the bottom surface; chat queue is bypassed for the same reason. */}
-                  <MessageSelectionToolbar selection={shareSelection} />
-                  <div className={shareSelection.active ? 'hidden' : 'contents'}>
-                    {shouldReplaceComposerWithPermission ? null : (
-                      <SessionChatInputArea
-                        isVisible={isVisible && !shareSelection.active}
-                        claimNavigationFocus={
-                          isVisible && !preparingWindow ? claimNavigationFocus : undefined
-                        }
-                        ref={inputAreaRef}
-                        session={session}
-                        sessionLocalProjectRootPath={resolvedLocalProjectMeta?.rootPath ?? null}
-                        isMachineRemoved={isMachineRemoved}
-                        isAgentBusy={isAgentBusy}
-                        canStopAgent={canStopAgent}
-                        isExternalHistoryRefreshing={isExternalHistoryRefreshing}
-                        externalHistorySyncLabel={externalHistorySyncLabel}
-                        isDark={isDark}
-                        isEmptyConversation={isEmptyConversation}
-                        selectedModeId={selectedModeId}
-                        selectedModelId={selectedModelId}
-                        durableAgentRoleId={sessionConversationConfig.agentRoleId}
-                        durableAgentRoleRevision={sessionConversationConfig.agentRoleRevision}
-                        durableAgentRoleSourceTurnKey={
-                          sessionConversationSourceFence.currentTurnKey
-                        }
-                        durableAgentRoleKnownTurnKeys={sessionConversationSourceFence.knownTurnKeys}
-                        durableAgentRoleReady={sessionDocReady}
-                        runConfigHasUserEdits={sessionRunConfigHasUserEdits}
-                        modeOptions={modeOptions}
-                        modelOptions={modelOptions}
-                        rateLimits={sessionRateLimits}
-                        showCodexResetForecast={showCodexResetForecast}
-                        isContextCompacting={isContextCompacting}
-                        configOptionSelectors={configOptionSelectors}
-                        configOptionValues={configOptionValues}
-                        isRepoPublic={isRepoPublic}
-                        availableCommands={availableCommands}
-                        commandsEnabled={isVisible}
-                        freeTurnLimitNotice={freeSessionTurnNotice}
-                        mcp={mcpSelection.menu}
-                        // The info bar above owns this gap (and seats the queue).
-                        hideTopSpacer
-                        onModeChange={handleModeChange}
-                        onModelChange={handleModelChange}
-                        onConfigOptionChange={handleConfigOptionChange}
-                        onSendMessage={handleSendMessage}
-                        onStop={() => {
-                          void handleStop();
-                        }}
-                        onRemoveQueueItem={handleRemoveQueueItem}
-                        onAgentConfigChange={isChildSession ? handleAgentConfigChange : undefined}
-                        onNavigateToComment={onNavigateToComment}
-                        onCommentReferencesChange={onCommentReferencesChange}
-                        onVisualAnnotationReferencesChange={onVisualAnnotationReferencesChange}
-                        onVisualAnnotationReferencesSubmitted={
-                          onVisualAnnotationReferencesSubmitted
-                        }
-                      />
-                    )}
-                  </div>
-                </SessionPinContext.Provider>
-              </SessionSearchProvider>
-            </>
-          )}
-          <RenameSessionDialog
-            target={renameDialogTarget?.sessionId === session.id ? renameDialogTarget : null}
-            onClose={() => setRenameDialogTarget(null)}
-          />
-          {publicShareWorkspaceId && publicShareSessionId === session.id && (
-            <SessionShareDialog
-              workspaceId={publicShareWorkspaceId}
-              session={session}
-              onClose={() => setPublicShareSessionId(null)}
+                    <MessageSelectionToolbar selection={shareSelection} />
+                    <div
+                      {...stylex.props(
+                        styles.composerContents,
+                        shareSelection.active && styles.composerHidden
+                      )}
+                    >
+                      {shouldReplaceComposerWithPermission ? null : (
+                        <SessionChatInputArea
+                          isVisible={isVisible && !shareSelection.active}
+                          claimNavigationFocus={
+                            isVisible && !preparingWindow ? claimNavigationFocus : undefined
+                          }
+                          ref={inputAreaRef}
+                          session={session}
+                          sessionLocalProjectRootPath={resolvedLocalProjectMeta?.rootPath ?? null}
+                          isMachineRemoved={isMachineRemoved}
+                          isAgentBusy={isAgentBusy}
+                          canStopAgent={canStopAgent}
+                          isExternalHistoryRefreshing={isExternalHistoryRefreshing}
+                          externalHistorySyncLabel={externalHistorySyncLabel}
+                          isDark={isDark}
+                          isEmptyConversation={isEmptyConversation}
+                          selectedModeId={selectedModeId}
+                          selectedModelId={selectedModelId}
+                          durableAgentRoleId={sessionConversationConfig.agentRoleId}
+                          durableAgentRoleRevision={sessionConversationConfig.agentRoleRevision}
+                          durableAgentRoleSourceTurnKey={
+                            sessionConversationSourceFence.currentTurnKey
+                          }
+                          durableAgentRoleKnownTurnKeys={
+                            sessionConversationSourceFence.knownTurnKeys
+                          }
+                          durableAgentRoleReady={sessionDocReady || hasPendingConfig}
+                          runConfigHasUserEdits={sessionRunConfigHasUserEdits}
+                          modeOptions={modeOptions}
+                          modelOptions={modelOptions}
+                          rateLimits={sessionRateLimits}
+                          showCodexResetForecast={showCodexResetForecast}
+                          isContextCompacting={isContextCompacting}
+                          configOptionSelectors={configOptionSelectors}
+                          configOptionValues={configOptionValues}
+                          isRepoPublic={isRepoPublic}
+                          availableCommands={availableCommands}
+                          commandsEnabled={isVisible}
+                          freeTurnLimitNotice={freeSessionTurnNotice}
+                          mcp={mcpSelection.menu}
+                          // The info bar above owns this gap (and seats the queue).
+                          hideTopSpacer
+                          onModeChange={handleModeChange}
+                          onModelChange={handleModelChange}
+                          onConfigOptionChange={handleConfigOptionChange}
+                          onSendMessage={handleSendMessage}
+                          onStop={() => {
+                            void handleStop();
+                          }}
+                          onRemoveQueueItem={handleRemoveQueueItem}
+                          onAgentConfigChange={isChildSession ? handleAgentConfigChange : undefined}
+                          onNavigateToComment={onNavigateToComment}
+                          onCommentReferencesChange={onCommentReferencesChange}
+                          onVisualAnnotationReferencesChange={onVisualAnnotationReferencesChange}
+                          onVisualAnnotationReferencesSubmitted={
+                            onVisualAnnotationReferencesSubmitted
+                          }
+                        />
+                      )}
+                    </div>
+                  </SessionPinContext.Provider>
+                </SessionSearchProvider>
+              </>
+            )}
+            <RenameSessionDialog
+              target={renameDialogTarget?.sessionId === session.id ? renameDialogTarget : null}
+              onClose={() => setRenameDialogTarget(null)}
             />
-          )}
-          <AlertDialog.Root
-            open={pendingRemoteHtmlFileName !== null}
-            onOpenChange={(open) => {
-              if (open) return;
-              if (!remotePortAllowedRef.current && pendingRemoteHtmlFileName !== null) {
-                captureSessionEvent('file_preview/remote_port_confirmed', { decision: 'deny' });
-              }
-              remotePortAllowedRef.current = false;
-              setPendingRemoteHtmlFile(null);
-            }}
-          >
-            <AlertDialog.Content>
-              <AlertDialog.Header>
-                <AlertDialog.Title>
-                  {t('sessions.htmlAttachment.openReportedPortTitle', 'Open the reported port?')}
-                </AlertDialog.Title>
-                <AlertDialog.Description>
-                  {t(
-                    'sessions.htmlAttachment.openReportedPortDescription',
-                    'To preview {{name}}, Lody will connect to the local port reported by the Agent and open it in Browser.',
-                    { name: pendingRemoteHtmlFileName ?? '' }
-                  )}
-                </AlertDialog.Description>
-              </AlertDialog.Header>
-              <AlertDialog.Footer>
-                <AlertDialog.Cancel>{t('common.cancel', 'Cancel')}</AlertDialog.Cancel>
-                <AlertDialog.Action
-                  onClick={() => {
-                    remotePortAllowedRef.current = true;
-                    captureSessionEvent('file_preview/remote_port_confirmed', {
-                      decision: 'allow',
-                    });
-                    setPendingRemoteHtmlFile(null);
-                    onOpenBrowser?.();
-                  }}
-                >
-                  {t('sessions.htmlAttachment.openReportedPortAction', 'Connect and open')}
-                </AlertDialog.Action>
-              </AlertDialog.Footer>
-            </AlertDialog.Content>
-          </AlertDialog.Root>
-        </SessionConversationPage>
+            {publicShareWorkspaceId && publicShareSessionId === session.id && (
+              <SessionShareDialog
+                workspaceId={publicShareWorkspaceId}
+                session={session}
+                onClose={() => setPublicShareSessionId(null)}
+              />
+            )}
+            <AlertDialog.Root
+              open={pendingRemoteHtmlFileName !== null}
+              onOpenChange={(open) => {
+                if (open) return;
+                if (!remotePortAllowedRef.current && pendingRemoteHtmlFileName !== null) {
+                  captureSessionEvent('file_preview/remote_port_confirmed', { decision: 'deny' });
+                }
+                remotePortAllowedRef.current = false;
+                setPendingRemoteHtmlFile(null);
+              }}
+            >
+              <AlertDialog.Content>
+                <AlertDialog.Header>
+                  <AlertDialog.Title>
+                    {t('sessions.htmlAttachment.openReportedPortTitle', 'Open the reported port?')}
+                  </AlertDialog.Title>
+                  <AlertDialog.Description>
+                    {t(
+                      'sessions.htmlAttachment.openReportedPortDescription',
+                      'To preview {{name}}, Lody will connect to the local port reported by the Agent and open it in Browser.',
+                      { name: pendingRemoteHtmlFileName ?? '' }
+                    )}
+                  </AlertDialog.Description>
+                </AlertDialog.Header>
+                <AlertDialog.Footer>
+                  <AlertDialog.Cancel>{t('common.cancel', 'Cancel')}</AlertDialog.Cancel>
+                  <AlertDialog.Action
+                    onClick={() => {
+                      remotePortAllowedRef.current = true;
+                      captureSessionEvent('file_preview/remote_port_confirmed', {
+                        decision: 'allow',
+                      });
+                      setPendingRemoteHtmlFile(null);
+                      onOpenBrowser?.();
+                    }}
+                  >
+                    {t('sessions.htmlAttachment.openReportedPortAction', 'Connect and open')}
+                  </AlertDialog.Action>
+                </AlertDialog.Footer>
+              </AlertDialog.Content>
+            </AlertDialog.Root>
+          </SessionConversationPage>
+        </SessionLinkProvider>
       </PrLinkProvider>
     );
   })

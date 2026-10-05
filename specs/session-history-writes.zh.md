@@ -40,6 +40,9 @@ Translation: current
   单独解析。新增字段非法时，整条命令在写入前拒绝。
 - 新历史接受原有内置 CLI selector 的归一化，不重写旧历史。steer 配置编辑只校验变化的字段。
 - 队列提升必须在历史接受后才删除队列行；写入失败保留队列行。
+- 每条缓冲中的 ACP 通知在自动重试期间保留稳定 operation ID。若 backend 在后续写入失败前只提交了
+  批次前缀，重试时必须复用原 ID，backend 对已接受的 ID 按幂等操作处理。过滤和拆分批次必须保持
+  ID 与通知的对应关系。分别入队的 Provider 通知即使 payload 相同，也仍是不同事件。
 - 调度和激活检查遇到重复 turn ID 时，采用最后一条已存记录，与定点历史读写一致。
   前面的副本不能复活已进入终态的最后一条。完整历史导出保留所有已存记录，不执行去重。
   尝试修复终态后，若该身份仍可被调度，当前检查必须结束，不重放该消息或反复物化历史。
@@ -94,7 +97,7 @@ Translation: current
   replacement 的进程。create/restore 原有的取消 fence 保持有效。
 - promotion 写入失败不能丢失已确认的未投递结论。CLI 返回 `promotion-failed` 和错误，不能
   假装恢复成功或改报投递未知。daemon 的 `recoveryOwned` 响应表示恢复仍由该 daemon 负责：
-  前端仅对明确的 promotion 失败通过同一 RPC 重试一次，持续失败则报错。旧响应保留
+  前端既不重试也不修复该轮次。旧响应（没有 `recoveryOwned`）保留
   pending_apply/pending/seen 的 dispatch 修复。不得复活 active、terminal 或已删除的轮次；
   超时或投递未知绝不授权重试。
 - foreground run configuration 归属其 turn 的 Effect signal。turn 被中断后，在途配置请求

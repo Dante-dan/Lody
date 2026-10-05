@@ -64,6 +64,7 @@ import {
   SidebarRowArchiveButton,
   SidebarRowEndSlot,
   SidebarListSkeleton,
+  SidebarSessionTitleText,
   SessionMergeablePill,
 } from '@/components/sidebar-row-shared';
 import { SessionInfoHoverCard } from '@/components/session-info-hover-card';
@@ -718,7 +719,13 @@ const TaskGroupSection = memo(function TaskGroupSection({
                     )}
                   />
                 ) : (
-                  <span className={cn('truncate font-normal', extraClassName)}>{task.title}</span>
+                  <SidebarSessionTitleText
+                    sessionId={task.taskId}
+                    selected={showSelectedState}
+                    className={cn('truncate font-normal', extraClassName)}
+                  >
+                    {task.title}
+                  </SidebarSessionTitleText>
                 );
               const handleAnchorClick = useAnchor
                 ? (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -843,6 +850,7 @@ const TaskGroupSection = memo(function TaskGroupSection({
                     </div>
                     {/* Keep PR at the right edge. Line totals stay in the hover card. */}
                     <SidebarRowEndSlot
+                      sessionId={task.taskId}
                       isWaitingPermission={task.isWaitingPermission}
                       isWorking={task.isWorking}
                       hasUnreadMessages={task.hasUnreadMessages}
@@ -905,7 +913,7 @@ const TaskGroupSection = memo(function TaskGroupSection({
                     {onOpenPullRequest && prUrl ? (
                       <>
                         <ContextMenu.Item
-                          icon={<GitPullRequest />}
+                          icon={GitPullRequest}
                           onClick={() => {
                             onOpenPullRequest({
                               taskId: task.taskId,
@@ -928,7 +936,7 @@ const TaskGroupSection = memo(function TaskGroupSection({
                     ) : null}
                     {onRenameTask ? (
                       <ContextMenu.Item
-                        icon={<Pencil />}
+                        icon={Pencil}
                         onClick={() => {
                           beginRename(task.taskId, task.title);
                         }}
@@ -938,7 +946,7 @@ const TaskGroupSection = memo(function TaskGroupSection({
                     ) : null}
                     {onTogglePinTask ? (
                       <ContextMenu.Item
-                        icon={task.isPinned ? <PinOff /> : <Pin />}
+                        icon={task.isPinned ? PinOff : Pin}
                         onClick={() => {
                           onTogglePinTask(task.taskId, !task.isPinned);
                         }}
@@ -948,7 +956,7 @@ const TaskGroupSection = memo(function TaskGroupSection({
                     ) : null}
                     {onArchiveTask ? (
                       <ContextMenu.Item
-                        icon={<Archive />}
+                        icon={Archive}
                         onClick={() => {
                           onArchiveTask(task.taskId);
                         }}
@@ -962,7 +970,7 @@ const TaskGroupSection = memo(function TaskGroupSection({
                     ) : null}
                     {onCopySessionUrl ? (
                       <ContextMenu.Item
-                        icon={<Link2 />}
+                        icon={Link2}
                         onClick={() => {
                           onCopySessionUrl(task.taskId);
                         }}
@@ -975,11 +983,11 @@ const TaskGroupSection = memo(function TaskGroupSection({
                         disabled={shareMenuState !== 'share'}
                         icon={
                           shareMenuState === 'share' ? (
-                            <Users />
+                            Users
                           ) : shareMenuState === 'loading' ? (
-                            <Spinner />
+                            <Spinner size="small" label={null} />
                           ) : (
-                            <LockKeyhole />
+                            LockKeyhole
                           )
                         }
                         onClick={() => {
@@ -997,7 +1005,7 @@ const TaskGroupSection = memo(function TaskGroupSection({
                     ) : null}
                     {task.branchName ? (
                       <ContextMenu.Item
-                        icon={<GitBranch />}
+                        icon={GitBranch}
                         onClick={() => {
                           void navigator.clipboard.writeText(task.branchName).catch(() => {});
                         }}

@@ -34,6 +34,7 @@ import {
   SidebarRowEndSlot,
   SidebarListSkeleton,
   SidebarSectionHeader,
+  SidebarSessionTitleText,
   type SidebarRowKind,
 } from '@/components/sidebar-row-shared';
 import { SessionInfoHoverCard } from '@/components/session-info-hover-card';
@@ -668,14 +669,16 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
       )}
     />
   ) : (
-    <span
+    <SidebarSessionTitleText
+      sessionId={item.id}
+      selected={showSelectedState}
       className={cn(
         'min-w-0 flex-1 truncate font-normal',
         showSelectedState ? 'text-sidebar-selection-foreground' : 'text-sidebar-row-foreground'
       )}
     >
       {item.title}
-    </span>
+    </SidebarSessionTitleText>
   );
 
   const [rowMenuOpen, setRowMenuOpen] = useState(false);
@@ -772,6 +775,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         </div>
         {/* Keep PR at the right edge. Line totals stay in the hover card. */}
         <SidebarRowEndSlot
+          sessionId={item.id}
           isWaitingPermission={item.isWaitingPermission}
           isWorking={item.isWorking}
           hasUnreadMessages={item.hasUnreadMessages}
@@ -843,7 +847,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
       <ContextMenu.Content className="min-w-[180px]">
         {handlePrOpen ? (
           <ContextMenu.Item
-            icon={<GitPullRequest />}
+            icon={GitPullRequest}
             onClick={() => {
               handlePrOpen();
             }}
@@ -856,7 +860,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {canRename ? (
           <ContextMenu.Item
-            icon={<Pencil />}
+            icon={Pencil}
             onClick={() => {
               onBeginRename(item.id, item.title);
             }}
@@ -866,7 +870,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {canTogglePin ? (
           <ContextMenu.Item
-            icon={item.isPinned ? <PinOff /> : <Pin />}
+            icon={item.isPinned ? PinOff : Pin}
             onClick={() => {
               onTogglePin?.(item.id, !item.isPinned);
             }}
@@ -876,7 +880,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {canArchive ? (
           <ContextMenu.Item
-            icon={<Archive />}
+            icon={Archive}
             onClick={() => {
               onArchive?.(item.id);
             }}
@@ -889,7 +893,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {canCopyUrl ? (
           <ContextMenu.Item
-            icon={<Link2 />}
+            icon={Link2}
             onClick={() => {
               onCopyUrl?.(item.id);
             }}
@@ -902,11 +906,11 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
             disabled={shareMenuState !== 'share'}
             icon={
               shareMenuState === 'share' ? (
-                <Users />
+                Users
               ) : shareMenuState === 'loading' ? (
-                <Spinner />
+                <Spinner size="small" label={null} />
               ) : (
-                <LockKeyhole />
+                LockKeyhole
               )
             }
             onClick={() => {
@@ -924,7 +928,7 @@ const UpdatedItemRow = memo(function UpdatedItemRow({
         ) : null}
         {branchName ? (
           <ContextMenu.Item
-            icon={<GitBranch />}
+            icon={GitBranch}
             onClick={() => {
               void navigator.clipboard.writeText(branchName).catch(() => {});
             }}

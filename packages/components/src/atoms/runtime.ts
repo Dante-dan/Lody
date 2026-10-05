@@ -1,4 +1,4 @@
-import type { createSessionSendJournal } from '../lib/session-send-journal';
+import type { PendingSessionSends } from '../lib/session-pending-sends';
 import type { SessionSendResources } from '@/lib/session-send-resources';
 import type { LocalFilePreviewResource } from '@lody/shared/local-file-preview';
 import type { SessionData } from '@lody/shared/session-data';
@@ -7,6 +7,8 @@ import type { LoroDoc } from 'loro-crdt';
 import type { LoroRepo } from 'loro-repo';
 import type { ConversationView } from '@/lib/conversation-view';
 import type {
+  McpToolListResult,
+  WorkspaceMcpServerMeta,
   InferInputType,
   InferType,
   ClientToServer,
@@ -27,6 +29,7 @@ import type {
   SessionTurnInputConfig,
   SessionId,
   SessionMeta,
+  SessionHistoryBackendKind,
   SessionOperation,
   MachineId,
   AgentConfigId,
@@ -103,6 +106,8 @@ export type SessionDocUpdater =
 export type SessionDocStore = {
   readonly sessionId: SessionId;
   readonly roomId: string;
+  /** Immutable history ownership selected from the session catalog. */
+  readonly historyBackend: SessionHistoryBackendKind;
   readonly doc: LoroDoc;
   readonly firstSynced: Promise<void>;
   acquireSync: () => () => void;
@@ -172,9 +177,14 @@ export type WorkspaceRuntime = {
    */
   readonly workspaceId: WorkspaceId;
   readonly sendResources: SessionSendResources;
-  readonly sendJournal: ReturnType<typeof createSessionSendJournal> | null;
-  readonly sourceReplica: string;
+  /** In-memory sends whose attachments are still preparing; lost with the page. */
+  readonly pendingSends: PendingSessionSends | null;
   readonly accountId: string | null;
+  /**
+   * True only when a Machine RPC to this machine provably cannot be sent now
+   * (its route needs the network and the browser is offline).
+   */
+  isMachineRpcUnreachable?: (machineId: MachineId) => boolean;
   readonly repo: LoroRepo;
   /** Read targets from the ready metadata source, independently of UI projection. */
   readSessionOperationTargets: (
@@ -493,6 +503,10 @@ export type WorkspaceRuntime = {
     request: LocalProjectControlRequest,
     options?: { timeoutMs?: number }
   ) => Promise<LocalProjectControlResponse | null>;
+  requestLocalMcpTools: (
+    machineId: MachineId,
+    server: WorkspaceMcpServerMeta
+  ) => Promise<McpToolListResult>;
   requestMachineBugReport: (
     machineId: MachineId,
     args: { description: string; reporterUserId: string; requestToken: string },
@@ -502,6 +516,18 @@ export type WorkspaceRuntime = {
     machineId: MachineId,
     options?: { configId?: AgentConfigId }
   ) => Promise<MachinePiExtensionsResponse>;
+  /**
+   * The one `ios-simulator/control` Machine RPC. Local machines are reached
+   * directly; remote ones with a preview-control proof for the exact command.
+   * Transport failures resolve as `{ success: false, error: 'failed' }`.
+   */
+  requestIosSimulatorControl: (request: {
+    machineId: MachineId;
+    sessionId: SessionId;
+    requestedByUserId: string;
+    command: import('@lody/shared').IosSimulatorCommand;
+    timeoutMs?: number;
+  }) => Promise<import('@lody/shared').IosSimulatorResponse>;
   dispose: () => Promise<void>;
 };
 

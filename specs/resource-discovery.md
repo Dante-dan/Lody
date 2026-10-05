@@ -23,7 +23,7 @@ represent enabled workspace repositories and have no machine binding.
 Only authorized resources are returned. MCP identity comes from the active runtime
 Turn. Role list/get follows `canReadAgentRole`; this does not change the separate
 explicit-id Role creation contract. Readable unavailable Roles remain listed with
-binding, machine, model, permission-mode or current-work-context reasons. Missing
+binding, machine, model or permission-mode reasons. Missing
 presence/capability information is unknown, not proof of unavailability. Availability
 does not replace dispatch validation or guarantee future availability.
 
@@ -48,6 +48,17 @@ complete traversal belongs to directory list tools. CLI workspace directory list
 now return paginated safe summaries and support `--all-pages`; resource-specific
 JSON array aliases remain. The local daemon project listing, trusted Agent config
 `show`, and explicit legacy detailed machine output remain available.
+
+Configuration inspection has a separate presentation contract: `show` exposes sorted
+`envKeys` by default, including keys whose value is empty, with no `env` values. Only
+explicit `show --show-secrets` includes `env`. JSON create/update acknowledge the
+`agentConfigId` and `changedFields` (initialized/requested field names), never the full stored
+configuration. The stored launch values remain intact. Invalid assignments report
+positions without raw input. This deliberately changes scripts that consumed the
+old full configuration JSON: use the receipt id and explicitly inspect when needed.
+Presentation fields are allowlisted; runtime/auth/custom-launch and future fields
+are not implicitly exported, even with the reveal flag. This is accidental-disclosure
+prevention, not a new authorization boundary or a full backup format.
 
 The existing cloud workspace runtime supplies the initial integration. New CLI
 workspace queries fail before cloud I/O in the local composition. Catalog offline

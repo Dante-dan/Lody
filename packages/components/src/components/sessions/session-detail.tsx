@@ -34,6 +34,7 @@ import { useComposerNavigationFocus } from '../chat/submission/use-composer-navi
 import { usePostHog } from '@posthog/react';
 import {
   getAcpCapabilityCacheKey,
+  resolveSessionAcpTargetId,
   getProjectRefBranch,
   getServerNow,
   getSessionPullRequestLegacyFields,
@@ -107,16 +108,9 @@ import {
   zenLayoutModeAtom,
   zenRightPanelAtom,
 } from '@/atoms/layout-state';
-import {
-  memo,
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import * as stylex from '@stylexjs/stylex';
+import { space } from '@lody/ui/tokens/scales.stylex';
 import { useDocumentTitle } from '@/hooks/use-document-title';
 import { useTabStatus, type TabStatus } from '@/hooks/use-tab-status';
 import {
@@ -172,6 +166,9 @@ import { SessionFileContentView, type SessionFileSaveViewState } from './session
 import { SessionFileQuickOpen } from './session-file-quick-open';
 import { PrTabContainer } from './pr-tab-container';
 import { SessionBrowserPanel } from './session-browser-panel';
+import { SessionIosSimulatorPanel } from './ios-simulator/session-ios-simulator-panel';
+import { getIosSimulatorPanelAvailability } from '@/lib/ios-simulator/ios-simulator-model';
+import { getMachineMetaByIdAtomFamily } from '@/atoms/machines';
 import { deletePrCacheEntriesForSession } from '@/lib/github-pr-cache';
 import { FileTreeView } from './components/file-tree-view';
 import { useSessionFileActions } from '@/hooks/use-session-file-actions';
@@ -197,6 +194,7 @@ import { SessionSyncingIndicator } from './session-syncing-indicator';
 // Aliased while the vaul drawer below still holds the bare name; the two
 // merge when the mobile drawers migrate onto this primitive.
 import { Drawer as UiDrawer } from '@lody/ui/drawer';
+import { SessionMobileDiffDrawerContent } from './session-mobile-diff-drawer-content';
 import { Drawer, DrawerContent, DrawerTitle } from '@/ui/drawer';
 import { VaulDrawerBody } from '@/components/mobile/vaul-drawer-edge-back-zone';
 import { Dialog } from '@/ui/dialog';
@@ -477,6 +475,7 @@ const MOBILE_DRAWER_HEADER_INSET = 'calc(3.5rem + var(--safe-area-top))';
 const EMPTY_LOCAL_PROJECTS: Record<LocalProjectId, LocalProjectMeta> = {};
 const MOBILE_PR_VIEWER_ID = 'mobile-viewer:pr';
 const MOBILE_BROWSER_VIEWER_ID = 'mobile-viewer:browser';
+const MOBILE_IOS_SIMULATOR_VIEWER_ID = 'mobile-viewer:ios-simulator';
 const MOBILE_FILES_VIEWER_ID = 'mobile-viewer:files';
 
 /* Minimum width the desktop right sidebar gets when the PR tab opens into a
@@ -484,6 +483,232 @@ const MOBILE_FILES_VIEWER_ID = 'mobile-viewer:files';
    conversation) is unreadably cramped at the default ~25% split. Honored only
    when the window is wide enough; see DesktopSessionDetailLayout. */
 const PR_SIDEBAR_MIN_WIDTH_PX = 500;
+
+const detailStyles = stylex.create({
+  projectInfo: {
+    display: 'flex',
+    minWidth: 0,
+    flexDirection: 'column',
+    justifyContent: 'center',
+    lineHeight: 1.25,
+  },
+  projectPrimaryRow: {
+    display: 'flex',
+    minWidth: 0,
+    alignItems: 'center',
+    gap: space[1.5],
+  },
+  projectPrimary: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: '0.95rem',
+    fontWeight: 600,
+    color: 'hsl(var(--foreground))',
+  },
+  projectSubtitle: {
+    display: 'flex',
+    minWidth: 0,
+    alignItems: 'center',
+    gap: space[1],
+    fontSize: '0.75rem',
+    lineHeight: '1rem',
+    color: 'hsl(var(--muted-foreground))',
+  },
+  inlineIcon: {
+    display: 'inline-flex',
+    flexShrink: 0,
+    alignItems: 'center',
+  },
+  icon12: {
+    width: '12px',
+    height: '12px',
+  },
+  icon14: {
+    width: '14px',
+    height: '14px',
+  },
+  icon16: {
+    width: '16px',
+    height: '16px',
+  },
+  rootFill: {
+    height: '100%',
+  },
+  shrink: {
+    flexShrink: 0,
+  },
+  fillNoShrink: {
+    height: '100%',
+    flexShrink: 0,
+  },
+  background: {
+    backgroundColor: 'hsl(var(--background))',
+  },
+  loading: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    height: '100%',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: space[3],
+  },
+  loadingText: {
+    fontSize: '0.875rem',
+    lineHeight: '1.25rem',
+    color: 'hsl(var(--muted-foreground))',
+  },
+  drawerBody: {
+    minHeight: 0,
+    flex: 1,
+    overflow: 'hidden',
+  },
+  columnFill: {
+    display: 'flex',
+    height: '100%',
+    flexDirection: 'column',
+  },
+  mobileDrawerHeader: {
+    display: 'flex',
+    height: 'calc(3.5rem + var(--safe-area-top))',
+    flexShrink: 0,
+    alignItems: 'center',
+    gap: space[2],
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: 'hsl(var(--border))',
+    paddingInline: space[3],
+    paddingTop: 'var(--safe-area-top)',
+  },
+  mobileTitle: {
+    minWidth: 0,
+    flex: 1,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: '0.875rem',
+    lineHeight: '1.25rem',
+    fontWeight: 500,
+  },
+  relativeFill: {
+    position: 'relative',
+    minHeight: 0,
+    flex: 1,
+  },
+  conversationTopInset: (inset: string) => ({
+    '--conversation-top-inset': inset,
+  }),
+  mobileViewerInset: {
+    paddingTop: 'var(--conversation-top-inset, 0px)',
+  },
+  conversationPage: {
+    position: 'relative',
+    display: 'flex',
+    height: '100%',
+    flexDirection: 'column',
+    backgroundColor: 'hsl(var(--background))',
+  },
+  mobileContent: {
+    position: 'relative',
+    flex: 1,
+    overflow: 'hidden',
+  },
+  hidden: {
+    display: 'none',
+  },
+  hiddenFill: {
+    display: 'none',
+    height: '100%',
+  },
+  desktopPanelShell: {
+    display: 'flex',
+    height: '100%',
+    minWidth: 0,
+    flexDirection: 'column',
+    overflow: 'hidden',
+    borderLeftWidth: '1px',
+    borderLeftStyle: 'solid',
+    borderLeftColor: 'hsl(var(--border) / 0.7)',
+    backgroundColor: 'hsl(var(--background))',
+  },
+  sidebarContentRoot: {
+    position: 'relative',
+    height: '100%',
+    minHeight: 0,
+  },
+  absoluteFill: {
+    position: 'absolute',
+    inset: 0,
+  },
+  invisibleFill: {
+    visibility: 'hidden',
+    pointerEvents: 'none',
+  },
+  sidebarBody: {
+    position: 'relative',
+    minHeight: 0,
+    flex: 1,
+    overflow: 'hidden',
+  },
+  sideTabBar: {
+    height: '44px',
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: {
+      default: 'hsl(var(--border) / 0.5)',
+      [stylex.when.ancestor('[data-lody-action-active="true"]')]: 'hsl(var(--primary))',
+    },
+    backgroundColor: 'hsl(var(--background))',
+  },
+  parentActiveScope: {
+    boxShadow: {
+      default: null,
+      [stylex.when.ancestor('[data-lody-action-active="true"]')]: 'inset 0 -1px 0 var(--primary)',
+    },
+  },
+  topBarHeight: {
+    height: '44px',
+  },
+  topBarMacInset: {
+    paddingInlineStart: '4.5rem',
+  },
+  sidebarToggleMargin: {
+    marginInlineEnd: '9px',
+  },
+  srOnly: {
+    position: 'absolute',
+    width: '1px',
+    height: '1px',
+    padding: 0,
+    margin: '-1px',
+    overflow: 'hidden',
+    clip: 'rect(0, 0, 0, 0)',
+    whiteSpace: 'nowrap',
+    borderWidth: 0,
+  },
+  mobileHeaderRight: {
+    display: 'flex',
+    flexShrink: 0,
+    alignItems: 'center',
+    gap: space[1],
+    marginInlineEnd: '-8px',
+  },
+  contextLabel: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  leftNudge: {
+    marginInlineStart: '-4px',
+  },
+  iconCurrent: {
+    width: '20px',
+    height: '20px',
+    color: 'currentColor',
+  },
+});
 
 const selectSessionDetailMeta = (meta: SessionMeta | undefined): SessionMeta | undefined => meta;
 
@@ -654,17 +879,21 @@ const MobileProjectInfo = memo(function MobileProjectInfo({
   const showSubtitle = !!sessionTitle && !!contextLabel;
 
   return (
-    <span className="flex min-w-0 flex-col justify-center leading-tight">
-      <span className="flex min-w-0 items-center gap-1.5">
-        <span className="truncate text-[0.95rem] font-semibold text-foreground">{primary}</span>
+    <span {...stylex.props(detailStyles.projectInfo)}>
+      <span {...stylex.props(detailStyles.projectPrimaryRow)}>
+        <span {...stylex.props(detailStyles.projectPrimary)}>{primary}</span>
         {isSyncing && <SessionSyncingIndicator />}
       </span>
       {showSubtitle && (
-        <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
-          <span className="inline-flex shrink-0 items-center">
-            {isGitHub ? <Github className="h-3 w-3" /> : <Folder className="h-3 w-3" />}
+        <span {...stylex.props(detailStyles.projectSubtitle)}>
+          <span {...stylex.props(detailStyles.inlineIcon)}>
+            {isGitHub ? (
+              <Github {...stylex.props(detailStyles.icon12)} />
+            ) : (
+              <Folder {...stylex.props(detailStyles.icon12)} />
+            )}
           </span>
-          <span className="truncate">{contextLabel}</span>
+          <span {...stylex.props(detailStyles.contextLabel)}>{contextLabel}</span>
         </span>
       )}
     </span>
@@ -680,8 +909,12 @@ function MobileSessionHeaderBackButton({ onBack }: { onBack: () => void }) {
     /* -ml-1: glass disc is 36px inside a 44px hit target, so without this the
        disc sits 4px right of the conversation gutter. Shift so the disc's left
        edge lines up with the agent avatar below (ConversationColumn px-3). */
-    <GlassIconButton label={t('common.back', 'Back')} onClick={onBack} className="-ml-1">
-      <ChevronLeft className="h-5 w-5 text-current" strokeWidth={1.75} />
+    <GlassIconButton
+      label={t('common.back', 'Back')}
+      onClick={onBack}
+      className={stylex.props(detailStyles.leftNudge).className}
+    >
+      <ChevronLeft {...stylex.props(detailStyles.iconCurrent)} strokeWidth={1.75} />
     </GlassIconButton>
   );
 }
@@ -721,9 +954,9 @@ const TerminalDockToggleButton = memo(function TerminalDockToggleButton() {
       onClick={() => store.get(terminalControllerAtom)?.toggleOpen()}
       aria-label={label}
       title={label}
-      className={cn('shrink-0', isOpen && '')}
+      className={stylex.props(detailStyles.shrink).className}
     >
-      <PanelBottom className="h-4 w-4" />
+      <PanelBottom {...stylex.props(detailStyles.icon16)} />
     </Button>
   );
 });
@@ -737,12 +970,14 @@ const SessionDetail = ({
   urlTab,
   urlPrNumber,
   urlBrowser,
+  urlSimulator,
   onMobileBack,
 }: {
   sessionId: SessionId;
   urlTab?: string;
   urlPrNumber?: number;
   urlBrowser?: boolean;
+  urlSimulator?: boolean;
   onMobileBack?: () => void;
 }) => {
   const { t } = useTranslation();
@@ -1307,7 +1542,8 @@ const SessionDetail = ({
     useResolvedMachineMeta(activeSessionMachineId);
   const canForkSession = useCallback(
     (target: SessionMeta): boolean => {
-      if (target.isArchived || !target.agentConfigId) return false;
+      if (target.isArchived || !target.agentConfigId || !resolveSessionAcpTargetId(target))
+        return false;
       const capability =
         sessionMachine?.acpCapabilities?.[getAcpCapabilityCacheKey(target.agentConfigId)];
       return (
@@ -1321,6 +1557,7 @@ const SessionDetail = ({
     (target: SessionMeta): boolean => {
       if (
         !target.agentConfigId ||
+        !resolveSessionAcpTargetId(target) ||
         !target.project ||
         (target.project.kind !== 'local' && target.project.kind !== 'github')
       ) {
@@ -1563,6 +1800,27 @@ const SessionDetail = ({
   // Closing the conversation does not close workspace tools. Keep their owner
   // explicit without making the parent an active conversation again.
   const activeBrowserSession = activeDraftTab ? null : (activeTabSession ?? activeSession);
+  // Simulator follows the selected conversation unless explicitly opened by a
+  // Side Chat. Keep that origin while the side panel switches away from the chat.
+  const [iosSimulatorTarget, setIosSimulatorTarget] = useState<{
+    parentId: SessionId;
+    tabId: SessionId | undefined;
+    sessionId: SessionId;
+  } | null>(null);
+  const simulatorOwnerSession =
+    iosSimulatorTarget?.parentId === sessionId &&
+    iosSimulatorTarget.tabId === activeBrowserSession?.id
+      ? ([activeBrowserSession, ...visibleSideSessions].find(
+          (candidate) => candidate?.id === iosSimulatorTarget.sessionId
+        ) ?? activeBrowserSession)
+      : activeBrowserSession;
+  const iosSimulatorMachine = useAtomValue(
+    getMachineMetaByIdAtomFamily(simulatorOwnerSession?.machineId)
+  );
+  const activeIosSimulatorSession =
+    simulatorOwnerSession && getIosSimulatorPanelAvailability(iosSimulatorMachine) !== 'hidden'
+      ? simulatorOwnerSession
+      : null;
   const workspaceOwnerSession =
     activeTabSession?.parentSessionId || isEmptyConversation ? activeSession : activeTabSession;
   const activeSessionProject = activeSession?.project;
@@ -1878,6 +2136,32 @@ const SessionDetail = ({
     },
     [router, sessionId, workspaceSlug]
   );
+
+  const replaceSessionUrlSimulator = useCallback(
+    (nextSimulator: boolean, { push = false }: { push?: boolean } = {}) => {
+      if (!workspaceSlug) {
+        return;
+      }
+
+      void router.navigate({
+        to: '/$workspaceName/sessions/$sessionId',
+        params: { workspaceName: workspaceSlug, sessionId },
+        search: (prev) => {
+          if ((prev.simulator === true) === nextSimulator) {
+            return prev;
+          }
+          if (!nextSimulator) {
+            const next = { ...prev };
+            delete next.simulator;
+            return next;
+          }
+          return { ...prev, simulator: true };
+        },
+        replace: !push,
+      });
+    },
+    [router, sessionId, workspaceSlug]
+  );
   // Multi-tab: create a new child session
   const {
     startSession,
@@ -2049,6 +2333,23 @@ const SessionDetail = ({
       return false;
     },
     [closedConversationIds, t]
+  );
+
+  // A simulator screenshot joins the composer as an ordinary attachment; the
+  // person decides when, and whether, it is sent.
+  const handleAttachSimulatorScreenshot = useCallback(
+    (targetSessionId: SessionId, file: File) => {
+      const chatRef = chatRefsMap.current.get(targetSessionId);
+      if (
+        closedConversationIds.has(targetSessionId) ||
+        !chatRef ||
+        !('addAttachmentFiles' in chatRef)
+      ) {
+        return false;
+      }
+      return chatRef.addAttachmentFiles([file]);
+    },
+    [closedConversationIds]
   );
 
   const handleAddPreviewAnnotationToChat = useCallback(
@@ -2943,6 +3244,17 @@ const SessionDetail = ({
     }
   }, [activeBrowserSession, activeSidebarTab]);
 
+  // Wait for the machine's metadata before deciding it is not a Mac, so a
+  // restored iOS Simulator selection survives the first render.
+  useEffect(() => {
+    if (
+      activeSidebarTab === 'ios-simulator' &&
+      (!activeBrowserSession || (iosSimulatorMachine && !activeIosSimulatorSession))
+    ) {
+      setActiveSidebarTab(null);
+    }
+  }, [activeBrowserSession, activeIosSimulatorSession, activeSidebarTab, iosSimulatorMachine]);
+
   // The ?browser=1 URL param is only meaningful for the mobile full-screen
   // drawer. On desktop the browser lives in the resizable sidebar (no URL
   // state), so strip the flag to keep the URL consistent and avoid a stale
@@ -2953,6 +3265,13 @@ const SessionDetail = ({
       replaceSessionUrlBrowser(false);
     }
   }, [isMobile, replaceSessionUrlBrowser, urlBrowser]);
+
+  // Same rule for the iOS Simulator drill's `?simulator=1`.
+  useEffect(() => {
+    if (!isMobile && urlSimulator) {
+      replaceSessionUrlSimulator(false);
+    }
+  }, [isMobile, replaceSessionUrlSimulator, urlSimulator]);
 
   /* Sync ?pr=<number> into the desktop sidebar. The mobile path reads
      `urlPrNumber` directly for its full-screen drawer.
@@ -3500,6 +3819,31 @@ const SessionDetail = ({
     replaceSessionUrlBrowser(false);
   }, [replaceSessionUrlBrowser]);
 
+  const handleOpenIosSimulator = useCallback(() => {
+    if (isMobile) {
+      replaceSessionUrlSimulator(true, { push: true });
+    } else {
+      revealRightSidebar();
+      activateSidebarTab('ios-simulator');
+    }
+  }, [activateSidebarTab, isMobile, replaceSessionUrlSimulator, revealRightSidebar]);
+
+  const handleOpenIosSimulatorForSession = useCallback(
+    (targetSessionId: SessionId) => {
+      setIosSimulatorTarget({
+        parentId: sessionId,
+        tabId: activeBrowserSession?.id,
+        sessionId: targetSessionId,
+      });
+      handleOpenIosSimulator();
+    },
+    [sessionId, activeBrowserSession?.id, handleOpenIosSimulator]
+  );
+
+  const handleCloseIosSimulator = useCallback(() => {
+    replaceSessionUrlSimulator(false);
+  }, [replaceSessionUrlSimulator]);
+
   const handleOpenFile = useStableCallback(
     (filePath: string, options: SessionDetailOpenFileOptions = {}) => {
       setFileProviderRequestedByInteraction(true);
@@ -3848,6 +4192,13 @@ const SessionDetail = ({
         kind: 'browser',
       });
     }
+    if (activeIosSimulatorSession) {
+      options.push({
+        id: 'ios-simulator',
+        label: t('sessions.detailTabs.iosSimulator', 'iOS Simulator'),
+        kind: 'ios-simulator',
+      });
+    }
     if (latestPr && repoFullName && latestPrNumber != null) {
       options.push({
         id: 'pr',
@@ -3856,7 +4207,7 @@ const SessionDetail = ({
       });
     }
     return options;
-  }, [activeBrowserSession, latestPr, latestPrNumber, repoFullName, t]);
+  }, [activeBrowserSession, activeIosSimulatorSession, latestPr, latestPrNumber, repoFullName, t]);
   const sideChatOption = useMemo<SessionSidePanelOption | null>(() => {
     const launcherState = getSideChatLauncherState({
       providerSupportsFork: Boolean(
@@ -4819,6 +5170,14 @@ const SessionDetail = ({
         active: false,
       });
     }
+    if (activeIosSimulatorSession) {
+      list.push({
+        id: MOBILE_IOS_SIMULATOR_VIEWER_ID,
+        label: t('sessions.detailTabs.iosSimulator', 'iOS Simulator'),
+        kind: 'ios-simulator',
+        active: false,
+      });
+    }
     if (canShowGitHubActions && latestPr && latestPrNumber != null && latestPrRepoFullName) {
       list.push({
         id: MOBILE_PR_VIEWER_ID,
@@ -4845,6 +5204,7 @@ const SessionDetail = ({
     latestPrNumber,
     latestPrRepoFullName,
     activeBrowserSession,
+    activeIosSimulatorSession,
     viewerTabItems,
     effectiveActiveViewerTabId,
     mobileFileViewerOpen,
@@ -4902,6 +5262,10 @@ const SessionDetail = ({
         if (activeBrowserSession) handleOpenBrowser(activeBrowserSession.id);
         return;
       }
+      if (id === MOBILE_IOS_SIMULATOR_VIEWER_ID) {
+        if (activeIosSimulatorSession) handleOpenIosSimulator();
+        return;
+      }
       if (id === MOBILE_FILES_VIEWER_ID) {
         setMobileFilesBrowserOpen(true);
         return;
@@ -4920,8 +5284,10 @@ const SessionDetail = ({
       latestPrNumber,
       latestPrRepoFullName,
       activeBrowserSession,
+      activeIosSimulatorSession,
       handleOpenPrTab,
       handleOpenBrowser,
+      handleOpenIosSimulator,
       handleViewerTabSelect,
       viewerTabs,
     ]
@@ -5025,7 +5391,7 @@ const SessionDetail = ({
 
   if (sessionPresenceState === 'not-found') {
     return (
-      <div className="h-full" data-window-session-ready={sessionId}>
+      <div {...stylex.props(detailStyles.rootFill)} data-window-session-ready={sessionId}>
         <SessionNotFound onBack={handleBackToList} />
       </div>
     );
@@ -5049,11 +5415,11 @@ const SessionDetail = ({
      The tab STAYS active — bouncing to the parent is exactly the bug this
      replaces — and this surface holds the space until its meta arrives. */
   const pendingChildTabSurface = activeTabIsPendingChild ? (
-    <div className="absolute inset-0 flex h-full flex-col items-center justify-center gap-3">
+    <div {...stylex.props(detailStyles.loading)}>
       {showPendingChildTabState ? (
         <>
           <Spinner className="h-5 w-5 text-muted-foreground" />
-          <p className="text-sm text-muted-foreground">
+          <p {...stylex.props(detailStyles.loadingText)}>
             {t('sessions.tabWaitingForSync', 'Waiting for this conversation to sync…')}
           </p>
           <Button variant="ghost" size="small" onClick={() => handleSessionTabSelect(sessionId)}>
@@ -5318,7 +5684,7 @@ const SessionDetail = ({
     if (sessionMachine?.name) {
       mobileMenuInfoRows.push({
         id: 'machine',
-        icon: <Monitor className="h-3.5 w-3.5" />,
+        icon: <Monitor {...stylex.props(detailStyles.icon14)} />,
         label: t('chat.mobileNewChat.machineLabel', 'Machine'),
         value: sessionMachine.name,
       });
@@ -5327,7 +5693,7 @@ const SessionDetail = ({
       if (mobileBranchInfo.baseBranch) {
         mobileMenuInfoRows.push({
           id: 'base-branch',
-          icon: <GitBranch className="h-3.5 w-3.5" />,
+          icon: <GitBranch {...stylex.props(detailStyles.icon14)} />,
           label: t('sessions.baseBranch', 'Base branch'),
           value: mobileBranchInfo.baseBranch,
           onCopy: () =>
@@ -5343,7 +5709,7 @@ const SessionDetail = ({
       ) {
         mobileMenuInfoRows.push({
           id: 'current-branch',
-          icon: <GitBranch className="h-3.5 w-3.5" />,
+          icon: <GitBranch {...stylex.props(detailStyles.icon14)} />,
           label: t('sessions.currentBranch', 'Current branch'),
           value: mobileBranchInfo.currentBranch,
           onCopy: () =>
@@ -5356,7 +5722,7 @@ const SessionDetail = ({
     } else if (mobileBranchInfo.localPath) {
       mobileMenuInfoRows.push({
         id: 'project-path',
-        icon: <Folder className="h-3.5 w-3.5" />,
+        icon: <Folder {...stylex.props(detailStyles.icon14)} />,
         label: t('sessions.projectPath', 'Project path'),
         value: mobileBranchInfo.localPath,
         onCopy: () =>
@@ -5371,9 +5737,9 @@ const SessionDetail = ({
         id: 'visibility',
         icon:
           activeSessionSharing.visibility === 'team' ? (
-            <Users className="h-3.5 w-3.5" />
+            <Users {...stylex.props(detailStyles.icon14)} />
           ) : activeSessionSharing.visibility === 'private' ? (
-            <LockKeyhole className="h-3.5 w-3.5" />
+            <LockKeyhole {...stylex.props(detailStyles.icon14)} />
           ) : (
             <Spinner className="h-3.5 w-3.5" />
           ),
@@ -5386,7 +5752,7 @@ const SessionDetail = ({
     if (!activeDraftTab) {
       mobileMenuActions.push({
         id: 'find',
-        icon: <Search className="h-3.5 w-3.5" />,
+        icon: <Search {...stylex.props(detailStyles.icon14)} />,
         label: t('sessions.findInConversation', 'Find in session'),
         onClick: handleOpenSearch,
       });
@@ -5401,7 +5767,7 @@ const SessionDetail = ({
             icon: pendingFork ? (
               <Spinner className="h-3.5 w-3.5" />
             ) : (
-              <GitFork className="h-3.5 w-3.5" />
+              <GitFork {...stylex.props(detailStyles.icon14)} />
             ),
             label: t('sessions.forkSession', 'Fork session'),
             onClick: handleForkCurrentSession,
@@ -5413,9 +5779,9 @@ const SessionDetail = ({
               id: `fork-${option.id}`,
               icon:
                 option.id === 'new-worktree' ? (
-                  <WorktreeIcon className="h-3.5 w-3.5" />
+                  <WorktreeIcon className={stylex.props(detailStyles.icon14).className} />
                 ) : (
-                  <Folder className="h-3.5 w-3.5" />
+                  <Folder {...stylex.props(detailStyles.icon14)} />
                 ),
               label: option.label,
               onClick: () => handleForkCurrentSession(option.id),
@@ -5426,7 +5792,7 @@ const SessionDetail = ({
       }
       mobileMenuActions.push({
         id: 'rename',
-        icon: <Pencil className="h-3.5 w-3.5" />,
+        icon: <Pencil {...stylex.props(detailStyles.icon14)} />,
         label: t('sidebar.renameChat.title', 'Rename Chat'),
         onClick: () =>
           setRenameDialogTarget({
@@ -5438,7 +5804,7 @@ const SessionDetail = ({
     mobileMenuActions.push(
       {
         id: 'copy-path',
-        icon: <Copy className="h-3.5 w-3.5" />,
+        icon: <Copy {...stylex.props(detailStyles.icon14)} />,
         label: t('sessions.copyPath', 'Copy path'),
         onClick: () =>
           handleCopyText(
@@ -5450,7 +5816,7 @@ const SessionDetail = ({
       },
       {
         id: 'copy-md',
-        icon: <FileText className="h-3.5 w-3.5" />,
+        icon: <FileText {...stylex.props(detailStyles.icon14)} />,
         label: t('sessions.copyAsMarkdown', 'Copy as Markdown'),
         onClick: () => handleCopyConversationHistory(),
         disabled: !!activeDraftTab,
@@ -5458,7 +5824,7 @@ const SessionDetail = ({
     );
     mobileMenuActions.push({
       id: 'copy-url',
-      icon: <Link className="h-3.5 w-3.5" />,
+      icon: <Link {...stylex.props(detailStyles.icon14)} />,
       label: t('sessions.copyUrl', 'Copy URL'),
       onClick: () => {
         void handleCopyUrl();
@@ -5470,7 +5836,7 @@ const SessionDetail = ({
     if (!activeDraftTab && !hasActiveViewerTab) {
       mobileMenuActions.push({
         id: 'share-image',
-        icon: <Image className="h-3.5 w-3.5" />,
+        icon: <Image {...stylex.props(detailStyles.icon14)} />,
         label: t('sessions.shareAsImage', 'Share as image…'),
         onClick: () => {
           void handleShareAsImage().catch((error: unknown) => {
@@ -5490,11 +5856,11 @@ const SessionDetail = ({
           activeSessionSharing.visibility === 'unknown' ? (
             <Spinner className="h-3.5 w-3.5" />
           ) : activeSessionSharing.privateReason === 'machine-not-registered' ? (
-            <Monitor className="h-3.5 w-3.5" />
+            <Monitor {...stylex.props(detailStyles.icon14)} />
           ) : activeSessionSharing.canManage ? (
-            <Users className="h-3.5 w-3.5" />
+            <Users {...stylex.props(detailStyles.icon14)} />
           ) : (
-            <LockKeyhole className="h-3.5 w-3.5" />
+            <LockKeyhole {...stylex.props(detailStyles.icon14)} />
           ),
         label:
           activeSessionSharing.visibility === 'unknown'
@@ -5517,7 +5883,7 @@ const SessionDetail = ({
       mobileMenuActions.push(
         {
           id: 'restore',
-          icon: <ArchiveRestore className="h-3.5 w-3.5" />,
+          icon: <ArchiveRestore {...stylex.props(detailStyles.icon14)} />,
           label: t('archive.restore', 'Restore session'),
           onClick: () => {
             void handleRestoreCurrentSession();
@@ -5526,7 +5892,7 @@ const SessionDetail = ({
         },
         {
           id: 'delete',
-          icon: <Trash2 className="h-3.5 w-3.5" />,
+          icon: <Trash2 {...stylex.props(detailStyles.icon14)} />,
           label: t('archive.delete', 'Delete permanently'),
           onClick: () => handleRequestDeleteCurrentSession(),
           destructive: true,
@@ -5535,7 +5901,7 @@ const SessionDetail = ({
     } else {
       mobileMenuActions.push({
         id: 'archive',
-        icon: <Archive className="h-3.5 w-3.5" />,
+        icon: <Archive {...stylex.props(detailStyles.icon14)} />,
         label: t('sessions.archive', 'Archive session'),
         onClick: () => {
           void handleArchiveActiveTab();
@@ -5556,8 +5922,10 @@ const SessionDetail = ({
       // `MobileWorkspaceStack` (this renders inside its Vaul right-drawer), so
       // here we only need the session's own flex column.
       <div
-        className="relative flex h-full flex-col bg-background"
-        style={{ '--conversation-top-inset': mobileHeaderInset } as CSSProperties}
+        {...stylex.props(
+          detailStyles.conversationPage,
+          detailStyles.conversationTopInset(mobileHeaderInset)
+        )}
       >
         <BaseHeader
           truncateTitle={false}
@@ -5576,7 +5944,7 @@ const SessionDetail = ({
             /* Extra -mr beyond the 4px disc/hit-target offset: the large
                glass radius reads optically left of the hard right gutter
                (user avatar + composer), so nudge ~8px total. */
-            <div className="-mr-2 flex shrink-0 items-center gap-1">
+            <div {...stylex.props(detailStyles.mobileHeaderRight)}>
               {/* Files, PR, and Browser entries live in the mobile tab sheet
                   (mobileViewers), not the header. */}
               <MobileSessionTabButton
@@ -5587,7 +5955,7 @@ const SessionDetail = ({
                 label={t('sessions.moreActions', 'More actions')}
                 onClick={() => setMobileMenuSheetOpen(true)}
               >
-                <Ellipsis className="h-5 w-5 text-current" strokeWidth={1.75} />
+                <Ellipsis {...stylex.props(detailStyles.iconCurrent)} strokeWidth={1.75} />
               </GlassIconButton>
             </div>
           }
@@ -5630,7 +5998,7 @@ const SessionDetail = ({
           id={mobileSkipTargetId}
           role="main"
           tabIndex={-1}
-          className="flex-1 overflow-hidden relative"
+          className={stylex.props(detailStyles.mobileContent).className}
         >
           {/* Keep inactive tabs mounted for fast switching; only the active tab holds room sync. */}
           {[activeSession, ...visibleChildSessions].map((tabSession) => {
@@ -5643,7 +6011,9 @@ const SessionDetail = ({
             return (
               <div
                 key={tabSession.id}
-                className={isActive ? 'h-full' : 'hidden h-full'}
+                className={
+                  stylex.props(isActive ? detailStyles.rootFill : detailStyles.hiddenFill).className
+                }
                 aria-hidden={!isActive}
               >
                 <SessionChatInterface
@@ -5653,7 +6023,7 @@ const SessionDetail = ({
                   }
                   session={tabSession}
                   workspaceSession={activeSession}
-                  className="h-full"
+                  className={stylex.props(detailStyles.rootFill).className}
                   hideHeader
                   syncEnabled={isActive || pendingForkSourceId !== undefined}
                   isVisible={isActive}
@@ -5676,6 +6046,7 @@ const SessionDetail = ({
                   )}
                   onOpenPrTab={handleOpenPrTab}
                   onOpenAllChanges={handleOpenAllChanges}
+                  onOpenIosSimulator={() => handleOpenIosSimulatorForSession(tabSession.id)}
                   onOpenBrowser={() => handleOpenBrowser(tabSession.id, true)}
                   onOpenExistingBrowser={() => handleOpenBrowser(tabSession.id, false)}
                   changesDiffStat={changesDiffStat}
@@ -5708,7 +6079,9 @@ const SessionDetail = ({
             return (
               <div
                 key={draft.id}
-                className={isActive ? 'h-full' : 'hidden h-full'}
+                className={
+                  stylex.props(isActive ? detailStyles.rootFill : detailStyles.hiddenFill).className
+                }
                 aria-hidden={!isActive}
               >
                 <DraftSessionChatInterface
@@ -5734,11 +6107,17 @@ const SessionDetail = ({
               return (
                 <div
                   key={tab.id}
-                  className={isActive ? 'h-full' : 'hidden h-full'}
-                  style={{ paddingTop: 'var(--conversation-top-inset, 0px)' }}
+                  {...stylex.props(
+                    isActive ? detailStyles.rootFill : detailStyles.hiddenFill,
+                    detailStyles.mobileViewerInset
+                  )}
                   aria-hidden={!isActive}
                 >
-                  {renderViewerTabContent(tab, 'h-full', isActive)}
+                  {renderViewerTabContent(
+                    tab,
+                    stylex.props(detailStyles.rootFill).className,
+                    isActive
+                  )}
                 </div>
               );
             })}
@@ -5750,13 +6129,13 @@ const SessionDetail = ({
           open={mobileDiffState !== null}
           onOpenChange={(open) => !open && handleCloseMobileDiff()}
         >
-          <UiDrawer.Content side="bottom" className="h-[85vh] flex flex-col p-0">
+          <SessionMobileDiffDrawerContent side="bottom" className="h-[85vh] flex flex-col p-0">
             <UiDrawer.Header className="shrink-0 border-b border-border px-4 py-3">
               <UiDrawer.Title className="text-sm font-medium">
                 {t('sessions.diffTab', 'Changes')}
               </UiDrawer.Title>
             </UiDrawer.Header>
-            <div className="flex-1 min-h-0 overflow-hidden">
+            <div {...stylex.props(detailStyles.drawerBody)}>
               {mobileDiffState && (
                 <SessionConversationDiffPanel
                   sessionId={activeSession.id}
@@ -5796,11 +6175,11 @@ const SessionDetail = ({
                       : false
                   }
                   onOpenFile={handleOpenFileFromDiff}
-                  className="h-full"
+                  className={stylex.props(detailStyles.rootFill).className}
                 />
               )}
             </div>
-          </UiDrawer.Content>
+          </SessionMobileDiffDrawerContent>
         </UiDrawer.Root>
         {viewerTabs
           .filter((tab): tab is Extract<ViewerTab, { type: 'file' }> => tab.type === 'file')
@@ -5839,7 +6218,7 @@ const SessionDetail = ({
                     : undefined
                 }
               >
-                {renderViewerTabContent(tab, 'h-full', open)}
+                {renderViewerTabContent(tab, stylex.props(detailStyles.rootFill).className, open)}
               </MobileFileViewerDrawer>
             );
           })}
@@ -5868,10 +6247,12 @@ const SessionDetail = ({
             className="w-full! max-w-none! inset-0 border-0 border-l-0! rounded-none"
             data-sidebar-swipe-open-disabled
           >
-            <DrawerTitle className="sr-only">{t('sessions.detailTabs.files', 'Files')}</DrawerTitle>
+            <DrawerTitle className={stylex.props(detailStyles.srOnly).className}>
+              {t('sessions.detailTabs.files', 'Files')}
+            </DrawerTitle>
             <VaulDrawerBody topInset={MOBILE_DRAWER_HEADER_INSET}>
-              <div className="flex h-full flex-col">
-                <header className="flex h-[calc(3.5rem+var(--safe-area-top))] shrink-0 items-center gap-2 border-b border-border px-3 pt-[var(--safe-area-top)]">
+              <div {...stylex.props(detailStyles.columnFill)}>
+                <header {...stylex.props(detailStyles.mobileDrawerHeader)}>
                   <Button
                     type="button"
                     variant="ghost"
@@ -5888,13 +6269,13 @@ const SessionDetail = ({
                     }}
                     aria-label={t('common.back', 'Back')}
                   >
-                    <ArrowLeft className="h-4 w-4" />
+                    <ArrowLeft {...stylex.props(detailStyles.icon16)} />
                   </Button>
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                  <span {...stylex.props(detailStyles.mobileTitle)}>
                     {t('sessions.detailTabs.files', 'Files')}
                   </span>
                 </header>
-                <div className="relative min-h-0 flex-1">
+                <div {...stylex.props(detailStyles.relativeFill)}>
                   <MobileProjectFileBrowser
                     ref={mobileFilesBrowserRef}
                     provider={activeSessionFileProvider}
@@ -5933,7 +6314,7 @@ const SessionDetail = ({
             className="w-full! max-w-none! inset-0 border-0 border-l-0! rounded-none"
             data-sidebar-swipe-open-disabled
           >
-            <DrawerTitle className="sr-only">
+            <DrawerTitle className={stylex.props(detailStyles.srOnly).className}>
               {t('sessions.detailTabs.pullRequest', 'Pull Request')}
             </DrawerTitle>
             <VaulDrawerBody topInset={MOBILE_DRAWER_HEADER_INSET}>
@@ -5944,7 +6325,7 @@ const SessionDetail = ({
                   prNumber={latestPrNumber}
                   headCommitSha={getSessionPullRequestLegacyFields(latestPr).headCommitSha}
                   onResolvedPrStatus={reconcilePersistedPrStatus}
-                  className="h-full"
+                  className={stylex.props(detailStyles.rootFill).className}
                   leadingSlot={
                     <Button
                       type="button"
@@ -5954,7 +6335,7 @@ const SessionDetail = ({
                       onClick={handleClosePrTab}
                       aria-label={t('common.back', 'Back')}
                     >
-                      <ArrowLeft className="h-4 w-4" />
+                      <ArrowLeft {...stylex.props(detailStyles.icon16)} />
                     </Button>
                   }
                 />
@@ -5985,13 +6366,15 @@ const SessionDetail = ({
             className="w-full! max-w-none! inset-0 border-0 border-l-0! rounded-none"
             data-sidebar-swipe-open-disabled
           >
-            <DrawerTitle className="sr-only">{t('sessions.browser.title', 'Browser')}</DrawerTitle>
+            <DrawerTitle className={stylex.props(detailStyles.srOnly).className}>
+              {t('sessions.browser.title', 'Browser')}
+            </DrawerTitle>
             <VaulDrawerBody topInset={MOBILE_DRAWER_HEADER_INSET}>
               {activeBrowserSession && (
                 <SessionBrowserPanel
                   session={activeBrowserSession}
                   active={Boolean(urlBrowser)}
-                  className="h-full"
+                  className={stylex.props(detailStyles.rootFill).className}
                   candidateNavigationRequestId={
                     browserCandidateNavigationRequest?.sessionId === activeBrowserSession.id
                       ? browserCandidateNavigationRequest.id
@@ -6019,7 +6402,50 @@ const SessionDetail = ({
                       onClick={handleCloseBrowserTab}
                       aria-label={t('common.back', 'Back')}
                     >
-                      <ArrowLeft className="h-4 w-4" />
+                      <ArrowLeft {...stylex.props(detailStyles.icon16)} />
+                    </Button>
+                  }
+                />
+              )}
+            </VaulDrawerBody>
+          </DrawerContent>
+        </Drawer>
+        {/* Mobile iOS Simulator drill: the same right-sliding layer as Browser,
+           with its own `?simulator=1` state. */}
+        <Drawer
+          direction="right"
+          repositionInputs={isNativeAppShell()}
+          open={Boolean(urlSimulator && activeIosSimulatorSession)}
+          onOpenChange={(open) => {
+            if (!open) handleCloseIosSimulator();
+          }}
+        >
+          <DrawerContent
+            className="w-full! max-w-none! inset-0 border-0 border-l-0! rounded-none"
+            data-sidebar-swipe-open-disabled
+          >
+            <DrawerTitle className={stylex.props(detailStyles.srOnly).className}>
+              {t('sessions.detailTabs.iosSimulator', 'iOS Simulator')}
+            </DrawerTitle>
+            <VaulDrawerBody topInset={MOBILE_DRAWER_HEADER_INSET}>
+              {activeIosSimulatorSession && (
+                <SessionIosSimulatorPanel
+                  session={activeIosSimulatorSession}
+                  active={Boolean(urlSimulator)}
+                  controlsLayout="menu"
+                  onAttachScreenshot={(file) =>
+                    handleAttachSimulatorScreenshot(activeIosSimulatorSession.id, file)
+                  }
+                  leadingSlot={
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      icon
+                      className={getSessionDetailTouchIconButtonClassName('-ml-1')}
+                      onClick={handleCloseIosSimulator}
+                      aria-label={t('common.back', 'Back')}
+                    >
+                      <ArrowLeft {...stylex.props(detailStyles.icon16)} />
                     </Button>
                   }
                 />
@@ -6090,7 +6516,7 @@ const SessionDetail = ({
         prNumber={latestPrNumber}
         headCommitSha={getSessionPullRequestLegacyFields(latestPr).headCommitSha}
         onResolvedPrStatus={reconcilePersistedPrStatus}
-        className="bg-background"
+        className={stylex.props(detailStyles.background).className}
         // The side panel stays mounted while collapsed, so GitHub polling has
         // to be paused explicitly — same signal SessionBrowserPanel takes.
         visible={isSidebarVisible}
@@ -6110,13 +6536,15 @@ const SessionDetail = ({
   // pages retain DOM state and Electron's native view is only hidden, so tab
   // switching behaves like a browser rather than rebuilding the page.
   const sidebarContent = (
-    <div className="relative h-full min-h-0">
+    <div {...stylex.props(detailStyles.sidebarContentRoot)}>
       {activeBrowserSession && openedSidebarTabs.includes('browser') ? (
         <div
-          className={cn(
-            'absolute inset-0',
-            activeSidebarTab !== 'browser' && 'invisible pointer-events-none'
-          )}
+          className={
+            stylex.props(
+              detailStyles.absoluteFill,
+              activeSidebarTab !== 'browser' && detailStyles.invisibleFill
+            ).className
+          }
           aria-hidden={activeSidebarTab !== 'browser'}
         >
           <SessionBrowserPanel
@@ -6141,8 +6569,27 @@ const SessionDetail = ({
           />
         </div>
       ) : null}
-      {activeSidebarTab !== 'browser' ? (
-        <div className="absolute inset-0">{nonBrowserSidebarContent}</div>
+      {activeIosSimulatorSession && openedSidebarTabs.includes('ios-simulator') ? (
+        <div
+          className={
+            stylex.props(
+              detailStyles.absoluteFill,
+              activeSidebarTab !== 'ios-simulator' && detailStyles.invisibleFill
+            ).className
+          }
+          aria-hidden={activeSidebarTab !== 'ios-simulator'}
+        >
+          <SessionIosSimulatorPanel
+            session={activeIosSimulatorSession}
+            active={activeSidebarTab === 'ios-simulator' && isSidebarVisible}
+            onAttachScreenshot={(file) =>
+              handleAttachSimulatorScreenshot(activeIosSimulatorSession.id, file)
+            }
+          />
+        </div>
+      ) : null}
+      {activeSidebarTab !== 'browser' && activeSidebarTab !== 'ios-simulator' ? (
+        <div {...stylex.props(detailStyles.absoluteFill)}>{nonBrowserSidebarContent}</div>
       ) : null}
     </div>
   );
@@ -6167,9 +6614,12 @@ const SessionDetail = ({
           ? t('sessions.sidebar.hide', 'Hide sidebar')
           : t('sessions.sidebar.show', 'Show sidebar')
       }
-      className={cn('shrink-0', !isSidebarVisible && 'mr-[9px]')}
+      className={
+        stylex.props(detailStyles.shrink, !isSidebarVisible && detailStyles.sidebarToggleMargin)
+          .className
+      }
     >
-      <PanelRight className="h-4 w-4" />
+      <PanelRight {...stylex.props(detailStyles.icon16)} />
     </Button>
   );
 
@@ -6181,9 +6631,9 @@ const SessionDetail = ({
       icon
       onClick={() => showNavigationSidebar()}
       aria-label={t('sessions.leftSidebar.show', 'Show navigation sidebar')}
-      className="shrink-0"
+      className={stylex.props(detailStyles.shrink).className}
     >
-      <PanelLeft className="h-4 w-4" />
+      <PanelLeft {...stylex.props(detailStyles.icon16)} />
     </Button>
   ) : null;
 
@@ -6195,7 +6645,7 @@ const SessionDetail = ({
     <SessionChatInterface
       session={activeSession}
       workspaceSession={activeSession}
-      className="h-full shrink-0"
+      className={stylex.props(detailStyles.fillNoShrink).className}
       headerVariant="toolbar"
       headerEndSlot={
         <>
@@ -6281,6 +6731,11 @@ const SessionDetail = ({
       leftSlot={leftSidebarExpandButton}
       rightSlot={desktopHeaderToolbar}
       className={cn(
+        stylex.props(
+          detailStyles.topBarHeight,
+          detailStyles.parentActiveScope,
+          isLeftSidebarHidden && hasMacOSTitlebarInset && detailStyles.topBarMacInset
+        ).className,
         // The macOS traffic lights sit over the LEFT sidebar (or, when it is
         // collapsed, over the horizontally-cleared `pl-[4.5rem]` gap below),
         // never over this top bar — so it must not reserve vertical inset.
@@ -6288,11 +6743,8 @@ const SessionDetail = ({
         // Flush with the window/sidebar top so this h-11 row shares y=0 with
         // the sidebar header; the macOS row pad centers its controls on the
         // traffic-light centerline. Re-derive if the row or pill height changes.
-        'h-11',
-        'group-data-[lody-action-active=true]/close-scope:shadow-[inset_0_-1px_0_var(--primary)]',
         macTrafficLightRowPadClass,
         windowsCaptionRowPadClass,
-        isLeftSidebarHidden && hasMacOSTitlebarInset && 'pl-[4.5rem]',
         !isSidebarVisible && windowsCaptionPadClass
       )}
     />
@@ -6314,13 +6766,14 @@ const SessionDetail = ({
         isActive && chatSession.id === sessionId ? claimNavigationFocus : undefined,
       session: chatSession,
       workspaceSession: activeSession,
-      className: 'h-full',
+      className: stylex.props(detailStyles.rootFill).className,
       hideHeader: true,
       syncEnabled: isActive || pendingForkSourceId !== undefined,
       isVisible,
       onFileDiffClick: handleOpenFileDiffForChat,
       onFilePathClick: handleOpenFile,
       onOpenHtmlFile: handleOpenHtmlFile,
+      onOpenIosSimulator: () => handleOpenIosSimulatorForSession(chatSession.id),
       onOpenBrowser: () => handleOpenBrowser(chatSession.id, true),
       onOpenExistingBrowser: () => handleOpenBrowser(chatSession.id, false),
       onNavigateToComment: handleNavigateToComment,
@@ -6358,7 +6811,9 @@ const SessionDetail = ({
         return (
           <div
             key={tabSession.id}
-            className={cn('absolute inset-0', !isActive && 'hidden')}
+            className={
+              stylex.props(detailStyles.absoluteFill, !isActive && detailStyles.hidden).className
+            }
             aria-hidden={!isActive}
           >
             <SessionChatInterface
@@ -6388,7 +6843,9 @@ const SessionDetail = ({
         return (
           <div
             key={draft.id}
-            className={cn('absolute inset-0', !isActive && 'hidden')}
+            className={
+              stylex.props(detailStyles.absoluteFill, !isActive && detailStyles.hidden).className
+            }
             aria-hidden={!isActive}
           >
             <DraftSessionChatInterface
@@ -6412,10 +6869,16 @@ const SessionDetail = ({
     return (
       <div
         key={tab.id}
-        className={isActive ? 'h-full' : 'hidden h-full'}
+        className={
+          stylex.props(isActive ? detailStyles.rootFill : detailStyles.hiddenFill).className
+        }
         aria-hidden={!isActive || !isSidebarVisible}
       >
-        {renderViewerTabContent(tab, 'h-full', isActive && isSidebarVisible)}
+        {renderViewerTabContent(
+          tab,
+          stylex.props(detailStyles.rootFill).className,
+          isActive && isSidebarVisible
+        )}
       </div>
     );
   });
@@ -6433,7 +6896,9 @@ const SessionDetail = ({
       return (
         <div
           key={sideSession.id}
-          className={cn('absolute inset-0', !isActive && 'hidden')}
+          className={
+            stylex.props(detailStyles.absoluteFill, !isActive && detailStyles.hidden).className
+          }
           aria-hidden={!isActive}
         >
           <SessionChatInterface
@@ -6451,7 +6916,10 @@ const SessionDetail = ({
     <div
       data-lody-session-tab-region="side-panel"
       data-lody-action-scope="side-panel"
-      className="group/close-scope flex h-full min-w-0 flex-col overflow-hidden border-l border-border/70 bg-background"
+      className={cn(
+        'group/close-scope',
+        stylex.props(stylex.defaultMarker(), detailStyles.desktopPanelShell).className
+      )}
     >
       <SessionSidePanelTabBar
         tabs={sidePanelTabs}
@@ -6472,18 +6940,16 @@ const SessionDetail = ({
         }
         endSlot={sidebarToggleButton}
         className={cn(
-          'border-b border-border/50 bg-background',
-          'group-data-[lody-action-active=true]/close-scope:border-primary',
+          stylex.props(detailStyles.sideTabBar).className,
           // Right panel is never under the macOS traffic lights (top-left) —
           // it must not reserve the titlebar inset the left sidebar needs. It
           // still shares the traffic-light centerline with the main tab bar.
-          'h-11',
           macTrafficLightBorderedRowPadClass,
           windowsCaptionBorderedRowPadClass,
           windowsCaptionPadClass
         )}
       />
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div {...stylex.props(detailStyles.sidebarBody)}>
         {showFixedSidePanelBody && activeSidebarTab !== null ? sidebarContent : null}
         {showFixedSidePanelBody && activeSidebarTab === null && sidePanelTabs.length === 0 ? (
           <SessionSidePanelEmptyState
@@ -6510,7 +6976,7 @@ const SessionDetail = ({
   return (
     <div
       ref={desktopActionRootRef}
-      className="h-full"
+      className={stylex.props(detailStyles.rootFill).className}
       onPointerDownCapture={(event) =>
         handleDesktopTabRegionInteraction(event.target, event.currentTarget)
       }

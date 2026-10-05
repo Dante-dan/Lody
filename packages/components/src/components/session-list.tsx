@@ -89,10 +89,16 @@ import {
   buildSessionRowOpenedByTreeSlot,
   SIDEBAR_ROW_LIST_CLASS,
   SIDEBAR_GROUP_LABEL_CLASS,
+  SIDEBAR_ROW_TEXT_CLASS,
+  SIDEBAR_CAPTION_TEXT_CLASS,
   SIDEBAR_GROUP_LABEL_COLOR_CLASS,
   SidebarGroupActivityMark,
+  SIDEBAR_UNSENT_TITLE_CLASS,
   summarizeSidebarGroupActivity,
+  useSessionUnsentNewConversation,
+  withSessionSendStates,
 } from '@/components/sidebar-row-shared';
+import { sessionSendStatesAtom } from '@/atoms/session-send-status';
 import { SessionInfoHoverCard } from '@/components/session-info-hover-card';
 import type { SessionSharingState } from '@/lib/session-sharing';
 import {
@@ -656,8 +662,17 @@ const SessionGroupRow = memo(function SessionGroupRow({
   // interactive child added inside an anchored row needs the same treatment.
   const sessionHref = isSelectable ? getSessionHref?.(session.sessionId) : undefined;
   const useAnchor = typeof sessionHref === 'string' && sessionHref.length > 0;
+  const isUnsent = useSessionUnsentNewConversation(session.sessionId);
   const renderTitle = (extraClassName?: string) => (
-    <span className={cn('truncate font-normal', extraClassName)}>{session.title}</span>
+    <span
+      className={cn(
+        'truncate font-normal',
+        isUnsent && !showSelectedState && SIDEBAR_UNSENT_TITLE_CLASS,
+        extraClassName
+      )}
+    >
+      {session.title}
+    </span>
   );
   const handleAnchorClick = useAnchor
     ? (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -775,7 +790,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
           onClick={handleAnchorClick}
         />
       ) : null}
-      <div className="flex min-w-0 items-center gap-1.5">
+      <div className={cn('flex min-w-0 items-center', isMobile ? 'gap-1.5' : 'gap-2')}>
         <SessionRowLeadingSlot
           showMenuButton={hasMenuActions}
           menuLabel={moreActionsLabel}
@@ -783,8 +798,9 @@ const SessionGroupRow = memo(function SessionGroupRow({
         />
         <div
           className={cn(
-            // 1em: conversation titles match the prose size in every organize mode.
-            'min-w-0 flex-1 flex items-center gap-1 truncate text-[1em]',
+            // Body role: conversation titles match prose in every organize mode.
+            'min-w-0 flex-1 flex items-center gap-1 truncate',
+            SIDEBAR_ROW_TEXT_CLASS,
             showSelectedState ? 'text-sidebar-selection-foreground' : 'text-sidebar-row-foreground'
           )}
           // Double-click to rename is scoped to the title only, so it can't
@@ -804,6 +820,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
         </div>
         {/* Keep PR at the right edge. Line totals stay in the hover card. */}
         <SidebarRowEndSlot
+          sessionId={session.sessionId}
           isWaitingPermission={session.isWaitingPermission}
           isWorking={session.isWorking}
           hasUnreadMessages={session.hasUnreadMessages}
@@ -812,13 +829,14 @@ const SessionGroupRow = memo(function SessionGroupRow({
               <span className={cn('flex items-center gap-1.5', useAnchor && 'z-20')}>
                 <SessionRowTime
                   latestMessageAt={session.latestMessageAt}
-                  className="text-[0.8em] text-muted-foreground"
+                  className={cn(SIDEBAR_CAPTION_TEXT_CLASS, 'text-muted-foreground')}
                 />
               </span>
             ) : hasPr || showMergeablePill || isMobile ? (
               <span
                 className={cn(
-                  'flex select-none items-center gap-1.5 text-[0.75em] tabular-nums text-sidebar-foreground-muted/80',
+                  SIDEBAR_CAPTION_TEXT_CLASS,
+                  'flex select-none items-center gap-1.5 tabular-nums text-sidebar-foreground-muted/80',
                   useAnchor && 'z-20'
                 )}
               >
@@ -860,7 +878,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
         />
         {onTogglePinSession ? (
           <ContextMenu.Item
-            icon={session.isPinned ? <PinOff /> : <Pin />}
+            icon={session.isPinned ? PinOff : Pin}
             onClick={() => {
               onTogglePinSession(session.sessionId, !session.isPinned);
             }}
@@ -870,7 +888,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
         ) : null}
         {canMarkUnread ? (
           <ContextMenu.Item
-            icon={<Mail />}
+            icon={Mail}
             onClick={() => {
               onMarkSessionUnread?.(session.sessionId);
             }}
@@ -880,7 +898,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
         ) : null}
         {onRenameSession ? (
           <ContextMenu.Item
-            icon={<Pencil />}
+            icon={Pencil}
             onClick={() => {
               beginRename(session.sessionId, session.title);
             }}
@@ -894,7 +912,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
         ) : null}
         {onCopySessionUrl ? (
           <ContextMenu.Item
-            icon={<Link2 />}
+            icon={Link2}
             onClick={() => {
               onCopySessionUrl(session.sessionId);
             }}
@@ -904,7 +922,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
         ) : null}
         {session.branchName ? (
           <ContextMenu.Item
-            icon={<GitBranch />}
+            icon={GitBranch}
             onClick={() => {
               void navigator.clipboard.writeText(session.branchName).catch(() => {});
             }}
@@ -917,11 +935,11 @@ const SessionGroupRow = memo(function SessionGroupRow({
             disabled={shareMenuState !== 'share'}
             icon={
               shareMenuState === 'share' ? (
-                <Users />
+                Users
               ) : shareMenuState === 'loading' ? (
-                <Spinner />
+                <Spinner size="small" label={null} />
               ) : (
-                <LockKeyhole />
+                LockKeyhole
               )
             }
             onClick={() => {
@@ -951,7 +969,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
         ) : null}
         {onOpenPullRequest && prUrl ? (
           <ContextMenu.Item
-            icon={<GitPullRequest />}
+            icon={GitPullRequest}
             onClick={() => {
               onOpenPullRequest({
                 sessionId: session.sessionId,
@@ -994,7 +1012,7 @@ const SessionGroupRow = memo(function SessionGroupRow({
         ) : null}
         {onArchiveSession ? (
           <ContextMenu.Item
-            icon={<Archive />}
+            icon={Archive}
             onClick={() => {
               onArchiveSession(session.sessionId);
             }}
@@ -1165,9 +1183,15 @@ const SessionGroupSection = memo(function SessionGroupSection({
     };
   }, [collapsedOpenedBySessionIds, group, whetherShowFullList]);
   // A folded group still says whether anything inside it needs the user.
+  const sendStates = useAtomValue(sessionSendStatesAtom);
   const collapsedActivity = useMemo(
-    () => (group.collapsed ? summarizeSidebarGroupActivity(group.sessions) : null),
-    [group.collapsed, group.sessions]
+    () =>
+      group.collapsed
+        ? summarizeSidebarGroupActivity(
+            withSessionSendStates(group.sessions, (row) => row.sessionId, sendStates)
+          )
+        : null,
+    [group.collapsed, group.sessions, sendStates]
   );
   const toggleListLabel = whetherShowFullList
     ? t('sessions.showLess', 'Show less')
@@ -1182,7 +1206,9 @@ const SessionGroupSection = memo(function SessionGroupSection({
   const headerBaseColorClass = isGroupLabel
     ? SIDEBAR_GROUP_LABEL_COLOR_CLASS
     : 'text-sidebar-row-foreground';
-  const headerTypographyClass = isGroupLabel ? SIDEBAR_GROUP_LABEL_CLASS : 'text-[1em] font-normal';
+  const headerTypographyClass = isGroupLabel
+    ? SIDEBAR_GROUP_LABEL_CLASS
+    : cn(SIDEBAR_ROW_TEXT_CLASS, 'font-normal');
 
   return (
     <div
@@ -1202,7 +1228,7 @@ const SessionGroupSection = memo(function SessionGroupSection({
           data-sidebar-group-key={group.key}
           className={cn(
             'relative flex w-full select-none items-center rounded-md px-2 text-left',
-            isGroupLabel ? 'h-[26px] gap-1.5' : 'h-7 gap-1',
+            isGroupLabel ? 'h-[26px] gap-1.5' : cn('h-7', isMobile ? 'gap-1' : 'gap-0.5'),
             'border border-transparent',
             'min-w-0 flex-1 transition-colors',
             headerTypographyClass,
@@ -1353,7 +1379,8 @@ const SessionGroupSection = memo(function SessionGroupSection({
               data-sidebar-show-more={group.key}
               className={cn(
                 // Same 30px pitch as a conversation row (py-1 + 1px borders + 20px line).
-                'flex h-[30px] select-none items-center gap-2 rounded-md px-2 text-left text-[0.8em] text-sidebar-foreground-muted/80',
+                SIDEBAR_CAPTION_TEXT_CLASS,
+                'flex h-[30px] select-none items-center gap-2 rounded-md px-2 text-left text-sidebar-foreground-muted/80',
                 'transition-colors',
                 'hover:bg-sidebar-hover hover:text-sidebar-hover-foreground',
                 'focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring/40'

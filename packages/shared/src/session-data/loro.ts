@@ -441,12 +441,6 @@ export function createLoroSessionData(options: LoroSessionDataOptions) {
       else writer.update(apply);
       return { matched };
     },
-    async prepareAppendTurn(turn) {
-      return writer.prepareAppend(turn as unknown as SessionHistory);
-    },
-    async applyPreparedTurn(update) {
-      writer.applyPrepared(update);
-    },
     async appendTurn(turn) {
       writer.append(turn as unknown as SessionHistory);
     },

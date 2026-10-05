@@ -1,3 +1,4 @@
+import { text as uiText } from '@lody/ui/tokens/scales.stylex';
 import React, { useMemo, useState } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { SettingsPageActions, SettingsPageLead, useSettingsPane } from './settings-page-header';
@@ -16,7 +17,6 @@ import {
 } from '@lody/shared/prompt-shortcuts';
 import { Plus, Trash2 } from 'lucide-react';
 import { Spinner } from '@lody/ui/spinner';
-import { promptShortcutsFeatureEnabledAtom } from '@/atoms/settings';
 import { getAllAgentConfigAtom } from '@/atoms/agents';
 import { cloudOperations } from '@/lib/cloud-api-operations';
 import { withClassName } from '@/lib/stylex';
@@ -65,7 +65,7 @@ const styles = stylex.create({
   slug: {
     flexShrink: 0,
     fontFamily: 'var(--font-mono, ui-monospace, monospace)',
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     color: colors.secondaryLabel,
   },
   scope: { flexShrink: 0, marginInlineStart: 'auto' },
@@ -80,7 +80,7 @@ const styles = stylex.create({
   warning: {
     flexShrink: 0,
     marginInlineStart: 'auto',
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     lineHeight: type.leading,
     color: colors.warning,
   },
@@ -150,21 +150,6 @@ const styles = stylex.create({
 });
 
 export function PromptShortcutsSetting() {
-  const enabled = useAtomValue(promptShortcutsFeatureEnabledAtom);
-  const { t } = useTranslation();
-  if (!enabled)
-    return (
-      <p {...stylex.props(surface.container)} role="status">
-        {t(
-          'settings.promptShortcuts.disabled',
-          'Enable Prompt Shortcuts under Developer mode in Settings → About to use this feature.'
-        )}
-      </p>
-    );
-  return <EnabledPromptShortcutsSetting />;
-}
-
-function EnabledPromptShortcutsSetting() {
   const state = usePromptShortcuts();
   return (
     <PromptShortcutsSettingContent

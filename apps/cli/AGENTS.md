@@ -7,9 +7,10 @@ Root `AGENTS.md` applies; this file adds CLI context. Build, PR-poller, and adap
 
 ## Build and packaging
 
-- The Node 22 bundle uses native top-level await. Do not run a browser TLA
-  compatibility transform over its output chunks. Validate the CLI SSR build
-  under `NODE_OPTIONS=--max-old-space-size=2048`; increasing the heap is not a fix.
+- CLI SSR uses native Node 22 TLA, never browser TLA transforms.
+  Validate at `NODE_OPTIONS=--max-old-space-size=2048`, not a raised heap.
+  Use per-package chunks, transitive assignment and CJS helper chunks.
+  Keep maps and no app code in vendor chunks.
 
 - The public CLI defaults to the local platform, discovers no deployment dotenv files, and must
   never initialize telemetry in local mode even if PostHog variables exist in the shell.
@@ -73,7 +74,8 @@ execution/consent rules. These rules also bind CLI callers outside that director
   never rewrite the exact opener to the root or treat either as `parentSessionId`.
 - INVARIANT: reasoning effort and fast mode are per MODEL, because an ACP probe's `configOptions`
   describe only the model current at probe time. Validate effort against the TARGET model using
-  `AcpCapabilityCacheEntry.modelReasoningEfforts` and skip the resulting `validatedConfigIds` in
+  `getModelEffortChoices` (the stored per-model declaration first, then
+  `modelReasoningEfforts`) and skip the resulting `validatedConfigIds` in
   `validateTurnConfigOptionValues`; dispatch what cannot be checked offline as requested. Keep
   runtime rejections in debug diagnostics: Codex/Claude mismatches for model, effort, Fast, or Plan
   never become visible `agent_warning` notices, while other rejections still do. Claude Fable

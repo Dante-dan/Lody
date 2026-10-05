@@ -1,4 +1,7 @@
-export { createConversationSession } from './create-conversation-session';
+export {
+  createConversationSession,
+  type ConversationSessionDataFactory,
+} from './create-conversation-session';
 export * from './types';
 export { isEmptyAssistantIndexRow } from './index-row';
 export {
@@ -10,7 +13,6 @@ export {
   createConversationViewFromHistory,
   type CreateConversationViewFromHistoryOptions,
 } from './create-conversation-view-from-history';
-export { createProjectedConversationView } from './projected-conversation-view';
 export { createHistoryWriter, type HistoryWriter } from '@lody/shared';
 export {
   collectConversationConfigSources,

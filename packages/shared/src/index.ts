@@ -26,6 +26,7 @@ export type {
 } from './ids';
 export * from './message';
 export * from './ai';
+export * from './acp-model-capabilities';
 export * from './pi-provider-migration';
 export * from './message-text-spans';
 export * from './deepseek-harness';
@@ -489,3 +490,5 @@ export interface Attachment {
 
 export * from './schedule-control';
 export * from './codex-auth-profile';
+export * from './ios-simulator';
+export * from './session-acp-identity';

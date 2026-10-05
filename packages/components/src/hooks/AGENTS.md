@@ -6,7 +6,7 @@ Parent AGENTS apply. Edit `AGENTS.md`, not its `CLAUDE.md` symlink. Background: 
 
 - The scroll engine owns the viewport: [its rules](../lib/conversation-scroll/AGENTS.md).
 - Only viewport/tail/selection render bodies; other reads keep placeholders.
-- Key readiness/window by `factSource ?? view`; new sources reset both. Before the
+- Key readiness/window by the view; a new view resets both. Before the
   first viewport report the window is the tail plus the restored anchor's turn;
   ignore reports until the initial window is ready.
 - A cached session renders in the frame after its click: no promise tick,
@@ -15,6 +15,9 @@ Parent AGENTS apply. Edit `AGENTS.md`, not its `CLAUDE.md` symlink. Background: 
 ## Session, auth, and app shell
 
 - History uses SessionData commands.
+- Held-send config is a session/runtime-scoped input to selection, never a stored
+  resolved selection. Keep its logical Turn fence across history/queue handoff;
+  next-draft edits win and attachment progress does not rebuild the catalog.
 - A proven-undelivered steer (`no-active-turn` or `promotion-failed`) repairs ordinary
   dispatch for pending/seen entries even if CLI already changed their status. Never
   repair active, terminal, removed, or delivery-unknown turns.

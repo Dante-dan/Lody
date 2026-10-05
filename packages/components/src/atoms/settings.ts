@@ -50,6 +50,17 @@ export const conversationFontSizeAtom = atom(
   }
 );
 
+/**
+ * Full-width conversation column (Notion-style): the session conversation's
+ * centered column drops its ~48rem cap and spans the pane, keeping only the
+ * shared side gutter. Read through `ConversationColumn` — never restyle one
+ * column by hand.
+ */
+export const conversationWideModeAtom = atomWithStorage<boolean>(
+  'lody-conversation-wide-mode',
+  false
+);
+
 export const INTERFACE_FONT_FAMILY_MAX_LENGTH = 100;
 
 export function normalizeInterfaceFontFamily(value: unknown): string {
@@ -121,6 +132,46 @@ export const fontLigaturesEnabledAtom = atom(
   (get) => normalizeFontLigaturesEnabled(get(fontLigaturesEnabledStorageAtom)),
   (_get, set, nextValue: boolean) => {
     set(fontLigaturesEnabledStorageAtom, nextValue);
+  }
+);
+
+export const DEFAULT_INLINE_MATH_ENABLED = false;
+
+export function normalizeInlineMathEnabled(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : DEFAULT_INLINE_MATH_ENABLED;
+}
+
+const inlineMathEnabledStorageAtom = atomWithStorage<unknown>(
+  'lody-inline-math-enabled',
+  DEFAULT_INLINE_MATH_ENABLED
+);
+
+export const inlineMathEnabledAtom = atom(
+  (get) => normalizeInlineMathEnabled(get(inlineMathEnabledStorageAtom)),
+  (_get, set, nextValue: boolean) => {
+    set(inlineMathEnabledStorageAtom, nextValue);
+  }
+);
+
+/**
+ * Optional syntax grammars stay out of the default rendering path. The
+ * preference is local because it changes only the languages this client loads.
+ */
+export const DEFAULT_EXTENDED_CODE_LANGUAGES_ENABLED = false;
+
+export function normalizeExtendedCodeLanguagesEnabled(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : DEFAULT_EXTENDED_CODE_LANGUAGES_ENABLED;
+}
+
+const extendedCodeLanguagesEnabledStorageAtom = atomWithStorage<unknown>(
+  'lody-extended-code-languages-enabled',
+  DEFAULT_EXTENDED_CODE_LANGUAGES_ENABLED
+);
+
+export const extendedCodeLanguagesEnabledAtom = atom(
+  (get) => normalizeExtendedCodeLanguagesEnabled(get(extendedCodeLanguagesEnabledStorageAtom)),
+  (_get, set, nextValue: boolean) => {
+    set(extendedCodeLanguagesEnabledStorageAtom, nextValue);
   }
 );
 
@@ -228,19 +279,6 @@ export const inboxBetaEnabledAtom = atomWithStorage<boolean>(
 /** The single gate for showing the unfinished mobile Inbox entry. */
 export const inboxFeatureEnabledAtom = atom(
   (get) => get(developerModeEnabledAtom) && get(inboxBetaEnabledAtom)
-);
-
-// Developer-only opt-in. Turning Developer mode off retains the local choice.
-export const promptShortcutsBetaEnabledAtom = atomWithStorage<boolean>(
-  'lody-prompt-shortcuts-beta-enabled',
-  false,
-  undefined,
-  { getOnInit: true }
-);
-
-/** Shared gate for Shortcut settings, discovery and the workspace runtime. */
-export const promptShortcutsFeatureEnabledAtom = atom(
-  (get) => get(developerModeEnabledAtom) && get(promptShortcutsBetaEnabledAtom)
 );
 
 export const semanticShortcutsBetaEnabledAtom = atomWithStorage<boolean>(

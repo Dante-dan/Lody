@@ -8,6 +8,7 @@ import { Effect } from 'effect';
 import { z } from 'zod';
 import { requestSessionShare } from '@/lib/session-share-delivery';
 import {
+  ACP_CAPABILITY_ROW_FAMILIES,
   getAcpCapabilityCacheKey,
   getMachineFlockAcpCapabilities,
   getMachineFlockDocId,
@@ -79,6 +80,7 @@ import {
   withWorkspaceManager,
   getCommandSessionSharingPort,
   WorkspaceSyncUnavailableError,
+  classifyLocalDaemonIpcError,
 } from '@/lib/command-runtime';
 import { listMergedAgentConfigs } from '@/lib/agent-config-machine-flock';
 import {
@@ -121,6 +123,7 @@ import {
 import { registerScheduleTools } from './schedule-tools';
 import { truncateSessionHistoryText as truncateUtf8HeadTail } from '@/mcp/session-history-page';
 import { buildSessionHistoryForReader } from '@/mcp/session-history-handler';
+import { createSessionBackend } from '@/session/session-backend';
 import { version as cliVersion } from '@/pkg';
 import {
   configureWorkspaceMcpServer,
@@ -134,6 +137,10 @@ import { createResourceDiscovery } from '@/lib/resource-discovery-runtime';
 import { getCliPlatformKind } from '@/lib/cli-platform';
 import { summarizeDiscoveryAgent as summarizeAgentConfig } from '@/lib/resource-discovery';
 import { SessionDiscoveryFilterShape, matchesSessionDiscovery } from '@/lib/discovery-query';
+import { getSessionCommandEnvironment } from '@/lib/session-command-environment';
+import { createSessionToolRegistrar, type SessionToolHandlers } from './session-tool-router';
+
+import { registerIosSimulatorPreviewTool } from './ios-simulator-tool';
 
 const PREVIEW_TOOL_NAME = 'lody_report_preview_candidate';
 const IMAGE_UPLOAD_TOOL_NAME = 'lody_upload_images';
@@ -290,11 +297,25 @@ const SessionWorkContextInputSchema = z.discriminatedUnion('kind', [
 ]);
 
 /**
- * Semantic run-config fields shared by single and batch create. The concrete ACP
- * config option ids differ per agent, so callers pick the values reported by
- * `lody_session_create_options` and the CLI maps them at dispatch time.
+ * Single and batch creates share semantic controls and explicit ACP selectors.
+ * Discovery reports the target's advertised ids and values; the shared CLI create
+ * path resolves semantic controls and validates the resulting configuration.
  */
 const SessionRunConfigInputShape = {
+  modeId: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      'ACP mode id from runConfig.modes. May grant broader permissions than the parent; choose only within the user authorization granted to the caller.'
+    ),
+  configOptionValues: z
+    .record(z.string().min(1), z.union([z.string(), z.boolean()]))
+    .optional()
+    .describe(
+      'Explicit ACP option values using ids and choices from runConfig.configOptions. Includes permission options even without a category. Semantic model/reasoning/Fast/Plan fields retain their existing precedence. Permissions may be broader than the parent; choose only within the user authorization granted to the caller.'
+    ),
   modelId: z
     .string()
     .trim()
@@ -1001,6 +1022,8 @@ const postSessionControl = async (
 const readActiveInvocationContext = async (
   ctx: McpSessionContext
 ): Promise<SessionActiveInvocationContextResult> => {
+  const environment = getSessionCommandEnvironment();
+  if (environment) return environment.host.readInvocation(ctx.sessionId);
   const response = await Effect.runPromise(
     makeLocalControlClientAuto({ socketPath: ctx.localControlSocketPath })
       .machineRpc(
@@ -1191,11 +1214,12 @@ const buildStructuredOutputOptions = (
 };
 
 /**
- * MCP callers select run config semantically (model / reasoning effort / fast /
- * plan). The concrete ACP ids are resolved against the target agent's
- * capabilities inside the shared create path, not here.
+ * Semantic controls resolve against target capabilities in the shared create
+ * path. Explicit ACP selectors use the same validation as CLI --mode/--config-option.
  */
 const buildMcpTurnDispatchConfig = (input: {
+  modeId?: string;
+  configOptionValues?: Record<string, string | boolean>;
   modelId?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
@@ -1209,17 +1233,27 @@ const buildMcpTurnDispatchConfig = (input: {
   };
   return {
     ...resolveTurnDispatchConfig({}),
+    ...(input.modeId !== undefined ? { modeId: input.modeId } : {}),
+    ...(input.configOptionValues !== undefined
+      ? { configOptionValues: input.configOptionValues }
+      : {}),
     ...(hasAgentRunConfigSelection(runConfig) ? { runConfig } : {}),
   };
 };
 
 /** Run config is part of the Command's identity, so it is fingerprinted too. */
 const buildMcpRunConfigCanonicalCommand = (input: {
+  modeId?: string;
+  configOptionValues?: Record<string, string | boolean>;
   modelId?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
   planMode?: boolean;
-}): Record<string, string | boolean> => ({
+}): Record<string, string | boolean | Record<string, string | boolean>> => ({
+  ...(input.modeId !== undefined ? { modeId: input.modeId } : {}),
+  ...(input.configOptionValues !== undefined
+    ? { configOptionValues: input.configOptionValues }
+    : {}),
   ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
   ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
   ...(input.fastMode !== undefined ? { fastMode: input.fastMode } : {}),
@@ -1277,17 +1311,10 @@ const resolveMcpSessionCreate = (
       false
     );
   }
+  // A Role may run on any Machine the requester can access; the shared create
+  // path enforces that access. Only a Local Project child is filesystem-bound,
+  // so a Role on another Machine starts as an independent Session there.
   const project = requester.project;
-  if (project?.kind !== 'github' && role.machineId !== requester.machineId) {
-    throw new LodyOperationStoreError(
-      'AGENT_ROLE_MACHINE_MISMATCH',
-      project?.kind === 'local'
-        ? `Agent Role ${role.name} must run on the Local Project's Machine.`
-        : `Agent Role ${role.name} must run on the current Machine in a chat Session.`,
-      false
-    );
-  }
-
   let useCurrentSessionAsParent = input.useCurrentSessionAsParent;
   let workContext = input.workContext;
   if (
@@ -1302,6 +1329,7 @@ const resolveMcpSessionCreate = (
     };
   } else if (
     project?.kind === 'local' &&
+    role.machineId === requester.machineId &&
     useCurrentSessionAsParent === undefined &&
     workContext === undefined
   ) {
@@ -1544,9 +1572,10 @@ const readSessionExecutionSnapshot = async (
   live: SessionLiveWorking
 ): Promise<SessionExecutionSnapshot> => {
   const sessionDoc = await manager.getOrCreateSessionDoc(session.id);
+  const backend = await createSessionBackend(sessionDoc, session);
   const [directory, queue] = await Promise.all([
-    sessionDoc.sessionData.history.readDirectory(0, Number.MAX_SAFE_INTEGER),
-    sessionDoc.getMessageQueue(),
+    backend.readHistoryDirectory(0, Number.MAX_SAFE_INTEGER),
+    backend.getMessageQueue(),
   ]);
   const activeTurnId = resolveActiveAssistantTurnId(directory.map((row) => row.scalars));
   const queuedTurnCount =
@@ -1942,11 +1971,12 @@ const buildSessionHistory = async (input: SessionHistoryToolInput): Promise<unkn
       );
     }
     const sessionDoc = await manager.getOrCreateSessionDoc(sessionId);
+    const backend = await createSessionBackend(sessionDoc, session);
     // Bounded business paging: `limit` counts displayable turns, the cursor is a
     // raw position, and entries removed by the 128 KiB byte cap stay reachable.
     return await buildSessionHistoryForReader({
       sessionId,
-      history: sessionDoc.sessionData.history,
+      history: backend.history,
       limit: input.limit ?? DEFAULT_MCP_SESSION_HISTORY_LIMIT,
       ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
       maxBytes: MAX_MCP_SESSION_HISTORY_BYTES,
@@ -2260,7 +2290,9 @@ const readMachineAcpCapabilities = async (
 ): Promise<Record<string, AcpCapabilityCacheEntry>> => {
   const handle = await manager.repo.openFlockDoc(getMachineFlockDocId(workspaceId, machineId));
   return getMachineFlockAcpCapabilities(
-    readMachineFlockRowsFromFlock(handle.flock, { families: ['acpCapability'] })
+    readMachineFlockRowsFromFlock(handle.flock, {
+      families: ACP_CAPABILITY_ROW_FAMILIES,
+    })
   );
 };
 
@@ -2477,18 +2509,19 @@ const buildSessionCreateOptions = async (
       )
     );
     const repoQuery = normalizeCliValue(input.repoQuery)?.toLowerCase();
-    const repos = repoQuery
-      ? (
-          await listWorkspaceGitHubRepositoriesForCliToken({
-            token: auth.token,
-            workspaceId,
-            requesterUserId,
-            enabledOnly: true,
-          })
-        )
-          .filter((repo) => repo.fullName.toLowerCase().includes(repoQuery))
-          .slice(0, MAX_MCP_CREATE_OPTION_MATCHES)
-      : [];
+    const repos =
+      repoQuery && !getSessionCommandEnvironment()
+        ? (
+            await listWorkspaceGitHubRepositoriesForCliToken({
+              token: auth.token,
+              workspaceId,
+              requesterUserId,
+              enabledOnly: true,
+            })
+          )
+            .filter((repo) => repo.fullName.toLowerCase().includes(repoQuery))
+            .slice(0, MAX_MCP_CREATE_OPTION_MATCHES)
+        : [];
     return {
       ok: true,
       current: await buildSessionCurrentInfo(manager, workspaceId, currentSession),
@@ -3528,6 +3561,10 @@ export const __lodyMcpServerInternals = {
 };
 
 export function buildLodyMcpServer(): McpServer {
+  return buildSessionToolServer();
+}
+
+export function buildSessionToolServer(handlers?: SessionToolHandlers): McpServer {
   // The HTTP host is long-lived and the stdio server normally lives for the
   // Agent session. Initialization is idempotent and local-platform telemetry
   // remains hard-disabled inside the analytics layer.
@@ -3556,10 +3593,44 @@ export function buildLodyMcpServer(): McpServer {
     },
   });
 
-  registerDiscoveryTools(server, async (read) => {
-    if (getCliPlatformKind() === 'local') {
-      throw new Error('Workspace catalog discovery is unavailable on the local platform.');
-    }
+  const registerSessionTool = createSessionToolRegistrar(
+    server,
+    async (name, args, execute) => {
+      if (getCliPlatformKind() !== 'local' || getSessionCommandEnvironment()) return execute();
+      try {
+        const ctx = getSessionContext();
+        const outcome = await Effect.runPromise(
+          makeLocalControlClientAuto({ socketPath: ctx.localControlSocketPath })
+            .machineRpc(
+              {
+                method: 'session/call-tool',
+                machineId: ctx.machineId,
+                workspaceId: ctx.workspaceId,
+                ownerSessionId: ctx.sessionId,
+                params: {
+                  sessionId: ctx.sessionId,
+                  name,
+                  arguments: z.record(z.string(), z.json()).parse(args),
+                },
+              },
+              { timeoutMs: SESSION_CONTROL_TIMEOUT_MS }
+            )
+            .pipe(Effect.either)
+        );
+        if (outcome._tag === 'Left') throw classifyLocalDaemonIpcError(outcome.left);
+        const response = outcome.right;
+        if (!response.ok) throw new Error(response.error);
+        if (!('type' in response.result) || response.result.type !== 'session/tool-result')
+          throw new Error('Unexpected Session tool response');
+        return { content: response.result.content, isError: response.result.isError };
+      } catch (error) {
+        return mcpErrorResult(error);
+      }
+    },
+    handlers
+  );
+
+  registerDiscoveryTools(registerSessionTool, async (read) => {
     const ctx = getSessionContext();
     const source = await resolveInvokingTurnSource();
     const auth = getCliAuthContextOrThrow('mcp');
@@ -3570,7 +3641,6 @@ export function buildLodyMcpServer(): McpServer {
           manager,
           auth,
           workspaceId: workspace.id as WorkspaceId,
-          requesterSessionId: ctx.sessionId as SessionId,
           delegatedRequester: { userId: source.userId },
           selectedMcpServerIds: source.inputConfig.mcpServerIds,
         })
@@ -3694,12 +3764,29 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
+  registerIosSimulatorPreviewTool(server, async (command) => {
+    const ctx = getSessionContext();
+    const response = await Effect.runPromise(
+      makeLocalControlClientAuto({ socketPath: ctx.localControlSocketPath }).machineRpc(
+        {
+          method: 'ios-simulator/agent-control',
+          machineId: ctx.machineId,
+          workspaceId: ctx.workspaceId,
+          params: { sessionId: ctx.sessionId, command },
+        },
+        { timeoutMs: SESSION_CONTROL_TIMEOUT_MS }
+      )
+    );
+    if (!response.ok) throw new Error('Simulator control unavailable.');
+    return response.result;
+  });
+
   server.registerTool(
     PREVIEW_TOOL_NAME,
     {
       title: 'Report frontend dev server preview',
       description:
-        "Use this immediately after starting or discovering a frontend/web dev server for the current Lody session. Report the loopback host and port before telling the user the server is ready. On remote-preview-enabled machines, a validated report from the session owner's active agent starts preparing the authenticated remote tunnel in the background. Reporting does not wait for tunnel readiness. Tell the user to click the Browser button in the bar directly above the message input to open the preview.",
+        "Use this immediately after starting or discovering a frontend/web dev server for the current Lody session. Report the loopback host and port before telling the user the server is ready. On remote-preview-enabled machines, a validated report from the session owner's active agent starts preparing the authenticated remote tunnel in the background. Reporting does not wait for tunnel readiness. Tell the user to click the Browser button in the bar directly above the message input to open the preview. For native iOS apps running in an iOS Simulator, use lody_ios_simulator_preview.",
       // Pass the full ZodObject (not `.shape`) so `.strict()` carries through to SDK
       // validation; the MCP SDK runs `safeParseAsync` against this before invoking the
       // handler, so no second `.parse(args)` is needed below.
@@ -3838,7 +3925,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CREATE_OPTIONS_TOOL_NAME,
     {
       title: 'List session create options',
@@ -3855,12 +3942,12 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CREATE_TOOL_NAME,
     {
       title: 'Create a Lody session',
       description:
-        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To use an Agent Role, pass agentRoleId; the current workspace catalog row supplies the exact Machine, Agent config, model, reasoning, and permission mode. If manual machine or run-config fields are also present, the Role takes precedence and those fields are ignored. To recover an already accepted create without resending its prompt, send only operationId with resume=true. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
+        'Start durable asynchronous work that creates a Lody session. Supply operationId; the result arrives automatically as a continuation, so do not poll operation_get. To use an Agent Role, pass agentRoleId; the current workspace catalog row supplies the exact Machine, Agent config, model, reasoning, and permission mode. If manual machine or run-config fields are also present, the Role takes precedence and those fields are ignored. A Role may run on any Machine the owner of this Machine can use; to work in a project there, pass workContext for a local project on that Machine (find it with lody_session_create_options machineId + localProjectQuery). Without workContext a Role on another Machine starts as a plain chat there. To recover an already accepted create without resending its prompt, send only operationId with resume=true. useCurrentSessionAsParent=true and workContext are mutually exclusive schema branches. Machine/config ids and runConfig values for non-Role creates come from lody_session_create_options. The wait field is temporary legacy compatibility only.',
       inputSchema: SessionCreateToolInputSchema,
     },
     async (input) => {
@@ -3949,7 +4036,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CHAT_TOOL_NAME,
     {
       title: 'Send a prompt to a Lody session',
@@ -4014,12 +4101,12 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CREATE_MANY_TOOL_NAME,
     {
       title: 'Create multiple Lody sessions',
       description:
-        'Start one durable batch Operation for 1-20 Session creates. defaults and items shallow-merge; nested objects replace wholesale. Each item may use an agentRoleId from the workspace catalog. When a Role item also includes manual machine, agent config, or run-config fields, the Role takes precedence and those fields are ignored. Non-Role items accept modelId, reasoningEffort, fastMode, and planMode. Ordered item failures are isolated. Completion arrives automatically as one continuation, so do not poll operation_get in a loop.',
+        'Start one durable batch Operation for 1-20 Session creates. defaults and items shallow-merge; nested objects replace wholesale. Each item may use an agentRoleId from the workspace catalog. When a Role item also includes manual machine, agent config, or run-config fields, the Role takes precedence and those fields are ignored. Non-Role items accept modeId, configOptionValues, modelId, reasoningEffort, fastMode, and planMode using target advertised capabilities from lody_session_create_options. Explicit permissions may be broader than the parent; choose only within the user authorization granted to the caller. Ordered item failures are isolated. Completion arrives automatically as one continuation, so do not poll operation_get in a loop.',
       inputSchema: SessionCreateManyToolInputSchema,
     },
     async (input) => {
@@ -4032,7 +4119,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CHAT_MANY_TOOL_NAME,
     {
       title: 'Chat multiple Lody sessions',
@@ -4049,7 +4136,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_CANCEL_TOOL_NAME,
     {
       title: 'Cancel a Lody session turn',
@@ -4061,6 +4148,14 @@ export function buildLodyMcpServer(): McpServer {
         const ctx = getSessionContext();
         const auth = getCliAuthContextOrThrow('mcp');
         await resolveWorkspaceOrThrow(auth, getMcpWorkspaceId(ctx));
+        const environment = getSessionCommandEnvironment();
+        if (environment) {
+          const sessionId = resolveMcpSessionId(args.sessionId, ctx) as SessionId;
+          const session = await readCurrentSessionMeta(environment.manager, sessionId);
+          if (!session || session.machineId !== auth.machineId)
+            throw new Error('Session not found on this machine');
+          return jsonTextResult(await environment.host.cancelSession(sessionId));
+        }
         return jsonTextResult(
           await runLodyCliJson([
             'session',
@@ -4077,7 +4172,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     'lody_operation_list',
     {
       description:
@@ -4107,7 +4202,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     OPERATION_GET_TOOL_NAME,
     {
       title: 'Get a Lody Operation snapshot',
@@ -4127,7 +4222,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     OPERATION_CANCEL_TOOL_NAME,
     {
       title: 'Cancel a Lody Operation',
@@ -4146,13 +4241,16 @@ export function buildLodyMcpServer(): McpServer {
           store.cancel(requesterSessionId, args.operationId)
         );
         if (cancellation.didCancel && before.state === 'active') {
+          const environment = getSessionCommandEnvironment();
           const startedTargets = before.items.filter(
             (item) => item.status === 'active' && item.inputDurable
           );
           await Promise.allSettled(
             startedTargets.map((item) =>
               item.status === 'active'
-                ? runLodyCliJson(buildOperationTargetCancelArgs(getMcpWorkspaceId(ctx), item))
+                ? environment
+                  ? environment.host.cancelSession(item.target.sessionId, item.target.userTurnId)
+                  : runLodyCliJson(buildOperationTargetCancelArgs(getMcpWorkspaceId(ctx), item))
                 : Promise.resolve()
             )
           );
@@ -4166,7 +4264,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_RENAME_TOOL_NAME,
     {
       title: 'Rename a Lody session',
@@ -4189,7 +4287,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_RENAME_MANY_TOOL_NAME,
     {
       title: 'Rename multiple Lody sessions',
@@ -4239,7 +4337,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_LIST_TOOL_NAME,
     {
       title: 'List Lody sessions',
@@ -4256,7 +4354,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_STATUS_MANY_TOOL_NAME,
     {
       title: 'Get Lody session statuses',
@@ -4273,7 +4371,7 @@ export function buildLodyMcpServer(): McpServer {
     }
   );
 
-  server.registerTool(
+  registerSessionTool(
     SESSION_HISTORY_TOOL_NAME,
     {
       title: 'Read Lody session history',

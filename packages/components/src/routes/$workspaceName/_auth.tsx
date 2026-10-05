@@ -1,4 +1,5 @@
-import { createFileRoute, Navigate, Outlet, useLocation } from '@tanstack/react-router';
+import { createFileRoute, Outlet } from '@tanstack/react-router';
+import { BootNavigate } from '@/components/boot-navigate';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useOrganization } from '@/hooks/useOrganization';
@@ -28,13 +29,10 @@ import {
 import { identifyPostHogUser } from '@/lib/posthog-identity';
 import { scheduleOneSignalTask } from '@/lib/onesignal';
 import { PreloadedMainLayout } from '@/components/preloaded-main-layout';
-import { RouteSuspense } from '@/components/route-suspense';
 import { RouteMessage } from '@/components/route-message';
 import { LoadingPlaceholder } from '@/components/loading-placeholder';
-import { BootShell } from '@/components/boot-shell';
 import { useVisibleMachineMetas } from '@/hooks/use-visible-machine-metas';
 import { useFireOncePerKey } from '@/hooks/use-fire-once';
-import { writeLastAppRoutePath } from '@/lib/last-app-route';
 import { type LodyLiveActivityBridge, useLodyLiveActivity } from '@/hooks/use-lody-live-activity';
 import { isNativeIOSAppShell } from '@/lib/native-platform';
 import { isLocalAppPlatform } from '@/lib/app-platform';
@@ -79,14 +77,9 @@ function LocalPlatformLayoutContent({ workspaceName }: { workspaceName: string }
       {/* Same dock-badge / live-activity wiring as the cloud layout. */}
       <LodyLiveActivityHost workspaceName={workspaceName} />
       <WorkspaceSyncStuckReporter />
-      {/* The boot shell holds the window's first frame until the layout chunk
-          arrives, on every route: an empty fallback would blank the window
-          between the static frame and the layout. */}
-      <RouteSuspense fallback={<BootShell />}>
-        <PreloadedMainLayout>
-          <AuthenticatedWorkspaceContent />
-        </PreloadedMainLayout>
-      </RouteSuspense>
+      <PreloadedMainLayout>
+        <AuthenticatedWorkspaceContent />
+      </PreloadedMainLayout>
     </>
   );
 }
@@ -277,7 +270,7 @@ function CloudMainLayoutComponent({ workspaceName }: { workspaceName: string }) 
 
   if (confirmedUnauthenticated) {
     const currentPath = getAppCurrentPathWithSearch();
-    return <Navigate to="/login" search={{ redirect: currentPath }} replace />;
+    return <BootNavigate to="/login" search={{ redirect: currentPath }} replace />;
   }
 
   if (hasLocalToken) {
@@ -315,7 +308,7 @@ function CloudMainLayoutComponent({ workspaceName }: { workspaceName: string }) 
 
   if (!session?.user) {
     const currentPath = getAppCurrentPathWithSearch();
-    return <Navigate to="/login" search={{ redirect: currentPath }} replace />;
+    return <BootNavigate to="/login" search={{ redirect: currentPath }} replace />;
   }
 
   return <AuthedLayoutContent hasLocalToken={false} workspaceName={workspaceName} />;
@@ -382,29 +375,25 @@ function AuthedLayoutRoutes({
 
   if (hasLocalToken) {
     if (orgSettled && organizations !== undefined && organizations.length === 0) {
-      return <Navigate to="/workspace/create" replace />;
+      return <BootNavigate to="/workspace/create" replace />;
     }
 
     if (!currentWorkspaceId) {
       return (
-        <RouteSuspense>
-          <PreloadedMainLayout workspaceReady={false}>
-            <LoadingPlaceholder
-              variant="content"
-              title={t('workspace.route.switchingTitle')}
-              description={t('workspace.route.switchingDescription')}
-            />
-          </PreloadedMainLayout>
-        </RouteSuspense>
+        <PreloadedMainLayout workspaceReady={false}>
+          <LoadingPlaceholder
+            variant="content"
+            title={t('workspace.route.switchingTitle')}
+            description={t('workspace.route.switchingDescription')}
+          />
+        </PreloadedMainLayout>
       );
     }
 
     return (
-      <RouteSuspense>
-        <PreloadedMainLayout>
-          <AuthenticatedWorkspaceContent showWorkspaceCheckout />
-        </PreloadedMainLayout>
-      </RouteSuspense>
+      <PreloadedMainLayout>
+        <AuthenticatedWorkspaceContent showWorkspaceCheckout />
+      </PreloadedMainLayout>
     );
   }
 
@@ -455,7 +444,7 @@ function AuthedLayoutRoutes({
   }
 
   if (organizations.length === 0) {
-    return <Navigate to="/workspace/create" replace />;
+    return <BootNavigate to="/workspace/create" replace />;
   }
 
   if (!user || !currentWorkspaceId) {
@@ -469,11 +458,9 @@ function AuthedLayoutRoutes({
   }
 
   return (
-    <RouteSuspense>
-      <PreloadedMainLayout>
-        <AuthenticatedWorkspaceContent showWorkspaceCheckout />
-      </PreloadedMainLayout>
-    </RouteSuspense>
+    <PreloadedMainLayout>
+      <AuthenticatedWorkspaceContent showWorkspaceCheckout />
+    </PreloadedMainLayout>
   );
 }
 
@@ -484,7 +471,6 @@ function AuthenticatedWorkspaceContent({
 }) {
   return (
     <>
-      <AuthedWorkspaceRouteTracker />
       <Outlet />
       <ElectronSessionCompletionNotifier />
       <ElectronMenuHandler />
@@ -494,40 +480,4 @@ function AuthenticatedWorkspaceContent({
       {showWorkspaceCheckout && <WorkspaceCheckoutPendingDialog />}
     </>
   );
-}
-
-function AuthedWorkspaceRouteTracker() {
-  const location = useLocation();
-  const routeHref = location.href;
-  const routeHrefRef = useRef(routeHref);
-  routeHrefRef.current = routeHref;
-
-  useEffect(() => {
-    writeLastAppRoutePath(routeHref);
-  }, [routeHref]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || typeof document === 'undefined') {
-      return undefined;
-    }
-
-    const persistCurrentRoute = () => {
-      writeLastAppRoutePath(routeHrefRef.current);
-    };
-    const persistWhenHidden = () => {
-      if (document.visibilityState === 'hidden') {
-        persistCurrentRoute();
-      }
-    };
-
-    window.addEventListener('pagehide', persistCurrentRoute);
-    document.addEventListener('visibilitychange', persistWhenHidden);
-
-    return () => {
-      window.removeEventListener('pagehide', persistCurrentRoute);
-      document.removeEventListener('visibilitychange', persistWhenHidden);
-    };
-  }, []);
-
-  return null;
 }

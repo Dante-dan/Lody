@@ -5,11 +5,15 @@ import { usePostHog } from '@posthog/react';
 import { Monitor, Moon, SquareTerminal, Sun } from 'lucide-react';
 import * as stylex from '@stylexjs/stylex';
 import { colors } from '@lody/ui/tokens/colors.stylex';
-import { corner, radius, space } from '@lody/ui/tokens/scales.stylex';
+import { corner, radius, space, text } from '@lody/ui/tokens/scales.stylex';
 
 import {
   conversationFontSizeAtom,
+  DEFAULT_CONVERSATION_FONT_SIZE,
+  conversationWideModeAtom,
+  extendedCodeLanguagesEnabledAtom,
   fontLigaturesEnabledAtom,
+  inlineMathEnabledAtom,
   interfaceFontFamilyAtom,
   normalizeConversationFontSize,
   normalizeTerminalFontSize,
@@ -44,6 +48,12 @@ export interface AppearanceSettingsViewProps {
   onThemeCancel: () => void;
   conversationFontSize: ConversationFontSize;
   onConversationFontSizeChange: (value: ConversationFontSize) => void;
+  conversationWideMode: boolean;
+  onConversationWideModeChange: (value: boolean) => void;
+  inlineMathEnabled: boolean;
+  onInlineMathEnabledChange: (value: boolean) => void;
+  extendedCodeLanguagesEnabled: boolean;
+  onExtendedCodeLanguagesEnabledChange: (value: boolean) => void;
   isElectron: boolean;
   interfaceFontFamily: string;
   onInterfaceFontFamilyChange: (value: string) => void;
@@ -115,7 +125,8 @@ const styles = stylex.create({
     height: '24px',
     paddingInline: space[3],
     backgroundColor: 'color-mix(in oklab, var(--terminal-background), black 10%)',
-    fontSize: '10px',
+    fontSize: text.captionSize,
+    lineHeight: text.captionLeading,
     color: 'color-mix(in oklab, var(--terminal-foreground) 60%, transparent)',
   },
   terminalBarIcon: { width: '12px', height: '12px', flexShrink: 0 },
@@ -216,6 +227,12 @@ export function AppearanceSettingsView({
   onThemeCancel,
   conversationFontSize,
   onConversationFontSizeChange,
+  conversationWideMode,
+  onConversationWideModeChange,
+  inlineMathEnabled,
+  onInlineMathEnabledChange,
+  extendedCodeLanguagesEnabled,
+  onExtendedCodeLanguagesEnabledChange,
   isElectron,
   interfaceFontFamily,
   onInterfaceFontFamilyChange,
@@ -357,6 +374,42 @@ export function AppearanceSettingsView({
           </div>
         </CompactRow>
         <CompactRow
+          label={t('settings.conversationWideMode.label', 'Full width')}
+          helper={t(
+            'settings.conversationWideMode.helper',
+            'Let the conversation column span the window instead of capping it.'
+          )}
+        >
+          <Switch
+            checked={conversationWideMode}
+            onCheckedChange={onConversationWideModeChange}
+            aria-label={t('settings.conversationWideMode.label', 'Full width')}
+          />
+        </CompactRow>
+        <CompactRow
+          label={t('settings.inlineMath.label', 'Render inline math')}
+          helper={t('settings.inlineMath.helper', 'Typeset $...$ and \\(...\\) in Markdown.')}
+        >
+          <Switch
+            checked={inlineMathEnabled}
+            onCheckedChange={onInlineMathEnabledChange}
+            aria-label={t('settings.inlineMath.label', 'Render inline math')}
+          />
+        </CompactRow>
+        <CompactRow
+          label={t('settings.extendedCodeLanguages.label', 'Extended code languages')}
+          helper={t(
+            'settings.extendedCodeLanguages.helper',
+            'Adds more syntax grammars, including Lean and Rocq. Each grammar loads when first used and can slow that render.'
+          )}
+        >
+          <Switch
+            checked={extendedCodeLanguagesEnabled}
+            onCheckedChange={onExtendedCodeLanguagesEnabledChange}
+            aria-label={t('settings.extendedCodeLanguages.label', 'Extended code languages')}
+          />
+        </CompactRow>
+        <CompactRow
           label={t('settings.fontLigatures.label', 'Font ligatures')}
           helper={t(
             'settings.fontLigatures.helper',
@@ -429,7 +482,7 @@ export function AppearanceSettingsView({
                 styles.terminalLine,
                 styles.terminalFace(
                   buildTerminalFontPreviewFamily(terminalFontFamily),
-                  `${terminalFontSize}px`
+                  `${(terminalFontSize * conversationFontSize) / DEFAULT_CONVERSATION_FONT_SIZE}px`
                 )
               )}
             >
@@ -450,6 +503,11 @@ export function AppearanceSettingsView({
 function DesktopAppearanceSettings() {
   const { theme, setTheme, previewTheme } = useTheme();
   const [conversationFontSize, setConversationFontSize] = useAtom(conversationFontSizeAtom);
+  const [conversationWideMode, setConversationWideMode] = useAtom(conversationWideModeAtom);
+  const [inlineMathEnabled, setInlineMathEnabled] = useAtom(inlineMathEnabledAtom);
+  const [extendedCodeLanguagesEnabled, setExtendedCodeLanguagesEnabled] = useAtom(
+    extendedCodeLanguagesEnabledAtom
+  );
   const [interfaceFontFamily, setInterfaceFontFamily] = useAtom(interfaceFontFamilyAtom);
   const [terminalFontFamily, setTerminalFontFamily] = useAtom(terminalFontFamilyAtom);
   const [terminalFontSize, setTerminalFontSize] = useAtom(terminalFontSizeAtom);
@@ -514,6 +572,12 @@ function DesktopAppearanceSettings() {
       onThemeCancel={handleThemeCancel}
       conversationFontSize={conversationFontSize}
       onConversationFontSizeChange={handleConversationFontSizeChange}
+      conversationWideMode={conversationWideMode}
+      onConversationWideModeChange={setConversationWideMode}
+      inlineMathEnabled={inlineMathEnabled}
+      onInlineMathEnabledChange={setInlineMathEnabled}
+      extendedCodeLanguagesEnabled={extendedCodeLanguagesEnabled}
+      onExtendedCodeLanguagesEnabledChange={setExtendedCodeLanguagesEnabled}
       isElectron={isElectron}
       interfaceFontFamily={interfaceFontFamily}
       onInterfaceFontFamilyChange={setInterfaceFontFamily}

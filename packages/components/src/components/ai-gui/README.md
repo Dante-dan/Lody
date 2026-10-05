@@ -12,13 +12,15 @@ the reasoning behind those rules.
 
 ## Ownership
 
-| Area                    | Owner                                            | Contract                                                                          |
-| ----------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------- |
-| Stream                  | `view.tsx`, `build-chat-stream-items.ts`         | Stable Virtua rows and scroll.                                                    |
-| User rows               | `view.tsx`                                       | Multi-member sender metadata and desktop profile.                                 |
-| Turns                   | `assistant-turn-render-blocks.ts`                | Activity groups and foldable segments.                                            |
-| Outline                 | `conversation-outline-*`                         | Round ticks and navigation.                                                       |
-| Image sharing selection | [`message-selection.tsx`](message-selection.tsx) | Temporary message selection, drag rectangle, range modifiers, and edge scrolling. |
+| Area                    | Owner                                                                                             | Contract                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| Stream                  | `view.tsx`, `build-chat-stream-items.ts`                                                          | Stable Virtua rows and scroll.                                                          |
+| User rows               | `view.tsx`                                                                                        | Multi-member sender metadata and desktop profile.                                       |
+| Turns                   | `assistant-turn-render-blocks.ts`                                                                 | Activity groups and foldable segments.                                                  |
+| Outline                 | `conversation-outline-*`                                                                          | Round ticks and navigation.                                                             |
+| Image sharing selection | [`message-selection.tsx`](message-selection.tsx)                                                  | Temporary message selection, drag rectangle, range modifiers, and edge scrolling.       |
+| Typography              | [`conversation-font-size-classes.ts`](conversation-font-size-classes.ts), `markdown-renderer.tsx` | Shared text roles; explicit preview size and compact tool prose without nested scaling. |
+| Spacing and surfaces    | [`conversation.tokens.stylex.ts`](conversation.tokens.stylex.ts), [`surface.ts`](surface.ts)      | Themeable conversation anatomy, activity rows and user bubbles.                         |
 
 - `conversation-outline-rail.tsx` renders one tick per round (a user turn plus its
   work) and a hover preview; `conversation-outline-arrival-intent.ts` decides when
@@ -27,6 +29,8 @@ the reasoning behind those rules.
   streaming turn with `@lobehub/streamdown`. Its dependency patch reveals text
   already present at mount so switching back to a live Session does not replay
   the stream fade ([note](../../../../../.agents/notes/implemented/bug-fix/2026-09-26-streamdown-remount-animation.md)).
+  Conversation paragraphs use start alignment during and after streaming; see
+  [conversation Markdown alignment](../../../../../specs/conversation-markdown-alignment.md).
   `markdown-code-block.tsx` owns fenced
   blocks, wrap, and Markdown-fence preview (`markdown-code-highlight.ts` the Shiki
   tokens); `markdown-diff-block.tsx` is the inline diff; `markdown-mermaid-block.tsx`
@@ -35,6 +39,10 @@ the reasoning behind those rules.
   pure zoom/pan geometry, and `mermaid-diagram-viewer.tsx` the full-screen
   surface. Invariants live in
   [mermaid-diagram-rendering.md](mermaid-diagram-rendering.md).
+- A `[Title](session://<id>)` link (the form session mentions reach the agent in)
+  renders as a conversation chip. `session-link-context.tsx` supplies the Session
+  navigation from `SessionChatInterface`; without it, or on a read-only share, the
+  chip is inert.
 - `message-content-guards.ts` gates which shared `MessageContent` variants render.
 - `markdown-file-image.tsx` binds live file Markdown to its owning provider. Local
   resources load automatically; remote file images show a one-line recessed slot
@@ -46,8 +54,12 @@ the reasoning behind those rules.
   in [agent-notices.md](agent-notices.md). `chat-failed-detail-dialog.tsx` is the
   retired modal, no longer reached from the conversation.
   `terminal-component.tsx` / `terminal-preview.ts` own terminal output;
-  `tool-call-detail.tsx` is an expanded tool step's sheet and
-  `tool-call-command.ts` the command it shows.
+  `tool-call-detail.tsx` is an expanded tool step's sheet.
+  `tool-call-command.ts` formats its command and suppresses text echoes whose
+  visible command matches it, including echoes with Markdown-linked paths;
+  result text remains in the sheet. The
+  [linked-echo fix](../../../../../.agents/notes/implemented/bug-fix/2026-09-29-linked-tool-command-echo.md)
+  records the matching boundary.
 - `conversation-outline-rail.tsx`, `conversation-outline-rail-geometry.ts`, and
   `conversation-outline-arrival-intent.ts` own the reader-position rail.
   Invariants live in [conversation-outline.md](conversation-outline.md).
@@ -55,7 +67,48 @@ the reasoning behind those rules.
   [session-files-rendering.md](session-files-rendering.md) own attachment and
   image-preview rendering.
 
+## Spacing and themes
+
+Conversation spacing and colours use the semantic `conversation` StyleX variable
+group, derived from `@lody/ui` space, radius and colour tokens or the active VS Code
+palette. `surface.ts` owns shared row and bubble styles; the Markdown renderer and
+code block own their element styles. A host can apply `createTheme(conversation, …)`
+to a subtree to change these values without descendant utility overrides.
+
+Activity thought prose uses compact Markdown at the same subheadline size and
+leading as its summary and tool rows, in the parent conversation and task dialog.
+Reading prose and user text use `readingLeading`, derived from the body role
+at 1.2 times its leading (24px at 14px). Compact tool prose and code retain their
+control leading. Explicit previews scale the reading token with their own size.
+Spacing follows the active interface leading through semantic `responseGap`,
+`roundGap`, `activityPitch`, `proseGap`, `paragraphGap`, `surfaceGap` and `listItemGap` tokens.
+Progress prose and activity summaries keep the prose gap inside expanded work;
+individual tool details keep their compact pitch.
+The user row reserves the response gap for its actions. The first assistant row
+adds no top gap; its last row reserves the next-round boundary only before a user
+turn. Footer actions and the next user's metadata share that reserve; larger
+footer content grows naturally. User text retains authored whitespace and the
+existing reading rail. The [rhythm Spec](../../../../../specs/conversation-rhythm.md)
+owns formulas and size examples; [the decision](../../../../../.agents/notes/implemented/simplification/2026-10-03-conversation-rhythm-stylex.md)
+records evidence and retained CSS boundaries.
+
 ## Coverage
+
+`InterfaceTypography.stories.tsx` composes real settings and surfaces;
+`tests/e2e/interface-typography.spec.ts` checks computed type metrics, portals,
+five-tier persistence, legacy preferences, themes and narrow desktop layout.
+See the [global scale decision](../../../../../.agents/notes/implemented/simplification/2026-10-03-interface-typography.md)
+for scope and retained exceptions.
+`AssistantTurnAlignment.ConversationRhythm` renders a synthetic two-round conversation;
+`ConversationRhythmTheme` applies a scoped StyleX theme to the same components.
+`ConversationRhythmReading` and its streaming variant add continuous mixed-script
+paragraphs to verify real wrapped-line pitch and compare reading density.
+`ConversationRhythmProgress` and its streaming variant interleave long progress
+paragraphs with tool summaries to check separation inside and outside folded work.
+The no-footer and edited-files variants exercise boundary reserves without a
+footer and with taller footer content. The typography browser suite checks all
+five interface sizes, measured activity/turn spacing, preserved
+user blank lines, keyboard access to actions, list pitch, folding, and token overrides.
 
 `tests/build-chat-stream-items.test.ts`, `tests/conversation-outline*.test.ts`,
 `tests/user-message-sender-identity.test.tsx`, the `ExtremeConversation` story,
@@ -128,9 +181,20 @@ second line with its latest step, taken from the last `run.items` entry, then
 `run.progress`, then the legacy `summary`/`lastToolName`, so older tasks keep
 working. A row opens the panel's ONE dialog by task id (not a snapshot), so a
 streaming run keeps updating inside it and the view follows the end only while
-the reader is there. The dialog renders `run.items` through `view.tsx`'s turn
-renderers (`SubagentRunHistory`) and never passes a `searchBlockId`: search
-indexes the conversation, not a dialog.
+the reader is there. `subagent-run-history.tsx` groups `run.items` with the conversation's
+`buildAssistantTurnRenderBlocks`; `view.tsx` supplies the same activity headers,
+Markdown, plans and tool detail renderers used by the parent turn. Activity groups
+start open and can be folded without hiding the surrounding prose; their state
+survives streamed updates. File links use the parent session's file-open callback.
+No `searchBlockId` is passed: search indexes the conversation, not a dialog.
+
+`subagent-task-state.tsx` owns task aggregation and display-state helpers;
+`subagent-task-panel.tsx` owns rows and the selected task;
+`subagent-task-detail.tsx` owns the dialog body and cancellation. Panel, detail and
+run-history styles each live in their adjacent `.stylex.ts` file and use shared
+conversation spacing and UI text tokens. Background command briefs use the same
+`ToolCommandSection` and `ToolDetailSheet` as tool steps, including shell highlighting
+and conversation font sizing. The brief and activity share one vertical scroller.
 
 State comes from `run.snapshot.state` when present; the legacy `status` cannot
 say cancelled or unknown. `unknown` means Lody lost sight of the run, so the

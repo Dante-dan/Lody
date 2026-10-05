@@ -32,7 +32,9 @@ subdirectory; this file is the navigation index. Cross-module explanations live 
   `runBridgeTransition`.
 - `machine-lifecycle.ts` — remote lifecycle verification and upgrade intents; runs the
   fixed npm install through `cross-spawn` so Windows `npm.cmd` shims use the command
-  interpreter. `../commands/daemon-runner.ts` owns restart and upgrade handoff.
+  interpreter. It resolves the installed package through that npm's global root
+  and verifies its entry/version. `../commands/daemon-runner.ts` owns restart and
+  handoff to that explicit entry, including matching-version readiness.
 - `cloud-cli-port.ts` — the sole official-build composition root for cloud clients,
   endpoint-derived adapters, and their lifecycle. `start.ts` validates
   identity/deployment configuration once and injects the resulting `CloudPort` through
@@ -62,7 +64,8 @@ subdirectory; this file is the navigation index. Cross-module explanations live 
 ## Projects and providers
 
 - `local-project-history-sync-service.ts` / `local-project-history-precheck.ts` —
-  builtin Codex local-project history import.
+  Provider-bound local-project ACP history catalogs, import and refresh. Catalogs
+  separate configurations; legacy transcript identifiers remain stable.
 - `local-project-removal.ts` — local project deletion, session archiving, and optional
   Lody-created worktree cleanup.
 - `provider-setup-manager.ts` — durable builtin provider setup; managed runtimes are installed before verification, while user-installed Bub is only published after a successful live probe.

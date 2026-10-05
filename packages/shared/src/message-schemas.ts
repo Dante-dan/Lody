@@ -86,6 +86,7 @@ export const BuiltinRuntimeOverridesSchema = z
     claudeCodeExecutable: z.string().optional(),
     kimiPath: z.string().optional(),
     grokPath: z.string().optional(),
+    devinPath: z.string().optional(),
     piExtensions: z
       .array(z.string().trim().min(1).max(PI_EXTENSION_PATH_MAX_LENGTH))
       .max(PI_EXTENSIONS_MAX_SELECTIONS)
@@ -2252,8 +2253,9 @@ export const LocalProjectSetWorktreeCleanupRequestSchema = z
   })
   .strict();
 
-const LocalProjectHistoryProviderSchema = z
+export const LocalProjectHistoryProviderSchema = z
   .object({
+    agentConfigId: AgentConfigIdSchema.refine((id) => id.trim().length > 0).optional(),
     cliType: AgentConfigCliTypeSchema,
     agentType: z.string().trim().min(1),
   })

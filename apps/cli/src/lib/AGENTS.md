@@ -11,11 +11,10 @@ end-to-end map. The WS/DO control-plane path is DEPRECATED; do not add to it.
 
 ## Composition and transports
 
-- GitHub command auth lives in `github-credential-runtime.ts`: explicit personal
-  preference first, owner-only local credentials next, repo-scoped App last.
-  `github-git-transport.ts` also intercepts HTTPS headers and SSH remotes. Never
-  inject a startup-repo token globally, persist managed tokens through helpers,
-  or replay an uncertain write. Each helper captures one session context token.
+- GitHub auth: conversation-owner personal → matching-owner machine → repo App,
+  once per source. Failures advance without a policy RPC; local context grants
+  machine eligibility. Never persist managed tokens or replay uncertain writes.
+  Checkout/LFS share the pinned helper context. Contract: [identity fallback](../../../../specs/github-identity-fallback.md).
 
 - `cloud-cli-port.ts` is the sole official-build composition root for cloud clients and
   endpoint-derived adapters. Daemon runtime modules must not construct cloud SDK
@@ -96,12 +95,12 @@ never pushed to renderers as local room health.
   Bind the baseline to the doc cursor, not metadata; compare existing content exactly,
   never sanitize it to hide edits. Write history and capture its baseline without an
   async gap, before publishing meta. Legacy history without a baseline is not migrated.
-- History import lists and imports through the machine's only same-type Provider
-  (`agentConfigId`), binding new imports and earlier unbound ones it lists; with none
-  or several they stay unbound. Never replace a binding. Refresh loads an existing
-  import through its own binding, else the default launch, exactly as continuation does.
-  Every import write also records the load-reported selection as the runtime config of
-  the last imported user turn through `applyAcpRuntimeConfigPatch`.
+- History import validates the selected Provider machine/id/type; never fall back
+  from a missing selection. Legacy requests use the sole same-type Provider. Catalogs
+  are Provider-scoped; replay/import keys stay stable. Bind an earlier unbound import only when the selected Provider
+  lists its source; never replace a binding or merge another account's native ID.
+  Refresh loads through the import's own binding. Every import write records the
+  load-reported selection on the last imported user turn via `applyAcpRuntimeConfigPatch`.
 - Removing a local project archives every unarchived Session for that machine/project
   before deleting the project row, found through the existence and metadata indexes
   rather than by opening every Session document; a failed archive keeps the delete

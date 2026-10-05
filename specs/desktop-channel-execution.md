@@ -47,11 +47,18 @@ links from a complete Nightly manifest. Missing or invalid metadata MUST NOT pro
 Stable fallback links or guessed aliases. The manifest and download page MUST identify
 the verified minimum Stable version; this floor requires packaged compatibility evidence,
 not just a version comparison.
+Nightly manifest versions MUST accept the first release in a cycle, `-nightly.0`,
+as well as later non-negative integer sequences without leading zeros.
 
 About, copied crash reports and submitted bug reports MUST identify the reporting
 desktop's channel, version and both source revisions when injected by its distribution
 composition. Build metadata MUST remain distinct from a remote machine's logs and
 MUST NOT expand into ambient environment, account or filesystem collection.
+
+The page MAY also display Android APK downloads when both manifest lists name the
+same immutable APK for that Nightly version. Desktop-only manifests remain valid
+during rollout; the page MUST NOT guess an Android URL or substitute Stable.
+Desktop process-switching guidance MUST be labeled as desktop-only.
 
 ## Evidence and limits
 
