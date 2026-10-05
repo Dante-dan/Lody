@@ -71,3 +71,15 @@ conversation handoffs are outside this first slice.
 - [Codex app-server protocol](https://github.com/openai/codex/tree/main/codex-rs/app-server): experimental native interface.
 - Inspected Lody adapter has native JSON-RPC/authentication and generated realtime notifications, but no realtime start client method or host/composer capability.
 - This draft describes proposed behavior. No microphone, native realtime, or desktop UX validation has been completed.
+
+## Pinned schema validation
+
+Ran bundled Codex 0.159.2 `app-server generate-json-schema --experimental`
+with an empty isolated CODEX_HOME, without login, microphone, or model requests.
+The schema confirms required `threadId` and `outputModality`, v3, WebRTC SDP,
+`prompt`, `includeStartupContext: false`, and `clientManagedHandoffs`. The start
+response is empty; SDP answers arrive as separate notifications. This validates
+shape only, not account access or event behavior. The voice thread must also
+isolate its working directory, omit startup context, and deny any tool/coding
+execution; a silent prompt or clientManagedHandoffs is not an enforced boundary
+against the model starting execution.

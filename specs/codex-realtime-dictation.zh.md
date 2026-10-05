@@ -56,3 +56,13 @@ flowchart LR
 - [Codex app-server 协议](https://github.com/openai/codex/tree/main/codex-rs/app-server)：实验性原生接口。
 - 已检查 Lody 适配器具备原生 JSON-RPC、登录和实时通知类型，但没有实时启动客户端方法或宿主/输入框能力。
 - 本文为行为提案，尚未验证麦克风、原生实时协议或桌面体验。
+
+## 固定版本结构验证
+
+已运行内置 Codex 0.159.2 的 `app-server generate-json-schema --experimental`，
+使用空隔离 CODEX_HOME，无登录、麦克风或模型请求。生成结构确认启动请求需要
+`threadId` 和 `outputModality`，支持 v3、WebRTC SDP、`prompt`、
+`includeStartupContext: false` 和 `clientManagedHandoffs`。启动响应为空对象，
+SDP answer 通过独立通知返回。此结果只验证结构，不证明账户权限或事件行为。
+语音线程还需隔离工作目录、禁用 startup context，并拒绝任何工具/代码执行；
+不能把静默 prompt 或 clientManagedHandoffs 当成禁止模型启动执行的强制边界。

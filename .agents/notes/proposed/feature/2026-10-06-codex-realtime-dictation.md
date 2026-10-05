@@ -60,3 +60,15 @@ requires no claimed human approval and does not satisfy implementation acceptanc
 - `packages/acp-extension-codex/src/CodexAppServerClient.ts`
 - `packages/acp-extension-codex/src/CodexJsonRpcConnection.ts`
 - `packages/acp-extension-core/src/methods.ts`
+
+## Pinned schema validation
+
+Ran bundled Codex 0.159.2 `app-server generate-json-schema --experimental`
+with an empty isolated CODEX_HOME, without login, microphone, or model requests.
+The schema confirms required `threadId` and `outputModality`, v3, WebRTC SDP,
+`prompt`, `includeStartupContext: false`, and `clientManagedHandoffs`. The start
+response is empty; SDP answers arrive as separate notifications. This validates
+shape only, not account access or event behavior. The voice thread must also
+isolate its working directory, omit startup context, and deny any tool/coding
+execution; a silent prompt or clientManagedHandoffs is not an enforced boundary
+against the model starting execution.

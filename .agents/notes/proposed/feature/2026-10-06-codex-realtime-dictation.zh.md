@@ -46,3 +46,13 @@ Lody 没有语音输入，#1263 作者报告内置 Codex 支持订阅登录的 W
 - `packages/acp-extension-codex/src/CodexAppServerClient.ts`
 - `packages/acp-extension-codex/src/CodexJsonRpcConnection.ts`
 - `packages/acp-extension-core/src/methods.ts`
+
+## 固定版本结构验证
+
+已运行内置 Codex 0.159.2 的 `app-server generate-json-schema --experimental`，
+使用空隔离 CODEX_HOME，无登录、麦克风或模型请求。生成结构确认启动请求需要
+`threadId` 和 `outputModality`，支持 v3、WebRTC SDP、`prompt`、
+`includeStartupContext: false` 和 `clientManagedHandoffs`。启动响应为空对象，
+SDP answer 通过独立通知返回。此结果只验证结构，不证明账户权限或事件行为。
+语音线程还需隔离工作目录、禁用 startup context，并拒绝任何工具/代码执行；
+不能把静默 prompt 或 clientManagedHandoffs 当成禁止模型启动执行的强制边界。
