@@ -38,8 +38,8 @@ Child directories (`sessions/`, `mobile/`, …) own their own rules.
   `SidebarGroupActivityMark`, no counts ([why](../../../../.agents/notes/implemented/feature/2026-09-26-sidebar-folded-group-status.md)).
 - Never hide a Session through nesting: missing, cross-section, cross-group, cycling,
   or deeper-than-one-level openers render top-level. `MAX_VISIBLE_SESSIONS` /
-  `SHOW_FULL_BUCKET_THRESHOLD` count top-level rows. Every list passes `rootRank` for
-  latest-activity sorting; rank an opener by its freshest opened Session.
+  `SHOW_FULL_BUCKET_THRESHOLD` count roots. Lists pass `rootRank`: latest activity
+  for unpinned groups; latest pin transition for pinned groups.
 - Collapse state uses `sidebarCollapsedOpenedBySessionsAtom`, default expanded. Keep
   both navigation directions reachable through the tree, every sidebar row's "Go to
   Opener Session", `SessionHeaderMenu.openedByRelations`, and conversation cards for

@@ -21,8 +21,9 @@ The public desktop pin action writes the transition timestamp through its existi
 metadata writer. Metadata caches and chat, GitHub, and local-project row projections
 carry the rank into both flat sorting and opened-by group ranking. Group rank uses
 the freshest pin transition, so messages in an opened conversation cannot reorder
-pinned groups. Mobile, manual drag ordering, and private client implementation
-remain outside this patch.
+pinned groups. Shared mobile row projections and `groupChats` use the same pin
+comparison and group rank. Native iOS Inbox implementation and manual drag
+ordering remain outside this public patch.
 Wall-clock skew can affect a new pin's relative rank; this proposal deliberately
 avoids claiming a total causal order across offline peers. Human approval of this
 revision remains pending.

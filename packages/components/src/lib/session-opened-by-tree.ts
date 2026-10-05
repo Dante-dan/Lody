@@ -98,7 +98,7 @@ export function pinnedFirstRootRank(latestMessageAtMs: number, isPinned?: boolea
   return isPinned ? PINNED_ROOT_RANK_OFFSET + latestMessageAtMs : latestMessageAtMs;
 }
 
-/** Desktop pins rank their opener group by pin transitions, never activity. */
+/** Durable pins rank their opener group by pin transitions, never activity. */
 export function durablePinnedRootRank(
   latestMessageAtMs: number,
   isPinned?: boolean,

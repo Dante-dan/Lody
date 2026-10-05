@@ -483,9 +483,8 @@ export function MobileChatListCard({
       buildOpenedBySessionTree(chats, {
         ...CHAT_OPENED_BY_TREE_ACCESSORS,
         isCollapsed: (openerId) => collapsedOpeners[openerId] === true,
-        /* Bucket order is pinned-first then latest activity; rank an opener by
-           its freshest opened Session so nesting cannot bury a just-updated
-           row under a stale opener. */
+        /* Pin transitions rank pinned groups; unpinned groups retain latest
+           activity so nesting cannot bury a just-updated row under a stale opener. */
         rootRank: (chat) =>
           durablePinnedRootRank(chat.latestMessageAt ?? 0, chat.isPinned, chat.pinnedAt),
         ...(capped ? { maxRoots: MOBILE_CHAT_PREVIEW_MAX_ROOTS } : {}),
