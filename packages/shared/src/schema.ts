@@ -998,6 +998,8 @@ export type SessionMeta = {
   origin?: 'lody' | 'external-acp';
   /** When true, this session is pinned to the top of the sidebar list. */
   isPinned?: boolean;
+  /** Epoch milliseconds of the last unpinned-to-pinned transition; absent on legacy pins. */
+  pinnedAt?: number;
   cliType: AgentConfigCliType;
   agentType: AgentType;
   /** Backend selected when this session was created. Missing means legacy Loro. */

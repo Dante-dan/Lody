@@ -1,0 +1,30 @@
+# Durable session pin ordering
+
+Status: draft
+Translation: current
+
+[中文](session-pin-order.zh.md)
+
+A user pins two conversations and expects their order to survive new messages and
+client restarts. The proposed shared contract adds optional `SessionMeta.pinnedAt`
+(epoch milliseconds) alongside `isPinned`. New pin transitions record the caller's
+clock; repeating a pin request preserves its rank. Unpinning preserves metadata,
+but repinning records a fresh timestamp.
+
+Pinned rows compare newest pin first, with session id breaking equal timestamps.
+Legacy pins lacking a valid timestamp follow timestamped pins, ordered by id.
+Opening a document never migrates legacy pins. Ordinary unpinned rows retain their
+existing message-activity ordering. Mixed older clients may still use message
+activity and do not acquire this guarantee until their consumers are adapted.
+
+This is a reference contract, not a completed sidebar feature. Consumer adapters,
+manual drag ordering, and private client implementation are outside this patch.
+Wall-clock skew can affect a new pin's relative rank; this proposal deliberately
+avoids claiming a total causal order across offline peers. Human approval of this
+revision remains pending.
+
+## Evidence
+
+- [Request and consumers](https://github.com/LodyAI/Lody/issues/782).
+- [Reference transitions and comparison](../packages/shared/src/session-pin.ts).
+- [Behavior checks](../packages/shared/tests/session-pin.test.ts).

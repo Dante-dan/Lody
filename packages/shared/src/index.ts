@@ -492,3 +492,4 @@ export * from './schedule-control';
 export * from './codex-auth-profile';
 export * from './ios-simulator';
 export * from './session-acp-identity';
+export * from './session-pin';
