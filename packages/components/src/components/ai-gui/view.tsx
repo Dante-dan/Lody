@@ -1,3 +1,4 @@
+import { MessageAuthorIdentity } from './message-author-identity';
 import * as stylex from '@stylexjs/stylex';
 import { space, text as textScale } from '@lody/ui/tokens/scales.stylex';
 import { writeTextToClipboard } from '@/lib/clipboard';
@@ -3766,7 +3767,15 @@ const UserMessageRowView = ({
       {...stylex.props(conversationSurface.userRow, isMobile && conversationSurface.mobileUserRow)}
     >
       <div {...stylex.props(conversationSurface.author)}>
-        <UserMessageAuthorAvatar user={user} isMobile={isMobile} showProfile={showSenderIdentity} />
+        {message.author?.kind === 'agent' ? (
+          <MessageAuthorIdentity author={message.author} />
+        ) : (
+          <UserMessageAuthorAvatar
+            user={user}
+            isMobile={isMobile}
+            showProfile={showSenderIdentity}
+          />
+        )}
       </div>
       <div
         {...withClassName(
@@ -3778,7 +3787,11 @@ const UserMessageRowView = ({
         )}
       >
         <div {...stylex.props(conversationSurface.metadata)} data-testid="user-message-metadata">
-          {showSenderIdentity && user?.name ? (
+          {message.author?.kind === 'agent' ? (
+            <span title={message.author.role?.name ?? message.author.name}>
+              {message.author.role?.name ?? message.author.name}
+            </span>
+          ) : showSenderIdentity && user?.name ? (
             <span className="max-w-40 truncate font-medium" title={user.name}>
               {user.name}
             </span>
@@ -5090,7 +5103,8 @@ export const AssistantTurnFooter = ({
               'flex flex-wrap items-center justify-start text-muted-foreground'
             ),
             isMobile ? 'min-h-6 gap-1' : 'min-h-7 gap-2',
-            !isMobile && 'opacity-0 transition-opacity duration-150 focus-within:opacity-100',
+            !isMobile &&
+              'opacity-0 transition-opacity duration-150 focus-within:opacity-100',
             !isMobile && (isTurnHovered || (showFinishedMetadata && isForking)) && 'opacity-100'
           )}
           data-assistant-turn-actions
