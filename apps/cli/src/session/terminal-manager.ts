@@ -87,6 +87,7 @@ interface BaseTerminalManagerOptions {
 }
 
 const DEFAULT_TERMINAL_BYTE_LIMIT = 1024 * 1024; // 1MB of retained output
+const TERMINAL_EXIT_DRAIN_MS = 100;
 
 abstract class BaseTerminalManager<THandle> implements TerminalManager {
   protected terminals = new Map<string, TerminalState<THandle>>();
@@ -355,7 +356,13 @@ export class ShellTerminalManager
 
     const stdoutListener = (chunk: Buffer) => hooks.onData(chunk);
     const stderrListener = (chunk: Buffer) => hooks.onData(chunk);
-    const closeListener = (code: number | null, signal: NodeJS.Signals | null) => {
+    let drainTimer: ReturnType<typeof setTimeout> | undefined;
+    let exitStatus: [number | null, NodeJS.Signals | null] | undefined;
+    let exitReported = false;
+    const reportExit = (code: number | null, signal: NodeJS.Signals | null) => {
+      if (exitReported) return;
+      exitReported = true;
+      clearTimeout(drainTimer);
       void processHandle
         .inspectExit(code, signal)
         .then((violation) => {
@@ -374,13 +381,26 @@ export class ShellTerminalManager
           hooks.onExit(code, signal);
         });
     };
+    // `close` waits for every inherited stdio descriptor, including those of
+    // background descendants. Drain ordinary trailing output, but do not let a
+    // server keep terminal/wait_for_exit pending after the command has exited.
+    const exitListener = (code: number | null, signal: NodeJS.Signals | null) => {
+      exitStatus = [code, signal];
+      drainTimer = setTimeout(() => reportExit(code, signal), TERMINAL_EXIT_DRAIN_MS);
+    };
+    const closeListener = (code: number | null, signal: NodeJS.Signals | null) => {
+      reportExit(...(exitStatus ?? [code, signal]));
+    };
     const errorListener = (error: Error) => hooks.onError?.(error);
 
     const unsubscribeStdout = processHandle.onStdout(stdoutListener);
     const unsubscribeStderr = processHandle.onStderr(stderrListener);
+    const unsubscribeExit = processHandle.onExit(exitListener);
     const unsubscribeClose = processHandle.onClose(closeListener);
     const unsubscribeError = processHandle.onError(errorListener);
     const dispose = () => {
+      clearTimeout(drainTimer);
+      unsubscribeExit();
       unsubscribeStdout();
       unsubscribeStderr();
       unsubscribeClose();

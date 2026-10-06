@@ -206,6 +206,16 @@ space is still spawned directly. The shell is non-interactive and non-login (`sh
 change its environment. A spawn that still fails answers with a JSON-RPC code instead of a bare
 errno, and its error is recorded as an exit status so no waiter is left pending.
 
+### ACP terminal exit and trailing output
+
+`ShellTerminalManager` records the command's `exit` event and drains trailing output
+until `close` or a 100 ms deadline, whichever arrives first. Node's `close` can be
+held indefinitely by a background descendant inheriting stdout/stderr; that
+lifetime must not define `terminal/wait_for_exit`. Exit reporting and resource-limit
+inspection run once, preserving the command's status even if `close` arrives later.
+The terminal keeps its bounded output buffer until release; this does not terminate
+background jobs or promise to capture their full output.
+
 ### Imported ACP identity
 
 Continuation and fork use the shared `resolveSessionAcpTargetId` projection: a

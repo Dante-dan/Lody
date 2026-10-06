@@ -253,6 +253,51 @@ describe('ShellTerminalManager', () => {
     expect((failure as TerminalSpawnError).spawnCode).toBe('ENOENT');
   });
 
+  it('bounds the output drain when descendants keep stdio open after exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const processHandle = createProcessHandle(async () => {});
+      const manager = createManager(createSandbox(async () => processHandle), 'darwin');
+      const terminalId = await manager.createTerminal('acp-1', 'background command', []);
+      const exitStatus = manager.waitForTerminalExit('acp-1', terminalId);
+      processHandle.child.emit('exit', 7, null);
+      processHandle.child.stdout?.emit('data', Buffer.from('trailing output'));
+      expect((await manager.terminalOutput('acp-1', terminalId)).exitStatus).toBeNull();
+
+      await vi.runAllTimersAsync();
+      await expect(exitStatus).resolves.toEqual({ exitCode: 7, signal: undefined });
+      expect((await manager.terminalOutput('acp-1', terminalId)).output).toBe('trailing output');
+      processHandle.child.emit('close', 0, null);
+      expect((await manager.terminalOutput('acp-1', terminalId)).exitStatus).toEqual({
+        exitCode: 7,
+        signal: undefined,
+      });
+      await manager.releaseTerminal('acp-1', terminalId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('finishes draining on close without waiting for the drain deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const processHandle = createProcessHandle(async () => {});
+      const manager = createManager(createSandbox(async () => processHandle), 'darwin');
+      const terminalId = await manager.createTerminal('acp-1', 'node', ['-v']);
+      const exitStatus = manager.waitForTerminalExit('acp-1', terminalId);
+      processHandle.child.emit('exit', null, 'SIGTERM');
+      processHandle.child.stderr?.emit('data', Buffer.from('final stderr'));
+      processHandle.child.emit('close', null, 'SIGTERM');
+
+      await expect(exitStatus).resolves.toEqual({ exitCode: null, signal: 'SIGTERM' });
+      expect((await manager.terminalOutput('acp-1', terminalId)).output).toBe('final stderr');
+      expect(vi.getTimerCount()).toBe(0);
+      await manager.releaseTerminal('acp-1', terminalId);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('completes a pending wait when the process errors after it started', async () => {
     const processHandle = createProcessHandle(async () => {});
     const manager = createManager(createSandbox(async () => processHandle), 'darwin');
