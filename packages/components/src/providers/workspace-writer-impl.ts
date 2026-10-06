@@ -23,6 +23,8 @@ import type { WorkspaceWriter } from './workspace-writer';
 /** Deps the writer needs from the runtime (repo + session stores). */
 export type DirectWorkspaceWriterDeps = {
   repo: LoroRepo;
+  /** Check again after each awaited acquisition before touching a live document. */
+  assertStorageHealthy?: () => void;
   acquireSessionStore: (sessionId: SessionId) => Promise<SessionDocStore>;
   releaseSessionStoreRef: (sessionId: SessionId) => void;
   acquirePreviewVisualCommentStore: (sessionId: SessionId) => Promise<PreviewVisualCommentDocStore>;
@@ -40,8 +42,10 @@ export function createDirectWorkspaceWriter(deps: DirectWorkspaceWriterDeps): Wo
     fn: (store: SessionDocStore) => T | Promise<T>
   ): Promise<T> => {
     const id = sessionId as SessionId;
+    deps.assertStorageHealthy?.();
     const store = await deps.acquireSessionStore(id);
     try {
+      deps.assertStorageHealthy?.();
       return await fn(store);
     } finally {
       deps.releaseSessionStoreRef(id);
@@ -51,6 +55,7 @@ export function createDirectWorkspaceWriter(deps: DirectWorkspaceWriterDeps): Wo
   // Renderer-side, every message-queue mutation also bumps `messageQueueUpdatedAt`
   // so the CLI dispatch watcher re-evaluates.
   const bumpMessageQueueWatermark = async (sessionId: string): Promise<void> => {
+    deps.assertStorageHealthy?.();
     await deps.repo.upsertDocMeta(getSessionRoomId(sessionId as SessionId), {
       messageQueueUpdatedAt: getServerNow(),
     });
@@ -60,8 +65,10 @@ export function createDirectWorkspaceWriter(deps: DirectWorkspaceWriterDeps): Wo
     sessionId: SessionId,
     fn: (store: PreviewVisualCommentDocStore) => T | Promise<T>
   ): Promise<T> => {
+    deps.assertStorageHealthy?.();
     const store = await deps.acquirePreviewVisualCommentStore(sessionId);
     try {
+      deps.assertStorageHealthy?.();
       return await fn(store);
     } finally {
       deps.releasePreviewVisualCommentStoreRef(sessionId);
@@ -70,10 +77,12 @@ export function createDirectWorkspaceWriter(deps: DirectWorkspaceWriterDeps): Wo
 
   return {
     async upsertDocMeta(roomId, patch) {
+      deps.assertStorageHealthy?.();
       await deps.repo.upsertDocMeta(roomId, patch as Parameters<LoroRepo['upsertDocMeta']>[1]);
     },
 
     async startSession(sessionId, meta, entry, dispatch) {
+      deps.assertStorageHealthy?.();
       // Backend selection is part of the session identity. Publish metadata
       // before the first history write so a crash cannot leave an orphaned
       // document that a later opener interprets as legacy Loro.
@@ -88,19 +97,25 @@ export function createDirectWorkspaceWriter(deps: DirectWorkspaceWriterDeps): Wo
     },
 
     async deleteDoc(roomId) {
+      deps.assertStorageHealthy?.();
       await deps.repo.deleteDoc(roomId);
     },
 
     async flockRowPut(flockDocId, key, value) {
+      deps.assertStorageHealthy?.();
       const handle = await deps.repo.openFlockDoc(flockDocId);
+      deps.assertStorageHealthy?.();
       handle.flock.set([...key], value as Parameters<typeof handle.flock.set>[1]);
       handle.flock.commit();
     },
 
     async flockRowUpdate(flockDocId, key, update) {
+      deps.assertStorageHealthy?.();
       const handle = await deps.repo.openFlockDoc(flockDocId);
+      deps.assertStorageHealthy?.();
       return handle.flock.txn(() => {
         const next = update(handle.flock.get([...key]));
+        deps.assertStorageHealthy?.();
         if (next === undefined) return false;
         handle.flock.set([...key], next as Parameters<typeof handle.flock.set>[1]);
         return true;
@@ -112,7 +127,9 @@ export function createDirectWorkspaceWriter(deps: DirectWorkspaceWriterDeps): Wo
       key: readonly string[],
       value: unknown
     ): Promise<{ inserted: boolean; value: unknown }> {
+      deps.assertStorageHealthy?.();
       const handle = await deps.repo.openFlockDoc(flockDocId);
+      deps.assertStorageHealthy?.();
       return handle.flock.txn(() => {
         const existing = handle.flock.get([...key]);
         if (existing !== undefined) {
@@ -125,7 +142,9 @@ export function createDirectWorkspaceWriter(deps: DirectWorkspaceWriterDeps): Wo
     },
 
     async flockRowDelete(flockDocId, key) {
+      deps.assertStorageHealthy?.();
       const handle = await deps.repo.openFlockDoc(flockDocId);
+      deps.assertStorageHealthy?.();
       handle.flock.delete([...key]);
       handle.flock.commit();
     },

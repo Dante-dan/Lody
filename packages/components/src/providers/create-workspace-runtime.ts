@@ -91,6 +91,7 @@ import {
 import { LocalLoroTransportAdapter } from '@lody/shared/local-loro-transport';
 import type { WorkspaceId } from '@lody/shared';
 import { createDirectWorkspaceWriter } from './workspace-writer-impl';
+import { createRepoStorageCrisis, type RepoStorageCrisis } from './repo-storage-crisis';
 import {
   createConversationSession,
   type ConversationSessionDataFactory,
@@ -209,6 +210,7 @@ type RuntimeDeps = {
    * plane only and performs zero cloud I/O — open-source platform builds.
    */
   syncMode?: PlatformSyncMode;
+  onStorageCrisis?: (crisis: RepoStorageCrisis) => void;
   onControlConnectionStateChange?: (state: LodyControlConnectionState) => void;
   onDocMetaPatch?: (roomId: string, patch: unknown) => void;
   onPresenceSnapshot?: (states: LodyPresenceStateMap) => void;
@@ -456,7 +458,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   let resolveRoomTransportsImpl:
     | ((room: WorkspaceTransportRoom) => WorkspaceTransportRoute)
     | null = null;
-  const repoStorage = new IndexedDBStorageAdaptor({ dbName: cacheIdentity.repoDbName });
+  const storageCrisis = createRepoStorageCrisis(deps.onStorageCrisis);
+  const repoStorage = storageCrisis.wrapStorage(
+    new IndexedDBStorageAdaptor({ dbName: cacheIdentity.repoDbName })
+  );
   const openSessionWithSnapshot = createSessionSnapshotLoader(repoStorage);
   const repo = await LoroRepo.create({
     storageAdapter: repoStorage,
@@ -4442,6 +4447,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   // the CLI over the local plane (specs/local-first-two-plane.md 作者规则).
   const workspaceWriter = createDirectWorkspaceWriter({
     repo,
+    assertStorageHealthy: storageCrisis.assertHealthy,
     acquireSessionStore: sessionStoreCache.acquire,
     releaseSessionStoreRef: sessionStoreCache.releaseRef,
     acquirePreviewVisualCommentStore: previewVisualCommentStoreCache.acquire,

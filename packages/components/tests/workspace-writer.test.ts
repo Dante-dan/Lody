@@ -1,3 +1,5 @@
+import { RepoStorageError, type StorageAdapter } from 'loro-repo';
+import { createRepoStorageCrisis } from '../src/providers/repo-storage-crisis';
 import { describe, expect, it, vi } from 'vitest';
 import { Flock } from '@loro-dev/flock-wasm';
 import { LoroDoc } from 'loro-crdt';
@@ -243,5 +245,99 @@ describe('createDirectWorkspaceWriter', () => {
         fileDiff: [],
       })
     ).rejects.toThrow('store unavailable');
+  });
+});
+
+describe('renderer Repo storage crisis', () => {
+  it.each(['quota', 'unavailable'] as const)(
+    'fences persistence and later Flock mutations after %s',
+    async (code) => {
+      const error = new RepoStorageError('injected failure', { code });
+      const flock = new Flock('storage-crisis');
+      let stored = 0;
+      let fail = false;
+      const crisis = createRepoStorageCrisis();
+      const storage = crisis.wrapStorage({
+        save: async () => {
+          if (fail) throw error;
+          stored++;
+        },
+        loadDoc: async () => undefined,
+        loadMeta: async () => flock,
+      });
+      await storage.save({ type: 'doc-snapshot', docId: 'room', snapshot: new Uint8Array() });
+      fail = true;
+      await expect(
+        storage.save({ type: 'doc-snapshot', docId: 'room', snapshot: new Uint8Array() })
+      ).rejects.toBe(error);
+      fail = false;
+      await expect(storage.loadDoc('room')).rejects.toBe(error);
+      await expect(
+        storage.save({ type: 'doc-snapshot', docId: 'room', snapshot: new Uint8Array() })
+      ).rejects.toBe(error);
+      expect(stored).toBe(1);
+      const writer = createDirectWorkspaceWriter({
+        repo: { openFlockDoc: async () => ({ flock }) },
+        assertStorageHealthy: crisis.assertHealthy,
+      } as never);
+      await expect(writer.flockRowPut('catalog', ['row'], 'value')).rejects.toBe(error);
+      expect(flock.get(['row'])).toBeUndefined();
+      expect(crisis.getCrisis()?.code).toBe(code);
+    }
+  );
+
+  it('checks the mutation fence again after a pending acquisition resolves', async () => {
+    const flock = new Flock('pending-storage-crisis');
+    const error = new RepoStorageError('injected quota', { code: 'quota' });
+    const crisis = createRepoStorageCrisis();
+    const storage = crisis.wrapStorage({
+      save: async () => {
+        throw error;
+      },
+      loadDoc: async () => undefined,
+      loadMeta: async () => flock,
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const writer = createDirectWorkspaceWriter({
+      repo: {
+        openFlockDoc: async () => {
+          await gate;
+          return { flock };
+        },
+      },
+      assertStorageHealthy: crisis.assertHealthy,
+    } as never);
+    const pending = writer.flockRowPut('catalog', ['row'], 'value');
+    await expect(
+      storage.save({ type: 'doc-snapshot', docId: 'room', snapshot: new Uint8Array() })
+    ).rejects.toBe(error);
+    const rejection = expect(pending).rejects.toBe(error);
+    release();
+    await rejection;
+    expect(flock.get(['row'])).toBeUndefined();
+  });
+
+  it('does not turn unknown errors into a crisis or remove optional adapter capabilities', async () => {
+    const error = new RepoStorageError('injected unknown', { code: 'unknown' });
+    let fail = true;
+    const crisis = createRepoStorageCrisis();
+    const storage: StorageAdapter = crisis.wrapStorage({
+      save: async () => {
+        if (fail) throw error;
+      },
+      loadDoc: async () => undefined,
+      loadMeta: async () => undefined,
+    });
+    await expect(
+      storage.save({ type: 'doc-snapshot', docId: 'room', snapshot: new Uint8Array() })
+    ).rejects.toBe(error);
+    expect(crisis.getCrisis()).toBeNull();
+    fail = false;
+    await expect(storage.loadDoc('room')).resolves.toBeUndefined();
+    expect(storage.saveMany).toBeUndefined();
+    expect(storage.loadMetaReplica).toBeUndefined();
   });
 });

@@ -61,3 +61,13 @@ mutations, and exercise Stay/Leave through normal shutdown. The draft Spec does 
 claim linked human approval; no implementation-before-approval restriction was
 found in current root/Spec guidelines. Fork PR publication separately requires a
 valid linked issue and the user's actual public Context handoff choice.
+
+## Reference implementation checkpoint
+
+The reference branch wires a typed sticky crisis through StorageAdapter methods
+and replica checkpoint stores, with WorkspaceWriter checks before acquisition
+and after awaited acquisition. The owning `workspace-writer.test.ts` suite passed
+14 tests, including quota/unavailable fencing, a failure during pending acquisition
+and unknown-error preservation. The blocking recovery UI, user quit action and
+background activity suspension remain unimplemented; this is not the full Spec
+or a cross-window/in-flight rollback guarantee.

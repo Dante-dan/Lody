@@ -51,3 +51,11 @@ quota/unavailable 类型，对未知错误保持未知。保留用户发起的�
 修改，并沿正常退出路径验证留在应用/离开。draft Spec 不代表已获得对应
 人工批准；当前根目录/Spec 规则未禁止批准前实施。fork PR 发布另需有效的
 关联 issue 和用户对公开 Context handoff 的真实选择。
+
+## 参考实现检查点
+
+参考分支已接入 typed sticky crisis、完整 StorageAdapter 方法及 replica 游标
+包装，并在 WorkspaceWriter 获取前和 await 后检查修改边界。所属
+`workspace-writer.test.ts` 14 项通过，包含明确的 quota/unavailable、等待获取
+期间失败和 unknown 不误分类。尚缺阻塞界面、用户退出动作与后台活动停止，
+不代表已经实现整个 Spec，也不代表跨窗口或在途写入回滚。
