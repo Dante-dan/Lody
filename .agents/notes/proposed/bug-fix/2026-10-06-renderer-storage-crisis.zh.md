@@ -56,6 +56,13 @@ quota/unavailable 类型，对未知错误保持未知。保留用户发起的�
 
 参考分支已接入 typed sticky crisis、完整 StorageAdapter 方法及 replica 游标
 包装，并在 WorkspaceWriter 获取前和 await 后检查修改边界。所属
-`workspace-writer.test.ts` 14 项通过，包含明确的 quota/unavailable、等待获取
+`workspace-writer.test.ts` 15 项通过，包含明确的 quota/unavailable、等待获取
 期间失败和 unknown 不误分类。尚缺阻塞界面、用户退出动作与后台活动停止，
 不代表已经实现整个 Spec，也不代表跨窗口或在途写入回滚。
+
+## 自动贡献停止
+
+发布前核验随后发现仍开放的其他实现 [PR #438](https://github.com/LodyAI/Lody/pull/438)，
+head `5a4978c1255a5db5d218b4a54d71207b00789a97`，作者为 `app/lodystage`。
+该实现已经覆盖第一阶段危机检测、阻塞恢复界面及重启/退出。本参考只保留为
+未完成的恢复检查点，不作为竞争贡献提交，不声称 issue 已修复。

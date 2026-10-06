@@ -341,3 +341,34 @@ describe('renderer Repo storage crisis', () => {
     expect(storage.loadMetaReplica).toBeUndefined();
   });
 });
+
+describe('Repo crisis replica checkpoint boundary', () => {
+  it('observes checkpoint failures and fences later checkpoint persistence', async () => {
+    const error = new RepoStorageError('checkpoint unavailable', { code: 'unavailable' });
+    let stored = false;
+    let fail = true;
+    const crisis = createRepoStorageCrisis();
+    const storage = crisis.wrapStorage({
+      save: async () => {},
+      loadDoc: async () => undefined,
+      loadMeta: async () => undefined,
+      loadMetaReplica: async () => ({
+        flock: new Flock('checkpoint-crisis'),
+        checkpointStore: {
+          load: async () => null,
+          save: async () => {
+            if (fail) throw error;
+            stored = true;
+          },
+        },
+      }),
+    });
+    const replica = await storage.loadMetaReplica!();
+    const cursor = { streamUrl: 'stream', offset: '0', version: {} };
+    await expect(replica.checkpointStore.save(cursor)).rejects.toBe(error);
+    fail = false;
+    await expect(replica.checkpointStore.save(cursor)).rejects.toBe(error);
+    expect(stored).toBe(false);
+    expect(crisis.getCrisis()?.code).toBe('unavailable');
+  });
+});

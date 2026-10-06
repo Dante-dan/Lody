@@ -67,7 +67,16 @@ valid linked issue and the user's actual public Context handoff choice.
 The reference branch wires a typed sticky crisis through StorageAdapter methods
 and replica checkpoint stores, with WorkspaceWriter checks before acquisition
 and after awaited acquisition. The owning `workspace-writer.test.ts` suite passed
-14 tests, including quota/unavailable fencing, a failure during pending acquisition
+15 tests, including quota/unavailable fencing, a failure during pending acquisition
 and unknown-error preservation. The blocking recovery UI, user quit action and
 background activity suspension remain unimplemented; this is not the full Spec
 or a cross-window/in-flight rollback guarantee.
+
+## Automatic contribution stopped
+
+Publication preflight subsequently found the still-open competing implementation
+[PR #438](https://github.com/LodyAI/Lody/pull/438), head
+`5a4978c1255a5db5d218b4a54d71207b00789a97`, authored by `app/lodystage`.
+It already covers Phase 1 crisis detection, the blocking recovery screen and
+restart/quit. This reference is retained as an unfinished recovery checkpoint,
+not submitted as a competing contribution. No completed issue fix is claimed.
