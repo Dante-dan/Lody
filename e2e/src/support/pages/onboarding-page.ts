@@ -64,7 +64,6 @@ export class OnboardingPage {
   }
 
   async openAgentConfiguration(): Promise<void> {
-    await this.page.getByRole('button', { name: /^(Skip intro|跳过介绍)$/u }).click();
     await this.page.getByRole('button', { name: /^(Configure Lody|开始配置)$/u }).click();
     await expect(
       this.page.getByRole('heading', { name: /^(Connect a coding agent|连接一个编码 Agent)$/u })
