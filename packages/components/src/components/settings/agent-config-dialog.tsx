@@ -1775,7 +1775,9 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
               ? 'devinPath'
               : formData.agentType === 'grok'
                 ? 'grokPath'
-                : null;
+                : formData.agentType === 'pi'
+                  ? 'piPath'
+                  : null;
   const builtinRuntimeOverrideValue = builtinRuntimeOverrideKey
     ? (formData.runtimeOverrides?.[builtinRuntimeOverrideKey] ?? '')
     : '';
@@ -3024,10 +3026,12 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
                                   'settings.agent.dialog.runtimeOverride.grokPlaceholder',
                                   '/path/to/grok'
                                 )
-                              : t(
-                                  'settings.agent.dialog.runtimeOverride.claudePlaceholder',
-                                  '/path/to/claude'
-                                )
+                              : formData.agentType === 'pi'
+                                ? t('settings.agent.dialog.runtimeOverride.piPlaceholder', '/path/to/pi')
+                                : t(
+                                    'settings.agent.dialog.runtimeOverride.claudePlaceholder',
+                                    '/path/to/claude'
+                                  )
                     }
                     autoComplete="off"
                     spellCheck={false}

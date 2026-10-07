@@ -146,6 +146,7 @@ export type BuiltinRuntimeOverrides = {
   kimiPath?: string;
   grokPath?: string;
   devinPath?: string;
+  piPath?: string;
   piExtensions?: string[];
 };
 
@@ -162,6 +163,7 @@ export const isBuiltinRuntimeOverrides = (value: unknown): value is BuiltinRunti
     kimiPath?: unknown;
     grokPath?: unknown;
     devinPath?: unknown;
+    piPath?: unknown;
     piExtensions?: unknown;
   };
   return (
@@ -171,6 +173,7 @@ export const isBuiltinRuntimeOverrides = (value: unknown): value is BuiltinRunti
     (record.kimiPath === undefined || typeof record.kimiPath === 'string') &&
     (record.devinPath === undefined || typeof record.devinPath === 'string') &&
     (record.grokPath === undefined || typeof record.grokPath === 'string') &&
+    (record.piPath === undefined || typeof record.piPath === 'string') &&
     (record.piExtensions === undefined ||
       (Array.isArray(record.piExtensions) &&
         record.piExtensions.length <= PI_EXTENSIONS_MAX_SELECTIONS &&
