@@ -236,6 +236,7 @@ export function useSessionAgentRole({
       ? {
           agentRoleId: selectedRoleId,
           agentRoleRevision: pickedItem.role.revision,
+          memory: pickedItem.role.runConfig.memory,
           agentRoleSnapshot: snapshotAgentRole(pickedItem.role),
         }
       : pickedRoleId === null

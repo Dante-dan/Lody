@@ -4238,6 +4238,10 @@ export const SessionChatInterface = memo(
             agentRoleId:
               options?.agentRole?.agentRoleId ?? (options?.agentRole === null ? null : undefined),
             agentRoleRevision: options?.agentRole?.agentRoleRevision,
+            memory:
+              options?.agentRole === undefined
+                ? sessionConversationConfig.memory
+                : options.agentRole?.memory,
             agentRoleSnapshot: options?.agentRole?.agentRoleSnapshot,
             resume: session.acpSessionId ?? undefined,
           });
@@ -4334,6 +4338,7 @@ export const SessionChatInterface = memo(
         guardNewBillableTurn,
         guideHistoryEntry,
         knownIssuePrItems,
+        sessionConversationConfig.memory,
         mcpSelection.selectedIds,
         repoFullName,
         requestSessionDispatch,
@@ -4388,6 +4393,10 @@ export const SessionChatInterface = memo(
             agentRoleId:
               options?.agentRole?.agentRoleId ?? (options?.agentRole === null ? null : undefined),
             agentRoleRevision: options?.agentRole?.agentRoleRevision,
+            memory:
+              options?.agentRole === undefined
+                ? sessionConversationConfig.memory
+                : options.agentRole?.memory,
             agentRoleSnapshot: options?.agentRole?.agentRoleSnapshot,
             resume: session.acpSessionId ?? undefined,
           });
@@ -4403,6 +4412,7 @@ export const SessionChatInterface = memo(
             mcpServerIds: [...mcpSelection.selectedIds],
             agentRoleId: inputConfig.agentRoleId,
             agentRoleRevision: inputConfig.agentRoleRevision,
+            memory: inputConfig.memory,
             agentRoleSnapshot: inputConfig.agentRoleSnapshot,
             resume: inputConfig.resume ?? undefined,
             chainDepth: 0,
@@ -4440,6 +4450,7 @@ export const SessionChatInterface = memo(
         currentUser?.id,
         guardNewBillableTurn,
         knownIssuePrItems,
+        sessionConversationConfig.memory,
         mcpSelection.selectedIds,
         pushMessageQueue,
         repoFullName,
@@ -4650,6 +4661,7 @@ export const SessionChatInterface = memo(
               : undefined,
           durableRoleId: sessionConversationConfig.agentRoleId,
           durableRoleRevision: sessionConversationConfig.agentRoleRevision,
+          durableMemory: sessionConversationConfig.memory,
         });
         return await dispatchInputBlocks(
           [{ type: 'text', text: prompt }],
@@ -4660,6 +4672,7 @@ export const SessionChatInterface = memo(
         dispatchInputBlocks,
         sessionConversationConfig.agentRoleId,
         sessionConversationConfig.agentRoleRevision,
+        sessionConversationConfig.memory,
       ]
     );
 
@@ -4709,6 +4722,7 @@ export const SessionChatInterface = memo(
           composer: inputAreaRef.current?.getAgentRoleSelection(),
           durableRoleId: sessionConversationConfig.agentRoleId,
           durableRoleRevision: sessionConversationConfig.agentRoleRevision,
+          durableMemory: sessionConversationConfig.memory,
         });
         const accepted = await handleSendMessage(inputBlocks, currentAgentRole);
         if (accepted) {
@@ -4736,6 +4750,7 @@ export const SessionChatInterface = memo(
         handleSendMessage,
         sessionConversationConfig.agentRoleId,
         sessionConversationConfig.agentRoleRevision,
+        sessionConversationConfig.memory,
         updateHistoryEntry,
       ]
     );

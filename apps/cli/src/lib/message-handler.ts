@@ -1,3 +1,4 @@
+import { handleMemoryProviderRequest } from './memory-providers';
 import { readMessageAuthor } from '@lody/shared';
 import { resolveSessionMessageAuthor } from '@/session/message-author';
 import { IosSimulatorService } from '@/ios-simulator/service';
@@ -3368,6 +3369,7 @@ export class MessageHandler {
             workspaceId: this.workspaceId,
             agentType,
           }),
+        memoryProvider: handleMemoryProviderRequest,
         listMachinePiExtensions: async ({ configId }) =>
           await this.executionService.listMachinePiExtensions(configId),
         installMachineAcpBinary: async ({ agentType, onAcpBinaryProgress }) =>
@@ -6697,6 +6699,8 @@ export class MessageHandler {
       }
       case 'session/terminate':
         return await this.terminateAcpSession(request.params.sessionId as SessionId);
+      case 'machine/memory':
+        return await handleMemoryProviderRequest(request.params);
       case 'machine/pi-extensions':
         return await this.executionService.listMachinePiExtensions(
           request.params.configId as AgentConfigId | undefined
