@@ -208,6 +208,99 @@ describe('reconnect storm repro', () => {
     expect(Math.max(...gaps)).toBeGreaterThanOrEqual(4_000);
   });
 
+  it('SCENARIO E: a slow meta-room recovery finishes without being restarted', async () => {
+    // #399: the room already owns an in-flight recovery. Calling reconnect
+    // again resets that recovery, so it never survives the 30s watchdog.
+    const metaSub = createMetaSub('reconnecting');
+    let joinTimer: ReturnType<typeof setTimeout> | undefined;
+    const startRoomRecovery = () => {
+      clearTimeout(joinTimer);
+      joinTimer = setTimeout(() => metaSub.emitStatus('joined'), 35_000);
+    };
+    startRoomRecovery();
+    const reconnect = vi.fn(async () => {
+      if (metaSub.status === 'reconnecting') startRoomRecovery();
+    });
+    const instance = createController({ reconnect, transportRooms: () => [] }, metaSub);
+    const streamsOnline = vi.fn();
+    instance.onStreamsOnline(streamsOnline);
+
+    await vi.advanceTimersByTimeAsync(90_000);
+
+    expect(metaSub.status).toBe('joined');
+    expect(instance.getStreamsHealth()).toBe('connected');
+    expect(streamsOnline).toHaveBeenCalledTimes(1);
+    clearTimeout(joinTimer);
+  });
+
+  it.each(['error', 'disconnected'] as const)(
+    'still recovers a meta room that leaves its in-flight join in %s',
+    async (terminalStatus) => {
+      const metaSub = createMetaSub('reconnecting');
+      const instance = createController(
+        {
+          reconnect: async () => metaSub.emitStatus('joined'),
+          transportRooms: () => [],
+        },
+        metaSub
+      );
+      const streamsOnline = vi.fn();
+      instance.onStreamsOnline(streamsOnline);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(instance.isRecovering()).toBe(true);
+
+      metaSub.emitStatus(terminalStatus);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(metaSub.status).toBe('joined');
+      expect(instance.getStreamsHealth()).toBe('connected');
+      expect(streamsOnline).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('allows an explicit forced reconnect during a meta-room join', async () => {
+    const metaSub = createMetaSub('reconnecting');
+    const instance = createController(
+      {
+        reconnect: async () => metaSub.emitStatus('joined'),
+        transportRooms: () => [],
+      },
+      metaSub
+    );
+    const streamsOnline = vi.fn();
+    instance.onStreamsOnline(streamsOnline);
+
+    await instance.reconnect('explicit-recovery');
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(instance.getStreamsHealth()).toBe('connected');
+    expect(streamsOnline).toHaveBeenCalledTimes(1);
+  });
+
+  it('repairs an errored room binding without interrupting the meta recovery', async () => {
+    const metaSub = createMetaSub('reconnecting');
+    const docSub = createMetaSub('error');
+    const binding = docSub.subscription('streams');
+    if (!binding) throw new Error('test Streams binding is missing');
+    const subscription = {
+      ...binding,
+      rejoin: async () => docSub.emitStatus('joined'),
+    };
+    const instance = createController(
+      {
+        reconnect: async () => metaSub.emitStatus('error'),
+        transportRooms: () => [{ room: { kind: 'doc', id: 'doc-recovery' }, subscription }],
+      },
+      metaSub
+    );
+
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(docSub.status).toBe('joined');
+    expect(metaSub.status).toBe('reconnecting');
+    expect(instance.isRecovering()).toBe(true);
+  });
+
   const createWatcherOverDocumentManager = (options: {
     onMetaRoomSynced: LoroDocumentManager['onMetaRoomSynced'];
     scanCounter: { scans: number; docMetaReads: number };

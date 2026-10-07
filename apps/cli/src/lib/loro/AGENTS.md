@@ -122,16 +122,17 @@ removal rules live in [../AGENTS.md](../AGENTS.md).
 
 ## Streams recovery has TWO signals and they must not be recombined
 
-`connection-recovery.ts` has TWO signals. `onStreamsOnline` is cheap, unthrottled, and
-fires on every health rising edge — it RELEASES work parked while offline (dirty
-Machine Flock docs, which arm no timer of their own, plus the task/review automation
-queues). `onMetaRoomSynced` is the EXPENSIVE "rescan the workspace index" signal whose
-listeners do O(rooms) work: it waits for meta catch-up and is rate-limited to one
-fan-out per `LODY_LORO_META_SYNCED_MIN_INTERVAL_MS` (30s), deferred and never dropped,
-because the dispatch bootstrap scan is the only retry path for a session whose
-reconcile threw. A fan-out after a real meta-room outage skips that floor; a
-transport-only flap does not. Recombining them turned a single stuck room into ~3400
-session reconciles/minute. Backoff is flap-aware for the same reason: health that does
-not survive `LODY_LORO_HEALTH_STABILITY_WINDOW_MS` (5s) counts as a failed recovery and
-charges the attempt counter instead of resetting it, and `force` must not clear that
-history. Regression: `tests/reconnect-storm-repro.test.ts`.
+`connection-recovery.ts` keeps `onStreamsOnline` cheap and unthrottled: every health
+rising edge releases parked dirty Machine Flock docs (which arm no timer), task and
+review automation queues. `onMetaRoomSynced` waits for meta catch-up before its
+O(rooms) rescan, limited to one fan-out per `LODY_LORO_META_SYNCED_MIN_INTERVAL_MS`
+(30s). Defer, never drop: the dispatch bootstrap scan alone retries failed session
+reconciles. A real meta-room outage skips that floor; a transport-only flap does
+not. Recombining the signals caused ~3400 session reconciles/minute. Health shorter
+than `LODY_LORO_HEALTH_STABILITY_WINDOW_MS` (5s) charges the recovery attempt counter
+instead of resetting it; `force` must not clear this flap history.
+
+Automatic passes must preserve an in-flight meta `connecting`/`reconnecting` room
+while the aggregate is not `disconnected`; do not reset its retry or abort its
+request via `repo.reconnect()`. Terminal room failure and explicit forced reconnect
+still recover. Regression: `tests/reconnect-storm-repro.test.ts`.

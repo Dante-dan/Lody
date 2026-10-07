@@ -712,6 +712,13 @@ export class LoroConnectionRecoveryController {
     );
   }
 
+  private isMetaRoomRecoveryInFlight(): boolean {
+    return (
+      this.transportStatus !== 'disconnected' &&
+      (this.metaRoomStatus === 'connecting' || this.metaRoomStatus === 'reconnecting')
+    );
+  }
+
   private offerStreamsReady(metaSub: RepoRoomSubscription | null, reason: string): void {
     if (!metaSub || !this.isStreamsHealthy()) {
       return;
@@ -801,6 +808,12 @@ export class LoroConnectionRecoveryController {
       return;
     }
 
+    if (!options.force && this.isMetaRoomRecoveryInFlight()) {
+      // The room owns this retry. A skipped watchdog pass is not a failed
+      // controller recovery and must not arm another repo-wide reconnect.
+      return;
+    }
+
     if (this.isStreamsHealthy()) {
       this.resetReconnectBackoff(`reconnect:${reason}`);
       return;
@@ -819,6 +832,15 @@ export class LoroConnectionRecoveryController {
 
   private async runReconnect(reason: string, options: ReconnectOptions): Promise<void> {
     if (this.isCleanedUp) {
+      return;
+    }
+
+    if (!options.force && this.isMetaRoomRecoveryInFlight()) {
+      // loro-repo's reconnect calls StreamsCrdt.rejoin(), which resets retry
+      // backoff and aborts the active request in 'reconnecting'. Let the room
+      // finish its own recovery; 'error'/'disconnected' and explicit force
+      // still enter the recovery path below.
+      await this.rejoinFailedStreamsBindings(reason);
       return;
     }
 
