@@ -892,12 +892,11 @@ export function MentionTwoLevelMenuBody({
     </div>
   );
 
-  // Keep the scroller mounted when hover adds or removes a detail pane;
-  // replacing its ancestors resets scroll and moves the row under the pointer.
+  if (!detail) return list;
   return (
-    <div {...stylex.props(detail && styles.withDetail)}>
+    <div {...stylex.props(styles.withDetail)}>
       <div {...stylex.props(styles.withDetailList)}>{list}</div>
-      {detail ? <CandidateDetailPane detail={detail} /> : null}
+      <CandidateDetailPane detail={detail} />
     </div>
   );
 
