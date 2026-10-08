@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { Switch } from '@lody/ui/switch';
 import {
   experimentalFeaturesEnabledAtom,
-  roostHistoryExperimentEnabledAtom,
   reviewAgentExperimentEnabledAtom,
 } from '@/atoms/settings';
 import { CompactRow, CompactSection } from './compact-layout';
@@ -30,7 +29,6 @@ export function ExperimentalFeatureRows() {
   const { t } = useTranslation();
   const [experimentalEnabled, setExperimentalEnabled] = useAtom(experimentalFeaturesEnabledAtom);
   const [reviewAgentEnabled, setReviewAgentEnabled] = useAtom(reviewAgentExperimentEnabledAtom);
-  const [roostHistoryEnabled, setRoostHistoryEnabled] = useAtom(roostHistoryExperimentEnabledAtom);
 
   return (
     <>
@@ -43,34 +41,19 @@ export function ExperimentalFeatureRows() {
       </CompactRow>
 
       {experimentalEnabled ? (
-        <>
-          <CompactRow
-            label={t('settings.experimental.reviewAgent', 'Review agent')}
-            helper={t(
-              'settings.experimental.reviewAgentHelper',
-              'Let a review agent check a branch, hand fixes back to the session, and merge once CI is green. You choose per session.'
-            )}
-          >
-            <Switch
-              checked={reviewAgentEnabled}
-              onCheckedChange={setReviewAgentEnabled}
-              aria-label={t('settings.experimental.reviewAgent', 'Review agent')}
-            />
-          </CompactRow>
-          <CompactRow
-            label={t('settings.experimental.roostHistory', 'Roost history')}
-            helper={t(
-              'settings.experimental.roostHistoryHelper',
-              'Use Roost for new conversations. Existing conversations keep their current history backend.'
-            )}
-          >
-            <Switch
-              checked={roostHistoryEnabled}
-              onCheckedChange={setRoostHistoryEnabled}
-              aria-label={t('settings.experimental.roostHistory', 'Roost history')}
-            />
-          </CompactRow>
-        </>
+        <CompactRow
+          label={t('settings.experimental.reviewAgent', 'Review agent')}
+          helper={t(
+            'settings.experimental.reviewAgentHelper',
+            'Let a review agent check a branch, hand fixes back to the session, and merge once CI is green. You choose per session.'
+          )}
+        >
+          <Switch
+            checked={reviewAgentEnabled}
+            onCheckedChange={setReviewAgentEnabled}
+            aria-label={t('settings.experimental.reviewAgent', 'Review agent')}
+          />
+        </CompactRow>
       ) : null}
     </>
   );

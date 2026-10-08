@@ -13,9 +13,8 @@ import type {
 import {
   getSessionRoomId,
   getServerNow,
-  LEGACY_SESSION_HISTORY_BACKEND,
+  NEW_SESSION_HISTORY_BACKEND,
   normalizeSessionTurnInputConfig,
-  type SessionHistoryBackendKind,
   SessionStatusFactory,
 } from '@lody/shared';
 import { v4 as uuidv4 } from 'uuid';
@@ -28,8 +27,6 @@ export type StartSessionResult = CreateSessionResult & { historyEntry: SessionHi
 /** UI bindings supply observation/admission, not another history writer. */
 export type SessionSubmissionPorts = {
   runtime: WorkspaceRuntime | null;
-  /** Default backend for new sessions when the payload has no explicit choice. */
-  defaultHistoryBackend?: SessionHistoryBackendKind;
   assertSessionCreateAllowed: (sessionId: SessionId) => void;
   recordWorkspaceActivity: (workspaceId: string | undefined) => void;
   publishSessionMeta: (roomId: string, meta: SessionMeta) => void;
@@ -43,10 +40,7 @@ export type SessionSubmissionPorts = {
   onRpcDelivered: (sessionId: SessionId, turnId: string) => void;
 };
 
-function buildSessionCreateResult(
-  payload: SessionToCreate,
-  defaultHistoryBackend: SessionHistoryBackendKind
-): CreateSessionResult {
+function buildSessionCreateResult(payload: SessionToCreate): CreateSessionResult {
   const sessionId = payload.sessionId ?? (uuidv4() as SessionId);
   const sessionMeta: SessionMeta = {
     id: sessionId,
@@ -58,9 +52,9 @@ function buildSessionCreateResult(
     cliType: payload.cliType,
     agentType: payload.agentType,
     // Backend selection is a creation policy, not caller-provided turn data.
-    // The backend identity is persisted at creation and remains immutable for
-    // the session lifetime. Existing sessions retain their stored backend.
-    historyBackend: payload.historyBackend ?? defaultHistoryBackend,
+    // Flip NEW_SESSION_HISTORY_BACKEND only when the corresponding adapter is
+    // registered on every client that can open the session.
+    historyBackend: NEW_SESSION_HISTORY_BACKEND,
     agentConfigId: payload.agentConfigId,
     acpSessionId: undefined,
     diffStats: undefined,
@@ -111,7 +105,6 @@ function buildSessionCreateResult(
 export function createSessionSubmission(ports: SessionSubmissionPorts) {
   const {
     runtime,
-    defaultHistoryBackend = LEGACY_SESSION_HISTORY_BACKEND,
     assertSessionCreateAllowed,
     recordWorkspaceActivity,
     publishSessionMeta,
@@ -124,7 +117,7 @@ export function createSessionSubmission(ports: SessionSubmissionPorts) {
     if (!runtime) {
       throw new Error('Runtime not ready');
     }
-    const { sessionId, sessionMeta } = buildSessionCreateResult(payload, defaultHistoryBackend);
+    const { sessionId, sessionMeta } = buildSessionCreateResult(payload);
     const sessionRoomId = getSessionRoomId(sessionId);
     // The local Flock index is the session-count source of truth. Incomplete
     // local state fails open so session creation never depends on Convex
@@ -156,7 +149,7 @@ export function createSessionSubmission(ports: SessionSubmissionPorts) {
     if (!runtime) {
       throw new Error('Runtime not ready');
     }
-    const { sessionId, sessionMeta } = buildSessionCreateResult(payload, defaultHistoryBackend);
+    const { sessionId, sessionMeta } = buildSessionCreateResult(payload);
     // The accept unit includes the first user message, so the meta it
     // publishes already carries that activity. Written here, not by a
     // follow-up touch: a close between acceptance and the first turn must
