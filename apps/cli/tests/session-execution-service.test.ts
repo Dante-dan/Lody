@@ -7942,7 +7942,7 @@ describe('SessionExecutionService', () => {
         ).resolves.toEqual({ success: true });
         const owner = (
           service as unknown as {
-            turnRuntimeBySession: Map<SessionId, { fiber?: Fiber.RuntimeFiber<unknown, unknown> }>;
+            turnRuntimeBySession: Map<SessionId, { fiber?: Fiber.Fiber<unknown, unknown> }>;
           }
         ).turnRuntimeBySession.get(sessionId);
         if (!owner?.fiber) throw new Error('Expected the running turn owner');
