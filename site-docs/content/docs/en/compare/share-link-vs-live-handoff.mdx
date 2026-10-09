@@ -5,19 +5,20 @@ description: A screenshot, transcript, share link, or archive is a record. A liv
 
 # Share link vs live handoff
 
-A **share link** publishes a record of a coding-agent session. A **live handoff** invites a teammate into the **same** session so they can keep chatting, reviewing diffs, and working in the same worktree.
+Two common meanings of “share my session” are easy to mix up:
 
-Those jobs get collapsed into “share my session.” They are not the same. A screenshot, a Markdown export, a ChatGPT-style snapshot, or an archive viewer lets someone *read* (or sometimes fork into a *new* run). None of those invite them into the live conversation, the live diffs, or the original working directory.
+- A **share link** (or screenshot, Markdown export, or archive) is a **record**. Someone can read what happened; some tools can start a *new* agent run from that context.
+- A **live handoff** invites a teammate into the **same** coding-agent session so they can keep chatting, reviewing diffs, and working in the same worktree.
 
-The how-to lives in [Share a Coding Agent Session](/docs/session-handoff). The team-workspace story is in [Team Features](/docs/team).
+A record is not an invite into the live conversation, the live diffs, or the original working directory.
+
+How-to and access rules: [Share a Coding Agent Session](/docs/session-handoff). Team workspace: [Team Features](/docs/team).
 
 <Callout title="Definition">
-A screenshot, transcript, share link, or session archive is not a live handoff. Viewers do not join your running session, and they do not inherit the original worktree. Handoff requires workspace membership and the machine / project sharing rules on the session-handoff page — it is not a public URL anyone can open.
+A screenshot, transcript, share link, or session archive is not a live handoff. Viewers do not join your running session, and they do not inherit the original worktree. Handoff needs workspace membership plus the machine / project sharing rules on the session-handoff page — it is not a public URL anyone can open.
 </Callout>
 
 ## Two different jobs
-
-People already share agent work in several ways. Most of them stop at “look at this.”
 
 | Job | What the recipient can do | Same live session? |
 | --- | --- | --- |
@@ -40,29 +41,26 @@ In Lody, a teammate who can open the session continues it from the same context:
 - the session worktree and branch
 - the same [agent config](/docs/agents), so they can send the next prompt
 
-They open **that** session — not a fork, and not a new composer thread. Forking copies history into a **new** session; use it when you want a private branch of the conversation. See [Fork a Session](/docs/session#fork-a-session).
+They open **that** session — not a fork, and not a brand-new chat. Forking copies history into a **new** session; use it when you want a private branch of the conversation. See [Fork a Session](/docs/session#fork-a-session).
 
 Handoff is a team-workspace action. The other person must already be a member, and the session is team-visible only when the machine (and local project, if any) is shared. Steps and edge cases: [Share a Coding Agent Session](/docs/session-handoff).
 
 ## When to use which
 
-Use a **screenshot, transcript, share link, or archive** when:
+| Goal | Prefer |
+| --- | --- |
+| Someone only needs to *read* what happened | Screenshot, transcript, share link, or archive |
+| You want a record outside the workspace | Screenshot, transcript, share link, or archive |
+| You are seeding a *new* agent run from exported context | Screenshot, transcript, share link, or archive |
+| A teammate should continue the **same** coding-agent session | **Live handoff** |
+| They need the current diffs and the same worktree (not a reconstructed prompt) | **Live handoff** |
+| They are already (or can be) a [workspace](/docs/team) member | **Live handoff** |
 
-- you only need someone to *read* what happened
-- you want a record outside the workspace
-- you are seeding a *new* agent run from exported context
+To run several isolated sessions as a team — mixed models, separate worktrees — see [Parallel Coding Agents](/docs/parallel-agents). That starts more work; it does not hand off one session.
 
-Use a **live handoff** when:
+## Permissions
 
-- a teammate should continue the same coding-agent session
-- they need the current diffs and the same worktree, not a reconstructed prompt
-- they are already (or can be) a member of the [workspace](/docs/team)
-
-To run several isolated sessions as a team — mixed models, separate worktrees — see [Parallel Coding Agents](/docs/parallel-agents). That is starting more work, not handing off one session.
-
-## Permissions (do not invent extra access)
-
-Handoff follows the same rules as the product guide. This page does not add a public share-link ACL.
+Handoff follows the same rules as the product guide. This page does not add a public share-link permission model.
 
 | Control | Effect |
 | --- | --- |
