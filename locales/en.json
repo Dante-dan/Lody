@@ -1,4 +1,7 @@
 {
+  "sessions.executionMachine.you": "You",
+  "sessions.executionMachine.unknownOwner": "Unknown owner",
+  "sessions.executionMachine.description": "Execution machine: {{owner}} · {{machine}}",
   "sessions.videoPreview.label": "Video preview",
   "sessions.videoPreview.failedTitle": "Video unavailable",
   "sessions.videoPreview.failedMessage": "This video could not be played. Its format may not be supported on this device, or the file could not be read.",
