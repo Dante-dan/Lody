@@ -1613,6 +1613,9 @@ importers:
       '@lody/shared':
         specifier: workspace:*
         version: link:../shared
+      effect:
+        specifier: 'catalog:'
+        version: 4.0.2
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
