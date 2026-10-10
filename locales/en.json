@@ -4823,5 +4823,9 @@
   "sessions.messageAuthor.source": "Open source conversation",
   "sessions.messageAuthor.on": "On",
   "sessions.messageAuthor.off": "Off",
-  "settings.memory.rolePromptHint": "Memory providers may inject role definitions into the prompt. Check for duplication or conflicts with your Lody configuration."
+  "settings.memory.rolePromptHint": "Memory providers may inject role definitions into the prompt. Check for duplication or conflicts with your Lody configuration.",
+  "onboarding.projects.search": "Filter connected projects",
+  "onboarding.projects.clearSearch": "Clear filter",
+  "onboarding.projects.filteredCount": "{{count}} of {{total}} projects",
+  "onboarding.projects.noMatches": "No projects match “{{query}}”."
 }

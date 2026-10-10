@@ -48,7 +48,7 @@ const manyLocalProjects: ProjectsScreenLocalEntry[] = Array.from({ length: 5 }, 
   detail: `/Users/dev/code/project-${i}`,
 }));
 
-const manyGitHubRepos: ProjectsScreenGitHubEntry[] = Array.from({ length: 6 }, (_, i) => ({
+const manyGitHubRepos: ProjectsScreenGitHubEntry[] = Array.from({ length: 186 }, (_, i) => ({
   key: `org/repo-${i}`,
   name: `org/repo-${i}`,
   detail: i % 2 === 0 ? 'Public' : 'Private',

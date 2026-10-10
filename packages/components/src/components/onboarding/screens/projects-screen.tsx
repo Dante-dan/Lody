@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useCloudAction, usePlatformCapability } from '@lody/platform/react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { Check, ExternalLink, FolderPlus, Github } from 'lucide-react';
 import * as stylex from '@stylexjs/stylex';
 import { Spinner } from '@lody/ui/spinner';
@@ -28,6 +28,7 @@ import { getIpcServices } from '@/lib/electron-ipc-client';
 import { selectAndWriteLocalProject } from '@/lib/local-project-import';
 import { openExternalUrl } from '@/lib/native-browser';
 import { Button } from '@lody/ui/button';
+import { Input } from '@lody/ui/input';
 import { OnboardingShell, OnboardingBackButton, OnboardingNextButton } from '../onboarding-shell';
 import { useOnboardingAnalytics } from '../onboarding-analytics';
 import { onboardingSurface as surface } from './surface';
@@ -55,6 +56,8 @@ const styles = stylex.create({
     fontWeight: 500,
     color: colors.secondaryLabel,
   },
+  search: { display: 'flex', gap: space[2], paddingInline: space[4], paddingBlock: space[2] },
+  empty: { paddingInline: space[4], paddingBlock: space[3], color: colors.secondaryLabel },
   listCount: { fontSize: text.captionSize, fontWeight: 400, color: colors.tertiaryLabel },
   /**
    * A project is a row of the card a person picks. The row carries its own
@@ -578,6 +581,12 @@ function ExistingProjectList({
   onSelect,
 }: ExistingProjectListProps) {
   const { t } = useTranslation();
+  const [query, setQuery] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
   const items = useMemo(
     () => [
       ...local.map((entry) => ({ ...entry, kind: 'local' as const })),
@@ -586,74 +595,133 @@ function ExistingProjectList({
     [local, github]
   );
 
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = items.filter((item) =>
+    `${item.key} ${item.name} ${item.detail}`.toLowerCase().includes(normalizedQuery)
+  );
+  const focusRow = (index: number) => {
+    const rows = listRef.current?.querySelectorAll<HTMLButtonElement>('button');
+    if (rows?.length) rows[(index + rows.length) % rows.length]?.focus();
+  };
+  const clearFilter = () => {
+    setQuery('');
+    inputRef.current?.focus();
+  };
+
   return (
     <div {...stylex.props(surface.card)}>
       <div {...stylex.props(styles.listHeader)}>
         <span>{t('onboarding.projects.connectedHeading', 'Connected')}</span>
         <span {...stylex.props(styles.listCount)}>
-          {t('onboarding.projects.connectedCount', '{{count}} project', {
-            count: items.length,
-            defaultValue_one: '{{count}} project',
-            defaultValue_other: '{{count}} projects',
-          })}
+          {normalizedQuery
+            ? t('onboarding.projects.filteredCount', '{{count}} of {{total}} projects', {
+                count: filtered.length,
+                total: items.length,
+              })
+            : t('onboarding.projects.connectedCount', '{{count}} project', {
+                count: items.length,
+                defaultValue_one: '{{count}} project',
+                defaultValue_other: '{{count}} projects',
+              })}
         </span>
       </div>
+      <div {...stylex.props(styles.search)}>
+        <Input
+          ref={inputRef}
+          type="search"
+          aria-label={t('onboarding.projects.search', 'Filter connected projects')}
+          placeholder={t('onboarding.projects.search', 'Filter connected projects')}
+          value={query}
+          onValueChange={setQuery}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') {
+              event.preventDefault();
+              clearFilter();
+            }
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              focusRow(event.key === 'ArrowDown' ? 0 : -1);
+            }
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              listRef.current?.querySelector<HTMLButtonElement>('button')?.click();
+            }
+          }}
+        />
+        {query ? (
+          <Button variant="secondary" onClick={clearFilter}>
+            {t('onboarding.projects.clearSearch', 'Clear filter')}
+          </Button>
+        ) : null}
+      </div>
+      {filtered.length === 0 ? (
+        <p role="status" {...stylex.props(styles.empty)}>
+          {t('onboarding.projects.noMatches', 'No projects match “{{query}}”.', { query })}
+        </p>
+      ) : null}
       {/*
         Cap height ~6 rows and let the rest scroll. `overscroll-contain` keeps
         the wheel from chaining to the page-level overlay scroll once the user
         hits an end inside the list.
       */}
-      <ul {...withClassName(stylex.props(surface.list), 'scrollbar-pro')}>
-        <AnimatePresence initial={false}>
-          {items.map((item, index) => {
-            const selected = selectedProjectKey === `${item.kind}:${item.key}`;
-            return (
-              <motion.li
-                key={`${item.kind}:${item.key}`}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -6 }}
-                transition={{ duration: 0.2 }}
-              >
-                <button
-                  type="button"
-                  onClick={() =>
-                    onSelect(
-                      item.kind === 'local'
-                        ? {
-                            kind: 'local',
-                            machineId: item.machineId,
-                            localProjectId: item.localProjectId,
-                            name: item.name,
-                          }
-                        : { kind: 'github', repoFullName: item.key, name: item.name }
-                    )
+      <ul ref={listRef} {...withClassName(stylex.props(surface.list), 'scrollbar-pro')}>
+        {filtered.map((item, index) => {
+          const selected = selectedProjectKey === `${item.kind}:${item.key}`;
+          return (
+            <motion.li
+              key={`${item.kind}:${item.key}`}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.2 }}
+            >
+              <button
+                type="button"
+                aria-pressed={selected}
+                onFocus={(event) => event.currentTarget.scrollIntoView?.({ block: 'nearest' })}
+                onKeyDown={(event) => {
+                  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    focusRow(index + (event.key === 'ArrowDown' ? 1 : -1));
                   }
-                  {...stylex.props(
-                    styles.projectRow,
-                    index > 0 && styles.projectRowRuled,
-                    selected && styles.projectRowSelected
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    clearFilter();
+                  }
+                }}
+                onClick={() =>
+                  onSelect(
+                    item.kind === 'local'
+                      ? {
+                          kind: 'local',
+                          machineId: item.machineId,
+                          localProjectId: item.localProjectId,
+                          name: item.name,
+                        }
+                      : { kind: 'github', repoFullName: item.key, name: item.name }
+                  )
+                }
+                {...stylex.props(
+                  styles.projectRow,
+                  index > 0 && styles.projectRowRuled,
+                  selected && styles.projectRowSelected
+                )}
+              >
+                <span {...stylex.props(surface.glyphBox, surface.glyphBoxSmall)}>
+                  {item.kind === 'local' ? (
+                    <FolderPlus {...stylex.props(surface.icon16)} />
+                  ) : (
+                    <Github {...stylex.props(surface.icon16)} />
                   )}
-                >
-                  <span {...stylex.props(surface.glyphBox, surface.glyphBoxSmall)}>
-                    {item.kind === 'local' ? (
-                      <FolderPlus {...stylex.props(surface.icon16)} />
-                    ) : (
-                      <Github {...stylex.props(surface.icon16)} />
-                    )}
-                  </span>
-                  <span {...stylex.props(surface.textColumn)}>
-                    <span {...stylex.props(surface.title)}>{item.name}</span>
-                    <span {...stylex.props(surface.detail)}>{item.detail}</span>
-                  </span>
-                  {selected ? (
-                    <Check {...stylex.props(surface.icon16, surface.iconAccent)} />
-                  ) : null}
-                </button>
-              </motion.li>
-            );
-          })}
-        </AnimatePresence>
+                </span>
+                <span {...stylex.props(surface.textColumn)}>
+                  <span {...stylex.props(surface.title)}>{item.name}</span>
+                  <span {...stylex.props(surface.detail)}>{item.detail}</span>
+                </span>
+                {selected ? <Check {...stylex.props(surface.icon16, surface.iconAccent)} /> : null}
+              </button>
+            </motion.li>
+          );
+        })}
       </ul>
     </div>
   );

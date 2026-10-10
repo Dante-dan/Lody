@@ -4823,5 +4823,9 @@
   "sessions.messageAuthor.source": "打开来源会话",
   "sessions.messageAuthor.on": "开启",
   "sessions.messageAuthor.off": "关闭",
-  "settings.memory.rolePromptHint": "记忆 Provider 可能向提示词注入角色定义，请留意是否与 Lody 中的配置重复或冲突。"
+  "settings.memory.rolePromptHint": "记忆 Provider 可能向提示词注入角色定义，请留意是否与 Lody 中的配置重复或冲突。",
+  "onboarding.projects.search": "筛选已连接的项目",
+  "onboarding.projects.clearSearch": "清除筛选",
+  "onboarding.projects.filteredCount": "{{total}} 个项目中有 {{count}} 个匹配",
+  "onboarding.projects.noMatches": "没有项目匹配“{{query}}”。"
 }

@@ -250,6 +250,100 @@ describe('desktop onboarding flow', () => {
     });
   });
 
+  it('filters connected projects and preserves exact keyboard selection through clearing', async () => {
+    function Picker() {
+      const [selection, setSelection] = React.useState<
+        import('../src/atoms/onboarding').DesktopOnboardingProjectSelection | null
+      >(null);
+      return (
+        <ProjectsScreenView
+          local={[
+            {
+              key: 'local:notes',
+              machineId,
+              localProjectId: 'notes' as LocalProjectId,
+              name: 'Notes',
+              detail: '/work/notes',
+            },
+          ]}
+          github={[
+            { key: 'Owner/Alpha', name: 'Owner/Alpha', detail: 'Private' },
+            { key: 'Owner/Zebra', name: 'Owner/Zebra', detail: 'Public' },
+          ]}
+          importing={false}
+          connectingGitHub={false}
+          canImportLocal
+          canConnectGitHub={false}
+          loadingRepos={false}
+          selectedProjectKey={
+            selection?.kind === 'github' ? `github:${selection.repoFullName}` : null
+          }
+          onSelectProject={setSelection}
+          onAddLocal={vi.fn()}
+          onConnectGitHub={vi.fn()}
+          onBack={vi.fn()}
+          onSkip={vi.fn()}
+          onComplete={vi.fn()}
+        />
+      );
+    }
+    await act(async () => {
+      root?.render(<Picker />);
+    });
+    const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+    expect(document.activeElement).toBe(input);
+    const typeQuery = async (query: string) => {
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(
+          input,
+          query
+        );
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    };
+    await typeQuery('OWNER');
+    expect(container.textContent).toContain('2 of 3 projects');
+    expect(container.querySelector('ul')?.textContent).not.toContain('Notes');
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    });
+    expect(document.activeElement?.textContent).toContain('Owner/Alpha');
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true })
+      );
+    });
+    expect(document.activeElement?.textContent).toContain('Owner/Zebra');
+    await act(async () => {
+      (document.activeElement as HTMLButtonElement).click();
+    });
+    expect(container.querySelector('button[aria-pressed="true"]')?.textContent).toContain(
+      'Owner/Zebra'
+    );
+    await typeQuery('private');
+    expect(container.querySelector('ul')?.textContent).toContain('Owner/Alpha');
+    expect(container.querySelector('ul')?.textContent).not.toContain('Owner/Zebra');
+    await typeQuery('missing');
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('No projects match');
+    expect(container.querySelector('ul button')).toBeNull();
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(input.value).toBe('');
+    expect(container.querySelector('button[aria-pressed="true"]')?.textContent).toContain(
+      'Owner/Zebra'
+    );
+    await typeQuery('  alpha  ');
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    });
+    expect(container.querySelector('button[aria-pressed="true"]')?.textContent).toContain(
+      'Owner/Alpha'
+    );
+    await typeQuery('NOTES');
+    expect(container.querySelector('ul')?.textContent).toContain('Notes');
+  });
+
   it('keeps GitHub available while the local agent is not ready', async () => {
     store.set(localProbeResultAtom, null);
     store.set(localCliStartingAtom, false);
