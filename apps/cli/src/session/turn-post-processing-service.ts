@@ -16,6 +16,7 @@ import {
   type GitRunner,
   type GitWorkingTreeDiffBaseline,
 } from '@/lib/git/git-diff-stats';
+import { fingerprintWorkingTreeFile } from '@/lib/git/working-tree-fingerprint';
 import { countWorkingTreeTextFileLines } from '@/lib/git/working-tree-line-count';
 import type { LoroDocumentManager, SessionDocument } from '@/lib/loro/doc';
 import { detectPullRequestForBranch, type DetectedPullRequest } from '@/lib/pr-detector';
@@ -178,6 +179,7 @@ export class TurnPostProcessingService {
         preferredBaseBranch,
         baseCommitHash: options.baseCommitHash,
         turnStartWorkingTreeDiff: options.turnStartWorkingTreeDiff,
+        fingerprintWorkingTreeFile: (filePath) => fingerprintWorkingTreeFile(workdir, filePath),
         countWorkingTreeFileLines: (filePath) => countWorkingTreeTextFileLines(workdir, filePath),
       });
       if (stats) {

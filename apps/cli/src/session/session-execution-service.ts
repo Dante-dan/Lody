@@ -74,6 +74,7 @@ import {
   type GitRunner,
   type GitWorkingTreeDiffBaseline,
 } from '@/lib/git/git-diff-stats';
+import { fingerprintWorkingTreeFile } from '@/lib/git/working-tree-fingerprint';
 import { resolveWorkspaceLocalProjectRootPathWithRetry } from '@/lib/local-project-meta';
 import { readTimeoutEnv, withTimeout } from '@/lib/loro/timeout-utils';
 import { ConcurrentQueue } from '@/lib/concurrent-queue';
@@ -5175,7 +5176,10 @@ export class SessionExecutionService {
                 self.deps.logger,
                 'execution.capture_worktree_diff_baseline',
                 { sessionId, turnId, triggerReason },
-                async () => await captureGitWorkingTreeDiffBaseline(runGit)
+                async () =>
+                  await captureGitWorkingTreeDiffBaseline(runGit, (filePath) =>
+                    fingerprintWorkingTreeFile(workdir, filePath)
+                  )
               )
             );
             runtime.project = project;
@@ -5959,7 +5963,10 @@ export class SessionExecutionService {
               self.deps.logger,
               'execution.capture_worktree_diff_baseline',
               { sessionId, turnId },
-              async () => await captureGitWorkingTreeDiffBaseline(runGit)
+              async () =>
+                await captureGitWorkingTreeDiffBaseline(runGit, (filePath) =>
+                  fingerprintWorkingTreeFile(containerWorkdir, filePath)
+                )
             )
           );
           runtime.project = project;

@@ -2,6 +2,7 @@ import type { FileDiff, LineChange, SessionDiffStats } from '@lody/shared';
 import { gitDiffBaseRefCandidates } from './git-diff-base';
 
 export type GitRunner = (args: string[]) => Promise<string>;
+export type WorkingTreeFingerprinter = (filePath: string) => Promise<string | null>;
 
 export type GitDiffStats = {
   baseRef: string;
@@ -221,9 +222,17 @@ export const getCurrentCommitHash = async (runGit: GitRunner): Promise<string | 
 
 const hashObjectPaths = async (
   runGit: GitRunner,
-  filePaths: readonly string[]
+  filePaths: readonly string[],
+  fingerprintFile?: WorkingTreeFingerprinter
 ): Promise<Map<string, string>> => {
   const hashesByPath = new Map<string, string>();
+  if (fingerprintFile) {
+    for (const filePath of filePaths) {
+      const fingerprint = await fingerprintFile(filePath);
+      if (fingerprint) hashesByPath.set(filePath, fingerprint);
+    }
+    return hashesByPath;
+  }
   const chunkSize = 100;
   for (let start = 0; start < filePaths.length; start += chunkSize) {
     const chunk = filePaths.slice(start, start + chunkSize);
@@ -257,7 +266,8 @@ const hashObjectPaths = async (
 
 const captureGitWorkingTreeDiffFingerprints = async (
   runGit: GitRunner,
-  filePaths?: readonly string[]
+  filePaths?: readonly string[],
+  fingerprintFile?: WorkingTreeFingerprinter
 ): Promise<GitWorkingTreeDiffBaseline> => {
   const args =
     filePaths && filePaths.length > 0
@@ -268,9 +278,11 @@ const captureGitWorkingTreeDiffFingerprints = async (
   const nonDeletedPaths = entries
     .filter((entry) => !entry.status.startsWith('D'))
     .map((entry) => entry.filePath);
-  const hashesByPath = await hashObjectPaths(runGit, [
-    ...new Set([...nonDeletedPaths, ...untrackedPaths]),
-  ]);
+  const hashesByPath = await hashObjectPaths(
+    runGit,
+    [...new Set([...nonDeletedPaths, ...untrackedPaths])],
+    fingerprintFile
+  );
 
   const baseline: GitWorkingTreeDiffBaseline = {};
   for (const entry of entries) {
@@ -295,9 +307,10 @@ const captureGitWorkingTreeDiffFingerprints = async (
 
 const captureGitWorkingTreePathStateFingerprints = async (
   runGit: GitRunner,
-  filePaths: readonly string[]
+  filePaths: readonly string[],
+  fingerprintFile?: WorkingTreeFingerprinter
 ): Promise<GitWorkingTreeDiffBaseline> => {
-  const hashesByPath = await hashObjectPaths(runGit, filePaths);
+  const hashesByPath = await hashObjectPaths(runGit, filePaths, fingerprintFile);
   const baseline: GitWorkingTreeDiffBaseline = {};
   for (const filePath of filePaths) {
     const objectHash = hashesByPath.get(filePath);
@@ -310,14 +323,15 @@ const captureGitWorkingTreePathStateFingerprints = async (
 };
 
 export const captureGitWorkingTreeDiffBaseline = async (
-  runGit: GitRunner
+  runGit: GitRunner,
+  fingerprintFile?: WorkingTreeFingerprinter
 ): Promise<GitWorkingTreeDiffBaseline | null> => {
   if (!(await isInsideGitWorktree(runGit))) {
     return null;
   }
 
   try {
-    return await captureGitWorkingTreeDiffFingerprints(runGit);
+    return await captureGitWorkingTreeDiffFingerprints(runGit, undefined, fingerprintFile);
   } catch {
     return null;
   }
@@ -349,6 +363,7 @@ export const getGitDiffStats = async (
     baseCommitHash?: string;
     turnStartWorkingTreeDiff?: GitWorkingTreeDiffBaseline | null;
     countWorkingTreeFileLines?: GitWorkingTreeLineCounter;
+    fingerprintWorkingTreeFile?: WorkingTreeFingerprinter;
   }
 ): Promise<GitDiffStats | null> => {
   const preferredBaseBranch = options?.preferredBaseBranch ?? 'main';
@@ -377,14 +392,15 @@ export const getGitDiffStats = async (
     if (turnStartWorkingTreeDiff && baselinePaths.length > 0) {
       const currentFingerprints = await captureGitWorkingTreePathStateFingerprints(
         runGit,
-        baselinePaths
+        baselinePaths,
+        options.fingerprintWorkingTreeFile
       );
       commitFileDiff = commitFileDiff.filter((diff) => {
         const before = turnStartWorkingTreeDiff[diff.filePath];
         if (!before) return true;
         const after = currentFingerprints[diff.filePath];
         if (!after) return true;
-        return before.objectHash !== after.objectHash;
+        return after.objectHash === null || before.objectHash !== after.objectHash;
       });
     }
     const commitFileDiffPaths = new Set(commitFileDiff.map((diff) => diff.filePath));
@@ -400,7 +416,11 @@ export const getGitDiffStats = async (
       (filePath) => !commitFileDiffPaths.has(filePath)
     );
     if (turnStartWorkingTreeDiff && turnUntrackedPaths.length > 0) {
-      const currentHashes = await hashObjectPaths(runGit, turnUntrackedPaths);
+      const currentHashes = await hashObjectPaths(
+        runGit,
+        turnUntrackedPaths,
+        options.fingerprintWorkingTreeFile
+      );
       turnUntrackedPaths = turnUntrackedPaths.filter((filePath) => {
         const before = turnStartWorkingTreeDiff[filePath];
         if (!before) return true;

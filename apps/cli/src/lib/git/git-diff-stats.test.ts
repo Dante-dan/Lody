@@ -1,3 +1,7 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
+import { fingerprintWorkingTreeFile } from './working-tree-fingerprint';
 import { describe, expect, it } from 'vitest';
 import {
   captureGitWorkingTreeDiffBaseline,
@@ -349,5 +353,56 @@ describe('isWorkspaceDirty', () => {
     // Must NOT be `false`: a transient failure that read as "clean" hid the
     // Create PR / Commit & Push actions on genuinely dirty sessions.
     await expect(isWorkspaceDirty(runGit)).resolves.toBeUndefined();
+  });
+});
+
+describe('bounded working-tree fingerprints', () => {
+  it('keeps unknown tracked and untracked files visible in turn-end stats', async () => {
+    const runGit: GitRunner = async (args) => {
+      if (args[0] === 'rev-parse') return 'true\n';
+      if (args[0] === 'merge-base') return 'base\n';
+      if (args[0] === 'diff') return args.at(-1) === 'HEAD' ? '' : '1\t0\ttracked.ts\n';
+      if (args[0] === 'ls-files') return 'dump\0';
+      throw new Error('Unknown fingerprints must not fall back to git hash-object');
+    };
+    const result = await getGitDiffStats(runGit, {
+      baseCommitHash: 'start',
+      turnStartWorkingTreeDiff: {
+        'tracked.ts': { status: 'D', objectHash: null },
+        dump: { status: '??', objectHash: 'old' },
+      },
+      fingerprintWorkingTreeFile: async () => null,
+    });
+    expect(result?.commitFileDiff).toEqual([
+      { filePath: 'tracked.ts', add: 1, del: 0 },
+      { filePath: 'dump', add: 0, del: 0 },
+    ]);
+  });
+
+  it('omits a multi-gigabyte artifact and still detects same-size source edits', async () => {
+    const workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'lody-fingerprint-'));
+    try {
+      const dump = await fs.open(path.join(workdir, 'heap.dump'), 'w');
+      await dump.truncate(12 * 1024 * 1024 * 1024);
+      await dump.close();
+      await fs.writeFile(path.join(workdir, 'source.ts'), 'before');
+      const runGit: GitRunner = async (args) => {
+        if (args[0] === 'rev-parse') return 'true\n';
+        if (args[0] === 'diff') return '';
+        if (args[0] === 'ls-files') return 'heap.dump\0source.ts\0';
+        throw new Error('Content must not be sent through git hash-object');
+      };
+      const fingerprint = (filePath: string) => fingerprintWorkingTreeFile(workdir, filePath);
+      const before = await captureGitWorkingTreeDiffBaseline(runGit, fingerprint);
+      expect(before).toEqual({ 'source.ts': { status: '??', objectHash: expect.any(String) } });
+      expect(await captureGitWorkingTreeDiffBaseline(runGit, fingerprint)).toEqual(before);
+      await fs.writeFile(path.join(workdir, 'source.ts'), 'after!');
+      const after = await captureGitWorkingTreeDiffBaseline(runGit, fingerprint);
+      expect(after?.['source.ts']?.objectHash).not.toEqual(before?.['source.ts']?.objectHash);
+      expect(await fingerprintWorkingTreeFile(workdir, '../outside')).toBeNull();
+      expect(await fingerprintWorkingTreeFile(workdir, 'missing')).toBeNull();
+    } finally {
+      await fs.rm(workdir, { recursive: true, force: true });
+    }
   });
 });

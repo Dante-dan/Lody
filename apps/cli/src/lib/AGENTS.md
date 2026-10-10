@@ -114,3 +114,6 @@ never pushed to renderers as local room health.
   tokens, or raw provider output.
 - **A `file-preview/` preview must never activate Code Collab**: no workspace watch, no
   All Changes recompute, no Flock publish.
+
+- Turn-diff equality uses the same bounded reader at start and end; unknown
+  fingerprints never suppress an edit.
