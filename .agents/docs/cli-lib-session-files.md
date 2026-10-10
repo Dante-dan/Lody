@@ -1,7 +1,12 @@
 # Session file attachments in the CLI
 
 How a file or image travels from a client into an agent prompt and, eventually, into
-cloud storage. Normative intent: `specs/session-files.md`.
+cloud storage. The [attachment draft Spec](../../specs/session-files.md) describes
+the implemented client deferral of existing transfers until Send; the CLI lifecycle below is retained.
+[Permanent local references](../../specs/local-attachment-references.md) belong to
+a separate follow-up PR. The Specs remain draft pending review. The client holds a
+message in memory until its attachments are ready, then writes it locally; CLI
+materialization, Agent execution, and backfill retain their existing owners.
 [`apps/cli/src/lib/AGENTS.md`](../../apps/cli/src/lib/AGENTS.md) requires this page to
 be read before session file upload, dispatch materialization, or backfill is changed,
 because the statements below bind those paths.
@@ -51,3 +56,16 @@ Agent-to-human ACP `image`, `resource` and `resource_link` output is materialize
 injected image/file capability, then append `image_group` / `file` history blocks. A
 `resource_link file://...` is accepted only when it is contained in the session
 workspace.
+
+
+## CLI and MCP input
+
+[CLI input attachments](../../specs/cli-session-attachments.md) adds a preparation
+boundary before user history is authored. `session-input-attachments.ts` resolves
+caller paths and snapshots all sources before any transfer. The shared
+`session-attachment-transfer.ts` performs uploads for both this preparation and
+MessageHandler's assistant output/backfill. Transport never appends history.
+
+Create and chat write the same complete input blocks to user content and frozen
+execution input. MCP acceptance persists references in `operation_inputs` with
+fixed Session/Turn IDs; daemon recovery consumes these instead of source paths.

@@ -1,6 +1,14 @@
+import { assertProductWindowSender } from '../assert-sender'
+import { parseSessionLink, INSTALLATION_LINK_SCHEMES } from '@lody/shared/session-link'
+import { desktopInstallationProfile } from '../../platform'
+import { getDesktopCallbackProtocol } from '../../desktop-channel'
+import { isDefaultLodyProtocolClient, setDefaultLodyProtocolClient } from '../../protocol-client'
+import { parseAppIconName } from '../../services/app-icon-core'
+import { productWindows } from '../../window-state'
+import { parseWindowTarget, openSessionWindow, type WindowTarget } from '../../session-windows'
 import { access } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
-import { BrowserWindow, nativeTheme, shell, systemPreferences } from 'electron'
+import { app, BrowserWindow, nativeTheme, shell, systemPreferences } from 'electron'
 import { getIpcContext, IpcMethod, IpcService } from 'electron-ipc-decorator'
 import {
   GLOBAL_SHORTCUT_DEFAULTS,
@@ -13,8 +21,19 @@ import {
   type WindowBadgeInput
 } from '@lody/shared/electron-ipc'
 import { getIpcServiceDeps } from '../ipc-service-deps'
+import { parseDevbarControlInput } from '../../services/devbar/control'
+import { getDevbarConfig, getDevbarMetrics, setDevbarControl } from '../../services/devbar/service'
+import {
+  prepareWindow,
+  cancelPreparedWindow,
+  getWindowWarmupMetrics,
+  isWindowWarmupEnabled,
+  setWindowWarmupEnabled
+} from '../../window-warm-service'
 import { setMenuLanguage } from '../../menu'
+import { localFileActionError } from '../../services/local-file-action-error'
 import { hasPathLauncher, launchLocalPath } from '../../services/local-path-launcher-service'
+import { takePendingRendererLocalClear } from '../../services/local-reset-service'
 import { parseWindowBadge } from '../../services/window-badge-service'
 import {
   findWindow,
@@ -22,7 +41,12 @@ import {
   persistRendererFatalError,
   requestRendererReload
 } from '../../renderer-recovery'
-import { applyResolvedWindowTheme, resolveNativeWindowTheme } from '../../window-theme'
+import {
+  applyResolvedWindowTheme,
+  isNativeWindowThemeSource,
+  resolveNativeWindowTheme
+} from '../../window-theme'
+import { writeStartupThemeSource } from '../../theme-settings'
 import { formatUnknownError, normalizeExternalHttpUrl } from '../../utils'
 import {
   applyAutoLaunchSettings,
@@ -90,6 +114,172 @@ export function installNativeThemeWatch(): void {
 
 export class AppIpc extends IpcService {
   static override readonly groupName = 'app'
+
+  @IpcMethod()
+  async getDefaultLinkHandler() {
+    assertProductWindowSender(getIpcContext().event)
+    return { isDefault: isDefaultLodyProtocolClient() }
+  }
+
+  @IpcMethod()
+  async setDefaultLinkHandler() {
+    assertProductWindowSender(getIpcContext().event)
+    const requested = setDefaultLodyProtocolClient()
+    return { requested, isDefault: isDefaultLodyProtocolClient() }
+  }
+
+  @IpcMethod()
+  async getLinkInstallations() {
+    assertProductWindowSender(getIpcContext().event)
+    return INSTALLATION_LINK_SCHEMES.flatMap((scheme) => {
+      if (scheme === getDesktopCallbackProtocol(desktopInstallationProfile)) return []
+      const name = app.getApplicationNameForProtocol(`${scheme}://session/probe`)
+      return name ? [{ scheme, name }] : []
+    })
+  }
+
+  @IpcMethod()
+  async openSessionInInstallation(raw: string, scheme: string) {
+    assertProductWindowSender(getIpcContext().event)
+    if (
+      !INSTALLATION_LINK_SCHEMES.includes(scheme) ||
+      typeof raw !== 'string' ||
+      !parseSessionLink(raw)?.workspaceId
+    ) {
+      throw new Error('Invalid installation link')
+    }
+    const target = new URL(raw)
+    target.protocol = `${scheme}:`
+    await shell.openExternal(target.href)
+  }
+
+  @IpcMethod()
+  async getAppIconState() {
+    assertProductWindowSender(getIpcContext().event)
+    return getIpcServiceDeps().appIconService.getState()
+  }
+
+  @IpcMethod()
+  async setAppIcon(raw: { name: string }) {
+    assertProductWindowSender(getIpcContext().event)
+    const name = parseAppIconName(raw?.name)
+    return getIpcServiceDeps().appIconService.setIcon(name)
+  }
+
+  @IpcMethod()
+  async openWindow(raw: WindowTarget) {
+    const { event } = getIpcContext()
+    assertProductWindowSender(event)
+    openSessionWindow(parseWindowTarget(raw))
+  }
+
+  @IpcMethod()
+  async prepareWindow(raw: WindowTarget, requestId: string): Promise<void> {
+    const { event } = getIpcContext()
+    assertProductWindowSender(event)
+    if (typeof requestId !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(requestId))
+      throw new Error('Invalid preparation request')
+    const source = BrowserWindow.fromWebContents(event.sender)
+    if (source) prepareWindow(source, parseWindowTarget(raw), requestId)
+  }
+
+  @IpcMethod()
+  async cancelPreparedWindow(requestId: string): Promise<void> {
+    const { event } = getIpcContext()
+    assertProductWindowSender(event)
+    if (typeof requestId !== 'string' || requestId.length > 64)
+      throw new Error('Invalid preparation request')
+    cancelPreparedWindow(event.sender.id, requestId)
+  }
+
+  @IpcMethod()
+  async prepareCacheClear() {
+    const { event } = getIpcContext()
+    assertProductWindowSender(event)
+    for (const window of productWindows) {
+      if (window.webContents !== event.sender) window.destroy()
+    }
+  }
+
+  /**
+   * Reports a cache clear armed from the CLI (`lody app reset-cache`) to the
+   * booting renderer, which owns the precise clear. One-shot: a later reload of
+   * the same window must not repeat it.
+   */
+  @IpcMethod()
+  async consumePendingLocalClear() {
+    const { event } = getIpcContext()
+    assertProductWindowSender(event)
+    return takePendingRendererLocalClear()
+  }
+
+  @IpcMethod()
+  async getDevbarConfig() {
+    return getDevbarConfig()
+  }
+
+  @IpcMethod()
+  async setDevbarControl(raw: unknown) {
+    const { event } = getIpcContext()
+    assertProductWindowSender(event)
+    const window = BrowserWindow.fromWebContents(event.sender)
+    const mainWindow = getIpcServiceDeps().getMainWindow()
+    if (!window || window !== mainWindow) {
+      return { ok: false as const, error: 'main_window_required' as const }
+    }
+
+    let input
+    try {
+      input = parseDevbarControlInput(raw)
+    } catch {
+      return { ok: false as const, error: 'invalid_input' as const }
+    }
+
+    const result = await setDevbarControl(input)
+    const reload = (enabled: boolean): void => {
+      setImmediate(() => {
+        if (window.isDestroyed()) return
+        void getIpcServiceDeps()
+          .reloadMainWindowForDevbar(window, enabled)
+          .catch((error) => {
+            console.error('[Devbar] Failed to switch renderer entry', error)
+          })
+      })
+    }
+    if (!result.ok) {
+      // A failed capability restart has already closed the previous Hub. Leave
+      // the dedicated renderer too, instead of showing a disconnected Devbar.
+      if (window.webContents.getURL().includes('/devbar.html')) reload(false)
+      return { ok: false as const, error: 'start_failed' as const, config: result.config }
+    }
+    reload(input.enabled)
+    return { ok: true as const, config: result.config }
+  }
+
+  @IpcMethod()
+  async getWindowWarmup() {
+    return { enabled: isWindowWarmupEnabled() }
+  }
+
+  @IpcMethod()
+  async setWindowWarmup(raw: unknown) {
+    const { event } = getIpcContext()
+    assertProductWindowSender(event)
+    if (typeof raw !== 'boolean') {
+      return { ok: false as const, error: 'invalid_input' as const }
+    }
+    // The spare pool never changes the renderer entry, so toggling it must not
+    // reload the window the way setDevbarControl does.
+    setWindowWarmupEnabled(raw)
+    return { ok: true as const, enabled: isWindowWarmupEnabled() }
+  }
+
+  @IpcMethod()
+  async getDevbarMetrics() {
+    const snapshot = getDevbarMetrics()
+    if (!snapshot) return null
+    return { ...snapshot, warmPool: getWindowWarmupMetrics(app.getAppMetrics()) }
+  }
 
   @IpcMethod()
   async getFullscreen() {
@@ -253,6 +443,12 @@ export class AppIpc extends IpcService {
 
   @IpcMethod()
   async openExternalUrl(urlRaw: string) {
+    if (typeof urlRaw === 'string' && parseSessionLink(urlRaw)) {
+      const { event } = getIpcContext()
+      assertProductWindowSender(event)
+      event.sender.send('app.deepLink', urlRaw)
+      return { opened: true, url: urlRaw }
+    }
     const externalUrl = normalizeExternalHttpUrl(urlRaw)
     if (!externalUrl) {
       return { opened: false, error: 'invalid_url' }
@@ -276,8 +472,8 @@ export class AppIpc extends IpcService {
     }
     try {
       await access(targetPath)
-    } catch {
-      return { revealed: false as const, error: 'not_found' }
+    } catch (error) {
+      return { revealed: false as const, error: localFileActionError(error) }
     }
     shell.showItemInFolder(targetPath)
     return { revealed: true as const }
@@ -298,8 +494,8 @@ export class AppIpc extends IpcService {
     }
     try {
       await access(targetPath)
-    } catch {
-      return { opened: false as const, error: 'not_found' }
+    } catch (error) {
+      return { opened: false as const, error: localFileActionError(error) }
     }
     // `shell.openPath` resolves to '' on success and to the failure message
     // otherwise; it never rejects.
@@ -362,9 +558,23 @@ export class AppIpc extends IpcService {
 
   @IpcMethod()
   async setNativeTheme(source: NativeThemeSource) {
-    if (source === 'dark' || source === 'light' || source === 'system') {
+    if (isNativeWindowThemeSource(source)) {
       nativeTheme.themeSource = source
       syncNativeThemeWindows()
+    }
+  }
+
+  /**
+   * Records the theme the next launch should open in.
+   *
+   * Deliberately separate from `setNativeTheme`, which also follows a preview
+   * (hovering a theme in Settings) so the native chrome tracks what the user is
+   * looking at. Only a committed choice belongs on disk.
+   */
+  @IpcMethod()
+  async setStartupThemeSource(source: NativeThemeSource) {
+    if (isNativeWindowThemeSource(source)) {
+      writeStartupThemeSource(source)
     }
   }
 

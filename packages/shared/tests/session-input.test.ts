@@ -10,10 +10,10 @@ import {
   historyItemsToInputBlocks,
   inputBlocksToHistoryItems,
   normalizeSessionInputBlocks,
+  resolveSessionExecutionInputBlocks,
   resolveSessionAcpRuntimeConfig,
   resolveSessionConversationConfig,
   resolveSessionConversationSourceFence,
-  resolveSessionTaskToolsEnabled,
 } from '../src/session-input';
 import { normalizeSessionTurnInputConfig, SessionFileBlockSchema } from '../src/message-schemas';
 import { sessionDocSchema } from '../src/schema';
@@ -22,6 +22,7 @@ import type {
   MessageContent,
   SessionFilePayload,
   SessionId,
+  SessionInputBlock,
   VisualAnnotationReferencePayload,
 } from '../src/ai';
 import type { SessionDoc, SessionHistoryInput } from '../src/schema';
@@ -119,6 +120,51 @@ const localFilePayload: SessionFilePayload = {
 };
 
 describe('session-input helpers', () => {
+  it('executes frozen instructions once while preserving every structured attachment', () => {
+    const attachments: SessionInputBlock[] = [
+      { type: 'image', imageId: 'image-1', mimeType: 'image/png', sizeBytes: 128 },
+      r2FilePayload,
+      { type: 'comment_reference', ...commentReference },
+      { type: 'visual_annotation_reference', ...visualAnnotationReference },
+    ];
+    const raw: SessionInputBlock[] = [
+      {
+        type: 'text',
+        text: 'Review @src/a.ts',
+        spans: [{ start: 7, end: 16, kind: 'file', label: '@src/a.ts', target: 'src/a.ts' }],
+      },
+      ...attachments,
+    ];
+    const config = buildSessionTurnInputConfig({
+      cliType: 'builtin',
+      agentType: 'codex',
+      inputBlocks: raw,
+      prompt: 'CONFIG_INSTRUCTION\n\nROLE_INSTRUCTION\n\nReview @src/a.ts',
+    });
+    const expected = [...attachments, { type: 'text', text: config.prompt }];
+    expect(resolveSessionExecutionInputBlocks(config)).toEqual(expected);
+    expect(resolveSessionExecutionInputBlocks({ ...config, inputBlocks: expected })).toEqual(
+      expected
+    );
+    expect(config.inputBlocks).toEqual(raw);
+    expect(inputBlocksToHistoryItems(raw)[0]).toMatchObject(raw[0]);
+  });
+
+  it('distinguishes an absent legacy prompt from explicit empty execution text', () => {
+    const inputBlocks: SessionInputBlock[] = [{ type: 'text', text: 'legacy task' }, r2FilePayload];
+    expect(resolveSessionExecutionInputBlocks({ inputBlocks })).toEqual(inputBlocks);
+    expect(resolveSessionExecutionInputBlocks({ inputBlocks, prompt: '' })).toEqual([
+      r2FilePayload,
+    ]);
+    expect(resolveSessionExecutionInputBlocks({ prompt: 'only text' })).toEqual([
+      { type: 'text', text: 'only text' },
+    ]);
+    expect(
+      resolveSessionExecutionInputBlocks({ inputBlocks: [r2FilePayload], prompt: '' })
+    ).toEqual([r2FilePayload]);
+    expect(resolveSessionExecutionInputBlocks({ prompt: '' })).toEqual([]);
+  });
+
   it('uses only the latest persisted user conversation config', () => {
     const history = [
       {
@@ -292,32 +338,6 @@ describe('session-input helpers', () => {
         configOptionValues: { collaboration_mode: 'default' },
       })
     ).toBeNull();
-  });
-
-  it('resolves the frozen Task tool gate with legacy inputs disabled', () => {
-    expect(
-      resolveSessionTaskToolsEnabled([
-        {
-          id: 'turn-1',
-          role: 'user',
-          inputConfig: {
-            prompt: 'create a task',
-            cliType: 'builtin',
-            agentType: 'codex',
-            taskToolsEnabled: true,
-          },
-        },
-      ])
-    ).toBe(true);
-    expect(
-      resolveSessionTaskToolsEnabled([
-        {
-          id: 'legacy-turn',
-          role: 'user',
-          inputConfig: { prompt: 'hello', cliType: 'builtin', agentType: 'codex' },
-        },
-      ])
-    ).toBe(false);
   });
 
   it('ignores invalid and unconfigured history when resolving conversation config', () => {
@@ -740,6 +760,7 @@ describe('session-input helpers', () => {
     ).toEqual({
       userId: 'user-1',
       role: 'user',
+      author: { v: 1, kind: 'human', userId: 'user-1' },
       items: [
         { type: 'text', text: 'hello' },
         {
@@ -938,4 +959,51 @@ describe('session-input helpers', () => {
       mirror.dispose();
     }
   });
+});
+
+it('freezes a memory identity in turn input and restores the same identity from history', () => {
+  const memory = { providerId: 'nowledge-mem', memoryId: 'reviewer' };
+  const inputConfig = buildSessionTurnInputConfig({
+    prompt: 'Review this',
+    cliType: 'builtin',
+    agentType: 'codex',
+    memory,
+  });
+  const doc = new Loro();
+  const mirror = new Mirror({
+    doc,
+    schema: sessionDocSchema,
+    initialState: {
+      session: { id: 'memory-session' as SessionId },
+      history: [],
+      mq: [],
+    } satisfies Partial<SessionDoc>,
+    throwOnValidationError: true,
+  });
+  mirror.setState((prev) => ({
+    ...prev,
+    history: [{ id: 'memory-turn', role: 'user', inputConfig }],
+  }));
+  expect(
+    normalizeSessionTurnInputConfig(mirror.getState().history[0]?.inputConfig)?.memory
+  ).toEqual(memory);
+  mirror.dispose();
+  expect(
+    resolveSessionConversationConfig([{ id: 'turn-1', role: 'user', inputConfig }]).memory
+  ).toEqual(memory);
+  expect(
+    resolveSessionConversationConfig([
+      { id: 'turn-1', role: 'user', inputConfig },
+      {
+        id: 'turn-2',
+        role: 'user',
+        inputConfig: buildSessionTurnInputConfig({
+          prompt: 'Continue',
+          cliType: 'builtin',
+          agentType: 'codex',
+          agentRoleId: null,
+        }),
+      },
+    ]).memory
+  ).toBeUndefined();
 });

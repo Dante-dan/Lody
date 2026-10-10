@@ -1,5 +1,14 @@
+import { MemoryProviderRequestSchema, MemoryProviderResponseSchema } from './memory-provider';
+import {
+  IosSimulatorCommandSchema,
+  IosSimulatorRequestSchema,
+  IosSimulatorResponseSchema,
+} from './ios-simulator';
+import { isWorkspaceMcpServerMeta, type WorkspaceMcpServerMeta } from './workspace-mcp';
 import { LocalFileResolutionSchema } from './local-file-preview';
+import { MachinePiExtensionsResponseSchema } from './pi-extensions';
 import { z } from 'zod';
+import { SESSION_GOAL_ACTIONS } from './goal';
 import {
   CodeCollabV2ErrorSchema,
   CodeCollabV2FileIndexRequestSchema,
@@ -29,14 +38,22 @@ import {
   SessionForkResponseSchema,
   SessionForkSpecSchema,
   SessionIdSchema,
+  AgentConfigIdSchema,
   SessionPreparationCancelSpecSchema,
   SessionPreparationSpecSchema,
   SessionPrepareCancelResponseSchema,
   SessionPrepareResponseSchema,
   SessionPreviewEndpointAcquireResponseSchema,
+  SessionPreviewCreateRequestSchema,
+  SessionPreviewCreateResponseSchema,
+  SessionPreviewRevokeRequestSchema,
+  SessionPreviewRevokeResponseSchema,
+  SessionPreviewStatusRequestSchema,
+  SessionPreviewStatusResponseSchema,
   SessionPreviewEndpointReleaseResponseSchema,
   PreviewTargetSchema,
   SessionSteerResponseSchema,
+  SessionGoalResponseSchema,
   SessionTerminateResponseSchema,
 } from './message-schemas';
 
@@ -74,7 +91,52 @@ export type SessionActiveInvocationContextResult = z.infer<
   typeof SessionActiveInvocationContextResultSchema
 >;
 
+export const McpToolListResultSchema = z
+  .object({
+    type: z.literal('mcp/tools'),
+    tools: z.array(z.object({ name: z.string(), description: z.string().optional() })),
+  })
+  .strict();
+export type McpToolListResult = z.infer<typeof McpToolListResultSchema>;
+
+export const SessionToolResultSchema = z
+  .object({
+    type: z.literal('session/tool-result'),
+    content: z.array(z.object({ type: z.literal('text'), text: z.string() }).strict()),
+    isError: z.boolean().optional(),
+  })
+  .strict();
+
 export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('ios-simulator/agent-control'),
+    params: z.object({ sessionId: SessionIdSchema, command: IosSimulatorCommandSchema }).strict(),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('ios-simulator/control'),
+    params: IosSimulatorRequestSchema,
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('mcp/list-tools'),
+    params: z
+      .object({ server: z.custom<WorkspaceMcpServerMeta>(isWorkspaceMcpServerMeta) })
+      .strict(),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('session/call-tool'),
+    params: z
+      .object({
+        sessionId: SessionIdSchema,
+        name: z.string().min(1).max(100),
+        arguments: z
+          .record(z.string(), z.json())
+          .refine(
+            (value) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= 256 * 1024,
+            'Session tool arguments exceed 256 KiB'
+          ),
+      })
+      .strict(),
+  }).strict(),
   BaseLocalMachineRpcRequestSchema.extend({
     method: z.literal('session/get-active-invocation-context'),
     params: z
@@ -156,6 +218,7 @@ export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
       .object({
         sessionId: SessionIdSchema,
         turnId: z.string().trim().min(1),
+        subagentTaskId: z.string().trim().min(1).optional(),
       })
       .strict(),
   }).strict(),
@@ -204,6 +267,41 @@ export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
       .strict(),
   }).strict(),
   BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('session/goal'),
+    params: z
+      .object({
+        sessionId: SessionIdSchema,
+        action: z.enum(SESSION_GOAL_ACTIONS),
+        objective: z.string().trim().min(1).optional(),
+        userId: z.string().trim().min(1),
+      })
+      .strict(),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('session/preview-create'),
+    params: SessionPreviewCreateRequestSchema.omit({
+      type: true,
+      machineId: true,
+      workspaceId: true,
+    }),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('session/preview-revoke'),
+    params: SessionPreviewRevokeRequestSchema.omit({
+      type: true,
+      machineId: true,
+      workspaceId: true,
+    }),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('session/preview-status'),
+    params: SessionPreviewStatusRequestSchema.omit({
+      type: true,
+      machineId: true,
+      workspaceId: true,
+    }),
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
     method: z.literal('session/preview-endpoint-acquire'),
     params: z
       .object({
@@ -230,12 +328,28 @@ export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
       })
       .strict(),
   }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('machine/memory'),
+    params: MemoryProviderRequestSchema,
+  }).strict(),
+  BaseLocalMachineRpcRequestSchema.extend({
+    method: z.literal('machine/pi-extensions'),
+    params: z
+      .object({
+        configId: AgentConfigIdSchema.optional(),
+      })
+      .strict(),
+  }).strict(),
 ]);
 
 export type LocalMachineRpcRequest = z.infer<typeof LocalMachineRpcRequestSchema>;
 export type LocalMachineRpcRequestValidated = LocalMachineRpcRequest;
 
 export const LocalMachineRpcResultSchema = z.union([
+  MemoryProviderResponseSchema,
+  IosSimulatorResponseSchema,
+  McpToolListResultSchema,
+  SessionToolResultSchema,
   SessionActiveInvocationContextResultSchema,
   CodeCollabV2FileIndexSnapshotSchema,
   CodeCollabV2OpenTextOkSchema,
@@ -258,7 +372,12 @@ export const LocalMachineRpcResultSchema = z.union([
   SessionPreviewEndpointAcquireResponseSchema,
   SessionPreviewEndpointReleaseResponseSchema,
   SessionSteerResponseSchema,
+  SessionPreviewCreateResponseSchema,
+  SessionPreviewRevokeResponseSchema,
+  SessionPreviewStatusResponseSchema,
+  SessionGoalResponseSchema,
   SessionTerminateResponseSchema,
+  MachinePiExtensionsResponseSchema,
 ]);
 export type LocalMachineRpcResult = z.infer<typeof LocalMachineRpcResultSchema>;
 

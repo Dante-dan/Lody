@@ -9,6 +9,7 @@ import {
 } from '@lody/shared';
 import type { SessionDocument } from '@/lib/loro/doc';
 import type { Logger } from '@/utils/logger';
+import type { SessionBackend } from '../session-backend';
 import type {
   WorktreeScriptEndEvent,
   WorktreeScriptEvents,
@@ -44,6 +45,7 @@ class WorktreeScriptHistoryRecorder implements WorktreeScriptEvents {
       phase: WorktreeScriptPhase;
       logger: Logger;
       insertBeforeEntryId?: string;
+      backend: Pick<SessionBackend, 'applyHistoryAction'>;
     }
   ) {
     this.historyId = `worktree-script-${args.phase}-${uuidv4()}`;
@@ -133,21 +135,10 @@ class WorktreeScriptHistoryRecorder implements WorktreeScriptEvents {
     finished?: boolean;
   }): Promise<void> {
     const entry = this.buildEntry(options);
-    await this.args.sessionDoc.updateHistory((history) => {
-      const index = history.findIndex((item) => item.id === this.historyId);
-      if (index === -1) {
-        const insertBeforeEntryId = this.args.insertBeforeEntryId;
-        if (insertBeforeEntryId) {
-          const insertIndex = history.findIndex((item) => item.id === insertBeforeEntryId);
-          if (insertIndex !== -1) {
-            return [...history.slice(0, insertIndex), entry, ...history.slice(insertIndex)];
-          }
-        }
-        return [...history, entry];
-      }
-      const next = [...history];
-      next[index] = entry;
-      return next;
+    await this.args.backend.applyHistoryAction({
+      kind: 'upsert-turn',
+      turn: entry,
+      beforeTurnId: this.args.insertBeforeEntryId,
     });
   }
 
@@ -188,6 +179,7 @@ export function createWorktreeScriptHistoryRecorder(args: {
   phase: WorktreeScriptPhase;
   logger: Logger;
   insertBeforeEntryId?: string;
+  backend: Pick<SessionBackend, 'applyHistoryAction'>;
 }): WorktreeScriptEvents {
   return new WorktreeScriptHistoryRecorder(args);
 }

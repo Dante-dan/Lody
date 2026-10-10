@@ -1,16 +1,16 @@
+import { MemoryBindingSchema } from '@lody/shared';
 import type { RepoTransportRoomStatus, RepoWatchHandle } from 'loro-repo';
 import { Effect, Fiber } from 'effect';
 import {
   buildMissingEmail,
   buildPendingUserHistoryEntry,
   buildSessionTurnInputConfig,
+  normalizeSessionTurnInputConfig,
   getSessionRoomId,
-  getLegacyReadForSessionHistoryStatus,
   type ChatFailedReason,
   isLoroRepoDocDeleted,
   isSessionDocRoomId,
   type AcpConfigOptionValue,
-  type MessageQueueItem,
   type MachineId,
   SESSION_DOC_PREFIX,
   SessionCreateRequestValidated,
@@ -26,11 +26,13 @@ import {
   normalizeMcpServerIdSelection,
   getPendingUserTurnActivationId,
   hasPendingUserTurnActivation,
+  resolveSessionHistoryStatus,
 } from '@lody/shared';
 import type { Logger } from '@/utils/logger';
 import { formatErrorMessage } from '@/utils/format-error';
 import { startTraceSpan, traceAsync } from '@/utils/trace-span';
 import type { LoroDocumentManager } from '@/lib/loro/doc';
+import { subscribeSessionChanges } from '@/lib/loro/doc';
 import { SessionExecutionService, type SessionDispatchSource } from './session-execution-service';
 import {
   extractPromptPreviewFromInputBlocks,
@@ -39,6 +41,7 @@ import {
 import type { SessionUserResolver, SessionUserProfile } from './session-user-resolver';
 import {
   findNextDispatchableUserTurn,
+  findLastHistoryEntry,
   isActivationAwaitingHistory,
   resolveDispatchTurnInput,
   resolveDispatchAcpSessionId,
@@ -57,6 +60,7 @@ import { resolveSessionLaunchConfig } from './session-launch-config-resolver';
 import type { SessionAccessPolicyService } from './session-access-policy';
 import { mapWithConcurrency } from '@/lib/bounded-concurrency';
 import { listAliveRoomIds } from '@/lib/loro/repo-existence';
+import { createSessionBackend, type SessionBackend } from './session-backend';
 
 const SESSION_RECONCILE_CONCURRENCY = 4;
 
@@ -120,7 +124,7 @@ type SessionDispatchWatcherDeps = {
 /** A running verify-with-retry fiber for a transient access failure on `turnId`. */
 type AccessRetryHandle = {
   turnId: string;
-  fiber: Fiber.RuntimeFiber<void, never>;
+  fiber: Fiber.Fiber<void, never>;
 };
 
 type WatchedSession = {
@@ -150,6 +154,9 @@ type InitialProbeObserver = {
 type InitialProbeRecord = {
   promise: Promise<void>;
   observer: InitialProbeObserver;
+  /** The whole-check chain promise this probe belongs to (resolves after any agent turn). */
+  chain: Promise<void>;
+  lifecycleGeneration: number | undefined;
   started: boolean;
   settled: boolean;
 };
@@ -223,7 +230,7 @@ const isConfigOptionValueRecord = (
  *    CRDT metadata changes (e.g. new session created, status updated, cancel requested).
  *    This is the primary trigger for new sessions and cancel requests.
  *
- * 2. **Mirror subscribe** (`sessionDoc.mirror.subscribe()`) — fires when a session
+ * 2. **Session subscription** (`sessionDoc.subscribeAll()`) — fires when a session
  *    doc's content changes (e.g. new user message synced from the web client).
  *    This handles follow-up messages on already-watched sessions.
  *
@@ -290,7 +297,15 @@ const isConfigOptionValueRecord = (
  * Each session has two independent serialized promise chains:
  * - `sessionCheckChains` — at most one `maybeHandleSession` runs per session at a time.
  *   If multiple events fire while a check is in progress, exactly one follow-up check
- *   runs after it completes (coalescing).
+ *   runs after it completes (coalescing): `enqueueSessionCheck` reuses the queued,
+ *   not-yet-started check instead of appending another one. This matters because
+ *   the dispatch branch awaits the whole agent turn, and the session mirror fires
+ *   once per commit while the agent streams output — a long turn would otherwise
+ *   leave hundreds of backlogged checks, each re-reading the full history
+ *   (~130 ms on a 13 MB doc), and drain them back-to-back on microtasks without
+ *   ever yielding to timers (observed: 42 s of event-loop starvation). A check that
+ *   follows another one in the chain also yields one macrotask first, so even a
+ *   real drain cannot starve timers or the Loro heartbeat.
  * - `cancelCheckChains` — same pattern for cancel requests. Separate from dispatch
  *   so that a cancel can be processed without waiting for a long-running dispatch.
  *
@@ -545,6 +560,15 @@ export class SessionDispatchWatcher {
   /**
    * Enqueue a dispatch check for a session. Multiple calls while a check is in-flight
    * are coalesced: exactly one follow-up check will run after the current one finishes.
+   *
+   * Every check reads meta and history fresh when it starts, so a check that is
+   * queued but has not started yet already covers any trigger that arrives
+   * before it. Such calls return the queued check's promises instead of
+   * appending a new link, which bounds the post-turn backlog to one check no
+   * matter how many mirror commits fired during the turn. Callers that await
+   * the result keep their contract: `resolveAfterInitialProbe` still resolves
+   * once that check's probe finishes, and the default still resolves once the
+   * whole check (including a dispatched turn) finishes.
    */
   enqueueSessionCheck(sessionId: SessionId, options: SessionCheckOptions = {}): Promise<void> {
     // Tests may drive an as-yet-unstarted watcher directly (generation 0). Once
@@ -572,8 +596,16 @@ export class SessionDispatchWatcher {
       const firstQueuedProbe = [...(probes ?? [])].find((probe) => !probe.settled);
       return firstQueuedProbe?.promise ?? existing;
     }
+    if (existing !== undefined) {
+      const queued = [...(this.sessionInitialProbes.get(sessionId) ?? [])].find(
+        (probe) => !probe.started && probe.lifecycleGeneration === lifecycleGeneration
+      );
+      if (queued) {
+        return options.resolveAfterInitialProbe === true ? queued.promise : queued.chain;
+      }
+    }
 
-    const previous = this.sessionCheckChains.get(sessionId) ?? Promise.resolve();
+    const previous = existing ?? Promise.resolve();
     let resolveProbe!: () => void;
     let rejectProbe!: (error: unknown) => void;
     let probeSettled = false;
@@ -603,6 +635,8 @@ export class SessionDispatchWatcher {
     probeRecord = {
       promise: probe,
       observer: initialProbe,
+      chain: Promise.resolve(),
+      lifecycleGeneration,
       started: false,
       settled: false,
     };
@@ -615,6 +649,13 @@ export class SessionDispatchWatcher {
     const next = previous
       .catch(() => {})
       .then(async () => {
+        if (existing !== undefined) {
+          // This check follows another one in the chain. Every await inside a
+          // check settles on in-memory objects (microtasks), so a drain would
+          // otherwise run back-to-back without ever reaching the timer phase.
+          // Triggers that land during this yield still coalesce into this check.
+          await SessionDispatchWatcher.yieldToEventLoop();
+        }
         probeRecord.started = true;
         await this.maybeHandleSession(sessionId, initialProbe, lifecycleGeneration);
       })
@@ -629,6 +670,7 @@ export class SessionDispatchWatcher {
           this.sessionCheckChains.delete(sessionId);
         }
       });
+    probeRecord.chain = next;
     this.sessionCheckChains.set(sessionId, next);
     // The maps own these promises even when an event handler intentionally
     // ignores the returned handle. Attach observers to avoid unhandled rejects;
@@ -1182,14 +1224,12 @@ export class SessionDispatchWatcher {
         // Bootstrap and live metadata can race on the same session. Re-check
         // after the awaited open so only one subscription is installed.
         if (!this.watchedSessions.has(sessionId)) {
-          const unsubscribe = sessionDoc.mirror?.subscribe(() => {
+          const unsubscribe = subscribeSessionChanges(sessionDoc, () => {
             if (isActive()) {
               void this.enqueueSessionCheck(sessionId, { lifecycleGeneration });
             }
           });
-          if (unsubscribe) {
-            this.watchedSessions.set(sessionId, { unsubscribe });
-          }
+          this.watchedSessions.set(sessionId, { unsubscribe });
         }
       }
 
@@ -1795,19 +1835,12 @@ export class SessionDispatchWatcher {
     this.deps.logger.warn(`[${sessionId}] Refusing dispatch: ${message}`);
 
     let entryMatched = false;
-    await sessionDoc.updateHistory((history) =>
-      history.map((entry) => {
-        if (entry.id !== userTurnId || entry.role !== 'user') {
-          return entry;
-        }
-        entryMatched = true;
-        return {
-          ...entry,
-          status: 'failed' as const,
-          read: getLegacyReadForSessionHistoryStatus('failed'),
-        };
-      })
-    );
+    const backend = await createSessionBackend(sessionDoc, await sessionDoc.getMetaState());
+    await backend
+      .applyHistoryAction({ kind: 'user-status', turnId: userTurnId, status: 'failed' })
+      .then((result) => {
+        entryMatched = result.matched ?? false;
+      });
     // An RPC-stashed turn can be denied before its history entry syncs; record
     // the failure so the late entry gets repaired to 'failed' instead of
     // re-dispatched, and drop the stash copy so it cannot loop back in.
@@ -1824,6 +1857,7 @@ export class SessionDispatchWatcher {
       lastHandledUserMsgId: userTurnId,
       processingUserMsgId: undefined,
     } satisfies Partial<SessionMeta>);
+    await this.deps.executionService.acknowledgeSteerTurn(sessionId, userTurnId);
     await sessionDoc.setStatus(SessionStatusFactory.idle());
 
     // Surface the denial to the user. Without this the turn renders as
@@ -1868,13 +1902,16 @@ export class SessionDispatchWatcher {
       return;
     }
     this.cancelSeenTurn.set(sessionId, action.turnId);
-    await this.deps.executionService.cancelSession({
-      type: 'session/cancel',
-      sessionId,
-      machineId: this.deps.machineId,
-      workspaceId: this.deps.workspaceId,
-      turnId: action.turnId,
-    });
+    await this.deps.executionService.cancelSession(
+      {
+        type: 'session/cancel',
+        sessionId,
+        machineId: this.deps.machineId,
+        workspaceId: this.deps.workspaceId,
+        turnId: action.turnId,
+      },
+      { pendingInput: 'promote', prePromptSession: 'discard' }
+    );
     if (!isActive()) {
       return;
     }
@@ -1963,15 +2000,16 @@ export class SessionDispatchWatcher {
         inputBlocks: inputBlocks.length > 0 ? inputBlocks : undefined,
         cliType: entry.inputConfig?.cliType ?? meta.cliType,
         agentType: entry.inputConfig?.agentType ?? meta.agentType,
-        customAcp: entry.inputConfig?.customAcp ?? launchConfig?.customAcp,
-        runtimeOverrides: entry.inputConfig?.runtimeOverrides ?? launchConfig?.runtimeOverrides,
+        customAcp: launchConfig?.customAcp,
+        runtimeOverrides: launchConfig?.runtimeOverrides,
         modeId: entry.inputConfig?.modeId,
         modelId: entry.inputConfig?.modelId,
         configOptionValues: entry.inputConfig?.configOptionValues,
+        memory: entry.inputConfig?.memory,
         mcpServerIds: entry.inputConfig?.mcpServerIds ?? [],
-        taskToolsEnabled: entry.inputConfig?.taskToolsEnabled === true,
         agentRoleId: entry.inputConfig?.agentRoleId,
         agentRoleRevision: entry.inputConfig?.agentRoleRevision,
+        agentRoleSnapshot: entry.inputConfig?.agentRoleSnapshot,
         issuePRMentions: entry.inputConfig?.issuePRMentions,
         resume: entry.inputConfig?.resume ?? resolveDispatchAcpSessionId(meta),
       },
@@ -2007,15 +2045,16 @@ export class SessionDispatchWatcher {
         inputBlocks: inputBlocks.length > 0 ? inputBlocks : undefined,
         cliType: entry.inputConfig?.cliType ?? meta.cliType,
         agentType: entry.inputConfig?.agentType ?? meta.agentType,
-        customAcp: entry.inputConfig?.customAcp ?? launchConfig?.customAcp,
-        runtimeOverrides: entry.inputConfig?.runtimeOverrides ?? launchConfig?.runtimeOverrides,
+        customAcp: launchConfig?.customAcp,
+        runtimeOverrides: launchConfig?.runtimeOverrides,
         modeId: entry.inputConfig?.modeId,
         modelId: entry.inputConfig?.modelId,
         configOptionValues: entry.inputConfig?.configOptionValues,
+        memory: entry.inputConfig?.memory,
         mcpServerIds: entry.inputConfig?.mcpServerIds ?? [],
-        taskToolsEnabled: entry.inputConfig?.taskToolsEnabled === true,
         agentRoleId: entry.inputConfig?.agentRoleId,
         agentRoleRevision: entry.inputConfig?.agentRoleRevision,
+        agentRoleSnapshot: entry.inputConfig?.agentRoleSnapshot,
         issuePRMentions: entry.inputConfig?.issuePRMentions,
         resume: entry.inputConfig?.resume,
       },
@@ -2052,13 +2091,184 @@ export class SessionDispatchWatcher {
     return resolveDispatchTurnInput(entry);
   }
 
+  private buildQueuedMessageEntry(
+    queuedItem: Awaited<ReturnType<SessionBackend['getMessageQueue']>>[number],
+    meta: SessionMeta,
+    queuedTurnId: string
+  ): SessionHistoryInput | null {
+    const inputBlocks = normalizeSessionInputBlocks(
+      queuedItem.acpSessionConfig?.inputBlocks,
+      queuedItem.acpSessionConfig?.prompt ?? queuedItem.task
+    );
+    const inputConfig = buildSessionTurnInputConfig({
+      inputBlocks,
+      prompt:
+        queuedItem.acpSessionConfig?.prompt ?? extractPromptPreviewFromInputBlocks(inputBlocks),
+      cliType: queuedItem.acpSessionConfig?.cliType ?? meta.cliType,
+      agentType: queuedItem.acpSessionConfig?.agentType ?? meta.agentType,
+      modeId: queuedItem.acpSessionConfig?.modeId,
+      modelId: queuedItem.acpSessionConfig?.modelId,
+      configOptionValues: isConfigOptionValueRecord(queuedItem.acpSessionConfig?.configOptionValues)
+        ? queuedItem.acpSessionConfig.configOptionValues
+        : undefined,
+      memory:
+        queuedItem.acpSessionConfig?.memory === undefined
+          ? undefined
+          : MemoryBindingSchema.parse(queuedItem.acpSessionConfig.memory),
+      mcpServerIds: normalizeMcpServerIdSelection(queuedItem.acpSessionConfig?.mcpServerIds) ?? [],
+      agentRoleId: queuedItem.acpSessionConfig?.agentRoleId,
+      agentRoleRevision: queuedItem.acpSessionConfig?.agentRoleRevision,
+      agentRoleSnapshot: normalizeSessionTurnInputConfig(queuedItem.acpSessionConfig)
+        ?.agentRoleSnapshot,
+      issuePRMentions: queuedItem.acpSessionConfig?.issuePRMentions,
+      resume: resolveResumableAcpSessionId(meta),
+    });
+    const pendingEntry = buildPendingUserHistoryEntry({
+      userId: queuedItem.userId ?? meta.userId,
+      inputBlocks,
+      timestamp: queuedItem.timestamp,
+      inputConfig,
+    });
+    return pendingEntry ? { ...pendingEntry, id: queuedTurnId } : null;
+  }
+
   /**
-   * Try to pop a message from the session's message queue and promote it into
+   * Repair queue promotions interrupted between their history, activation, and
+   * queue writes. The ledger is metadata-sized, so this recovery does not scan
+   * the conversation body; each history lookup is for one recorded turn only.
+   */
+  private async recoverIncompleteQueuePromotions(
+    sessionDoc: SessionDocumentHandle,
+    meta: SessionMeta
+  ): Promise<void> {
+    const releaseQueueMutation = this.deps.executionService.tryAcquireSessionRewriteConflictLease(
+      meta.id
+    );
+    if (!releaseQueueMutation) return;
+    try {
+      const backend = await createSessionBackend(sessionDoc, meta);
+      const currentMeta = await backend.getMetaState();
+      const ledger = currentMeta?.queuePromotionLedger;
+      if (!ledger) return;
+      const pending = Object.entries(ledger).filter(
+        ([, record]) => record.state !== 'queue_consumed'
+      );
+      if (pending.length === 0) return;
+
+      for (const [operationId] of pending) {
+        const record = await backend.getQueuePromotionRecord(operationId);
+        if (!record || record.state === 'queue_consumed') continue;
+
+        // A previous receipt may have consumed the head. Re-read both the row
+        // and the head for every operation so a later receipt can recover in
+        // queue order during this same watcher check.
+        const [queue, readyHead] = await Promise.all([
+          backend.getMessageQueue(),
+          backend.peekReadyMessageQueue(),
+        ]);
+        const queuedItem = queue.find((item) => item.$cid === record.queueCid);
+        const read = await backend.readTurn(record.userTurnId);
+        const existingEntry =
+          read.state === 'ready' && read.turn.role === 'user'
+            ? (read.turn as SessionHistoryInput)
+            : undefined;
+
+        const latestMeta = await backend.getMetaState();
+        if (!latestMeta) continue;
+
+        if (
+          existingEntry &&
+          this.hasQueuedTurnSettled(latestMeta, record.userTurnId, [existingEntry])
+        ) {
+          // Terminal history is stronger evidence than an incomplete receipt.
+          // Retire the row without publishing a stale activation over newer work.
+          if (queuedItem) await backend.removeMessageQueueItem(queuedItem.$cid);
+          await backend.setQueuePromotionRecord(operationId, {
+            ...record,
+            state: 'queue_consumed',
+            updatedAt: Date.now(),
+          });
+          continue;
+        }
+
+        if (!queuedItem) {
+          // The queue write may have succeeded before the final receipt. If the
+          // durable user row exists, repair activation only while no newer
+          // pending activation owns the metadata pointer.
+          if (!existingEntry) continue;
+
+          const pendingActivation = getPendingUserTurnActivationId(latestMeta);
+          if (pendingActivation && pendingActivation !== record.userTurnId) continue;
+
+          const alreadyPublished =
+            latestMeta.latestUserMsgId === record.userTurnId ||
+            latestMeta.processingUserMsgId === record.userTurnId;
+          if (!alreadyPublished) {
+            // Close the read/write window as much as the metadata API permits.
+            // A newer activation observed here must never be overwritten by a
+            // recovery replay of an older queue promotion.
+            const beforePublish = await backend.getMetaState();
+            if (!beforePublish) continue;
+            const currentPending = getPendingUserTurnActivationId(beforePublish);
+            if (currentPending && currentPending !== record.userTurnId) continue;
+            await backend.publishUserTurnActivation(record.userTurnId);
+          }
+          await backend.setQueuePromotionRecord(operationId, {
+            ...record,
+            state: 'activation_published',
+            updatedAt: Date.now(),
+          });
+          await backend.setQueuePromotionRecord(operationId, {
+            ...record,
+            state: 'queue_consumed',
+            updatedAt: Date.now(),
+          });
+          continue;
+        }
+
+        // Preserve queue order and the editing lease during recovery. A row that
+        // is not currently dispatchable will be handled by the normal watcher.
+        if (!readyHead || readyHead.$cid !== queuedItem.$cid) continue;
+        if (backend.getQueueOperationId(queuedItem) !== operationId) continue;
+
+        const pendingActivation = getPendingUserTurnActivationId(latestMeta);
+        if (pendingActivation && pendingActivation !== record.userTurnId) {
+          // If activation was already published, the queue row can be retired
+          // without replaying it over the newer pointer. Otherwise leave the
+          // receipt open until normal history dispatch settles the turn.
+          if (record.state === 'activation_published') {
+            await backend.removeMessageQueueItem(queuedItem.$cid);
+            await backend.setQueuePromotionRecord(operationId, {
+              ...record,
+              state: 'queue_consumed',
+              updatedAt: Date.now(),
+            });
+          }
+          continue;
+        }
+
+        const entry =
+          existingEntry ?? this.buildQueuedMessageEntry(queuedItem, latestMeta, record.userTurnId);
+        if (!entry) continue;
+        await backend.promoteQueuedTurn({
+          item: queuedItem,
+          entry,
+          operationId,
+          existingEntry,
+        });
+      }
+    } finally {
+      releaseQueueMutation();
+    }
+  }
+
+  /**
+   * Peek a ready message from the session's message queue and promote it into
    * a history entry. This handles the case where the web client enqueues messages
    * via the message queue API instead of writing directly to the session history.
    *
-   * This is an I/O operation (mutates the session doc by popping the queue and
-   * appending to history), which is why it lives in the watcher rather than in
+   * Remove its queue row only after history and activation accept it. This I/O operation
+   * lives in the watcher rather than in
    * the pure turn-finding logic.
    */
   private async promoteNextQueuedMessage(
@@ -2073,74 +2283,114 @@ export class SessionDispatchWatcher {
       return null;
     }
     try {
-      const popMessageQueue = (
-        sessionDoc as { popMessageQueue?: (() => Promise<MessageQueueItem | null>) | undefined }
-      ).popMessageQueue;
-      if (!popMessageQueue) {
-        return null;
-      }
-
-      const queuedItem = await popMessageQueue.call(sessionDoc);
+      const backend = await createSessionBackend(sessionDoc, meta);
+      const queuedItem = await backend.peekReadyMessageQueue();
       if (!queuedItem) {
         return null;
       }
 
       const queuedTurnId = queuedItem.userTurnId?.trim() || `queued-${queuedItem.$cid}`;
-      if (history.some((entry) => entry.id === queuedTurnId)) {
+      const operationId = backend.getQueueOperationId(queuedItem);
+      const existing = findLastHistoryEntry(history, queuedTurnId);
+      if (existing) {
+        if (existing.role === 'user' && isActivationAwaitingHistory(history, queuedTurnId)) {
+          const currentMeta = await backend.getMetaState();
+          if (!currentMeta) return null;
+          if (!this.hasQueuedTurnSettled(currentMeta, queuedTurnId, history)) {
+            // History may have committed before activation publication failed. Do not
+            // discard the retry record until the missing second write succeeds.
+            const pending = getPendingUserTurnActivationId(currentMeta);
+            if (pending && pending !== queuedTurnId) return null;
+            const promoted = await backend.promoteQueuedTurn({
+              item: queuedItem,
+              entry: existing,
+              operationId,
+              existingEntry: existing,
+            });
+            return promoted.entry;
+          }
+        }
+        await backend.removeMessageQueueItem(queuedItem.$cid);
+        await backend.setQueuePromotionRecord(operationId, {
+          queueCid: queuedItem.$cid,
+          userTurnId: queuedTurnId,
+          state: 'queue_consumed',
+          updatedAt: Date.now(),
+        });
         this.deps.logger.debug(
           `[${meta.id}] Dropping already-promoted queued message ${queuedItem.$cid}`
         );
         return null;
       }
 
-      const inputBlocks = normalizeSessionInputBlocks(
-        queuedItem.acpSessionConfig?.inputBlocks,
-        queuedItem.acpSessionConfig?.prompt ?? queuedItem.task
-      );
-      const inputConfig = buildSessionTurnInputConfig({
-        inputBlocks,
-        prompt:
-          queuedItem.acpSessionConfig?.prompt ?? extractPromptPreviewFromInputBlocks(inputBlocks),
-        cliType: queuedItem.acpSessionConfig?.cliType ?? meta.cliType,
-        agentType: queuedItem.acpSessionConfig?.agentType ?? meta.agentType,
-        modeId: queuedItem.acpSessionConfig?.modeId,
-        modelId: queuedItem.acpSessionConfig?.modelId,
-        configOptionValues: isConfigOptionValueRecord(
-          queuedItem.acpSessionConfig?.configOptionValues
-        )
-          ? queuedItem.acpSessionConfig.configOptionValues
-          : undefined,
-        mcpServerIds:
-          normalizeMcpServerIdSelection(queuedItem.acpSessionConfig?.mcpServerIds) ?? [],
-        taskToolsEnabled: queuedItem.acpSessionConfig?.taskToolsEnabled === true,
-        agentRoleId: queuedItem.acpSessionConfig?.agentRoleId,
-        agentRoleRevision: queuedItem.acpSessionConfig?.agentRoleRevision,
-        issuePRMentions: queuedItem.acpSessionConfig?.issuePRMentions,
-        resume: resolveResumableAcpSessionId(meta),
-      });
-      const pendingEntry = buildPendingUserHistoryEntry({
-        userId: queuedItem.userId ?? meta.userId,
-        inputBlocks,
-        timestamp: queuedItem.timestamp,
-        inputConfig,
-      });
-
-      if (!pendingEntry) {
-        this.deps.logger.debug(`[${meta.id}] Dropping invalid queued message ${queuedItem.$cid}`);
+      // Renderer steering appends this turn and removes the queue row on another
+      // replica. Execution may have seen the steer before either write syncs here.
+      const currentMeta = await backend.getMetaState();
+      if (!currentMeta) return null;
+      const steerStatus = currentMeta.steerTurnStatuses?.[queuedTurnId];
+      // Settled evidence outranks a refused steer: recovery writes its tombstone
+      // before clearing the steer status, and a hold would then never end.
+      if (
+        (steerStatus !== undefined && steerStatus !== 'pending') ||
+        this.deps.executionService.getActiveUserTurnId?.(meta.id) === queuedTurnId ||
+        this.hasQueuedTurnSettled(currentMeta, queuedTurnId, history)
+      ) {
+        await backend.removeMessageQueueItem(queuedItem.$cid);
+        this.deps.logger.debug(
+          `[${meta.id}] Dropping queued message ${queuedItem.$cid} already owned by execution`
+        );
+        return null;
+      }
+      if (steerStatus === 'pending') {
+        // A refused steer still owes an ordinary run through its own history row.
+        this.deps.logger.debug(
+          `[${meta.id}] Holding queued message ${queuedItem.$cid} for refused steer history`
+        );
         return null;
       }
 
-      const entry: SessionHistoryInput = {
-        ...pendingEntry,
-        id: queuedTurnId,
-      };
+      const entry = this.buildQueuedMessageEntry(queuedItem, meta, queuedTurnId);
+      if (!entry) {
+        this.deps.logger.debug(`[${meta.id}] Retaining invalid queued message ${queuedItem.$cid}`);
+        return null;
+      }
 
-      // Promotion is a dispatch producer; `appendUserTurn` publishes the pointer.
-      await sessionDoc.appendUserTurn(entry);
-      return entry;
+      const promoted = await backend.promoteQueuedTurn({
+        item: queuedItem,
+        entry,
+        operationId,
+        existingEntry: existing,
+      });
+      return promoted.entry;
     } finally {
       releaseQueueMutation();
     }
+  }
+
+  /** Durable evidence that this turn ran or must never run again. */
+  private hasQueuedTurnSettled(
+    meta: SessionMeta,
+    turnId: string,
+    history: SessionHistoryInput[]
+  ): boolean {
+    return (
+      meta.lastHandledUserMsgId === turnId ||
+      meta.settledActivationUserMsgId === turnId ||
+      meta.lastMissingHistoryUserMsgId === turnId ||
+      this.deps.executionService.getTerminalUserTurnStatusWithoutEntry?.(meta.id, turnId) !==
+        undefined ||
+      history.some((entry) => {
+        if (entry.role !== 'user' || entry.id !== turnId) return false;
+        const status = resolveSessionHistoryStatus(entry);
+        return status === 'handled' || status === 'failed' || status === 'canceled';
+      }) ||
+      history.some(
+        (entry) =>
+          entry.role === 'assistant' &&
+          entry.userTurnId === turnId &&
+          typeof entry.endedAt === 'number'
+      )
+    );
   }
 
   /** Maximum time (ms) to wait for a pending user-turn pointer to appear in history. */
@@ -2150,6 +2400,17 @@ export class SessionDispatchWatcher {
   private static readonly HISTORY_RECONNECT_JITTER_MAX_MS = 1_500;
   private static readonly HISTORY_RECONNECT_BASE_DELAY_MS = 1_000;
   private static readonly HISTORY_RECONNECT_MAX_DELAY_MS = 15_000;
+  /**
+   * One macrotask yield. `setImmediate` runs after the timer phase, so a queued
+   * check gives pending timers (Loro heartbeat, event-loop lag monitor, other
+   * sessions' waits) a turn before the next history read.
+   */
+  private static yieldToEventLoop(): Promise<void> {
+    return new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+
   private static setUnrefTimeout(
     callback: () => void,
     delayMs: number
@@ -2494,7 +2755,7 @@ export class SessionDispatchWatcher {
       // arrives during join retries is a complete turn source and must preempt
       // the CRDT wait without bypassing the serialized dispatch chain.
       unsubscribeRpcOffers = this.subscribeToRpcTurnOffers(sessionId, requestTurnCheck);
-      unsubscribeMirror = sessionDoc.mirror?.subscribe(requestTurnCheck);
+      unsubscribeMirror = subscribeSessionChanges(sessionDoc, requestTurnCheck);
       if (!unsubscribeMirror) {
         this.deps.logger.debug(
           `[${sessionId}] Session mirror is unavailable during history sync wait`
@@ -2607,6 +2868,8 @@ export class SessionDispatchWatcher {
       `[${sessionId}] Marking missing-history recovery for user turn ${pendingUserMsgId ?? 'unknown'} (message_delivery_failed)`
     );
     await this.deps.workspaceDocument.repo.upsertDocMeta?.(roomId, recoveryPatch);
+    if (pendingUserMsgId)
+      await this.deps.executionService.acknowledgeSteerTurn(sessionId, pendingUserMsgId);
     this.deps.logger.info(
       `[${sessionId}] Recorded missing-history recovery for user turn ${
         pendingUserMsgId ?? 'unknown'
@@ -2650,34 +2913,47 @@ export class SessionDispatchWatcher {
     meta: SessionMeta,
     isActive: () => boolean = () => true
   ): Promise<{ turn: SessionHistoryInput | null; history: SessionHistoryInput[] }> {
-    const history = await sessionDoc.getHistory();
-    if (!isActive()) {
-      return { turn: null, history };
-    }
-    const turn = findNextDispatchableUserTurn(history, meta);
-    if (turn) {
-      const repaired = await this.maybeRepairAlreadyHandledTurn(sessionDoc, meta, turn, history);
-      if (repaired) {
-        // The repaired entry no longer matches; re-scan so an older repaired
-        // turn cannot mask a genuinely dispatchable newer one.
-        return await this.checkHistoryAndQueue(sessionDoc, meta, isActive);
+    const repairedTurnIds = new Set<string>();
+    while (true) {
+      await this.deps.executionService.reconcileSteerHistory(meta.id, sessionDoc);
+      const backend = await createSessionBackend(sessionDoc, meta);
+      await this.recoverIncompleteQueuePromotions(sessionDoc, meta);
+      const history = await backend.readHistory();
+      if (!isActive()) {
+        return { turn: null, history };
       }
-      // The history copy is authoritative once it syncs; drop the RPC copy.
-      this.consumeStashedRpcTurn(meta.id, turn.id);
-      return { turn, history };
+      const turn = findNextDispatchableUserTurn(history, meta);
+      if (turn) {
+        if (repairedTurnIds.has(turn.id)) {
+          this.deps.logger.warn(
+            `[${meta.id}] Stopping history check: repaired user turn ${turn.id} is still dispatchable`
+          );
+          return { turn: null, history };
+        }
+        const repaired = await this.maybeRepairAlreadyHandledTurn(sessionDoc, meta, turn, history);
+        if (repaired) {
+          // Re-read without retaining recursive frames and stop if the repair
+          // did not retire this identity. A matched write need not change it.
+          repairedTurnIds.add(turn.id);
+          continue;
+        }
+        // The history copy is authoritative once it syncs; drop the RPC copy.
+        this.consumeStashedRpcTurn(meta.id, turn.id);
+        return { turn, history };
+      }
+      if (!isActive()) {
+        return { turn: null, history };
+      }
+      const promoted = await this.promoteNextQueuedMessage(sessionDoc, meta, history);
+      if (!isActive()) {
+        return { turn: null, history };
+      }
+      if (promoted) {
+        this.turnSourceHints.set(`${meta.id}:${promoted.id}`, 'queue');
+        return { turn: promoted, history };
+      }
+      return { turn: this.peekStashedRpcTurn(meta.id, meta, history), history };
     }
-    if (!isActive()) {
-      return { turn: null, history };
-    }
-    const promoted = await this.promoteNextQueuedMessage(sessionDoc, meta, history);
-    if (!isActive()) {
-      return { turn: null, history };
-    }
-    if (promoted) {
-      this.turnSourceHints.set(`${meta.id}:${promoted.id}`, 'queue');
-      return { turn: promoted, history };
-    }
-    return { turn: this.peekStashedRpcTurn(meta.id, meta, history), history };
   }
 
   /**
@@ -2709,7 +2985,7 @@ export class SessionDispatchWatcher {
       sessionId,
       turn.id
     );
-    if (!terminalStatus && turn.status === 'pending') {
+    if (!terminalStatus && ['pending', 'seen', 'processing'].includes(turn.status ?? '')) {
       // Restart backstop (in-memory record is gone): a completed assistant
       // entry linked to this user turn is positive proof it ran to completion.
       // endedAt is written at ACP finalization. Only this proves 'handled'.
@@ -2740,17 +3016,12 @@ export class SessionDispatchWatcher {
     this.deps.logger.debug(
       `[${sessionId}] Repairing late-arriving user turn ${turn.id} to '${status}' (already executed via fast path)`
     );
-    await sessionDoc.updateHistory((entries) =>
-      entries.map((entry) =>
-        entry.id === turn.id && entry.role === 'user'
-          ? {
-              ...entry,
-              status,
-              read: getLegacyReadForSessionHistoryStatus(status),
-            }
-          : entry
-      )
-    );
+    const backend = await createSessionBackend(sessionDoc, meta);
+    await backend.applyHistoryAction({
+      kind: 'user-status',
+      turnId: turn.id,
+      status,
+    });
     this.deps.executionService.clearTerminalUserTurnStatusWithoutEntry?.(sessionId, turn.id);
     this.consumeStashedRpcTurn(sessionId, turn.id);
     return true;

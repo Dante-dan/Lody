@@ -25,6 +25,7 @@ const createSilentLogger = (): Logger => ({
   error: () => {},
   success: () => {},
   debug: () => {},
+  trace: () => {},
   setLevel: () => {},
   child: () => createSilentLogger(),
   close: async () => {},
@@ -153,7 +154,7 @@ const createProcessHandle = (
 const createSandbox = (
   handles: SessionProcessHandle[]
 ): SessionSandbox & {
-  spawn: ReturnType<typeof vi.fn>;
+  spawn: ReturnType<typeof vi.fn<SessionSandbox['spawn']>>;
   terminate: ReturnType<typeof vi.fn>;
   cleanup: ReturnType<typeof vi.fn>;
 } => ({

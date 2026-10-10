@@ -99,6 +99,7 @@ describe('supportsBuiltinAuthentication', () => {
   it('refuses the builtin login flow for registry and custom providers', () => {
     expect(supportsBuiltinAuthentication({ cliType: 'registry', agentType: 'gemini' })).toBe(false);
     expect(supportsBuiltinAuthentication({ cliType: 'custom', agentType: 'my-agent' })).toBe(false);
+    expect(supportsBuiltinAuthentication({ cliType: 'builtin', agentType: 'bub' })).toBe(false);
     expect(supportsBuiltinAuthentication({ cliType: 'builtin', agentType: 'auggie' })).toBe(false);
     expect(supportsBuiltinAuthentication({ cliType: undefined, agentType: undefined })).toBe(false);
   });
@@ -109,6 +110,8 @@ describe('usesAcpProtocolAuthentication', () => {
     expect(usesAcpProtocolAuthentication('registry')).toBe(true);
     expect(usesAcpProtocolAuthentication('custom')).toBe(true);
     expect(usesAcpProtocolAuthentication('builtin')).toBe(false);
+    expect(usesAcpProtocolAuthentication('builtin', 'devin')).toBe(true);
+    expect(supportsBuiltinAuthentication({ cliType: 'builtin', agentType: 'devin' })).toBe(false);
     expect(usesAcpProtocolAuthentication(undefined)).toBe(false);
   });
 });

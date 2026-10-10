@@ -1,5 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import * as stylex from '@stylexjs/stylex';
+import { space } from '@lody/ui/tokens/scales.stylex';
 import {
   githubCreatePRReviewComment,
   githubFetchPullRequestHeadSha,
@@ -17,7 +19,7 @@ import {
 } from '@lody/shared';
 import { useAtomValue } from 'jotai';
 import { usePostHog } from '@posthog/react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { currentWorkspaceIdAtom, userAtom } from '@/atoms';
 import { getDurationSinceMs, getPerformanceNowMs } from '@/lib/posthog-analytics';
 import {
@@ -28,8 +30,8 @@ import {
 } from './diff-pr-analytics';
 import { DiffViewer } from '@/ui/diff-viewer/diff-viewer';
 import { ScrollArea } from '@/ui/scroll-area';
-import { Skeleton } from '@/ui/skeleton';
-import { cn } from '@/lib/utils';
+import { Skeleton } from '@lody/ui/skeleton';
+import { withClassName } from '@/lib/stylex';
 import { observeDiffPerfLongTasks } from '@/lib/diff-perf';
 import { FileIcon } from '@/components/icons/file-icons';
 import { EMPTY_COMMENT_REFERENCE_KEYS } from '@/components/chat/comment-reference-state';
@@ -44,14 +46,101 @@ import { useDiffFocusScroll } from './use-diff-focus-scroll';
 import { useSessionAllChangesDiffData } from './use-session-all-changes-diff-data';
 import { useSessionConversationDiffData } from './use-session-conversation-diff-data';
 import { useGitHubReviewComments } from '@/hooks/use-github-review-comments';
-import { withGitHubOperationTokenRetry, withGitHubTokenRetry } from '@/lib/github-token';
-import { getPullRequestNumber, getSessionGitHubState } from '@/lib/session-github-state';
+import {
+  getPullRequestNumber,
+  getPullRequestRepoFullName,
+  getSessionGitHubState,
+} from '@/lib/session-github-state';
+import { GitHubReviewErrorNotice } from './github-review-error-notice';
 import { SessionFileDiffNoticeCard } from './session-file-diff-notice-card';
 import { DiffFileHeaderActions } from '@/ui/diff-viewer/diff-file-header-actions';
 import type { SessionFileProvider } from '@/lib/session-file-provider';
 
 const DIFF_LOAD_SCROLL_PAUSE_MS = 500;
 const EMPTY_GITHUB_THREADS: GitHubReviewThread[] = [];
+const styles = stylex.create({
+  diffCard: {
+    width: '100%',
+    overflow: 'hidden',
+    borderWidth: '1px',
+    borderStyle: 'solid',
+    borderRadius: 'var(--radius-lg)',
+    backgroundColor: 'hsl(var(--background))',
+    boxShadow: '0 1px 2px hsl(0 0% 0% / 0.04)',
+    borderColor: {
+      default: 'hsl(var(--foreground) / 0.12)',
+      ':where(.dark, .dark *, .dark-scope, .dark-scope *):not(:where(.light-scope, .light-scope *))':
+        'hsl(var(--border))',
+    },
+  },
+  diffCardHeader: {
+    display: 'flex',
+    height: '32px',
+    alignItems: 'center',
+    gap: space[2],
+    borderBottomWidth: '1px',
+    borderBottomStyle: 'solid',
+    borderBottomColor: {
+      default: 'hsl(var(--foreground) / 0.08)',
+      ':where(.dark, .dark *, .dark-scope, .dark-scope *):not(:where(.light-scope, .light-scope *))':
+        'hsl(var(--border))',
+    },
+    backgroundColor: 'hsl(var(--background))',
+    paddingInlineStart: space[1],
+    paddingInlineEnd: space[4],
+  },
+  fileIcon: { width: '16px', height: '16px', flexShrink: 0 },
+  filePathRow: {
+    display: 'flex',
+    minWidth: 0,
+    flex: '1 1 0%',
+    alignItems: 'center',
+    gap: space[1],
+  },
+  filePath: {
+    minWidth: 0,
+    overflow: 'hidden',
+    color: 'hsl(var(--foreground) / 0.9)',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    fontSize: '14px',
+    lineHeight: '20px',
+  },
+  skeletonBody: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: space[1.5],
+    paddingBlock: space[3],
+    paddingInline: space[4],
+  },
+  errorMessage: { color: 'hsl(var(--muted-foreground))', fontSize: '12px', lineHeight: '16px' },
+  emptyMessage: {
+    padding: space[3],
+    color: 'hsl(var(--muted-foreground))',
+    fontSize: '14px',
+    lineHeight: '20px',
+  },
+  root: { display: 'flex', height: '100%', minHeight: 0, flexDirection: 'column' },
+  fileBlock: { width: '100%' },
+  panelContent: {
+    display: 'flex',
+    width: '100%',
+    flexDirection: 'column',
+    gap: space[4],
+    paddingBlock: space[2],
+  },
+  baseScrollFrame: { minHeight: 0, flex: '1 1 0%', paddingInlineEnd: space[1] },
+  baseScrollArea: { height: '100%', overflow: 'hidden' },
+  baseScrollContent: { paddingInline: space[3] },
+  conversationScroll: {
+    minHeight: 0,
+    flex: '1 1 0%',
+    overflow: 'auto',
+    paddingInline: space[3],
+    scrollbarWidth: 'thin',
+    scrollbarColor: 'hsl(var(--scrollbar-thumb) / 0.5) transparent',
+  },
+});
 
 function FileDiffSkeleton({
   filePath,
@@ -61,22 +150,22 @@ function FileDiffSkeleton({
   onOpenFile?: (path: string) => void;
 }) {
   return (
-    <div className="w-full overflow-hidden rounded-xl border border-foreground/[0.12] bg-background shadow-[0_1px_2px_hsl(0_0%_0%/0.04)] dark:border-border">
-      <div className="flex h-8 items-center gap-2 border-b border-foreground/[0.08] bg-background pl-1 pr-4 dark:border-border">
-        <FileIcon filePath={filePath} className="h-4 w-4 shrink-0" />
-        <div className="flex min-w-0 flex-1 items-center gap-1">
-          <span className="min-w-0 truncate text-sm text-foreground/90" title={filePath}>
+    <div {...stylex.props(styles.diffCard)}>
+      <div {...stylex.props(styles.diffCardHeader)}>
+        <FileIcon filePath={filePath} className={stylex.props(styles.fileIcon).className} />
+        <div {...stylex.props(styles.filePathRow)}>
+          <span {...stylex.props(styles.filePath)} title={filePath}>
             {filePath}
           </span>
           <DiffFileHeaderActions path={filePath} onOpenFile={onOpenFile} />
         </div>
       </div>
-      <div className="space-y-1.5 px-4 py-3">
-        <Skeleton className="h-3 w-full" />
-        <Skeleton className="h-3 w-11/12" />
-        <Skeleton className="h-3 w-4/5" />
-        <Skeleton className="h-3 w-full" />
-        <Skeleton className="h-3 w-3/4" />
+      <div {...stylex.props(styles.skeletonBody)}>
+        <Skeleton width="100%" height={12} />
+        <Skeleton width="91%" height={12} />
+        <Skeleton width="80%" height={12} />
+        <Skeleton width="100%" height={12} />
+        <Skeleton width="75%" height={12} />
       </div>
     </div>
   );
@@ -139,6 +228,23 @@ function getMatchingPath(paths: string[], filePath?: string | null): string | nu
   return paths.find((path) => arePathsEquivalent(path, filePath)) ?? null;
 }
 
+export function shouldOpenDiffFileByDefault(input: {
+  readonly mode: 'conversation' | 'base';
+  readonly filePath: string;
+  readonly focusFilePath?: string | null;
+}): boolean {
+  if (input.focusFilePath == null) {
+    // A direct turn diff has no file selection and keeps its historical
+    // all-files-open view. An unfocused All Changes panel starts collapsed so
+    // opening it from the summary does not render every file at once.
+    return input.mode === 'conversation';
+  }
+
+  // A precise file action is the same interaction in both surfaces: open the
+  // requested file and leave unrelated cards collapsed.
+  return arePathsEquivalent(input.filePath, input.focusFilePath);
+}
+
 export type SessionConversationDiffPanelProps = {
   sessionId: SessionId;
   turnId?: string;
@@ -163,6 +269,7 @@ export type SessionConversationDiffPanelProps = {
 type DiffFileBlockProps = {
   filePath: string;
   data: FileDiffData | undefined;
+  defaultOpen: boolean;
   commentsEnabled: boolean;
   currentUser: CommentUser | null;
   githubThreads: GitHubReviewThread[];
@@ -189,6 +296,7 @@ export function createConversationDiffViewerParseCacheKey(input: {
 const DiffFileBlock = memo(function DiffFileBlock({
   filePath,
   data,
+  defaultOpen,
   commentsEnabled,
   currentUser,
   githubThreads,
@@ -213,12 +321,13 @@ const DiffFileBlock = memo(function DiffFileBlock({
   }
 
   if (data.status === 'error') {
-    return <div className="text-xs text-muted-foreground">{data.message}</div>;
+    return <div {...stylex.props(styles.errorMessage)}>{data.message}</div>;
   }
 
   if (data.status === 'ready-parsed') {
     return (
       <DiffViewer
+        key={`${mode}:${defaultOpen ? 'open' : 'closed'}`}
         path={filePath}
         oldText=""
         newText=""
@@ -235,7 +344,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
         commentReferenceKeys={commentReferenceKeys}
         onCommentError={onCommentError}
         onOpenFile={onOpenFile}
-        defaultOpen
+        defaultOpen={defaultOpen}
         deferRenderUntilOpen
         parseCacheKey={diffViewerParseCacheKey}
         cachePrerenderedHtml={false}
@@ -246,6 +355,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
   if (data.status === 'ready-text-source') {
     return (
       <DiffViewer
+        key={`${mode}:${defaultOpen ? 'open' : 'closed'}`}
         path={filePath}
         oldText=""
         newText=""
@@ -260,7 +370,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
         commentReferenceKeys={commentReferenceKeys}
         onCommentError={onCommentError}
         onOpenFile={onOpenFile}
-        defaultOpen
+        defaultOpen={defaultOpen}
         deferRenderUntilOpen
         parseCacheKey={diffViewerParseCacheKey}
         cachePrerenderedHtml={false}
@@ -306,6 +416,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
 
   return (
     <DiffViewer
+      key={`${mode}:${defaultOpen ? 'open' : 'closed'}`}
       path={filePath}
       oldText={data.oldSnapshot.kind === 'text' ? data.oldSnapshot.text : ''}
       newText={data.newSnapshot.kind === 'text' ? data.newSnapshot.text : ''}
@@ -319,7 +430,7 @@ const DiffFileBlock = memo(function DiffFileBlock({
       commentReferenceKeys={commentReferenceKeys}
       onCommentError={onCommentError}
       onOpenFile={onOpenFile}
-      defaultOpen
+      defaultOpen={defaultOpen}
       deferRenderUntilOpen
       responsiveSplit
       cachePrerenderedHtml={false}
@@ -428,19 +539,27 @@ function SessionConversationDiffPanelImpl({
   const { cacheKey, normalizedPaths, resolvedByPath, isDiffUnavailable } = isBaseMode
     ? allChangesDiffData
     : conversationDiffData;
-  const { repoFullName, latestPr } = useMemo(
+  const {
+    sourceSessionId: prSessionId,
+    repoFullName,
+    latestPr,
+  } = useMemo(
     () => getSessionGitHubState(session ?? null, workspaceSession ?? null),
     [session, workspaceSession]
   );
   const latestPrNumber = getPullRequestNumber(latestPr);
   const githubReviewComments = useGitHubReviewComments({
+    sessionId: prSessionId,
     workspaceId: currentWorkspaceId,
-    repoFullName,
+    repoFullName: getPullRequestRepoFullName(latestPr) ?? repoFullName,
     prNumber: latestPrNumber,
     enabled: normalizedPaths.length > 0 && Boolean(latestPrNumber),
   });
-  const { threads: githubReviewCommentThreads, refresh: refreshGitHubReviewComments } =
-    githubReviewComments;
+  const {
+    threads: githubReviewCommentThreads,
+    refresh: refreshGitHubReviewComments,
+    runWithToken: runWithGitHubReviewToken,
+  } = githubReviewComments;
 
   useEffect(() => observeDiffPerfLongTasks() ?? undefined, []);
 
@@ -534,10 +653,10 @@ function SessionConversationDiffPanelImpl({
     if (legacyHeadCommitSha?.trim()) {
       return legacyHeadCommitSha.trim();
     }
-    return await withGitHubTokenRetry(currentWorkspaceId, repoFullName, (token) =>
-      githubFetchPullRequestHeadSha(token, repoFullName, latestPrNumber)
+    return await runWithGitHubReviewToken('read', (token, canonicalRepo) =>
+      githubFetchPullRequestHeadSha(token, canonicalRepo, latestPrNumber)
     );
-  }, [currentWorkspaceId, latestPr, latestPrNumber, repoFullName]);
+  }, [currentWorkspaceId, latestPr, latestPrNumber, repoFullName, runWithGitHubReviewToken]);
 
   const addCommentReferenceToChatInput = useCallback(
     (reference: CommentReferencePayload): boolean => {
@@ -565,18 +684,14 @@ function SessionConversationDiffPanelImpl({
         try {
           const headCommitSha = await resolvePrHeadCommitSha();
           const position = lodyAnchorToGitHubParams(input.anchor, latestPr, headCommitSha);
-          const comment = await withGitHubOperationTokenRetry(
-            currentWorkspaceId,
-            repoFullName,
-            'write',
-            (token) =>
-              githubCreatePRReviewComment(token, repoFullName, latestPrNumber, {
-                body: input.body,
-                path: position.path,
-                commitId: position.commit_id,
-                line: position.line,
-                side: position.side,
-              })
+          const comment = await runWithGitHubReviewToken('write', (token, canonicalRepo) =>
+            githubCreatePRReviewComment(token, canonicalRepo, latestPrNumber, {
+              body: input.body,
+              path: position.path,
+              commitId: position.commit_id,
+              line: position.line,
+              side: position.side,
+            })
           );
           await refreshGitHubReviewComments();
           captureDiffCommentGithubThreadCreated(postHog, diffCommentAnalyticsBase, {
@@ -601,10 +716,10 @@ function SessionConversationDiffPanelImpl({
         if (!currentWorkspaceId || !repoFullName || !latestPrNumber) {
           throw new Error('This session is not linked to a GitHub pull request');
         }
-        await withGitHubOperationTokenRetry(currentWorkspaceId, repoFullName, 'write', (token) =>
+        await runWithGitHubReviewToken('write', (token, canonicalRepo) =>
           githubReplyPRReviewComment(
             token,
-            repoFullName,
+            canonicalRepo,
             latestPrNumber,
             input.githubCommentId,
             input.body
@@ -625,6 +740,7 @@ function SessionConversationDiffPanelImpl({
       refreshGitHubReviewComments,
       repoFullName,
       resolvePrHeadCommitSha,
+      runWithGitHubReviewToken,
     ]
   );
 
@@ -640,7 +756,7 @@ function SessionConversationDiffPanelImpl({
 
   if (normalizedPaths.length === 0) {
     return (
-      <div className={cn('p-3 text-sm text-muted-foreground', className)}>
+      <div {...withClassName(stylex.props(styles.emptyMessage), className)}>
         {t('sessions.fileDiff.selectFile', 'Select a file to view its diff.')}
       </div>
     );
@@ -648,17 +764,22 @@ function SessionConversationDiffPanelImpl({
 
   if (isDiffUnavailable) {
     return (
-      <div className={cn('p-3 text-sm text-muted-foreground', className)}>
+      <div {...withClassName(stylex.props(styles.emptyMessage), className)}>
         {t('sessions.fileDiff.unavailable', 'Diff unavailable')}
       </div>
     );
   }
 
   const renderFileBlock = (filePath: string) => (
-    <div key={filePath} ref={(node) => registerPathBlock(filePath, node)} className="w-full">
+    <div
+      key={filePath}
+      ref={(node) => registerPathBlock(filePath, node)}
+      {...stylex.props(styles.fileBlock)}
+    >
       <DiffFileBlock
         filePath={filePath}
         data={resolvedByPath[filePath]}
+        defaultOpen={shouldOpenDiffFileByDefault({ mode, filePath, focusFilePath })}
         commentsEnabled={Boolean(latestPrNumber && repoFullName)}
         currentUser={currentUser}
         githubThreads={githubThreadsByPath.get(filePath) ?? EMPTY_GITHUB_THREADS}
@@ -675,21 +796,33 @@ function SessionConversationDiffPanelImpl({
   );
 
   const panelContent = (
-    <div className="w-full space-y-4 py-2">{normalizedPaths.map(renderFileBlock)}</div>
+    <div {...stylex.props(styles.panelContent)}>
+      {githubReviewComments.error && (
+        <GitHubReviewErrorNotice
+          message={githubReviewComments.error.message}
+          onRetry={() => void refreshGitHubReviewComments()}
+        />
+      )}
+      {normalizedPaths.map(renderFileBlock)}
+    </div>
   );
 
   return (
-    <div className={cn('flex h-full min-h-0 flex-col', className)}>
+    <div {...withClassName(stylex.props(styles.root), className)}>
       {mode === 'base' ? (
-        <div className="min-h-0 flex-1 pr-1">
-          <ScrollArea ref={setScrollAreaRoot} className="h-full overflow-hidden" type="auto">
-            <div className="px-3">{panelContent}</div>
+        <div {...stylex.props(styles.baseScrollFrame)}>
+          <ScrollArea
+            ref={setScrollAreaRoot}
+            className={stylex.props(styles.baseScrollArea).className}
+            type="auto"
+          >
+            <div {...stylex.props(styles.baseScrollContent)}>{panelContent}</div>
           </ScrollArea>
         </div>
       ) : (
         <div
           ref={scrollContainerRef}
-          className="scrollbar-pro min-h-0 flex-1 overflow-auto px-3"
+          {...withClassName(stylex.props(styles.conversationScroll), 'scrollbar-pro')}
           onScroll={handleDiffScroll}
         >
           {panelContent}

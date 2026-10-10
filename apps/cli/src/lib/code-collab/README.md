@@ -11,6 +11,10 @@ host/runtime/CRDT capture implementation has been removed from this directory.
   Git All Changes uses the owner base; non-Git uses local diff evidence only when a
   trustworthy base exists. It owns in-memory file-index state replacement and Flock
   publish even when the scan itself ran in a worker.
+- `file-index-scan-core.ts` — shared scan and Git merge-base resolution. Tracking
+  lookup normalizes qualified local owner refs using `git/git-diff-base.ts`, also
+  consumed by committed summary stats. Batch diffs pin the resolved commit for
+  their list and inline snapshots; refreshed refs take effect on the next read.
 - `code-collab-v2-diff-store.ts` / `turn-diff-store-worker.ts` — CLI adapter and the
   mandatory production Worker for local ACP turn evidence. The adapter returns
   per-turn `FileDiff` and `getLatestText` heads; `message-handler.ts` passes the
@@ -34,3 +38,9 @@ host/runtime/CRDT capture implementation has been removed from this directory.
 - `code-collab-v2-diff-store.test.ts` — adapter tests for exact snapshots, path
   scoping, chaining, and retention GC. Package-level dedup/refcount/size-GC tests
   live in `packages/turn-diff-store/tests`.
+
+Checkout branch observation is injected via `observeWorkspaceGit` on initial local
+activation and explicit root refresh. Watcher and terminal diff refreshes do not repeat
+this work. MessageHandler connects the authorized workspace to
+[WorkspaceGitService](../../session/workspace-git-service.ts); see its
+[contract](../../../../../specs/workspace-branch-state.md).

@@ -1,12 +1,23 @@
 // @vitest-environment jsdom
 
-import { act, createElement } from 'react';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { act, createElement, useState } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRoot, type Root } from 'react-dom/client';
-import type { MessageQueueItem, SessionId } from '@lody/shared';
+import { createStore, Provider } from 'jotai';
+import type { MessageQueueItem, SessionId, WorkspaceId } from '@lody/shared';
 
 import { MessageQueueDisplay } from '../src/components/sessions/message-queue';
+import { currentWorkspaceIdAtom } from '../src/atoms';
+import { authTokenAtom, runtimeAtom, type WorkspaceRuntime } from '../src/atoms/runtime';
+import type { PendingSessionSend } from '../src/lib/session-pending-sends';
 import { initI18n } from '../src/i18n';
+
+// Each variant resolves to a distinct URL so the test can tell the row's
+// thumbnail from the full-size image the preview loads.
+vi.mock('../src/lib/session-image-cache', () => ({
+  getSessionImageBlobUrl: async ({ imageId, variant }: { imageId: string; variant: string }) =>
+    `blob:${variant}/${imageId}`,
+}));
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -120,6 +131,30 @@ describe('queued message editing commits', () => {
     return event;
   };
 
+  it('folds and reopens without committing or losing an editing draft', async () => {
+    const view = await renderQueue();
+    const textarea = await startEditing(view);
+    await act(async () => setTextareaValue(textarea, 'Keep this unfinished draft'));
+    const toggle = view.querySelector<HTMLButtonElement>('[data-message-queue-toggle]')!;
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+    // The focus transition is shared by pointer presses and keyboard navigation.
+    await act(async () => toggle.focus());
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(view.querySelector('textarea')).toBe(textarea);
+    expect(textarea.value).toBe('Keep this unfinished draft');
+    expect(saved).toEqual([]);
+    expect(cancelled).toEqual([]);
+
+    await act(async () => toggle.click());
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(view.querySelector('textarea')).toBe(textarea);
+    await act(async () => textarea.focus());
+    await pressEnter(textarea);
+    expect(saved).toEqual([{ cid: 'cid-0', task: 'Keep this unfinished draft' }]);
+  });
+
   it('saves the edit when Enter is pressed', async () => {
     const view = await renderQueue();
     const textarea = await startEditing(view);
@@ -131,6 +166,44 @@ describe('queued message editing commits', () => {
 
     expect(event.defaultPrevented).toBe(true);
     expect(saved).toEqual([{ cid: 'cid-0', task: 'Rewrite the queue instead' }]);
+  });
+
+  it('focuses the editor when the editing flag arrives before the start write completes', async () => {
+    let finishStart!: () => void;
+    function QueueWithEarlyUpdate() {
+      const [items, setItems] = useState([makeItem()]);
+      return createElement(MessageQueueDisplay, {
+        sessionId: 'session-test' as SessionId,
+        items,
+        onRemove: () => undefined,
+        onReorder: () => undefined,
+        onSteer: () => undefined,
+        onEditCancel: () => undefined,
+        onEditSave: (item, task) => {
+          saved.push({ cid: item.$cid, task });
+          setItems((current) => current.map((entry) => ({ ...entry, isEditing: false, task })));
+        },
+        onEditStart: (item) => {
+          setItems([{ ...item, isEditing: true }]);
+          return new Promise<void>((resolve) => {
+            finishStart = resolve;
+          });
+        },
+      });
+    }
+    await act(async () => root?.render(createElement(QueueWithEarlyUpdate)));
+    const textarea = await startEditing(container!);
+    expect(textarea.disabled).toBe(true);
+    expect(document.activeElement).not.toBe(textarea);
+
+    await act(async () => finishStart());
+    expect(textarea.disabled).toBe(false);
+    expect(document.activeElement).toBe(textarea);
+    expect(textarea.selectionStart).toBe(ORIGINAL_TASK.length);
+    expect(textarea.selectionEnd).toBe(ORIGINAL_TASK.length);
+    await act(async () => setTextareaValue(textarea, 'Clarified queued instruction'));
+    await pressEnter(textarea);
+    expect(saved).toEqual([{ cid: 'cid-0', task: 'Clarified queued instruction' }]);
   });
 
   it('leaves Shift+Enter to the textarea as a newline', async () => {
@@ -193,5 +266,139 @@ describe('queued message editing commits', () => {
 
     expect(saved).toEqual([]);
     expect(cancelled).toEqual(['cid-0']);
+  });
+});
+
+describe('queued message images', () => {
+  let root: Root | undefined;
+  let container: HTMLDivElement | undefined;
+  let editsStarted: string[];
+
+  beforeEach(async () => {
+    await initI18n('en');
+    editsStarted = [];
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(async () => {
+    await act(async () => root?.unmount());
+    container?.remove();
+  });
+
+  it('keeps live pending and failed-send counts visible while folded', async () => {
+    const store = createStore();
+    store.set(currentWorkspaceIdAtom, 'workspace-test' as WorkspaceId);
+    const record = (id: string, error?: string) =>
+      ({
+        id,
+        error,
+        sessionId: 'session-test',
+        workspaceId: 'workspace-test',
+        sequence: 1,
+        attachments: [],
+        delivery: { kind: 'queue' },
+        queue: { task: id },
+        entry: { id, role: 'user', items: [] },
+      }) as PendingSessionSend;
+    let records = [record('uploading'), record('failed', 'offline')];
+    const listeners = new Set<() => void>();
+    store.set(runtimeAtom, {
+      workspaceId: 'workspace-test',
+      pendingSends: {
+        getSnapshot: () => records,
+        subscribe: (listener: () => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    } as unknown as WorkspaceRuntime);
+    await act(async () =>
+      root?.render(
+        createElement(
+          Provider,
+          { store },
+          createElement(MessageQueueDisplay, {
+            sessionId: 'session-test' as SessionId,
+            items: [makeItem()],
+            onRemove: () => undefined,
+            onReorder: () => undefined,
+            onEditStart: () => undefined,
+            onEditCancel: () => undefined,
+            onEditSave: () => undefined,
+            onSteer: () => undefined,
+          })
+        )
+      )
+    );
+    const toggle = container!.querySelector<HTMLButtonElement>('[data-message-queue-toggle]')!;
+    await act(async () => toggle.click());
+    expect(toggle.textContent).toContain('3 queued');
+    expect(container!.querySelector('[role="status"]')?.textContent).toBe('1 not sent1 preparing');
+
+    await act(async () => {
+      records = [...records, record('new-upload')];
+      listeners.forEach((listener) => listener());
+    });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle.textContent).toContain('4 queued');
+    expect(container!.querySelector('[role="status"]')?.textContent).toBe('1 not sent2 preparing');
+    await act(async () => toggle.click());
+    expect(container!.querySelectorAll('[data-pending-queue-row]').length).toBe(3);
+    expect(container!.querySelector('[aria-label="Continue sending"]')).toBeTruthy();
+  });
+
+  it('opens the full-size image in the viewer without editing the row', async () => {
+    const store = createStore();
+    store.set(currentWorkspaceIdAtom, 'workspace-test' as WorkspaceId);
+    store.set(authTokenAtom, 'token');
+    const item = {
+      ...makeItem(),
+      acpSessionConfig: {
+        ...makeItem().acpSessionConfig,
+        inputBlocks: [
+          { type: 'text', text: ORIGINAL_TASK },
+          {
+            type: 'image',
+            imageId: 'image-1',
+            mimeType: 'image/png',
+            sizeBytes: 1024,
+            fileName: 'screenshot.png',
+          },
+        ],
+      },
+    } as unknown as MessageQueueItem;
+    await act(async () => {
+      root?.render(
+        createElement(
+          Provider,
+          { store },
+          createElement(MessageQueueDisplay, {
+            sessionId: 'session-test' as SessionId,
+            items: [item],
+            onRemove: () => undefined,
+            onReorder: () => undefined,
+            onEditStart: (started: MessageQueueItem) => {
+              editsStarted.push(started.$cid);
+            },
+            onEditCancel: () => undefined,
+            onEditSave: () => undefined,
+            onSteer: () => undefined,
+          })
+        )
+      );
+    });
+
+    const thumbnail = container!.querySelector<HTMLButtonElement>(
+      '[aria-label="Preview screenshot.png"]'
+    );
+    expect(thumbnail?.querySelector('img')?.getAttribute('src')).toBe('blob:thumbnail/image-1');
+    await act(async () => thumbnail?.click());
+
+    const images = [...document.querySelectorAll('img')].map((img) => img.getAttribute('src'));
+    expect(images).toContain('blob:original/image-1');
+    expect(editsStarted).toEqual([]);
+    expect(container!.querySelector('textarea')).toBeNull();
   });
 });

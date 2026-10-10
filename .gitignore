@@ -122,6 +122,8 @@ logs/
 .lody-e2e/
 /.lody-artifacts/
 /e2e/artifacts/
+# Local acceptance captures and experiment bundles; do not commit generated evidence.
+/artifacts/
 
 # OS
 .DS_Store
@@ -141,6 +143,7 @@ bun.lockb
 
 # Electron (generated)
 apps/electron/resources/cli/
+apps/electron/resources/roost/
 .gstack/
 
 # Claude Code local settings

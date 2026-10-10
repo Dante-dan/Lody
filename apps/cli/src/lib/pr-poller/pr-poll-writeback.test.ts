@@ -57,9 +57,9 @@ describe('selectCurrentPullRequestUrl', () => {
       [URL_1, obs(1, { headRefName: 'feat/x', updatedAt: '2026-07-17T09:00:00Z' })],
       [URL_2, obs(2, { headRefName: 'other', updatedAt: '2026-07-17T11:00:00Z' })],
     ]);
-    expect(
-      selectCurrentPullRequestUrl({ associated, observations, runtimeBranch: 'feat/x' })
-    ).toBe(URL_1);
+    expect(selectCurrentPullRequestUrl({ associated, observations, runtimeBranch: 'feat/x' })).toBe(
+      URL_1
+    );
     // Without a runtime branch the branch rule is ignored → newer wins.
     expect(selectCurrentPullRequestUrl({ associated, observations, runtimeBranch: null })).toBe(
       URL_2
@@ -69,9 +69,9 @@ describe('selectCurrentPullRequestUrl', () => {
   it('prefers open/draft over terminal, even an unobserved open association', () => {
     // Same branch rank (observation on another branch) → openness decides.
     const observations = new Map([[URL_2, obs(2, { status: 'merged', headRefName: 'other' })]]);
-    expect(
-      selectCurrentPullRequestUrl({ associated, observations, runtimeBranch: 'feat/x' })
-    ).toBe(URL_1);
+    expect(selectCurrentPullRequestUrl({ associated, observations, runtimeBranch: 'feat/x' })).toBe(
+      URL_1
+    );
   });
 
   it('a terminal PR on the runtime branch outranks an open association from another context', () => {
@@ -109,6 +109,20 @@ describe('selectCurrentPullRequestUrl', () => {
 });
 
 describe('planAssociation', () => {
+  it('retries a published winner until its webhook association is confirmed', () => {
+    const args = {
+      meta: makeMeta({ pullRequests: [{ url: URL_1, status: 'open' }] }),
+      observations: [],
+      discovered: [obs(1)],
+      runtimeBranch: 'feat/x',
+    };
+    expect(planAssociation({ ...args, confirmedAssociationUrls: new Set() })).toEqual({
+      url: URL_1,
+      prNumber: 1,
+      status: 'open',
+    });
+    expect(planAssociation({ ...args, confirmedAssociationUrls: new Set([URL_1]) })).toBeNull();
+  });
   it('plans association when a discovered PR wins current-PR selection', () => {
     const meta = makeMeta({ pullRequests: [{ url: URL_1, status: 'open' }] });
     const discovered = obs(2, { updatedAt: '2026-07-18T00:00:00Z' });
@@ -175,7 +189,12 @@ describe('planAssociation', () => {
       })
     ).toEqual({ url: 'https://github.com/owner/repo/pull/5', prNumber: 5, status: 'open' });
     expect(
-      planAssociation({ meta: makeMeta(), observations: [], discovered: [], runtimeBranch: 'feat/x' })
+      planAssociation({
+        meta: makeMeta(),
+        observations: [],
+        discovered: [],
+        runtimeBranch: 'feat/x',
+      })
     ).toBeNull();
   });
 });
@@ -243,7 +262,12 @@ describe('planPullRequestMetaWrite', () => {
   it('strips legacy detail fields exactly once (ordering bootstrap)', () => {
     const meta = makeMeta({
       pullRequests: [
-        { url: URL_1, status: 'open', number: 1, reportedAt: '2026-01-01' } as SessionPullRequestMeta,
+        {
+          url: URL_1,
+          status: 'open',
+          number: 1,
+          reportedAt: '2026-01-01',
+        } as SessionPullRequestMeta,
       ],
     });
 
@@ -285,7 +309,7 @@ describe('planPullRequestMetaWrite', () => {
     expect(plan?.pullRequestState).toEqual({ [URL_2]: { s: 's', m: 'c', t: NOW_SEC } });
   });
 
-  it('ignores observations for URLs that are not associated (association-first invariant)', () => {
+  it('ignores status-only observations for URLs that are not published', () => {
     const meta = makeMeta({ pullRequests: [{ url: URL_1, status: 'open' }] });
 
     const plan = planPullRequestMetaWrite({

@@ -1,7 +1,14 @@
 import * as React from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
+import * as stylex from '@stylexjs/stylex';
+import { Button } from '@lody/ui/button';
 import { Mention, MentionInput } from '@/ui/mention';
-import { MentionTwoLevelMenuBody } from '@/components/mentions/mention-two-level-menu';
+import { mentionSurface } from '@/ui/mention/mention-surface';
+import type { Mention as MentionRange } from '@/ui/mention/mention-root';
+import {
+  MentionTwoLevelMenu,
+  MentionTwoLevelMenuBody,
+} from '@/components/mentions/mention-two-level-menu';
 import {
   getMentionViewCandidates,
   selectMentionMenuView,
@@ -111,6 +118,37 @@ const SKILLS: MentionCandidate[] = [
   ),
 ];
 
+/* A machine's system skills, as the desktop reads them from `~/.codex/skills/.system`:
+   one long description, and paths under a directory every one of them shares. */
+const SYSTEM_SKILL_NAMES = [
+  'imagegen',
+  'openai-docs',
+  'plugin-creator',
+  'review-agent',
+  'skill-creator',
+  'skill-installer',
+];
+const SYSTEM_SKILLS: MentionCandidate[] = SYSTEM_SKILL_NAMES.map((name, index) =>
+  toSkillCandidate(
+    {
+      token: name,
+      dir: '~/.codex/skills/.system',
+      scope: 'system',
+      skill: {
+        id: `system-${index}`,
+        name,
+        description:
+          index === 0
+            ? 'Generate or edit raster images when the task benefits from AI-created bitmap visuals such as photos, illustrations, textures, sprites, mockups, or transparent-background cutouts. Use when Codex should create a brand-new image, transform an existing image, or derive visual variants from references, and the output should be a bitmap asset rather than repo-native code or vector. Do not use when the task is better handled by editing existing SVG/vector/code-native assets.'
+            : `The ${name} system skill.`,
+        relativePath: `~/.codex/skills/.system/${name}/SKILL.md`,
+        isSymlink: false,
+      },
+    },
+    SKILL_LABELS
+  )
+);
+
 const ROLE_MACHINE = { name: 'Studio' };
 
 const ROLE_AGENT_CONFIG = {
@@ -138,6 +176,7 @@ const agentRole = (overrides: Partial<AgentRole>): AgentRole => ({
 
 const AGENT_ROLES: MentionCandidate[] = [
   toAgentRoleCandidate({
+    availability: { kind: 'available' },
     slug: 'Code-Reviewer',
     role: agentRole({
       // Long on purpose: the instruction scrolls inside its own block so the
@@ -153,6 +192,7 @@ const AGENT_ROLES: MentionCandidate[] = [
     agentConfig: ROLE_AGENT_CONFIG,
   }),
   toAgentRoleCandidate({
+    availability: { kind: 'available' },
     slug: 'Release-Notes',
     role: agentRole({
       id: 'role-2' as AgentRoleId,
@@ -166,9 +206,61 @@ const AGENT_ROLES: MentionCandidate[] = [
   }),
 ];
 
+const UNAVAILABLE_AGENT_ROLES: MentionCandidate[] = [
+  ...AGENT_ROLES,
+  toAgentRoleCandidate(
+    {
+      slug: 'Offline-Reviewer',
+      role: agentRole({ id: 'offline-role' as AgentRoleId, name: 'Offline Reviewer' }),
+      availability: { kind: 'unavailable', reason: 'machine_offline' },
+    },
+    'Unavailable: its machine is offline'
+  ),
+  toAgentRoleCandidate(
+    {
+      slug: 'Loading-Reviewer',
+      role: agentRole({ id: 'loading-role' as AgentRoleId, name: 'Loading Reviewer' }),
+      availability: { kind: 'unknown' },
+    },
+    'Checking availability…'
+  ),
+  toAgentRoleCandidate(
+    {
+      slug: 'Unreachable-Reviewer',
+      role: agentRole({ id: 'unreachable-role' as AgentRoleId, name: 'Unreachable Reviewer' }),
+      availability: { kind: 'unavailable', reason: 'machine_unknown' },
+    },
+    'Unavailable: its machine is not available to you'
+  ),
+];
+
 const COMMANDS: MentionCandidate[] = [
   toCommandCandidate({ name: 'review', description: 'Review the changes on this branch' }),
   toCommandCandidate({ name: 'compact', description: 'Compact the conversation context' }),
+];
+
+/** Session times are shown against the page's clock, so the fixture is relative to it. */
+const STORY_NOW = Date.now();
+
+const SESSION_CANDIDATES: MentionCandidate[] = [
+  {
+    value: 'session-current',
+    label: 'current-parser-work',
+    insertText: '@current-parser-work',
+    kind: 'session',
+    icon: 'session',
+    title: 'Current parser work',
+    activityAt: STORY_NOW - 12 * 60_000,
+  },
+  {
+    value: 'session-other',
+    label: 'other-project-work',
+    insertText: '@other-project-work',
+    kind: 'session',
+    icon: 'session',
+    title: 'Other project work',
+    activityAt: STORY_NOW - 3 * 24 * 60 * 60_000,
+  },
 ];
 
 function category(
@@ -197,10 +289,32 @@ const CATEGORIES: MentionCategory[] = [
   category('file', 'file', 'Files', 'file', FILES),
   category('issue', 'issue', 'Issues', 'issue', ISSUES),
   category('pr', 'pr', 'Pull Requests', 'pr', []),
-  category('skill', 'skill', 'Skills', 'skill', SKILLS),
+  category('skill', 'skill', 'Skills', 'skill', SKILLS, { directTrigger: '$' }),
   category('agent_role', 'role', 'Agent Roles', 'agent_role', AGENT_ROLES),
-  category('command', 'cmd', 'Commands', 'command', COMMANDS),
+  category('session', 'session', 'Sessions', 'session', SESSION_CANDIDATES),
+  category('command', 'cmd', 'Commands', 'command', COMMANDS, { directTrigger: '/' }),
 ];
+
+/* The real menu surface, laid out where floating-ui would put it. */
+const harness = stylex.create({
+  menu: { width: 'max-content', maxWidth: '100%', marginTop: '8px' },
+  menuWithDetail: { width: 'min(536px, 100%)' },
+  /* A window-sized page with the composer at its foot, as on the home screen. */
+  floatingPage: {
+    display: 'flex',
+    flexDirection: 'column',
+    justifyContent: 'flex-end',
+    minHeight: 'max(500px, 100dvh)',
+    width: 'min(900px, 100%)',
+    paddingBlock: '24px',
+    paddingInline: 'clamp(16px, 13.33vw, 120px)',
+    boxSizing: 'border-box',
+  },
+  floatingPageTop: { justifyContent: 'flex-start' },
+  /* The composer's frame: its chip row over its box, as `ChatComposer` lays them out. */
+  composerFrame: { display: 'flex', flexDirection: 'column', gap: '8px' },
+  chipRow: { display: 'flex', alignItems: 'center', gap: '4px' },
+});
 
 type HarnessProps = {
   /** Text after `@`, exactly what the composer would hold. */
@@ -239,32 +353,19 @@ function Harness({ search, categories = CATEGORIES, withDetail = true, narrow }:
           className="w-full rounded-md border border-input-border bg-input p-2"
           aria-label="composer"
         />
-        <div className="mt-2 w-max max-w-full overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md">
+        <div
+          {...stylex.props(
+            mentionSurface.surface,
+            harness.menu,
+            detail != null && harness.menuWithDetail
+          )}
+        >
           <MentionTwoLevelMenuBody view={view} onBack={() => {}} showBack detail={detail} />
         </div>
       </Mention>
     </div>
   );
 }
-
-const SESSION_CANDIDATES: MentionCandidate[] = [
-  {
-    value: 'session-current',
-    label: 'current-parser-work',
-    insertText: '@current-parser-work',
-    kind: 'session',
-    icon: 'session',
-    title: 'Current parser work',
-  },
-  {
-    value: 'session-other',
-    label: 'other-project-work',
-    insertText: '@other-project-work',
-    kind: 'session',
-    icon: 'session',
-    title: 'Other project work',
-  },
-];
 
 function SessionScopeHarness({
   initialScope,
@@ -318,6 +419,102 @@ function SessionScopeHarness({
   );
 }
 
+const FLOATING_CATEGORIES: MentionCategory[] = CATEGORIES.map((entry) =>
+  entry.id === 'skill'
+    ? category('skill', 'skill', 'Skills', 'skill', [...SYSTEM_SKILLS, ...SKILLS], {
+        directTrigger: '$',
+      })
+    : entry
+);
+
+/**
+ * Type `@`, `$` or `/` in a framed editor. The frame variant exercises an
+ * explicit fixed anchor; caret variants cover main and inline-editor placement.
+ */
+function FloatingHarness({
+  atTop = false,
+  mainComposer = false,
+  menuSide,
+  preparedShortcut = false,
+  categories = FLOATING_CATEGORIES,
+}: {
+  atTop?: boolean;
+  mainComposer?: boolean;
+  menuSide?: 'top' | 'bottom';
+  preparedShortcut?: boolean;
+  categories?: MentionCategory[];
+}) {
+  const [loading, setLoading] = React.useState(false);
+  const shortcutCategories: MentionCategory[] = [
+    category(
+      'prompt_shortcut',
+      'shortcut',
+      'Prompt Shortcuts',
+      'prompt_shortcut',
+      [
+        {
+          value: 'prompt-shortcut:review',
+          label: 'review',
+          title: '/review',
+          insertText: '/review',
+          kind: 'prompt_shortcut',
+          icon: 'prompt_shortcut',
+          disabled: loading,
+          onPrepare: async () => {
+            setLoading(true);
+            await Promise.resolve();
+            setLoading(false);
+            return { text: 'Review this change', mentions: [] };
+          },
+        },
+      ],
+      { directTrigger: '/' }
+    ),
+  ];
+  const [value, setValue] = React.useState('');
+  const [mentions, setMentions] = React.useState<MentionRange[]>([]);
+  const [selected, setSelected] = React.useState<string[]>([]);
+  return (
+    <div {...stylex.props(harness.floatingPage, atTop && harness.floatingPageTop)}>
+      <div data-mention-frame="" {...stylex.props(harness.composerFrame)}>
+        <div {...stylex.props(harness.chipRow)}>
+          <Button variant="secondary" size="mini">
+            codex-happy
+          </Button>
+          <Button variant="secondary" size="mini">
+            Choose project
+          </Button>
+        </div>
+        <Mention
+          triggers={['@', '$', '/']}
+          autoCloseOnEmpty={false}
+          inputValue={value}
+          onInputValueChange={setValue}
+          mentions={mentions}
+          onMentionsChange={setMentions}
+          value={selected}
+          onValueChange={setSelected}
+          onFilter={(options) => options}
+        >
+          <MentionInput
+            value={value}
+            onChange={() => {}}
+            className="w-full rounded-md border border-input-border bg-input p-2"
+            aria-label="composer"
+            rows={3}
+          />
+          <MentionTwoLevelMenu
+            categories={preparedShortcut ? shortcutCategories : categories}
+            surface="unknown"
+            anchor={mainComposer ? 'composer' : 'caret'}
+            menuSide={menuSide ?? (mainComposer ? 'top' : 'bottom')}
+          />
+        </Mention>
+      </div>
+    </div>
+  );
+}
+
 const meta = {
   title: 'Mentions/MentionTwoLevelMenu',
   component: Harness,
@@ -365,6 +562,23 @@ export const SessionScopeNarrow: Story = {
 /** `@skill:` — the second level with the detail panel populated. */
 export const SkillCategoryWithDetail: Story = {
   args: { search: 'skill:' },
+};
+
+/**
+ * Six system skills: the names take the narrow column, and a long description
+ * is clamped so the list, not the pane, sets the height. The path gives way in
+ * its middle.
+ */
+export const SkillCategorySystem: Story = {
+  args: {
+    search: 'skill:',
+    categories: [category('skill', 'skill', 'Skills', 'skill', SYSTEM_SKILLS)],
+  },
+};
+
+/** `@skill:zz` — a term that names no skill says so rather than keep the list. */
+export const SkillNoMatch: Story = {
+  args: { search: 'skill:zz' },
 };
 
 /** The same level on mobile, where the docked strip stays list-only. */
@@ -432,4 +646,114 @@ export const FileCategoryTruncated: Story = {
 /** Nothing matched anywhere. */
 export const NoResults: Story = {
   args: { search: 'zzzz' },
+};
+
+export const AgentRoleAvailability: Story = {
+  args: {
+    search: 'role:',
+    withDetail: false,
+    categories: [
+      category('agent_role', 'role', 'Agent Roles', 'agent_role', UNAVAILABLE_AGENT_ROLES),
+    ],
+  },
+};
+
+export const AgentRoleAvailabilityNarrow: Story = {
+  args: { ...AgentRoleAvailability.args, narrow: true },
+};
+
+/** The inline editor's caret menu at the page's foot. */
+export const FloatingInComposer: Story = {
+  args: { search: '' },
+  render: () => <FloatingHarness />,
+};
+
+/** The explicit frame-anchor alternative keeps its menu above the whole frame. */
+export const MainComposerAboveFrame: Story = {
+  args: { search: '' },
+  render: () => <FloatingHarness mainComposer />,
+};
+
+/** The main composer's top caret menu with a full Role catalog and varied prompts. */
+export const MainComposerRoleCatalogAtCaret: Story = {
+  args: { search: '' },
+  render: () => (
+    <FloatingHarness
+      menuSide="top"
+      categories={[
+        category('agent_role', 'role', 'Agent Roles', 'agent_role', [
+          ...AGENT_ROLES,
+          ...Array.from({ length: 18 }, (_, index) =>
+            toAgentRoleCandidate({
+              availability: { kind: 'available' },
+              slug: `Reviewer-${index + 1}`,
+              role: agentRole({
+                id: `catalog-role-${index}` as AgentRoleId,
+                name: `Reviewer ${index + 1}`,
+                promptPrefix: index % 2 ? 'Review this change.\n'.repeat(40) : undefined,
+              }),
+              machine: ROLE_MACHINE,
+              agentConfig: ROLE_AGENT_CONFIG,
+            })
+          ),
+          ...UNAVAILABLE_AGENT_ROLES.slice(2),
+        ]),
+      ]}
+    />
+  ),
+};
+
+/** Search `@review`, scroll to Roles, and hover between file and Role rows. */
+export const MainComposerAggregateRoles: Story = {
+  args: { search: '' },
+  render: () => (
+    <FloatingHarness
+      mainComposer
+      categories={[
+        category(
+          'file',
+          'file',
+          'Files',
+          'file',
+          Array.from({ length: 4 }, (_, index) =>
+            toFileCandidate({
+              kind: 'file',
+              path: `src/review-${index}.ts`,
+              token: `src/review-${index}.ts`,
+            })
+          )
+        ),
+        ...(['issue', 'pr'] as const).map((type) =>
+          category(
+            type,
+            type,
+            type === 'issue' ? 'Issues' : 'Pull Requests',
+            type,
+            Array.from({ length: 4 }, (_, index) =>
+              toIssuePrCandidate({
+                number: index + (type === 'issue' ? 1 : 101),
+                title: `Review ${type} ${index}`,
+                type,
+                token: `#${index + (type === 'issue' ? 1 : 101)}`,
+                label: String(index),
+                searchableNumber: String(index),
+              })
+            )
+          )
+        ),
+        category('agent_role', 'role', 'Agent Roles', 'agent_role', AGENT_ROLES),
+      ]}
+    />
+  ),
+};
+
+/** The caret editor at the top of the page: the popup stays with the caret. */
+export const FloatingComposerAtTop: Story = {
+  args: { search: '' },
+  render: () => <FloatingHarness atTop />,
+};
+
+export const PreparedShortcut: Story = {
+  args: { search: '' },
+  render: () => <FloatingHarness mainComposer preparedShortcut />,
 };

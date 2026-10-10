@@ -1,10 +1,17 @@
-import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
+import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { totalmem } from 'node:os'
 import { basename, join, resolve as resolvePath } from 'node:path'
 import { app, powerSaveBlocker, type WebContents } from 'electron'
-import { Effect } from 'effect'
+import { Effect, Layer, Logger, LogLevel, References } from 'effect'
+import {
+  signalChildTreeNowLegacy,
+  startProcessLegacy,
+  type ProcessFacadeOptions,
+  type ProcessHandleLegacy,
+  type TerminationPolicy
+} from '@lody/shared/node/process'
 import { isLocalSessionControlRequest } from '@lody/shared/node/local-session-control'
 import { isLocalProjectControlRequest } from '@lody/shared/node/local-project-control'
 import {
@@ -33,6 +40,7 @@ import {
   makeLocalProbeClientAuto
 } from '@lody/shared/node/local-ipc'
 import { getLodyDataDir } from '@lody/shared/node/installation-profile'
+import { ACP_CAPABILITIES_REFRESH_CLIENT_BACKSTOP_MS } from '@lody/shared/acp-startup-budget'
 import type {
   LocalProjectControlRequest,
   LocalProjectControlResponse,
@@ -54,10 +62,14 @@ import {
   formatCommandForDisplay,
   isV8OutOfMemoryExit,
   type LaunchHandle,
-  type PreparedLaunch
+  type PreparedLaunch,
+  type SupervisorExitDecision,
+  type SupervisorState
 } from '@lody/cli-supervisor'
 import type { BootstrapSession } from './auth-service'
-import { isLocalPlatform, mainPlatformKind } from '../platform'
+import { desktopInstallationProfile, isLocalPlatform, mainPlatformKind } from '../platform'
+import { getDesktopLog } from '../desktop-log'
+import type { DesktopExecutionHost } from './desktop-execution-host'
 import { getUserShellEnvCached, shouldUseWindowsShell } from './shell-env'
 import { applyProxyEnvFallback, resolveSystemProxyEnv } from './system-proxy-env'
 import type { CliOutputEvent, CliRunResult } from '../types'
@@ -67,12 +79,41 @@ const CLI_OUTPUT_BUFFER_MAX_EVENTS = 2000
 // force-killing it. Kept short so Command+Q feels responsive; with the CLI's own
 // fast socket teardown a clean exit normally lands well under this.
 const CLI_QUIT_GRACE_MS = 3000
+// How long a SIGKILLed embedded CLI may take to be reaped before quit reports it.
+const CLI_FORCE_KILL_WAIT_MS = 5000
+// The embedded CLI shares Electron's process group: it is not spawned detached,
+// so termination reaches it (and on Windows its tree) through its own pid. The
+// supervisor must be told the same thing through `LaunchHandle.processGroup`.
+const EMBEDDED_CLI_PROCESS_GROUP = false
+// Process-layer diagnostics (a tree that survived termination) go to the daily log.
+const CLI_PROCESS_OPTIONS: ProcessFacadeOptions = {
+  loggerLayer: Layer.merge(
+    Logger.layer([
+      Logger.make(({ logLevel, message }) => {
+        const text = (Array.isArray(message) ? message : [message]).map(String).join(' ')
+        if (LogLevel.isGreaterThanOrEqualTo(logLevel, 'Warn')) {
+          getDesktopLog().warn('cli-process', text)
+        } else {
+          getDesktopLog().debug('cli-process', text)
+        }
+      }),
+      Logger.tracerLogger
+    ]),
+    // The desktop log applies its own level; keep the escalation diagnostics.
+    Layer.succeed(References.MinimumLogLevel, 'Debug')
+  )
+}
 const CLI_ELECTRON_BOOTSTRAP_ENV = 'LODY_ELECTRON_BOOTSTRAP'
 const CLI_ELECTRON_SESSION_TOKEN_ENV = 'LODY_ELECTRON_SESSION_TOKEN'
 // See apps/cli/src/commands/start.ts:ELECTRON_SESSION_USER_ID_ENV for rationale.
 const CLI_ELECTRON_SESSION_USER_ID_ENV = 'LODY_ELECTRON_SESSION_USER_ID'
 const LOCAL_SESSION_CONTROL_TIMEOUT_MS = 10_000
-const LOCAL_SESSION_CONTROL_ACP_REFRESH_TIMEOUT_MS = 120_000
+// The machine owns this deadline and answers with its own failure reason. This
+// is only a backstop for a daemon that died without replying, so it is derived
+// from the machine's worst case rather than set to a second, smaller number:
+// a 120s socket timeout here expired requests the CLI was still working on
+// (a cold `npx` init alone may run 300s) and reported them as our timeout.
+const LOCAL_SESSION_CONTROL_ACP_REFRESH_TIMEOUT_MS = ACP_CAPABILITIES_REFRESH_CLIENT_BACKSTOP_MS
 // Downloading + unpacking a registry agent binary can take minutes on a slow
 // link, so the local-control request must outlive the default before falling
 // back to Streams RPC.
@@ -89,6 +130,108 @@ const LOCAL_CLI_HOST_ENDPOINT = getLocalCliHostEndpoint(mainPlatformKind)
 const CLI_CREDENTIALS_PATH = join(LODY_DATA_DIR, 'credentials.json')
 const ELECTRON_SETTINGS_PATH = join(LODY_DATA_DIR, 'electron-settings.json')
 const BUNDLED_CLI_ENTRY_FILE = 'index.js'
+
+function decideEmbeddedCliExit(result: CliRunResult): SupervisorExitDecision {
+  if (result.code === CLI_EXIT_CODE_AUTH_FAILURE) {
+    return {
+      action: 'fatal' as const,
+      message: 'CLI authentication failed; sign in again to restart the local agent'
+    }
+  }
+  if (result.code === CLI_EXIT_CODE_SUPERVISOR_CONTRACT_MISMATCH) {
+    return {
+      action: 'fatal' as const,
+      message: 'Embedded CLI rejected the supervisor contract; update the desktop app'
+    }
+  }
+  if (isV8OutOfMemoryExit(result)) {
+    return {
+      action: 'retry' as const,
+      countFailure: true,
+      failureClass: 'v8_oom' as const,
+      message: 'Electron-managed CLI exhausted its V8 heap'
+    }
+  }
+  return {
+    action: 'retry' as const,
+    countFailure: result.code !== CLI_EXIT_CODE_RETRYABLE_STARTUP,
+    message:
+      result.code === 0
+        ? 'Electron-managed CLI exited unexpectedly'
+        : `Electron-managed CLI exited with code ${result.code ?? 'signal'}`
+  }
+}
+
+function traceEmbeddedCliExitDecision(
+  result: CliRunResult,
+  decision: SupervisorExitDecision
+): SupervisorExitDecision {
+  const counted = 'countFailure' in decision ? ` countFailure=${decision.countFailure}` : ''
+  const failureClass =
+    'failureClass' in decision && decision.failureClass
+      ? ` failureClass=${decision.failureClass}`
+      : ''
+  getDesktopLog().warn(
+    'cli-supervisor',
+    `exit decision action=${decision.action}${counted}${failureClass} code=${
+      result.code ?? 'null'
+    } signal=${result.signal ?? 'none'} terminationKind=${
+      result.terminationKind ?? 'unknown'
+    } message=${decision.message ?? ''}`
+  )
+  return decision
+}
+
+const CLI_STDERR_TRACE_MAX_CHARS = 8_000
+
+/**
+ * Daily-log trace of one embedded CLI process: spawn, every stderr line (a V8
+ * out-of-memory abort or native crash writes only there; the CLI's own logger
+ * never sees it), and how it ended.
+ */
+function traceEmbeddedCliProcess(
+  handle: LaunchHandle,
+  meta: { subcommand: string; argCount: number; maxOldSpaceMiB?: number }
+): LaunchHandle {
+  const log = getDesktopLog()
+  const { child } = handle
+  const pid = child.pid ?? '?'
+  const spawnedAtMs = Date.now()
+  log.info(
+    'cli',
+    `spawned embedded CLI pid=${pid} subcommand=${meta.subcommand} argCount=${meta.argCount}${
+      meta.maxOldSpaceMiB ? ` maxOldSpaceMiB=${meta.maxOldSpaceMiB}` : ''
+    }`
+  )
+  child.stderr?.on('data', (chunk: Buffer | string) => {
+    const text = String(chunk).slice(0, CLI_STDERR_TRACE_MAX_CHARS)
+    for (const line of text.split('\n')) {
+      if (line.trim()) log.debug('cli', `pid=${pid} stderr: ${line}`)
+    }
+  })
+  void handle.result.then(
+    (result) => {
+      const abnormal = result.terminationKind !== 'exit' || result.code !== 0
+      log[abnormal ? 'warn' : 'info'](
+        'cli',
+        `embedded CLI pid=${pid} subcommand=${meta.subcommand} ended code=${
+          result.code ?? 'null'
+        } signal=${result.signal ?? 'none'} terminationKind=${
+          result.terminationKind ?? 'unknown'
+        } uptimeMs=${Date.now() - spawnedAtMs}`
+      )
+    },
+    (error: unknown) => {
+      log.error(
+        'cli',
+        `embedded CLI pid=${pid} subcommand=${meta.subcommand} failed after ${
+          Date.now() - spawnedAtMs
+        }ms: ${formatUnknownError(error)}`
+      )
+    }
+  )
+  return handle
+}
 
 type CliRunOptions = {
   envOverrides?: NodeJS.ProcessEnv
@@ -114,6 +257,7 @@ type MachineIdLookupOptions = {
 
 type CliServiceOptions = {
   resolveBootstrapSession?: () => Promise<BootstrapSession | null>
+  executionHost?: DesktopExecutionHost
 }
 
 function resolveLocalProjectControlTimeoutMs(type: LocalProjectControlRequest['type']): number {
@@ -233,6 +377,21 @@ function resolveRepoRoot(): string | null {
   return null
 }
 
+/**
+ * Best-effort signal from `process.on('exit')`, where no later tick runs, so it
+ * must be delivered synchronously and cannot escalate or wait. Like Node's
+ * default child kill, it asks POSIX trees to exit and force-kills on Windows,
+ * where a console-less CLI refuses a graceful `taskkill`.
+ */
+function signalCliTreeOnExit(child: ChildProcess): void {
+  signalChildTreeNowLegacy(
+    child,
+    process.platform === 'win32' ? 'SIGKILL' : 'SIGTERM',
+    { processGroup: EMBEDDED_CLI_PROCESS_GROUP },
+    CLI_PROCESS_OPTIONS
+  )
+}
+
 function formatUnknownError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -337,7 +496,7 @@ function readMachineIdFromCliCredentials(): string | null {
 }
 
 export class CliService {
-  private readonly trackedCliChildren = new Set<ChildProcess>()
+  private readonly trackedCliChildren = new Map<ChildProcess, ProcessHandleLegacy>()
   private autoStartSender: WebContents | undefined
   private readonly cliOutputBuffer: CliOutputEvent[] = []
   private readonly cliStateSenders = new Set<WebContents>()
@@ -366,12 +525,16 @@ export class CliService {
   private cliAutoStartEnabled = true
   private powerSaveBlockerId: number | null = null
   private supervisor: CliSupervisor | null = null
-  private readonly supervisorInstanceId = randomUUID()
+  private readonly supervisorInstanceId: string
+  private readonly executionHost: DesktopExecutionHost | undefined
   private readonly supervisorToken = `${randomUUID()}${randomUUID()}`
   private hostLease: LocalCliHostLease | null = null
+  private lastTracedSupervisorState = ''
 
   constructor(options: CliServiceOptions = {}) {
     this.resolveBootstrapSession = options.resolveBootstrapSession
+    this.executionHost = options.executionHost
+    this.supervisorInstanceId = options.executionHost?.instanceId ?? randomUUID()
     const settings = readElectronSettings()
     if (typeof settings.preventSleepEnabled === 'boolean') {
       this.preventSleepEnabled = settings.preventSleepEnabled
@@ -396,38 +559,11 @@ export class CliService {
           return null
         }
       },
-      decideExit: (result) => {
-        if (result.code === CLI_EXIT_CODE_AUTH_FAILURE) {
-          return {
-            action: 'fatal' as const,
-            message: 'CLI authentication failed; sign in again to restart the local agent'
-          }
-        }
-        if (result.code === CLI_EXIT_CODE_SUPERVISOR_CONTRACT_MISMATCH) {
-          return {
-            action: 'fatal' as const,
-            message: 'Embedded CLI rejected the supervisor contract; update the desktop app'
-          }
-        }
-        if (isV8OutOfMemoryExit(result)) {
-          return {
-            action: 'retry' as const,
-            countFailure: true,
-            failureClass: 'v8_oom' as const,
-            message: 'Electron-managed CLI exhausted its V8 heap'
-          }
-        }
-        return {
-          action: 'retry' as const,
-          countFailure: result.code !== CLI_EXIT_CODE_RETRYABLE_STARTUP,
-          message:
-            result.code === 0
-              ? 'Electron-managed CLI exited unexpectedly'
-              : `Electron-managed CLI exited with code ${result.code ?? 'signal'}`
-        }
-      },
-      existingRuntimePolicy: 'attach',
-      ownership: {
+      decideExit: (result) => traceEmbeddedCliExitDecision(result, decideEmbeddedCliExit(result)),
+      processOptions: CLI_PROCESS_OPTIONS,
+      existingRuntimePolicy:
+        desktopInstallationProfile.releaseChannel === 'nightly' ? 'reject' : 'attach',
+      ownership: this.executionHost?.ownership ?? {
         acquire: async (signal) => {
           const result = await acquireLocalCliHostLease({
             instanceId: this.supervisorInstanceId,
@@ -455,6 +591,7 @@ export class CliService {
         }
       },
       onStateChange: (state) => {
+        this.traceSupervisorState(state)
         const runtime = state.runtime
         if (runtime?.machineId) {
           this.cachedMachineId = runtime.machineId
@@ -465,6 +602,26 @@ export class CliService {
     })
 
     return this.supervisor
+  }
+
+  /**
+   * Records Supervisor transitions in the daily log. `reconnecting` while a CLI
+   * child is alive means its state probe went unanswered — the embedded CLI's
+   * event loop is blocked — which the UI shows as a disconnect.
+   */
+  private traceSupervisorState(state: SupervisorState): void {
+    const runtime = state.runtime
+    const summary = `phase=${state.phase} desired=${state.desiredState}${
+      runtime ? ` runtimePid=${runtime.pid} ownership=${state.runtimeOwnership ?? 'unknown'}` : ''
+    }${state.retryAttempt !== undefined ? ` retryAttempt=${state.retryAttempt}` : ''}${
+      state.retryInMs !== undefined ? ` retryInMs=${state.retryInMs}` : ''
+    }${state.lastExitCode !== undefined ? ` lastExitCode=${state.lastExitCode}` : ''} message=${
+      state.message ?? ''
+    }`
+    if (summary === this.lastTracedSupervisorState) return
+    this.lastTracedSupervisorState = summary
+    const level = state.phase === 'fatal' || state.phase === 'offline' ? 'warn' : 'info'
+    getDesktopLog()[level]('cli-supervisor', `state ${summary}`)
   }
 
   private async buildLaunchPreparation(signal: AbortSignal): Promise<PreparedLaunch> {
@@ -658,12 +815,10 @@ export class CliService {
         this.localControlClient
           .sessionControl(message, { timeoutMs, onResponse: options.onResponse })
           .pipe(
-            Effect.map(
-              (responses): SendLocalSessionControlResult => ({
-                ok: true,
-                responses
-              })
-            ),
+            Effect.map((responses): SendLocalSessionControlResult => ({
+              ok: true,
+              responses
+            })),
             Effect.catchTag('IpcTimeoutError', () =>
               Effect.succeed({ ok: false as const, error: 'request_timeout' })
             ),
@@ -773,12 +928,8 @@ export class CliService {
       this.supervisor = null
     }
     this.clearMachineIdCache()
-    for (const child of this.trackedCliChildren) {
-      try {
-        child.kill()
-      } catch {
-        // best effort
-      }
+    for (const child of this.trackedCliChildren.keys()) {
+      signalCliTreeOnExit(child)
     }
     this.trackedCliChildren.clear()
     this.updatePowerSaveBlocker()
@@ -788,16 +939,17 @@ export class CliService {
   /**
    * Gracefully terminate the embedded CLI for app quit, then guarantee it is dead.
    *
-   * `killAllProcesses()` only sends SIGTERM and never waits, so on Command+Q the
-   * app would exit while the CLI was still shutting down — orphaning it holding the
-   * local probe/session-control ports and the terminal socket, which then breaks
-   * the next launch. Here we send SIGTERM, wait up to `graceMs` for a clean exit,
-   * then SIGKILL anything still alive so nothing is left holding resources.
+   * `killAllProcesses()` never waits, so on Command+Q the app would exit while
+   * the CLI was still shutting down — orphaning it holding the local
+   * probe/session-control ports and the terminal socket, which then breaks the
+   * next launch. Here every tracked CLI process tree gets SIGTERM, up to
+   * `graceMs` for a clean exit, then SIGKILL; a tree that is still running
+   * after that bounded wait fails quit instead of being orphaned.
    */
   async shutdownForQuit(graceMs = CLI_QUIT_GRACE_MS): Promise<void> {
     if (this.supervisor) {
       // Stop polling/retry first so the supervisor does not relaunch the child
-      // after we signal it. (This also sends SIGTERM to its active child.)
+      // after we signal it. (This also asks its active child to shut down.)
       try {
         await this.supervisor.stop({ terminationGraceMs: graceMs })
       } catch (error) {
@@ -807,52 +959,33 @@ export class CliService {
     }
     this.clearMachineIdCache()
 
-    const children = Array.from(this.trackedCliChildren)
-    for (const child of children) {
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        // best effort
-      }
-    }
-
-    await Promise.race([
-      Promise.all(children.map((child) => this.waitForChildExit(child))),
-      new Promise<void>((resolve) => setTimeout(resolve, graceMs))
-    ])
-
-    for (const child of this.trackedCliChildren) {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        // best effort
-      }
-    }
-    await Promise.race([
-      Promise.all(Array.from(this.trackedCliChildren, (child) => this.waitForChildExit(child))),
-      new Promise<void>((resolve) => setTimeout(resolve, 5000))
-    ])
-    const survivors = Array.from(this.trackedCliChildren).filter(
-      (child) => child.exitCode === null && child.signalCode === null
-    )
+    const survivors = await this.terminateTrackedCliChildren({
+      graceMs,
+      killWaitMs: CLI_FORCE_KILL_WAIT_MS
+    })
     this.updatePowerSaveBlocker()
     this.publishCliState()
     if (survivors.length > 0) {
       const error = new Error(
-        `Embedded CLI did not confirm exit after SIGKILL (${survivors.map((child) => child.pid ?? 'unknown').join(', ')})`
+        `Embedded CLI did not confirm exit after SIGKILL (${survivors.join('; ')})`
       )
       console.error('[Electron]', error.message)
       throw error
     }
   }
 
-  private waitForChildExit(child: ChildProcess): Promise<void> {
-    if (child.exitCode !== null || child.signalCode !== null) {
-      return Promise.resolve()
+  /** Terminate every tracked CLI tree in parallel; resolves with each survivor's reason. */
+  private async terminateTrackedCliChildren(policy: TerminationPolicy): Promise<string[]> {
+    const outcomes = await Promise.allSettled(
+      Array.from(this.trackedCliChildren.values(), (handle) => handle.terminate(policy))
+    )
+    const survivors = outcomes.flatMap((outcome) =>
+      outcome.status === 'rejected' ? [formatUnknownError(outcome.reason)] : []
+    )
+    for (const survivor of survivors) {
+      getDesktopLog().warn('cli', `embedded CLI survived termination: ${survivor}`)
     }
-    return new Promise<void>((resolve) => {
-      child.once('close', () => resolve())
-    })
+    return survivors
   }
 
   autoStart(sender: WebContents | undefined): void {
@@ -913,11 +1046,17 @@ export class CliService {
       chunk: `$ ${formatCommandForDisplay(command, args)}\n`
     })
 
-    const child = spawn(command, args, {
-      ...spawnOptions,
-      shell: shouldUseWindowsShell(command)
-    })
-    this.trackedCliChildren.add(child)
+    const processHandle = startProcessLegacy(
+      {
+        command,
+        args,
+        options: { ...spawnOptions, shell: shouldUseWindowsShell(command) },
+        processGroup: EMBEDDED_CLI_PROCESS_GROUP
+      },
+      CLI_PROCESS_OPTIONS
+    )
+    const { child } = processHandle
+    this.trackedCliChildren.set(child, processHandle)
     options?.onSpawn?.(child)
 
     const result = new Promise<CliRunResult>((resolvePromise, reject) => {
@@ -976,6 +1115,7 @@ export class CliService {
     return {
       child,
       result,
+      processGroup: EMBEDDED_CLI_PROCESS_GROUP,
       ...(options?.supervisorControl
         ? {
             requestShutdown: async () => {
@@ -1025,20 +1165,30 @@ export class CliService {
 
     return {
       spawn: () =>
-        this.spawnCli(
-          resolveBundledCliRuntime(),
-          [
-            ...(options?.maxOldSpaceMiB ? [`--max-old-space-size=${options.maxOldSpaceMiB}`] : []),
-            entry,
-            ...args
-          ],
+        traceEmbeddedCliProcess(
+          this.spawnCli(
+            resolveBundledCliRuntime(),
+            [
+              ...(options?.maxOldSpaceMiB
+                ? [`--max-old-space-size=${options.maxOldSpaceMiB}`]
+                : []),
+              entry,
+              ...args
+            ],
+            {
+              env,
+              windowsHide: true,
+              ...(options?.supervisorControl ? { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] } : {})
+            },
+            sender,
+            options
+          ),
+          // Only the subcommand: renderer-supplied arguments may carry credentials.
           {
-            env,
-            windowsHide: true,
-            ...(options?.supervisorControl ? { stdio: ['ignore', 'pipe', 'pipe', 'ipc'] } : {})
-          },
-          sender,
-          options
+            subcommand: args[0] ?? '(none)',
+            argCount: args.length,
+            maxOldSpaceMiB: options?.maxOldSpaceMiB
+          }
         )
     }
   }

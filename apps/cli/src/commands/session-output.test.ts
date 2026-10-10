@@ -1,3 +1,8 @@
+import { createSessionAgentWrites } from '../lib/loro/session-agent-writes';
+import { LoroDoc, LoroMap } from 'loro-crdt';
+import { createHistoryWriter } from '@lody/shared';
+import { createLoroSessionData } from '@lody/shared/session-data';
+import { withHistoryPort } from '../../tests/history-port-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import type { SessionHistoryInput, SessionId } from '@lody/shared';
 import {
@@ -41,10 +46,21 @@ const createMirror = (initialState: MirrorState) => {
   };
 };
 
-const createSessionDoc = (mirror: ReturnType<typeof createMirror>) => ({
-  sessionId: 'session-1' as SessionId,
-  mirror: mirror as unknown,
-});
+const createSessionDoc = (mirror: ReturnType<typeof createMirror>) => {
+  const sessionDoc = withHistoryPort({
+    sessionId: 'session-1' as SessionId,
+    readHistorySnapshot: () => mirror.getState().history ?? [],
+    subscribeAll: (listener: () => void) => mirror.subscribe(() => listener()),
+  });
+  return {
+    sessionDoc,
+    backend: {
+      readTurnOutput: (userTurnId: string) =>
+        sessionDoc.sessionData.history.readTurnOutput(userTurnId),
+      subscribeHistory: (listener: () => void) => sessionDoc.subscribeAll(listener),
+    },
+  };
+};
 
 describe('session output helpers', () => {
   it('finds the assistant entry linked to the target user turn', () => {
@@ -72,6 +88,77 @@ describe('session output helpers', () => {
     expect(findAssistantEntryForUserTurn(history, 'user-1')?.id).toBe('assistant-target');
   });
 
+  it('streams one linked turn without materializing unrelated bodies', async () => {
+    const doc = new LoroDoc();
+    const writer = createHistoryWriter(doc);
+    for (let i = 0; i < 100; i++)
+      writer.append(
+        createHistoryEntry({
+          id: `old-${i}`,
+          items: [{ type: 'text', text: 'large old body'.repeat(100) }],
+        })
+      );
+    writer.append(createHistoryEntry({ id: 'u', role: 'user', status: 'processing' }));
+    writer.append(
+      createHistoryEntry({
+        id: 'a',
+        userTurnId: 'u',
+        finished: false,
+        items: [{ type: 'text', text: 'first' }],
+      })
+    );
+    const data = createLoroSessionData({
+      sessionId: 'session-1' as SessionId,
+      doc,
+      writer,
+    });
+    const bodyReads: string[] = [];
+    const toJSON = LoroMap.prototype.toJSON;
+    const spy = vi.spyOn(LoroMap.prototype, 'toJSON').mockImplementation(function (this: LoroMap) {
+      const id = this.get('id');
+      if (typeof id === 'string') bodyReads.push(id);
+      return toJSON.call(this);
+    });
+    const first = Promise.withResolvers<void>();
+    const events: Array<Record<string, unknown>> = [];
+    const completion = waitForTurnCompletion({
+      sessionDoc: {
+        sessionId: 'session-1' as SessionId,
+        sessionData: data,
+        subscribeAll: (notify) => doc.subscribe(() => notify()),
+      },
+      backend: {
+        readTurnOutput: (userTurnId: string) => data.history.readTurnOutput(userTurnId),
+        subscribeHistory: (listener: () => void) => doc.subscribe(() => listener()),
+      },
+      userTurnId: 'u',
+      outputMode: 'jsonl',
+      timeoutMs: 0,
+      onEvent(event) {
+        events.push(event);
+        if (event.type === 'update') first.resolve();
+      },
+    });
+    try {
+      await first.promise;
+      await createSessionAgentWrites(data.writer).setTurnField('a', 'finished', {
+        kind: 'set',
+        value: true,
+      });
+      await createSessionAgentWrites(data.writer).setTurnField('u', 'status', {
+        kind: 'set',
+        value: 'handled',
+      });
+      expect((await completion).turnId).toBe('a');
+      expect(events.map((e) => e.type)).toEqual(['update', 'done']);
+      expect(bodyReads.length).toBeGreaterThan(0);
+      expect([...new Set(bodyReads)]).toEqual(['a']);
+    } finally {
+      spy.mockRestore();
+      data.dispose();
+    }
+  });
+
   it('streams updated assistant items and resolves when the turn finishes', async () => {
     const userTurn = createHistoryEntry({
       id: 'user-1',
@@ -81,8 +168,10 @@ describe('session output helpers', () => {
     });
     const mirror = createMirror({ history: [userTurn] });
     const events: Array<Record<string, unknown>> = [];
+    const { sessionDoc, backend } = createSessionDoc(mirror);
     const completion = waitForTurnCompletion({
-      sessionDoc: createSessionDoc(mirror),
+      sessionDoc,
+      backend,
       userTurnId: 'user-1',
       outputMode: 'jsonl',
       timeoutMs: 5_000,
@@ -102,6 +191,7 @@ describe('session output helpers', () => {
         }),
       ],
     });
+    await Promise.resolve();
     mirror.setState({
       history: [
         userTurn,
@@ -113,6 +203,7 @@ describe('session output helpers', () => {
         }),
       ],
     });
+    await Promise.resolve();
     mirror.setState({
       history: [
         createHistoryEntry({
@@ -162,8 +253,10 @@ describe('session output helpers', () => {
       status: 'processing',
     });
     const mirror = createMirror({ history: [userTurn] });
+    const { sessionDoc, backend } = createSessionDoc(mirror);
     const completion = waitForTurnCompletion({
-      sessionDoc: createSessionDoc(mirror),
+      sessionDoc,
+      backend,
       userTurnId: 'user-1',
       outputMode: 'json',
       timeoutMs: 5_000,
@@ -215,8 +308,10 @@ describe('session output helpers', () => {
       endedAt: Date.parse('2026-03-27T00:00:01.000Z'),
     });
     const mirror = createMirror({ history: [userTurn] });
+    const { sessionDoc, backend } = createSessionDoc(mirror);
     const completion = waitForTurnCompletion({
-      sessionDoc: createSessionDoc(mirror),
+      sessionDoc,
+      backend,
       userTurnId: 'user-1',
       outputMode: 'json',
       timeoutMs: 5_000,
@@ -271,8 +366,10 @@ describe('session output helpers', () => {
       items: [{ type: 'text', text: 'hello' }],
     });
     const mirror = createMirror({ history: [userTurn] });
+    const { sessionDoc, backend } = createSessionDoc(mirror);
     const completion = waitForTurnCompletion({
-      sessionDoc: createSessionDoc(mirror),
+      sessionDoc,
+      backend,
       userTurnId: 'user-1',
       outputMode: 'json',
       timeoutMs: 5_000,
@@ -327,8 +424,10 @@ describe('session output helpers', () => {
         ],
       });
 
+      const { sessionDoc, backend } = createSessionDoc(mirror);
       const completion = waitForTurnCompletion({
-        sessionDoc: createSessionDoc(mirror),
+        sessionDoc,
+        backend,
         userTurnId: 'user-1',
         outputMode: 'json',
         timeoutMs: 1_000,

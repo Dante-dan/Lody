@@ -1,5 +1,7 @@
 'use client';
 
+import { OptionalEnhancement } from './optional-enhancement';
+
 /**
  * UnderwaterExperience
  *
@@ -63,11 +65,10 @@ const UnderwaterPointCloudBackground = lazy(() => {
   });
 });
 
-// The product stage sits below the 100dvh hero, but `landing-app-preview` is the
-// landing's single heaviest module: it mounts REAL product UI and drags the chat
-// composer, markdown renderer and katex in behind it. Statically imported it
-// landed in the landing's critical chunk and delayed the hero's LCP for UI the
-// visitor cannot even see yet. Lazy + armed on approach instead.
+// The product stage sits below the 100dvh hero, and `landing-app-preview` (the
+// product replica plus its diff highlighter) is UI the visitor cannot see yet.
+// Statically imported it landed in the landing's critical chunk and delayed the
+// hero's LCP. Lazy + armed on approach instead.
 //
 // Unlike three.js above, this one is NOT module-eval — the fetch is deferred to
 // `armPreview()` so the hero copy gets first-paint bandwidth. Arming waits
@@ -414,15 +415,23 @@ export function UnderwaterExperience({
 
   return (
     <>
-      <Suspense
+      <OptionalEnhancement
         fallback={
           <div className="underwater-bg underwater-landing__bg" aria-hidden="true">
             <div className="underwater-bg__overlay" />
           </div>
         }
       >
-        <UnderwaterPointCloudBackground className="underwater-landing__bg" diveRef={diveRef} />
-      </Suspense>
+        <Suspense
+          fallback={
+            <div className="underwater-bg underwater-landing__bg" aria-hidden="true">
+              <div className="underwater-bg__overlay" />
+            </div>
+          }
+        >
+          <UnderwaterPointCloudBackground className="underwater-landing__bg" diveRef={diveRef} />
+        </Suspense>
+      </OptionalEnhancement>
 
       <main id="main-content" className="underwater-main">
         <div className="underwater-hero">
@@ -509,13 +518,15 @@ export function UnderwaterExperience({
                       `previewArmed` only gates the FIRST mount; it never flips back,
                       so this cannot remount ghost scripts mid-scroll. */}
                   {previewArmed ? (
-                    <Suspense fallback={null}>
-                      <LandingAppPreview
-                        locale={locale}
-                        demo={activeDemo}
-                        ghostEnabled={demosLive && stageInView}
-                      />
-                    </Suspense>
+                    <OptionalEnhancement>
+                      <Suspense fallback={null}>
+                        <LandingAppPreview
+                          locale={locale}
+                          demo={activeDemo}
+                          ghostEnabled={demosLive && stageInView}
+                        />
+                      </Suspense>
+                    </OptionalEnhancement>
                   ) : null}
                 </div>
               </div>

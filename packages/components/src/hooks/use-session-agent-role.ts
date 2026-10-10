@@ -1,5 +1,7 @@
+import { snapshotAgentRole } from '@lody/shared';
 import { useCallback, useEffect, useMemo } from 'react';
 import { useAtom, useAtomValue } from 'jotai';
+import { usePostHog } from '@posthog/react';
 import type { AgentConfigId, AgentRoleId, MachineId, SessionId } from '@lody/shared';
 
 import { getAllAgentConfigAtom } from '@/atoms/agents';
@@ -13,6 +15,7 @@ import type {
 } from '@/components/shared/acp-selector-options';
 import type { AcpSessionSelectOption } from '@/components/shared/acp-session-select';
 import { filterAcpSessionConfigOptionValues } from '@/lib/acp-session-config-selection';
+import { captureAgentRoleApplied } from '@/lib/agent-role-analytics';
 import {
   isAgentRoleRunConfigApplied,
   selectSessionAgentRoles,
@@ -98,6 +101,7 @@ export function useSessionAgentRole({
   runConfigHasUserEdits?: boolean;
   onConfigOptionChange?: (configId: string, value: AcpConfigOptionValue) => void;
 }): SessionAgentRoleControl {
+  const postHog = usePostHog();
   const { roles, synced: agentRolesSynced } = useWorkspaceAgentRoles();
   const scopedRoles = useMemo(
     () =>
@@ -232,6 +236,8 @@ export function useSessionAgentRole({
       ? {
           agentRoleId: selectedRoleId,
           agentRoleRevision: pickedItem.role.revision,
+          memory: pickedItem.role.runConfig.memory,
+          agentRoleSnapshot: snapshotAgentRole(pickedItem.role),
         }
       : pickedRoleId === null
         ? null
@@ -240,7 +246,7 @@ export function useSessionAgentRole({
             null
           : !agentRolesSynced
             ? runConfigHasUserEdits
-              ? undefined
+              ? null
               : typeof storedPickedRevision === 'number'
                 ? { agentRoleId: pickedRoleId, agentRoleRevision: storedPickedRevision }
                 : undefined
@@ -286,6 +292,8 @@ export function useSessionAgentRole({
       )) {
         onConfigOptionChange?.(configId, value);
       }
+      // Offered Roles are bound to this Session's own machine and Agent Config.
+      captureAgentRoleApplied(postHog, role, { source: 'existing_session', crossMachine: false });
     },
     [
       configOptionSelectors,
@@ -297,6 +305,7 @@ export function useSessionAgentRole({
       onConfigOptionChange,
       onModeChange,
       onModelChange,
+      postHog,
       selectedModelId,
       setSelectionOverride,
     ]

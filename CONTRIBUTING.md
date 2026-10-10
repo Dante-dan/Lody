@@ -51,7 +51,8 @@ git submodule update --init --recursive
 
 ## Local Development
 
-You need Node.js 22 or later and the pnpm version specified by this project.
+You need Node.js 22.14-22.x or 23.6+ (Node-API 10+) and the pnpm
+version specified by this project.
 
 ```bash
 pnpm install
@@ -85,7 +86,9 @@ For changes to important behavior or architecture, follow the
 [document maintenance workflow](./.agents/README.md). Specs explain intent and require explicit human
 review. Significant decisions belong in an Agent Note; routine styling and local
 fixes normally need only a PR explanation. You may contribute in either English
-or Chinese; maintainers can arrange the counterpart after merge. Invariants
+or Chinese; maintainers can arrange the counterpart after merge. Agents instead
+follow [the note rules](./.agents/notes/AGENTS.md#history-and-language) and ship
+both languages in the same change. Invariants
 continue to live in the nearest `AGENTS.md`.
 
 1. Create a clearly named branch from the latest code.
@@ -99,7 +102,7 @@ continue to live in the nearest `AGENTS.md`.
    docs: improve local setup guide
    ```
 
-5. Open a pull request using the [pull request template](./.github/PULL_REQUEST_TEMPLATE.md). Every fork-based pull request must reference a Lody Issue and fill in the problem, summary, test plan, and Context handoff. Use `Closes #123` when merging the PR should close the Issue, and `Refs #123` only when it must remain open. A bare `#123` or full Lody Issue URL in `Related issue` defaults to `Closes #123`. The handoff gives the maintainers' reviewing Agent concise, PR-specific review focus, decisions to challenge, plausible failures or evidence gaps, and a public summary of the authoring context. Every field is required; `N/A` and redacted answers are rejected because they do not provide enough context for a safe review.
+5. Open a pull request using the [pull request template](./.github/PULL_REQUEST_TEMPLATE.md). Every fork-based pull request must reference a Lody Issue and fill in the problem, summary, test plan, and Context handoff. Use `Closes #123` when merging the PR should close the Issue, and `Refs #123` only when it must remain open. A bare `#123` or full Lody Issue URL in `Related issue` defaults to `Closes #123`. The handoff preserves the original prompt verbatim and must declare the conversation-sharing status using the template: a public link from any authoring tool, or a concrete reason for user refusal, unavailable sharing, or no Agent use. If the user refuses sharing, include their exact reply in a separate fenced block headed `#### Sharing refusal (verbatim)` under `### Original user prompt`, without changing the original prompt. Agents must ask before opening the PR and wait for the response; silence is not refusal. Redact only private spans with explicit markers. Placeholders and entirely redacted evidence are not accepted.
 
 If an Agent prepares a fork-based contribution, it must explain that the Context handoff is public and an invalid PR receives seven days to be corrected before closure. An Agent preparing a same-repository branch must not create an Issue solely to satisfy contribution intake.
 

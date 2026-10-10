@@ -24,7 +24,7 @@ import {
 } from '@/components/mentions/mention-hydration';
 
 /**
- * Skill mentions, reachable directly through `$` and through the `@` category
+ * Skill mentions, reachable directly through `$` / `￥` and through the `@` category
  * menu (phase 2 of docs/project-skills.md).
  *
  * Reuses the same discovery/SWR core as the Skills display tab via
@@ -39,6 +39,7 @@ import {
  * the provider-filtered skill path while the composer stays compact.
  */
 export const SKILL_MENTION_TRIGGER = '$';
+export const SKILL_MENTION_TRIGGER_ALIAS = '￥';
 const SKILL_MENTION_PROMPT_PREFIX = '/';
 /** Label of the expanded `[Skill Path](...)` markdown link. The writer and the
    already-expanded detector both derive from this so they cannot drift. */
@@ -108,7 +109,7 @@ export function buildSkillMentionItems(
  *     the directories that provider uses (`allowedDirs`); null = show all.
  *  2. Dedupe by token — the same `$<token>` surfaced from multiple dirs appears
  *     once (the inserted text is identical either way).
- *  3. Term filter + rank — prefix > substring > path match.
+ *  3. Term filter + rank — prefix > substring > the skill's own folder.
  */
 export function selectSkillMentionCandidates(
   items: readonly SkillMentionItem[],
@@ -136,7 +137,7 @@ export function selectSkillMentionCandidates(
     .map((item) => {
       const token = item.token.toLowerCase();
       const name = item.skill.name.toLowerCase();
-      const path = item.skill.relativePath.toLowerCase();
+      const path = getSkillFolderPath(item).toLowerCase();
       let score = -1;
       if (token.startsWith(query) || name.startsWith(query)) {
         score = 0;
@@ -150,6 +151,20 @@ export function selectSkillMentionCandidates(
     .filter((entry) => entry.score >= 0)
     .sort((a, b) => a.score - b.score || a.item.token.localeCompare(b.item.token))
     .map((entry) => entry.item);
+}
+
+/**
+ * The part of a skill's path that is the skill's own: its folder under the
+ * skills directory, without the directory or `SKILL.md`. Matching the whole
+ * path matched the directory every skill shares — `sy` hit
+ * `~/.codex/skills/.system/…` and `skill` hit every path — so a term that named
+ * no skill still returned the whole list.
+ */
+function getSkillFolderPath(item: SkillMentionItem): string {
+  const path = item.skill.relativePath.replace(/\/SKILL\.md$/i, '');
+  const dir = item.dir.replace(/\/+$/, '');
+  if (dir && path.startsWith(`${dir}/`)) return path.slice(dir.length + 1);
+  return path.split('/').filter(Boolean).pop() ?? path;
 }
 
 function isSkillMentionDirAllowed(dir: string, allowedDirs: ReadonlySet<string>): boolean {
@@ -183,7 +198,7 @@ export function getAllowedSkillMentionDirs(
   ]);
 }
 
-function getSkillMentionReferencePath(item: SkillMentionItem): string {
+export function getSkillMentionReferencePath(item: SkillMentionItem): string {
   // Home-scoped skills (global + system) expand to their absolute SKILL.md path;
   // project skills use the project-relative path.
   if (item.scope !== 'project') {
@@ -194,6 +209,11 @@ function getSkillMentionReferencePath(item: SkillMentionItem): string {
 
 function formatSkillPathMarkdownDestination(path: string): string {
   return path.replace(/\\/g, '\\\\').replace(/\)/g, '\\)');
+}
+
+/** Stable-target form, shared by ordinary skill mentions and frozen Shortcut semantics. */
+export function formatSkillMentionPrompt(token: string, path: string): string {
+  return `use ${SKILL_MENTION_PROMPT_PREFIX}${token} [${SKILL_MENTION_PATH_LABEL}](${formatSkillPathMarkdownDestination(path)})`;
 }
 
 function buildSkillMentionPathByToken(
@@ -269,7 +289,7 @@ export function buildSkillMentionRewrites(
     rewrites.push({
       start,
       end: tokenEnd,
-      replacement: `use ${SKILL_MENTION_PROMPT_PREFIX}${token} [${SKILL_MENTION_PATH_LABEL}](${formatSkillPathMarkdownDestination(path)})`,
+      replacement: formatSkillMentionPrompt(token, path),
       span: { kind: 'skill', label: `${SKILL_MENTION_TRIGGER}${token}`, target: token },
     });
     return true;

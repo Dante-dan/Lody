@@ -1,6 +1,6 @@
+import { toShared } from '@/platform/process-options';
 import type { ChildProcess } from 'child_process';
 import os from 'os';
-import spawn from 'cross-spawn';
 import { randomUUID } from 'node:crypto';
 import * as acp from '@agentclientprotocol/sdk';
 import type { AuthMethod } from '@agentclientprotocol/sdk';
@@ -35,7 +35,11 @@ import {
   AcpAgentAuthorizationOutputParser,
   BuiltinAuthenticationOutputParser,
 } from './acp-authentication-output';
-import { shutdownLocalAcpAgent, spawnAcpProcess } from './acp-runner';
+import { shutdownLocalAcpAgent, spawnAcpProcess, terminateAcpProcessTree } from './acp-runner';
+import { startProcessLegacy } from '@lody/shared/node/process';
+
+import type { NodeProcessApi } from '@lody/shared/node/process';
+import type { ManagedRuntimeProgressEvent } from './managed-agent-runtime';
 import { createStdinWritableStream, createStdoutReadableStream } from '@/utils/stream';
 import { getLoginShellEnv } from './login-shell-env';
 import { appendStderrTail, createAcpStartupMonitor } from './acp-startup-monitor';
@@ -71,6 +75,16 @@ export type AcpAuthenticationProgressEvent =
       message: string;
       form: MachineAcpAuthenticationForm;
     }
+  | {
+      /**
+       * The builtin login command needs a managed runtime that is not
+       * installed yet; it is being downloaded before the process can spawn.
+       */
+      status: 'runtime-download';
+      runtimeName: string;
+      runtimePhase: ManagedRuntimeProgressEvent['phase'];
+      runtimePercent?: number;
+    }
   | { status: 'output'; stream: 'stdout' | 'stderr'; output: string }
   | { status: 'authenticated' }
   | { status: 'cancelled' }
@@ -92,8 +106,13 @@ export type AcpAuthenticationResult =
 const DEFAULT_AUTHENTICATION_TIMEOUT_MS = 285_000;
 const DEFAULT_TERMINATION_GRACE_MS = 3_000;
 const DEFAULT_STATUS_PROBE_TIMEOUT_MS = 15_000;
+/** Bound on waiting for a SIGKILLed status probe tree to disappear. */
+const STATUS_PROBE_KILL_WAIT_MS = 2_000;
 
 const BUILTIN_AUTH_METHODS = {
+  // Pi credentials are configured through the official Pi CLI on the host.
+  pi: [],
+  devin: [],
   kimi: [
     {
       id: 'login',
@@ -163,8 +182,9 @@ const AcpAuthenticationInteractionInputSchema = z.discriminatedUnion('action', [
 type AcpAuthenticationManagerOptions = {
   authenticationTimeoutMs?: number;
   terminationGraceMs?: number;
-  spawnProcess?: typeof spawn;
+  nodeProcess?: NodeProcessApi;
   resolveLoginShellEnv?: typeof getLoginShellEnv;
+  resolveAuthenticationProcessLaunch?: typeof resolveBuiltinAuthenticationProcessLaunch;
 };
 
 export type BuiltinAuthenticationProbeResult =
@@ -183,7 +203,7 @@ type ProbeBuiltinAuthenticationOptions = {
   logger: Logger;
   signal?: AbortSignal;
   statusProbeTimeoutMs?: number;
-  spawnProcess?: typeof spawn;
+  nodeProcess?: NodeProcessApi;
   resolveLoginShellEnv?: typeof getLoginShellEnv;
 };
 
@@ -354,7 +374,7 @@ function formatAuthenticationExitError(
 ): string {
   const base = `${displayName} authentication exited with code ${exitCode ?? 'unknown'}`;
   if (agentType !== 'codex') return base;
-  return `${base}. Make sure device-code login is enabled in your ChatGPT security settings or workspace permissions, then try again.`;
+  return `${base}. Check the Codex login log on the execution machine for the cause, then try again.`;
 }
 
 async function buildAuthenticationProcessEnv(options: {
@@ -394,14 +414,7 @@ export async function probeBuiltinAuthentication(
   options: ProbeBuiltinAuthenticationOptions
 ): Promise<BuiltinAuthenticationProbeResult> {
   options.signal?.throwIfAborted();
-  if (options.cliType !== 'builtin' || !isManagedBuiltinAgentType(options.agentType)) {
-    return { status: 'unknown' };
-  }
-  if (
-    options.agentType === 'kimi' ||
-    options.agentType === 'grok' ||
-    options.agentType === 'codex'
-  ) {
+  if (options.cliType !== 'builtin' || options.agentType !== 'claude') {
     return { status: 'unknown' };
   }
   const launch = await resolveBuiltinAuthenticationProcessLaunch({
@@ -425,12 +438,27 @@ export async function probeBuiltinAuthentication(
   if (hasBuiltinEnvAuthentication(options.agentType, env)) {
     return { status: 'unknown' };
   }
-  const child = (options.spawnProcess ?? spawn)(launch.command, launch.args, {
-    cwd: os.homedir(),
-    env,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
+  // Its own group, so a timeout or cancel ends whatever the status command
+  // started, not just the command itself.
+  const { child } = startProcessLegacy(
+    {
+      command: launch.command,
+      args: launch.args,
+      options: { cwd: os.homedir(), env, stdio: 'ignore' },
+      processGroup: true,
+    },
+    toShared({ nodeProcess: options.nodeProcess })
+  );
+  let termination: Promise<void> | undefined;
+  const terminateProbe = (): void => {
+    termination ??= terminateAcpProcessTree(child, {
+      logger: options.logger,
+      sessionLabel: `acp-auth:${options.agentType}:status`,
+      exitTimeoutMs: STATUS_PROBE_KILL_WAIT_MS,
+      force: true,
+      nodeProcess: options.nodeProcess,
+    });
+  };
   const timeoutMs = Math.max(1, options.statusProbeTimeoutMs ?? DEFAULT_STATUS_PROBE_TIMEOUT_MS);
   const exit = await new Promise<{
     aborted?: boolean;
@@ -453,11 +481,7 @@ export async function probeBuiltinAuthentication(
       resolve(result);
     };
     const handleAbort = (): void => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // The process may have exited between cancellation and the kill call.
-      }
+      terminateProbe();
       finish({ aborted: true, code: null });
     };
     options.signal?.addEventListener('abort', handleAbort, { once: true });
@@ -466,11 +490,7 @@ export async function probeBuiltinAuthentication(
       return;
     }
     timeoutHandle = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // The process may have exited between the timeout and kill call.
-      }
+      terminateProbe();
       finish({ code: null, timedOut: true });
     }, timeoutMs);
     timeoutHandle.unref?.();
@@ -478,6 +498,12 @@ export async function probeBuiltinAuthentication(
     child.once('exit', (code) => finish({ code }));
   });
 
+  // The probe is over only once its process tree is gone.
+  await termination?.catch((error: unknown) => {
+    options.logger.warn(
+      `[acp-auth] ${getBuiltinDisplayName(options.agentType)} status probe could not be terminated: ${formatErrorMessage(error)}`
+    );
+  });
   if (exit.aborted) {
     throw new DOMException('ACP authentication probe was cancelled', 'AbortError');
   }
@@ -501,13 +527,12 @@ export async function probeBuiltinAuthentication(
 }
 
 export class AcpAuthenticationManager {
-  // Each builtin provider has one shared credential store, so concurrent login
-  // attempts are intentionally keyed by agent type.
   private readonly runningByAgentType = new Map<string, RunningAuthentication>();
   private readonly authenticationTimeoutMs: number;
   private readonly terminationGraceMs: number;
-  private readonly spawnProcess: typeof spawn;
+  private readonly nodeProcess: NodeProcessApi | undefined;
   private readonly resolveLoginShellEnv: typeof getLoginShellEnv;
+  private readonly resolveAuthenticationProcessLaunch: typeof resolveBuiltinAuthenticationProcessLaunch;
 
   constructor(
     private readonly logger: Logger,
@@ -521,8 +546,10 @@ export class AcpAuthenticationManager {
       1,
       options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS
     );
-    this.spawnProcess = options.spawnProcess ?? spawn;
+    this.nodeProcess = options.nodeProcess;
     this.resolveLoginShellEnv = options.resolveLoginShellEnv ?? getLoginShellEnv;
+    this.resolveAuthenticationProcessLaunch =
+      options.resolveAuthenticationProcessLaunch ?? resolveBuiltinAuthenticationProcessLaunch;
   }
 
   async authenticate(options: {
@@ -532,10 +559,21 @@ export class AcpAuthenticationManager {
     customAcp?: CustomAcpLaunchSpec;
     runtimeOverrides?: BuiltinRuntimeOverrides;
     env?: Record<string, string>;
+    codexProfile?: ResolvedCodexProfile;
     onProgress?: (event: AcpAuthenticationProgressEvent) => void;
+    authenticateManagedProfile?: (context: {
+      signal: AbortSignal;
+      requestInput: (
+        form: MachineAcpAuthenticationForm,
+        message: string
+      ) => Promise<Record<string, unknown>>;
+    }) => Promise<void>;
   }): Promise<AcpAuthenticationResult> {
+    // Devin advertises its own browser method over ACP, not a native login command.
     const isBuiltinAuthentication =
-      options.cliType === 'builtin' && isManagedBuiltinAgentType(options.agentType);
+      options.cliType === 'builtin' &&
+      isManagedBuiltinAgentType(options.agentType) &&
+      options.agentType !== 'devin';
     const displayName = isBuiltinAuthentication
       ? getBuiltinDisplayName(options.agentType)
       : options.agentType;
@@ -562,6 +600,9 @@ export class AcpAuthenticationManager {
     this.runningByAgentType.set(options.agentType, running);
 
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let releaseProfile:
+      | import('./codex-profile-process-usage').CodexProfileProcessUsage
+      | undefined;
     const interruptedResult = (): AcpAuthenticationResult | null => {
       if (running.cancelled) {
         options.onProgress?.({ status: 'cancelled' });
@@ -589,15 +630,57 @@ export class AcpAuthenticationManager {
     timeoutHandle.unref?.();
 
     try {
+      if (options.authenticateManagedProfile) {
+        await options.authenticateManagedProfile({
+          signal: running.abortController.signal,
+          requestInput: async (form, message) => {
+            const interactionId = randomUUID();
+            const pending = this.waitForAuthenticationInput(running, interactionId);
+            if (!pending) throw new Error('Authentication input is already pending');
+            options.onProgress?.({ status: 'input-required', interactionId, message, form });
+            const input = await pending;
+            if (input.action !== 'accept')
+              throw new DOMException('Authentication cancelled', 'AbortError');
+            return input.content ?? {};
+          },
+        });
+        const interruption = interruptedResult();
+        if (interruption) return interruption;
+        options.onProgress?.({ status: 'authenticated' });
+        return { success: true, disposition: 'authenticated' };
+      }
+      if (options.codexProfile) {
+        if (await getCodexProfileStore().isReady(options.codexProfile)) {
+          throw new Error(
+            'This provider already has a Codex account. Add a new provider to sign in to another account.'
+          );
+        }
+        releaseProfile = await registerCodexProfileProcess(options.codexProfile, {
+          directNative: true,
+        });
+      }
       if (!isBuiltinAuthentication) {
         return await this.authenticateProtocolDrivenAcp(options, running);
       }
       const agentType = options.agentType as BuiltinCliType;
-      const launch = await resolveBuiltinAuthenticationProcessLaunch({
+      // Resolving the launch can download a managed runtime first. Wire the
+      // abort signal so cancel/timeout interrupt that download, and surface
+      // its progress instead of sitting silent until the login errors out.
+      const launch = await this.resolveAuthenticationProcessLaunch({
         cliType: options.cliType,
         agentType: options.agentType,
         runtimeOverrides: options.runtimeOverrides,
         action: 'login',
+        signal: running.abortController.signal,
+        onManagedRuntimeProgress: (event) => {
+          if (running.abortController.signal.aborted) return;
+          options.onProgress?.({
+            status: 'runtime-download',
+            runtimeName: event.runtimeName,
+            runtimePhase: event.phase,
+            ...(event.percent === undefined ? {} : { runtimePercent: event.percent }),
+          });
+        },
       });
       if (!launch) {
         throw new Error(`${displayName} authentication is unavailable`);
@@ -605,24 +688,30 @@ export class AcpAuthenticationManager {
       const launchInterruption = interruptedResult();
       if (launchInterruption) return launchInterruption;
 
-      const env = await buildAuthenticationProcessEnv({
+      let env = await buildAuthenticationProcessEnv({
         launch,
         agentType: options.agentType,
         env: options.env,
         resolveLoginShellEnv: this.resolveLoginShellEnv,
       });
+      if (options.codexProfile) env = codexProfileEnvironment(options.codexProfile, env);
       const preparationInterruption = interruptedResult();
       if (preparationInterruption) return preparationInterruption;
 
       options.onProgress?.({ status: 'starting' });
-      const child = this.spawnProcess(launch.command, launch.args, {
-        cwd: os.homedir(),
-        env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        detached: process.platform !== 'win32',
-        windowsHide: true,
-      });
+      const { child } = startProcessLegacy(
+        {
+          command: launch.command,
+          args: options.codexProfile
+            ? ['-c', 'forced_login_method="chatgpt"', ...launch.args]
+            : launch.args,
+          options: { cwd: os.homedir(), env, stdio: ['pipe', 'pipe', 'pipe'] },
+          processGroup: true,
+        },
+        toShared({ nodeProcess: this.nodeProcess })
+      );
       running.child = child;
+      releaseProfile?.recordNativePid(child.pid);
       child.stdin?.on('error', (error: unknown) => {
         this.logger.debug(
           `[acp-auth] ${displayName} authorization input failed: ${formatErrorMessage(error)}`
@@ -672,6 +761,8 @@ export class AcpAuthenticationManager {
         return { success: false, disposition: 'error', error };
       }
 
+      if (options.codexProfile) await getCodexProfileStore().markChatgptReady(options.codexProfile);
+
       options.onProgress?.({ status: 'authenticated' });
       return { success: true, disposition: 'authenticated' };
     } catch (error) {
@@ -681,6 +772,7 @@ export class AcpAuthenticationManager {
       options.onProgress?.({ status: 'error', error: message });
       return { success: false, disposition: 'error', error: message };
     } finally {
+      await releaseProfile?.();
       if (timeoutHandle) {
         clearTimeout(timeoutHandle);
       }
@@ -885,7 +977,7 @@ export class AcpAuthenticationManager {
               env,
               command: launch.command,
               args: [...args],
-              spawnImpl: this.spawnProcess,
+              spawnImpl: this.nodeProcess?.spawn,
             });
             running.child = child;
             running.terminating = false;
@@ -1094,6 +1186,7 @@ export class AcpAuthenticationManager {
                 logger: this.logger,
                 sessionLabel: `acp-auth:${options.agentType}:protocol`,
                 exitTimeoutMs: this.terminationGraceMs,
+                nodeProcess: this.nodeProcess,
               }).catch((error: unknown) => {
                 this.logger.debug(
                   `[acp-auth] Failed to terminate protocol authentication process: ${formatErrorMessage(error)}`
@@ -1128,6 +1221,7 @@ export class AcpAuthenticationManager {
       logger: this.logger,
       sessionLabel: `acp-auth:${agentType}:${reason}`,
       exitTimeoutMs: this.terminationGraceMs,
+      nodeProcess: this.nodeProcess,
     }).catch((error: unknown) => {
       this.logger.debug(
         `[acp-auth] Failed to terminate authentication process: ${formatErrorMessage(error)}`
@@ -1135,3 +1229,5 @@ export class AcpAuthenticationManager {
     });
   }
 }
+import { getCodexProfileStore, type ResolvedCodexProfile } from './codex-profile-store';
+import { registerCodexProfileProcess, codexProfileEnvironment } from './codex-profile-runtime';

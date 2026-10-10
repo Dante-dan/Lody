@@ -1,3 +1,4 @@
+import type { MemoryBinding } from './memory-provider';
 import type { AcpConfigOptionValue, AgentConfigCliType } from './ai';
 import type { McpServerId } from './ids';
 import { normalizeProjectRefForDedup } from './project';
@@ -10,8 +11,8 @@ export type SessionPreparationRunConfig = {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, AcpConfigOptionValue>;
+  memory?: MemoryBinding;
   mcpServerIds?: McpServerId[];
-  taskToolsEnabled?: boolean;
 };
 
 export type SessionPreparationClaimIdentity = {
@@ -44,8 +45,8 @@ export function buildSessionPreparationRunConfig(input: {
   modeId?: string | null;
   modelId?: string | null;
   configOptionValues?: Record<string, AcpConfigOptionValue> | null;
+  memory?: MemoryBinding;
   mcpServerIds?: readonly McpServerId[] | null;
-  taskToolsEnabled?: boolean;
 }): SessionPreparationRunConfig | undefined {
   const modeId = trimOptionalId(input.modeId);
   const modelId = trimOptionalId(input.modelId);
@@ -61,17 +62,16 @@ export function buildSessionPreparationRunConfig(input: {
       ? configOptionValues
       : undefined;
   const mcpServerIds = input.mcpServerIds ? [...input.mcpServerIds] : undefined;
-  const taskToolsEnabled = input.taskToolsEnabled === true ? true : undefined;
 
-  if (!modeId && !modelId && !nonEmptyConfigOptionValues && !mcpServerIds && !taskToolsEnabled) {
+  if (!modeId && !modelId && !nonEmptyConfigOptionValues && !mcpServerIds && !input.memory) {
     return undefined;
   }
   return {
+    ...(input.memory ? { memory: input.memory } : {}),
     ...(modeId ? { modeId } : {}),
     ...(modelId ? { modelId } : {}),
     ...(nonEmptyConfigOptionValues ? { configOptionValues: nonEmptyConfigOptionValues } : {}),
     ...(mcpServerIds ? { mcpServerIds } : {}),
-    ...(taskToolsEnabled ? { taskToolsEnabled } : {}),
   };
 }
 
@@ -87,10 +87,10 @@ export function normalizeSessionPreparationRunConfigForDedup(
           left.localeCompare(right)
         )
       : null,
+    ...(config.memory ? [[config.memory.providerId, config.memory.memoryId]] : []),
     ...(config.mcpServerIds === undefined
       ? []
       : [normalizeMcpServerIdsForDedup(config.mcpServerIds)]),
-    ...(config.taskToolsEnabled === true ? [true] : []),
   ];
 }
 

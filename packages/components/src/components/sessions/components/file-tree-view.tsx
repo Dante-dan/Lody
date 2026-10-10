@@ -5,12 +5,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { ChevronRight, CloudOff, FileWarning, FolderOpen, RefreshCw } from 'lucide-react';
 import { getMachineFlockLocalProjects, type FileTreeItem, type SessionMeta } from '@lody/shared';
 import { type TreeDataItem } from '@/components/tree-view';
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from '@/ui/context-menu';
+import { ContextMenu } from '@lody/ui/context-menu';
 import { useSessionFileActions, type SessionFileMenuItem } from '@/hooks/use-session-file-actions';
 import { FileTreeSkeleton, FileTreeStatePanel } from './file-tree-states';
 import { useFileWorkspaceTree } from '@/hooks/use-code-session';
@@ -415,7 +410,7 @@ const VirtualFileTreeRow = memo(function VirtualFileTreeRow({
       aria-selected={selected}
       disabled={disabled}
       className={cn(
-        'group flex w-full items-center pr-2 text-left text-sm outline-none hover:bg-hover hover:text-hover-foreground focus-visible:bg-hover focus-visible:ring-1 focus-visible:ring-ring',
+        'group flex w-full items-center pr-2 text-left text-[0.9em] outline-none hover:bg-hover hover:text-hover-foreground focus-visible:bg-hover focus-visible:ring-1 focus-visible:ring-ring',
         // `w-full` resolves against the positioned ancestor once absolute, so
         // the hover/selection background still spans the full row.
         virtualStart !== undefined && 'absolute left-0 top-0',
@@ -465,23 +460,31 @@ const VirtualFileTreeRow = memo(function VirtualFileTreeRow({
   );
 
   // Only files get a menu, and only when the surface resolved actions for this
-  // session — no menu at all beats a menu that can only disappoint.
+  // session — no menu at all beats a menu that can only disappoint. An item can
+  // still decline a specific path, so filter before deciding to render.
   if (!isFile || !fileMenuItems || fileMenuItems.length === 0) return rowButton;
+  const visibleMenuItems = fileMenuItems.filter(
+    (menuItem) => menuItem.isAvailable?.(item.id) ?? true
+  );
+  if (visibleMenuItems.length === 0) return rowButton;
   return (
-    <ContextMenu>
-      <ContextMenuTrigger asChild>{rowButton}</ContextMenuTrigger>
-      <ContextMenuContent className="min-w-[190px]">
-        {fileMenuItems.map((menuItem) => {
+    <ContextMenu.Root>
+      <ContextMenu.Trigger>{rowButton}</ContextMenu.Trigger>
+      <ContextMenu.Content className="min-w-[190px]">
+        {visibleMenuItems.map((menuItem) => {
           const ItemIcon = menuItem.icon;
           return (
-            <ContextMenuItem key={menuItem.id} onSelect={() => menuItem.run(item.id)}>
-              <ItemIcon className="h-3.5 w-3.5" aria-hidden="true" />
+            <ContextMenu.Item
+              key={menuItem.id}
+              icon={ItemIcon}
+              onClick={() => menuItem.run(item.id)}
+            >
               {menuItem.label}
-            </ContextMenuItem>
+            </ContextMenu.Item>
           );
         })}
-      </ContextMenuContent>
-    </ContextMenu>
+      </ContextMenu.Content>
+    </ContextMenu.Root>
   );
 });
 
@@ -864,7 +867,7 @@ const AutoFileTreeView = ({
           localError ?? t('sessions.localProject.files.loadFailed', 'Failed to load files.')
         }
         action={
-          <Button variant="outline" size="sm" className="gap-1.5" onClick={handleRetryLocalFiles}>
+          <Button variant="secondary" size="small" onClick={handleRetryLocalFiles}>
             <RefreshCw className="h-3.5 w-3.5" />
             {t('sessions.codeSession.files.retry', 'Try again')}
           </Button>
@@ -910,7 +913,7 @@ const AutoFileTreeView = ({
         />
 
         {shouldUseLocalFileList && localListTruncated ? (
-          <div className="pt-2 text-xs text-muted-foreground">{localTruncatedLabel}</div>
+          <div className="pt-2 text-[0.8em] text-muted-foreground">{localTruncatedLabel}</div>
         ) : null}
       </div>
     </ScrollArea>

@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { SessionHistoryParsed } from '@lody/shared';
 import {
+  OUTLINE_MIN_USER_ROUNDS,
   OUTLINE_PREVIEW_MAX_LENGTH,
   OUTLINE_TITLE_MAX_LENGTH,
   buildConversationOutline,
+  countUserDrivenRounds,
   reuseConversationOutline,
   type ConversationOutlineSource,
 } from '../src/lib/conversation-outline';
@@ -70,6 +72,28 @@ describe('buildConversationOutline', () => {
     ]);
 
     expect(outline[0]?.title).toBe('Fix the bug in view.tsx');
+  });
+
+  it('preserves literal identifiers in summaries and refreshes only changed turns', () => {
+    const user = message('user', [text('Find QA_RESUMED_OK')]);
+    const assistant = message('assistant', [text('**QA_RESUMED_OK** `foo_bar`')]);
+    const first = buildConversationOutline([user, assistant]);
+    expect(first[0]).toMatchObject({
+      title: 'Find QA_RESUMED_OK',
+      preview: 'QA_RESUMED_OK foo_bar',
+    });
+    expect(buildConversationOutline([user, assistant])).toEqual(first);
+    const updated = {
+      ...assistant,
+      message: { ...assistant.message!, items: [text('QA_RESUMED_OK — updated')] },
+    };
+    expect(buildConversationOutline([user, updated])[0]?.preview).toBe('QA_RESUMED_OK — updated');
+    expect(buildConversationOutline([user, assistant])).toEqual(first);
+    const long = message('assistant', [
+      text('QA_RESUMED_OK ' + 'x'.repeat(960) + ' OUTSIDE_WINDOW'),
+    ]);
+    expect(buildConversationOutline([user, long])[0]?.preview).toContain('QA_RESUMED_OK');
+    expect(buildConversationOutline([user, long])[0]?.preview).not.toContain('OUTSIDE_WINDOW');
   });
 
   it('leaves the preview empty while a round has produced no agent prose yet', () => {
@@ -204,6 +228,33 @@ describe('buildConversationOutline', () => {
 
       expect(outline[0]?.weight).toBe(0);
     });
+  });
+});
+
+describe('countUserDrivenRounds', () => {
+  const rounds = (count: number): ConversationOutlineSource[] =>
+    Array.from({ length: count }, (_unused, index) =>
+      message('user', [text(`round ${index + 1}`)])
+    );
+
+  it('counts one round per user turn', () => {
+    expect(countUserDrivenRounds(buildConversationOutline(rounds(9)))).toBe(9);
+    expect(countUserDrivenRounds(buildConversationOutline(rounds(10)))).toBe(10);
+    expect(OUTLINE_MIN_USER_ROUNDS).toBe(10);
+  });
+
+  it('does not count a leading agent round toward the rail threshold', () => {
+    const outline = buildConversationOutline([
+      message('assistant', [text('Scheduled run starting.')]),
+      ...rounds(OUTLINE_MIN_USER_ROUNDS - 1),
+    ]);
+
+    expect(outline).toHaveLength(OUTLINE_MIN_USER_ROUNDS);
+    expect(countUserDrivenRounds(outline)).toBe(OUTLINE_MIN_USER_ROUNDS - 1);
+  });
+
+  it('returns zero for an empty outline', () => {
+    expect(countUserDrivenRounds([])).toBe(0);
   });
 });
 

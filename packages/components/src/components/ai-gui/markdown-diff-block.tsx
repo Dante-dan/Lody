@@ -1,10 +1,11 @@
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useState } from 'react';
 import {
   CodeBlockContainer,
-  CodeBlockCopyButton,
-  CodeBlockHeader,
-  type CustomRendererProps,
-} from 'streamdown';
+  CodeBlockBody,
+  MarkdownCodeToolbar,
+  parseMarkdownCodeBlockLabel,
+  type MarkdownCodeBlockProps,
+} from './markdown-code-block';
 
 type MarkdownDiffLineKind = 'addition' | 'context' | 'deletion' | 'hunk' | 'metadata';
 
@@ -33,40 +34,37 @@ export const MarkdownDiffBlock = memo(function MarkdownDiffBlock({
   code,
   isIncomplete,
   language,
-}: CustomRendererProps) {
+  meta,
+}: MarkdownCodeBlockProps) {
+  const [wrapped, setWrapped] = useState(false);
   const lines = useMemo(() => getVisibleDiffLines(code), [code]);
+  const label = useMemo(() => parseMarkdownCodeBlockLabel(language, meta), [language, meta]);
 
   return (
     <CodeBlockContainer
+      data-code-wrap={wrapped ? 'true' : undefined}
       data-markdown-diff-block="true"
       isIncomplete={isIncomplete}
       language={language}
     >
-      <CodeBlockHeader language={language} />
-      <div className="pointer-events-none sticky top-2 z-10 -mt-10 flex h-8 items-center justify-end">
-        <div
-          className="pointer-events-auto flex shrink-0 items-center gap-2 rounded-md border border-sidebar bg-sidebar/80 px-1.5 py-1 supports-[backdrop-filter]:bg-sidebar/70 supports-[backdrop-filter]:backdrop-blur"
-          data-streamdown="code-block-actions"
-        >
-          <CodeBlockCopyButton code={code} />
-        </div>
-      </div>
-      <div data-streamdown="code-block-body">
-        <pre dir="ltr">
-          <code>
-            {lines.map((line, index) => (
-              <span
-                // A streamed block grows by appending lines, so its stable
-                // source position is the least disruptive key available.
-                key={index}
-                data-markdown-diff-line={getMarkdownDiffLineKind(line)}
-              >
-                {line}
-              </span>
-            ))}
-          </code>
-        </pre>
-      </div>
+      <MarkdownCodeToolbar
+        code={code}
+        label={label}
+        wrapped={wrapped}
+        onToggleWrap={() => setWrapped((current) => !current)}
+      />
+      <CodeBlockBody>
+        {lines.map((line, index) => (
+          <span
+            // A streamed block grows by appending lines, so its stable
+            // source position is the least disruptive key available.
+            key={index}
+            data-markdown-diff-line={getMarkdownDiffLineKind(line)}
+          >
+            {line}
+          </span>
+        ))}
+      </CodeBlockBody>
     </CodeBlockContainer>
   );
 });

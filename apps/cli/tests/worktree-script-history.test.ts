@@ -1,3 +1,4 @@
+import { withHistoryPort } from './history-port-fixture';
 import { describe, expect, it, vi } from 'vitest';
 import { type MessageContent, type SessionHistoryInput, type SessionId } from '@lody/shared';
 import type { SessionDocument } from '../src/lib/loro/doc';
@@ -10,6 +11,7 @@ const testLogger: Logger = {
   error: vi.fn(),
   success: vi.fn(),
   debug: vi.fn(),
+  trace: vi.fn(),
   setLevel: vi.fn(),
   setDebug: vi.fn(),
   child: vi.fn(() => testLogger),
@@ -25,13 +27,15 @@ describe('worktree script history recorder', () => {
       }
     );
     const waitUntilSynced = vi.fn(async () => true);
-    const sessionDoc = {
+    const fixture = withHistoryPort({
       updateHistory,
       waitUntilSynced,
-    } as unknown as SessionDocument;
+    });
+    const sessionDoc = fixture as unknown as SessionDocument;
 
     const recorder = createWorktreeScriptHistoryRecorder({
       sessionDoc,
+      backend: fixture,
       sessionId: 'session-1' as SessionId,
       phase: 'setup',
       logger: testLogger,
@@ -130,13 +134,15 @@ describe('worktree script history recorder', () => {
       }
     );
     const waitUntilSynced = vi.fn(async () => true);
-    const sessionDoc = {
+    const fixture = withHistoryPort({
       updateHistory,
       waitUntilSynced,
-    } as unknown as SessionDocument;
+    });
+    const sessionDoc = fixture as unknown as SessionDocument;
 
     const recorder = createWorktreeScriptHistoryRecorder({
       sessionDoc,
+      backend: fixture,
       sessionId: 'session-1' as SessionId,
       phase: 'setup',
       logger: testLogger,

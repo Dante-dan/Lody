@@ -36,8 +36,10 @@ this page is the full text of the rules summarised there.
   one is presentation-only provenance: the opened Session stays INDEPENDENT — own workspace,
   machine, project, lifecycle, sidebar row — and is only INDENTED under its opener by
   `lib/session-opened-by-tree.ts`. It must never be turned into a `parentSessionId`, never roll
-  its activity into the opener's row, and never be filtered out of the session list. Both
-  directions of that link are navigable: the sidebar tree plus its "Go to Opener Session" row menu,
+  its activity into the opener's row, and never be filtered out of the session list. The durable
+  operation rules live in the [Session relation contract](../../specs/session-relations.md).
+  While both endpoints exist, both directions of that link are navigable: the sidebar tree plus
+  its "Go to Opener Session" row menu,
   `SessionHeaderMenu`'s `openedByRelations` ("Opened by …" / "Opened sessions"), and
   in-conversation relationship cards. A successful `session_create` Operation completion links to
   each exact `target.sessionId`; the opened Session's first scroll row links back to its exact
@@ -53,7 +55,10 @@ this page is the full text of the rules summarised there.
   pre-existing data, `resolveOpenedByNavigationTarget` derives the root from the opener's
   `parentSessionId`. Sidebar indentation uses the same persisted root first, then the legacy
   `buildSidebarOpenerRowResolver` fallback (`SessionListRow.openedByRowSessionId`). Do not collapse
-  the two ids into one field, and do not give the child Tab a sidebar row to nest under.
+  the two ids into one field, and do not give the child Tab a sidebar row to nest under. Permanent
+  deletion keeps surviving Sessions' `openedBy*` fields as historical provenance. After metadata
+  hydration proves that the exact opener or its route root is gone, show that provenance without a
+  navigation action; an id alone is not evidence that a route exists.
   Unlike a fixed panel, a side chat is a tab the moment it exists, so mounting every one of them
   would open a Loro session doc per side chat even for a user who never expands the panel: mount one
   when it is first selected (`mountedSideSessionIds`), plus any fork target still waiting to report
@@ -62,10 +67,12 @@ this page is the full text of the rules summarised there.
   support; keep it visible but disabled when that conversation's machine is explicitly offline. That
   offline rule lives ONLY in `getSideChatLauncherState` — the shared fork entry point stays
   offline-clickable per `docs/acp-session-fork.md` §3.2.
-  Right-panel selection, collapse, route changes, and component cleanup must never delete it. Only its
-  explicit tab `X` terminates the ACP runtime and then permanently deletes the Session doc; if either
-  step fails, keep the tab so the user can retry. Parent-session permanent deletion may still cascade
-  through all children.
+  Right-panel selection, collapse, route changes, and component cleanup must never delete it. Only explicit
+  tab close (× or the native close action) terminates the ACP runtime and then permanently deletes the Session doc; if either
+  step fails, keep the tab so the user can retry. This doc cleanup supplies the exact side Session id
+  and does not wait for the global metadata cache. Parent-session permanent deletion instead
+  discovers direct `parentSessionId` children and requires the complete metadata cache before it
+  selects that destructive set.
   Native fork handoff keeps the source conversation active after RPC acknowledgement while the
   new child tab mounts and syncs in the background; activate it only after its real chat surface
   reports durable history ready, so the user never sees the target's transient empty state.
@@ -79,7 +86,11 @@ this page is the full text of the rules summarised there.
   reattach, and navigates only after the target publishes committed root-Session meta. Dirty-source
   confirmation means committed `HEAD` only; never imply that uncommitted or untracked files move.
   Browser side-panel state and the mobile deep link are named `browser` / `?browser=1`; the removed
-  `preview` values are not migrated. Once opened, keep `SessionBrowserPanel` mounted while other fixed side-panel
+  `preview` values are not migrated. The iOS Simulator is a separate fixed panel beside it
+  (`ios-simulator` / `?simulator=1`), offered only when the tab Session's target machine is a Mac;
+  it shares no state with Browser, stays mounted once opened like Browser, polls only while a
+  preview is preparing and on screen, and tells its still-mounted viewer when it is hidden. Its rules live in
+  [ios-simulator/AGENTS.md](../../packages/components/src/components/sessions/ios-simulator/AGENTS.md). Once opened, keep `SessionBrowserPanel` mounted while other fixed side-panel
   tabs are active so managed DOM state and Electron native-view history survive tab switches.
   The desktop layout also keeps the whole side panel mounted while COLLAPSED (it only hides it), so
   anything in there that polls or holds a connection must take an explicit on-screen prop and pause

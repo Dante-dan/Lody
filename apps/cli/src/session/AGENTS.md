@@ -2,9 +2,8 @@
 
 `CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only.
 
-Rules only; responsibilities and reasoning: [README.md](README.md). Worktrees and git
-credentials: [worktree/AGENTS.md](worktree/AGENTS.md). Architecture: context/message-flow.md.
-Contract: specs/session-orchestration.md.
+Module map and contracts: [README.md](README.md).
+Worktree rules: [worktree/AGENTS.md](worktree/AGENTS.md).
 
 ## Authorization and identity
 
@@ -17,15 +16,15 @@ Contract: specs/session-orchestration.md.
   substitute.
 - Derive the human identity from the active dispatch/execution runtime and fail closed when none
   exists; retries and recovery never reread mutable history.
-- Machine and Provider credentials stay execution-host scoped; attribution, authorization,
-  GitHub, and Git identity use the frozen identity, never the Session owner.
-- Commit identity MUST resolve through `CloudPort.access.resolveWorkspaceUser` before host git
-  config; a missing-email placeholder is never one, and every minting path resolves it.
+- Machine/Provider credentials stay host-scoped. Attribution, authorization and commits
+  use the frozen Turn identity; GitHub network auth uses the trusted conversation owner.
+- Git: owner uses local config, no profile query; others never read it.
+  `CloudPort` profiles: 60s deadline, retry failures, reject placeholders.
+  Commit attribution never restarts ACP; owner changes retire the runtime.
 
 ## Dispatch
 
-- Queue-to-history promotion preserves every frozen Turn field, `agentRoleId` and
-  `agentRoleRevision` included.
+- Queue promotion preserves frozen fields; remove its row only after history and activation succeed.
 - Absent session meta is "unknown", not foreign: hold the TTL-bounded RPC stash until meta lands;
   drop it only on a definitive verdict.
 - Subscribe to RPC offers BEFORE awaiting Doc Room join/sync and never dispatch from the RPC
@@ -34,49 +33,53 @@ Contract: specs/session-orchestration.md.
   `lastMissingHistoryUserMsgId` ack for that turn and surface `chat_failed`.
 - Retire an already-terminal stale activation into `settledActivationUserMsgId`; never claim the
   marker or rewrite `latestUserMsgId`, and report settled only if none survives.
-- Never re-dispatch a late-arriving history entry; recovery is a fresh send.
+- Never replay late history; recovery is a new send. Use last row per ID; stop no-progress repairs.
 - `hasPendingUserTurnActivation` is the ONLY pending-turn predicate; never compare those two
   pointers in a consumer.
-- Session metadata is the activation index: never inspect historical Session documents to infer
-  work, and never publish or clear active presence here (`../lib/loro/session-active-presence.ts`).
+- Never inspect historical Session documents to infer work, or publish or clear active presence
+  here (`../lib/loro/session-active-presence.ts`).
 - Keep bootstrap and live reconciliation bounded as README describes; add no per-trigger scan or
   extra throttle.
 
 ## Turn execution
 
-- Gate turn-scoped history LIST writes on user-entry sync (`turn-history-gate.ts`, 20s);
-  never gate status or meta writes.
-- An `active` session goal must not suppress turn completion or its notification.
-- Never mint a second visible turn while a `TurnRuntimeState` is registered; derive assistant
-  entry ids from `userTurnId`. `invocation` atomically owns source Turn, requester, and input
-  config; steer replaces it before tool execution.
+- Gate turn-scoped LIST writes on user-entry sync (`turn-history-gate.ts`, 20s), never status/meta.
+- Goals obey [this contract](../../../../specs/session-goal-control.md).
+- Stop ends local steer waits, not the owner fiber. Drain raw prompt/steer/config work before
+  reuse, or confirm termination. Assistant ids use `userTurnId`.
+  `invocation` owns source Turn, requester and config atomically; steer replaces it before tools.
 - Publish `latestUserMsgId` in the SAME write as the history append (`appendUserTurn`). Only
   dispatch producers publish it. Renderer sends and queue promotion retain the missing-history
   tombstone; CLI dispatch producers keep their own marker policy.
 - Ordinary turn execution writes only `processingUserMsgId` and `lastHandledUserMsgId`; no start
   or terminal path may read-await-rewrite the other slots.
-- INVARIANT: a steer the agent never accepted must not stay parked in `pending_apply`. Requeue it
-  through the pointer, not the entry status, only for pre-submission rejections or
-  `AgentSteerNotDeliveredError`; skip active or already-handled entries.
+- Never steer after cancellation or infer delivery from it. Stop uses
+  `pendingInput: promote` / `prePromptSession: discard`; Edit & Resend uses preserve/keep,
+  access revocation preserve/discard. Limit create/restore fences to initialization.
+- Promote only proven non-delivery via `steerTurnStatuses`, never producer pointers.
+  Unknown never replays; RPC ACKs never revive history. Surface recovery errors.
+- Foreground/steer config uses its owner signal; fence mutations after interrupt.
 - Resume must REOPEN the in-progress assistant entry, clearing
   `finished`/`endedAt`/`permissionWaitMs` there only; never write `finished=false` from teardown.
 - Keep JSON-RPC/transport matching in `acp-error-classification.ts`: disposed/stale `-32603` is
   `agent_disconnected`, Harness compression mismatch is `acp_session_storage_incompatible`.
 - Continue-session recovery may restore the ACP session and retry the same prompt once, only
   while that turn has no ACP output.
-- INVARIANT: a resolved prompt is not proof of success. A turn that emitted no ACP update takes
-  `recordSilentTurnFailure`, not `setDispatchHandled` (read `turnProducedVisibleOutput` before
-  `finalizeTurn` clears it); it still finalizes, still ADVANCES the pointer, and fails open.
+- A turn with no ACP updates takes `recordSilentTurnFailure`, not `setDispatchHandled`.
+  Read `turnProducedVisibleOutput` before `finalizeTurn` clears it; still finalize, advance
+  the pointer, and fail open.
 - Diff content comes only from the CLI-local ACP evidence store; GitHub `diffStats` use PR compare
   semantics, and `session-diff-stats-target.ts` skips rather than overwrites a good total.
 
 ## Lifecycle
 
-- `Session.createAgent` acquires the shared ACP start gate before spawn. ACP terminal creation
-  passes the protocol's executable and argv straight to `SessionSandbox.spawn`, never a rebuilt
-  shell command.
-- Child tab sessions reuse the parent workspace directory. Never write per-session workspace paths
-  into `MachineMeta`: the machine publishes `['dotlodyPath']` and frontends derive them.
+- For Roost reads and writes, follow [paging rules](README.md#roost-history-paging).
+
+- `Session.createAgent` gates each ACP spawn; failed spawns reject JSON-RPC. Terminals spawn
+  protocol argv (`sh -c` only for unsplit commands). Managed Codex reused-refresh startup
+  retries once after process cleanup, delay, and live Provider recheck; other auth errors do not.
+- Child tabs reuse the parent workspace. Never write per-session paths into `MachineMeta`:
+  the machine publishes `['dotlodyPath']` for frontends to derive them.
 - INVARIANT: any `sandbox.spawn` whose OUTPUT is the result must pass `captureOutput: true` (ACP
   stdio deliberately does not), and the capture buffer stays capped at 4 MiB.
 - Shutdown is two-phase: `cleanUp({ keepWorkspaceDocumentOpen: true })`, then plain `cleanUp()`
@@ -84,30 +87,27 @@ Contract: specs/session-orchestration.md.
 
 ## Sagas
 
-- `session-preparation-service.ts`: peek and claim never delay cold fallback, peek never transfers
-  ownership, and the resource is published BEFORE its `start()` hook. Preparation may create the
-  final marked worktree and complete `newSession`, but must not create a session doc, run setup,
-  append history, or publish events before adoption.
-- Dispatch and claim rescan the current row and reject changed compatibility under canonical
-  `buildSessionLaunchConfig` semantics; a published incompatible resource cleans up first.
+- Peek/claim are synchronous; publish before `start()`. Peek never transfers ownership.
+  Cold/replacement starts await same-session cleanup; failures block, including late creation.
+  Before adoption: marked worktree and `newSession` only; no doc, setup, history or events.
+- Credentials are runtime leases: adopt retains, dispose releases that generation; local has none.
+- Dispatch/claim rescan `buildSessionLaunchConfig`; await incompatible cleanup.
 - Nested child Sessions are rejected: ownership resolves one parent hop only.
-- Fork commits at `LoroDocumentManager.persistPendingChanges()`; cloud `waitUntilSynced()` is
-  never a success condition. Persist the target placeholder before ACP; a failed final commit
-  terminates the fork and durably deletes the target.
-- Fork an active source turn only on an advertised `_meta.lody.forkAtTurn = { version: 1 }`, pass
-  the adapter's `_meta.lody.turnId` through unchanged as `acpTurnId`, and reuse the source Git
-  identity only on an exact requester match. New-worktree forks also require native fork support,
-  persist a target-doc `forkOperation` before returning, publish no target meta before the final
-  commit, clean up ACP and the worktree/branch with a durable failed receipt, and stay idempotent
-  on retry.
-- Fork recovery fail-closes interrupted operations and finds them ONLY in the machine-local marker
-  store under `withForkOperationLock`. Never enumerate rooms or open docs to find candidates, and
-  never `cleanSessionDoc` a doc you do not own.
-- Edit-and-resend prepares provider `forkAtTurn` (`session/new` for the first User), cancels the
-  exact active turn, waits for ownership release, then one durable history/meta commit.
-  Its rewrite barrier excludes queue promotion and blocks dispatch and steer; the queue is never
-  rewritten. Keep the original User attribution, config, and attachments, use new turn ids and ACP
-  identity, and never replay transcript or roll back files.
+- Fork and continuation share `resolveSessionAcpTargetId`; source runtime config copies only at its matching user-turn fence.
+- Fork commits at `persistPendingChanges()`, never cloud sync. Persist its placeholder
+  before ACP; failed commits terminate and durably delete the target. Post-commit
+  display projections stay outside compensation.
+- Active-turn fork requires advertised `_meta.lody.forkAtTurn = { version: 1 }`; pass adapter
+  `_meta.lody.turnId` unchanged as `acpTurnId`, and reuse source Git identity only for an exact requester.
+  New-worktree forks require native support, persist target-doc `forkOperation` before return,
+  publish target meta only after final commit, clean ACP/worktree/branch with a durable failed
+  receipt, and stay idempotent on retry.
+- Fork recovery fail-closes interrupted operations and finds them ONLY in machine-local markers
+  under `withForkOperationLock`; never enumerate rooms/open docs for candidates or clean an unowned doc.
+- Edit-and-resend prepares `forkAtTurn` (`session/new` for the first User), cancels the exact
+  turn, waits for release, then commits history/meta. Its barrier excludes queue promotion,
+  dispatch and steer. Keep the queue, User attribution/config/attachments; use new turn/ACP ids.
+  Never replay transcript or roll back files.
 
 ## Access
 

@@ -1,4 +1,5 @@
-import { Loader2 } from 'lucide-react';
+import { Spinner } from '@lody/ui/spinner';
+import { BootShell } from '@/components/boot-shell';
 import { cn } from '@/lib/utils';
 
 export function LoadingPlaceholder({
@@ -9,12 +10,27 @@ export function LoadingPlaceholder({
   title?: string;
   description?: string;
   /**
-   * `viewport` is reserved for boot/auth gates where no application shell is
-   * safe to show yet. `content` fills an already-mounted workspace pane so the
+   * `boot` is for the boot/auth gates between the window's first frame and the
+   * workspace layout: it continues the boot shell painted by `index.html`, with
+   * this copy under the mark. `viewport` fills the viewport where that frame is
+   * not continued. `content` fills an already-mounted workspace pane so the
    * sidebar and workspace identity remain stable during scoped synchronization.
    */
-  variant?: 'viewport' | 'content';
+  variant?: 'boot' | 'viewport' | 'content';
 }) {
+  if (variant === 'boot') {
+    return (
+      <BootShell
+        status={
+          <>
+            <div className="lody-boot-shell__status-title">{title}</div>
+            {description ? <div>{description}</div> : null}
+          </>
+        }
+      />
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -28,7 +44,7 @@ export function LoadingPlaceholder({
         role="status"
         aria-live="polite"
       >
-        <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+        <Spinner className="h-5 w-5" aria-hidden />
         <div className="space-y-1">
           <div className="text-sm font-medium text-foreground">{title}</div>
           {description ? (

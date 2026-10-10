@@ -1,17 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import { usePostHog } from '@posthog/react';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { useTranslation } from 'react-i18next';
 import type { GitHubMergeMethod, PrStatus } from '@lody/shared';
 
 import { currentWorkspaceIdAtom } from '@/atoms';
 import { derivePrStatusFromDetails } from '@/lib/github-pr-details-state';
 import { getDurationSinceMs, getPerformanceNowMs } from '@/lib/posthog-analytics';
-import { isGitHubUnauthorizedTokenError } from '@/lib/github-token';
+import {
+  isGitHubOperationTokenConnectionLostError,
+  isGitHubUnauthorizedTokenError,
+} from '@/lib/github-token';
 import { ReadyForReviewStillDraftError, useGitHubPrDetails } from '@/hooks/use-github-pr-details';
+import { useGitHubPrDiff } from '@/hooks/use-github-pr-diff';
+import type { PrCommitSelection } from '@/lib/github-pr-diff';
 import { PrTabView, type PrTabViewData, type PrTabViewState } from './pr-tab-view';
 import { resolveConflictsActionAtomFamily } from './session-pr-agent-action';
 import {
@@ -90,6 +95,7 @@ export function PrTabContainer({
     branchExists,
     isRevalidating,
   } = useGitHubPrDetails({
+    sessionId: sessionId ?? undefined,
     workspaceId: currentWorkspaceId ?? null,
     repoFullName,
     prNumber,
@@ -100,9 +106,7 @@ export function PrTabContainer({
   // The owning session (this PR tab's session) publishes the live resolve-
   // conflicts action; consuming it here keeps the PR-tab button in lockstep with
   // the info-bar "Resolve Conflicts" button (same dispatch, shared pending).
-  const resolveConflictsAction = useAtomValue(
-    resolveConflictsActionAtomFamily(sessionId ?? '')
-  );
+  const resolveConflictsAction = useAtomValue(resolveConflictsActionAtomFamily(sessionId ?? ''));
   const canResolveConflicts = Boolean(
     resolveConflictsAction?.available && !resolveConflictsAction.pending
   );
@@ -118,6 +122,21 @@ export function PrTabContainer({
   );
 
   const pullRequest = data?.pullRequest ?? null;
+  const [changeSelection, setChangeSelection] = useState<PrCommitSelection>({ type: 'all' });
+  useEffect(() => {
+    setChangeSelection({ type: 'all' });
+  }, [pullRequest?.headSha, prNumber, repoFullName]);
+  const prDiff = useGitHubPrDiff({
+    workspaceId: currentWorkspaceId ?? null,
+    sessionId: sessionId ?? undefined,
+    repoFullName,
+    prNumber,
+    baseRef: pullRequest?.baseRef,
+    baseSha: pullRequest?.baseSha,
+    headSha: pullRequest?.headSha,
+    selection: changeSelection,
+    visible,
+  });
 
   // Reconcile the persisted session PR status from GitHub's live truth. The
   // sidebar + session-header badges read the persisted `status`, which the
@@ -159,6 +178,12 @@ export function PrTabContainer({
           errorKind: classifyMergeError(err, pr),
           durationMs: getDurationSinceMs(startedAt),
         });
+        // The request only obtains the credential used for the subsequent
+        // GitHub merge. If Convex disconnects here, the merge was never sent;
+        // the retry above has already had a chance to recover, so leave the
+        // action ready to try again instead of exposing a backend transport
+        // detail as a merge failure.
+        if (isGitHubOperationTokenConnectionLostError(err)) return;
         const message = err instanceof Error ? err.message : String(err);
         toast.error(t('sessions.prTab.mergeError', 'Failed to merge'), { description: message });
       }
@@ -249,12 +274,21 @@ export function PrTabContainer({
       reviews: data.reviews,
       issueComments: data.issueComments,
       checkRuns: data.checkRuns,
+      ...(prDiff.state !== 'idle'
+        ? {
+            changes: {
+              ...prDiff,
+              selection: changeSelection,
+              onSelectionChange: setChangeSelection,
+            },
+          }
+        : {}),
     };
-  }, [data]);
+  }, [changeSelection, data, prDiff]);
 
-  const handleRefresh = useCallback(() => {
-    void refresh();
-  }, [refresh]);
+  // Returned so the error panel's Retry button can hold its pending state for
+  // the whole reload (slice fetches or the identity-resolution mutation).
+  const handleRefresh = useCallback(() => refresh(), [refresh]);
 
   const handleGrantChecksPermission = useCallback(() => {
     window.open(resolveGitHubAppInstallUrl(), '_blank', 'noopener,noreferrer');
@@ -283,7 +317,11 @@ export function PrTabContainer({
       onMarkReadyForReview={handleMarkReadyForReview}
       onDeleteBranch={handleDeleteBranch}
       onResolveConflicts={canResolveConflicts ? resolveConflictsAction?.run : undefined}
-      isResolvingConflicts={resolveConflictsAction?.pending ?? false}
+      // Pending only counts for an offerable action: while the session hydrates
+      // or cannot offer it, the header shows the disabled merge instead.
+      isResolvingConflicts={Boolean(
+        resolveConflictsAction?.available && resolveConflictsAction.pending
+      )}
       onRefresh={handleRefresh}
       onPostComment={handlePostComment}
       onGrantChecksPermission={handleGrantChecksPermission}

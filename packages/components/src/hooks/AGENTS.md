@@ -1,37 +1,44 @@
 # React hooks
 
-Root and `packages/components/AGENTS.md` also apply. `CLAUDE.md` is a symlink;
-edit `AGENTS.md` only. Per-hook background and reasoning: [README.md](README.md).
+Parent AGENTS apply. Edit `AGENTS.md`, not its `CLAUDE.md` symlink. Background: [README.md](README.md).
 
 ## Conversation scrolling
 
-- Keep virtualization and bottom-following separate: `virtua` owns mounted rows,
-  measurement, and index navigation; `use-sticky-scroll.ts` adapts `use-stick-to-bottom`
-  to Virtua's viewport and content elements. Never restore a content-token effect or a
-  distance-based upward-scroll threshold. Any real upward wheel, touch, selection, or
-  scrollbar movement releases streaming follow at once.
-- Sticky-scroll binds through the real scroll viewport's React callback ref, on Virtua's
-  public `Virtualizer` primitive with that explicit viewport. Never recover the element
-  from a `VList` handle, DOM query, item-count effect, observer retry, or timer.
-  Empty-to-populated conversations attach on the viewport's mount commit and detach on
-  its unmount commit.
-- Treat `use-stick-to-bottom`'s `state.isAtBottom` as the follow-lock truth: the returned
-  `isAtBottom` adds near-bottom tolerance, and `escapedFromLock` is escape history that
-  stays true after an explicit `scrollToBottom` restored the lock.
-- Follow viewport-size changes from the viewport's `ResizeObserver` records; never
-  restore resize-event pumps, guessed transition durations, or stop timers. Only HEIGHT
-  changes may re-anchor the viewport; never forward width-only records.
-- A session composer height change sets a one-shot ref immediately before its inline
-  height write. Consume that ref only for the next viewport _height_ resize, without
-  calling `scrollToRealBottom`, and keep it separate from jump suppression.
-- Group expansion scrolls after Virtua descendants finish their layout effects and
-  releases sticky suppression in the later parent layout effect of the same commit;
-  no frame retries or guessed settle timers.
-- Preserve the app-specific adapters: per-session scroll restoration,
-  search/group-expansion suppression, and viewport resize handling for the mobile
-  keyboard and terminal dock.
+- The scroll engine owns the viewport: [its rules](../lib/conversation-scroll/AGENTS.md).
+- Only viewport/tail/selection render bodies; other reads keep placeholders.
+- Key readiness/window by the view; a new view resets both. Before the
+  first viewport report the window is the tail plus the restored anchor's turn;
+  ignore reports until the initial window is ready.
+- A cached session renders in the frame after its click: no promise tick,
+  effect-only state or deferred setState before its first cycle.
+
+## Sharing errors
+
+- Keep error operation context independent of React progress state (which resets in
+  `finally`). `lib/session-share-errors.ts` maps only known codes to localized advice;
+  never display raw errors or claim a lost mutation response proves failure.
 
 ## Session, auth, and app shell
+
+- Cloud auth recovery has a per-session attempt budget and per-attempt deadline.
+  Loading/visibility transitions must not reset it; exhausted recovery requires
+  explicit retry or sign-in. Preserve mounted routes and local data.
+  [Contract](../../../../specs/auth-recovery.md).
+
+- Session ACP catalogs use the bound Provider's runtime overrides.
+
+- History uses SessionData commands.
+- Existing-session run-config drafts store only edited fields, scoped to account,
+  workspace and session. Only successful local admission retires captured field
+  generations; remote Turns never consume them. Never retain history IDs or empty
+  visited-session entries. Deletion/account teardown invalidates edit callbacks;
+  navigation preserves intent. [Contract](../../../../specs/session-run-config-drafts.md).
+- Held-send config is a session/runtime-scoped input to selection, never a stored
+  resolved selection. Keep its logical Turn fence across history/queue handoff;
+  next-draft edits win and attachment progress does not rebuild the catalog.
+- A proven-undelivered steer (`no-active-turn` or `promotion-failed`) repairs ordinary
+  dispatch for pending/seen entries even if CLI already changed their status. Never
+  repair active, terminal, removed, or delivery-unknown turns.
 
 - `useStableSession` treats an HTTP 401 from `authClient.useSession()` as potentially
   stale and verifies it once with the current credential. Only a second 401 for the
@@ -57,38 +64,33 @@ edit `AGENTS.md` only. Per-hook background and reasoning: [README.md](README.md)
 
 ## Workspace catalog
 
-- `use-workspace-catalog.ts` reads a ref-counted per-workspace room in
-  `lib/workspace-catalog-room.ts`; it must not open the Flock document, subscribe, or
-  join the room per mount. MCP servers and Agent Roles are two row families of that ONE
-  document, so `use-workspace-mcp-catalog.ts` and `use-workspace-agent-roles.ts` derive
-  from that room instead of opening a second one. Keep the shared snapshot identity
-  stable across mounts.
-- Catalog `upsert`/`remove` (Agent Roles and MCP alike) resolve on DURABILITY; the
-  upload runs on its own and no surface waits for it or reports it.
-- `use-workspace-agent-roles.ts` filters the catalog through the shared
-  `listAccessibleAgentRoles` / `resolveAgentRoleAvailability` rules, never a local
-  predicate. Availability stays `unknown` — not `unavailable` — until that machine's
-  agent-config rows are read, so subscribe exactly the machines the given Roles point at.
-  A Settings row states only reasons about its own binding; `machine_offline` belongs to
-  the group's machine pill.
+- `use-workspace-catalog.ts` reads the ref-counted room in
+  `lib/workspace-catalog-room.ts`. Never open, subscribe or join per mount. MCP servers
+  and Agent Roles share that ONE Flock document; their hooks derive from the room and
+  preserve snapshot identity across mounts.
+- Role/MCP catalog `upsert`/`remove` resolve on DURABILITY; upload runs independently
+  and no surface waits for or reports it.
+- Role filtering uses shared `listAccessibleAgentRoles` / `resolveAgentRoleAvailability`,
+  never local predicates. Availability stays `unknown` until bound machine configs load;
+  subscribe exactly those machines. Settings rows describe their own binding;
+  `machine_offline` belongs to the group pill.
 
 ## Code Collab
 
-- Code Collab file-index hooks borrow owner-session resources from the workspace-owned
-  Effect `ScopedCache`; do not open, scan, subscribe, or join the same Flock once per
-  React mount. The resource subscribes before its cold scan, advances by batch events,
-  and compares the Flock version before any remote catch-up rescan. Each entry holds a
-  loro-repo Flock lease: LRU eviction closes its room and Flock subscriptions, releases
-  the lease, then unloads the replica, in that order; a room that finishes joining after
-  eviction is unsubscribed and best-effort unloaded again. Never cache a failed open;
-  invalidate a failed room resource after its last borrower releases. Workspace disposal
-  closes every borrower Scope before destroying the repo, and cache-resource identity is
-  part of provider memoization. Local-machine RPC snapshots seed the shared resource
-  before it is visible; later Flock events stay deduplicated across mounts.
+- File-index hooks borrow owner-session resources from the workspace Effect
+  `ScopedCache`, never open/scan/subscribe/join per mount. Subscribe before cold scan,
+  advance by batches and compare Flock versions before remote catch-up rescans.
+- Each entry owns a loro-repo Flock lease. LRU eviction closes room and Flock
+  subscriptions, releases the lease, then unloads the replica. Late room joins after
+  eviction must unsubscribe and best-effort unload again. Never cache failed opens;
+  invalidate failed resources after their last borrower releases.
+- Workspace disposal closes borrower Scopes before destroying the repo. Provider
+  memoization includes cache-resource identity. Local-machine RPC snapshots seed the
+  shared resource before exposure; later Flock events stay deduplicated across mounts.
 
 ## Mobile prompts and Live Activity
 
-- `use-app-store-review-prompt.ts` takes its historical baseline only from the first
+- `use-app-store-review-prompt.ts` takes its baseline only from the first
   ready-and-synced session snapshot. Hydrated turns seed eligibility but never trigger
   a prompt; later finalized turns are processed once, and streaming updates with no new
   outcome must not synchronously rewrite local storage. Its idle timer depends on the
@@ -106,15 +108,14 @@ edit `AGENTS.md` only. Per-hook background and reasoning: [README.md](README.md)
   `resolveAppStoreReviewBlockReason`, plus missing bridge, text entry, interaction
   cancel, hidden app) and is deduplicated per user AND per reason for the process
   lifetime. Keep both bounds when adding a gate.
-- `use-lody-live-activity.ts` throttles the summary INPUT; the bridge debounce cannot do
-  that job. EVERY summary input goes through one leading-edge throttle whose trailing
-  deadline is anchored to the last EMIT; one input left outside it restores starvation.
+- `use-lody-live-activity.ts` throttles the summary INPUT (the bridge debounce cannot):
+  EVERY summary input goes through one leading-edge throttle whose trailing deadline
+  is anchored to the last EMIT; one input left outside it restores starvation.
 - Nothing reaching the payload memo may carry a per-render identity: depend on the
-  permission candidate's key and title, not on the object.
+  permission candidate's key and title.
 - Keep the 250ms bridge debounce.
 - Scan a pending permission request from the UNTHROTTLED list and flush the window, so
-  the alert ships promptly with a summary that contains it; `shownPermissionAlertKeysRef`
-  still shows one alert per candidate key.
+  the alert ships promptly with it; `shownPermissionAlertKeysRef` shows one per key.
 - Compute nothing when the feature is off: `iosLiveActivitiesEnabledAtom` and the
   native iOS shell are BOTH required and are not equivalent. Derive the activity id
   separately from that gate so the disable and unmount paths can still end an activity

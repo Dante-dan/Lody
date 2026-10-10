@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useAtomValue } from 'jotai';
 import { selectAtom } from 'jotai/utils';
 import { CheckCircle2, Circle, CircleX, LoaderCircle } from 'lucide-react';
+import { Spinner } from '@/ui/spinner';
 import { useTranslation } from 'react-i18next';
 import {
   getSessionRoomId,
@@ -27,25 +28,33 @@ const statusLabels = {
 const selectSessionTitle = (session: SessionMeta | null | undefined): string | null =>
   session?.title?.trim() || null;
 
-/** The status belongs to the creating Operation's target Turn, not later Session activity. */
-export function CreatedSessionOperationCard({
-  sessionId,
-  fallbackTitle,
-  status,
-  onNavigateSession,
-}: {
-  sessionId: SessionId;
-  fallbackTitle?: string;
-  status: CreatedSessionStatus;
-  onNavigateSession?: (target: SessionNavigationTarget) => void;
-}) {
+/** A target Session's live title, falling back to the Operation's label. */
+export function useOperationTargetTitle(sessionId: SessionId, fallbackTitle?: string): string {
   const { t } = useTranslation();
   const titleAtom = useMemo(
     () => selectAtom(sessionMetaAtomFamily(getSessionRoomId(sessionId)), selectSessionTitle),
     [sessionId]
   );
   const liveTitle = useAtomValue(titleAtom);
-  const title = liveTitle || fallbackTitle?.trim() || t('sessions.untitled', 'Untitled session');
+  return liveTitle || fallbackTitle?.trim() || t('sessions.untitled', 'Untitled session');
+}
+
+/** The status belongs to the creating Operation's target Turn, not later Session activity. */
+export function CreatedSessionOperationCard({
+  sessionId,
+  fallbackTitle,
+  status,
+  detail,
+  onNavigateSession,
+}: {
+  sessionId: SessionId;
+  fallbackTitle?: string;
+  status: CreatedSessionStatus;
+  detail?: string;
+  onNavigateSession?: (target: SessionNavigationTarget) => void;
+}) {
+  const { t } = useTranslation();
+  const title = useOperationTargetTitle(sessionId, fallbackTitle);
   const StatusIcon =
     status === 'running'
       ? LoaderCircle
@@ -60,6 +69,7 @@ export function CreatedSessionOperationCard({
       relation="opened"
       label={t('sessions.openedBy.createdSession', 'Session created')}
       sessionTitle={title}
+      detail={detail}
       actionLabel={t('sessions.openedBy.viewSession', 'View session')}
       onAction={onNavigateSession ? () => onNavigateSession({ sessionId }) : undefined}
       status={
@@ -67,7 +77,7 @@ export function CreatedSessionOperationCard({
           role="status"
           data-session-creation-status={status}
           className={cn(
-            'inline-flex shrink-0 items-center gap-1.5 self-start text-xs sm:self-auto',
+            'inline-flex shrink-0 items-center gap-1 text-xs',
             status === 'failed'
               ? 'text-destructive'
               : status === 'succeeded'
@@ -75,8 +85,10 @@ export function CreatedSessionOperationCard({
                 : 'text-muted-foreground'
           )}
         >
-          <StatusIcon
-            className={cn('h-3.5 w-3.5', status === 'running' && 'motion-safe:animate-spin')}
+          <Spinner
+            icon={StatusIcon}
+            spinning={status === 'running'}
+            className="h-3 w-3 motion-reduce:animate-none"
             aria-hidden="true"
           />
           {t(statusLabels[status])}

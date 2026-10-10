@@ -4,31 +4,27 @@
 
 ## Mirrors over synced docs tolerate unknown root keys
 
-Every `new Mirror(...)` over a doc that syncs between clients must pass
-`ignoreUnknownProperties: true`. Peers on a newer schema write root keys this
-build does not declare; without the flag loro-mirror rejects the entire state
-with `Unknown property: <key>`, so the older client can never write to that doc
-again. Contract test: `packages/shared/tests/session-doc-forward-compat.test.ts`.
+Every synced Mirror must use `ignoreUnknownProperties: true`: otherwise an
+unknown root from a newer peer blocks writes on this client. Regression:
+`packages/shared/tests/session-doc-forward-compat.test.ts`.
 
-Session Mirrors temporarily set `validateUpdates: false`; keep external parsers.
-This is availability, not malformed-input safety. Replace only after write-boundary
-review (PR #460).
+SessionDocument's private Mirror is control-only. HistoryWriter owns writes;
+SessionData owns reads. CLI execution methods in `session-agent-writes.ts` reuse
+shared planners over that writer, not UI port methods or a second writer.
+Replacement rules: [shared](../../../../../packages/shared/AGENTS.md#session-history).
 
 ## Opening a doc pulls its stream
 
 `LoroDocumentManager.getOrCreateSessionDoc()` is not a cheap read.
-`SessionDocument.init()` (`doc.ts`) calls `startDocRoomSync()` immediately: opening
-a doc joins its room and starts pulling the stream, and the doc stays in the
-manager's `sessions` cache with the room joined until `cleanSessionDoc` tears it
-down. Cost per call = one Streams subscription plus the doc's full initial sync.
+`SessionDocument.init()` joins and pulls the room immediately. It stays joined
+in the manager cache until `cleanSessionDoc`; each open costs a subscription and
+full initial sync.
 
 Rules:
 
-- Renderer metadata reaches the CLI by direct import into the repo's internal
-  meta Flock even when local mode has no registered transport. Keep the
-  `loro-repo` metadata live monitor enabled from repo initialization; deferring
-  it until transport join leaves `getDocMeta` stale and prevents the session
-  dispatch watcher from seeing `latestUserMsgId`.
+- Renderer metadata is imported into the meta Flock with no transport; the
+  metadata live monitor must start at repo init (`ready()`), or
+  `getDocMeta` stays stale and dispatch misses `latestUserMsgId`.
 - Never open docs in a loop over `listAliveRoomIds` or any other workspace-wide
   enumeration. A long-lived workspace holds thousands of historical session
   rooms; opening them all stalls startup and floods the Streams backend.
@@ -39,10 +35,8 @@ Rules:
   filtered candidates, under a concurrency bound (`mapWithConcurrency`, 4).
 - To drop a doc you opened for inspection, first prove no other holder adopted
   it: `LoroDocumentManager.sessions` is a shared cache with **no refcounting**,
-  and `cleanSessionDoc`/`destroy` disposes the mirror out from under every other
-  subscriber (the dispatch watcher, for one, unsubscribes before it cleans and
-  its `watchedSessions` guard would block a re-subscribe — a destroyed shared
-  instance silently kills doc-level signals for that session). When you cannot
+  and `cleanSessionDoc`/`destroy` disposes every holder's mirror/subscriptions
+  (the dispatch watcher's `watchedSessions` guard blocks re-subscription). When you cannot
   prove sole ownership, leave the doc cached. Never call
   `repo.unloadDoc`/`unloadDocRoom` on a live wrapper directly either (the room
   binding would leak; see `SessionDocument.destroy` in `doc.ts`), and never let
@@ -51,6 +45,19 @@ Rules:
 
 The dispatch watcher's contract, "session metadata is the activation index", is
 documented in `../../session/AGENTS.md` and applies to any module enumerating rooms.
+
+`getOrCreateSessionDoc(..., { skipAutoRead: true })` affects only newly initialized
+wrappers. Use it for observation in an isolated command manager, never to change
+a cached execution wrapper's policy. Read-only release must preserve status;
+see [observe scopes](../../commands/session-observe-runtime.ts).
+
+## Streams cursors are replica-bound
+
+Daemon and one-shot commands share `repo.sqlite3`, not replicas: Meta/Flock
+cursors come from `createRepoStreamsPersistence`, LoroDoc cursors from
+`createDocumentRemoteCursorStore` (shared rows: daemon only). No shared
+`remoteCursorStore` or schedule-only `onPersist*`. Test:
+`tests/cli-streams-replica-checkpoints.test.ts`.
 
 ## Shared ACP runtime config contains no secrets
 
@@ -62,23 +69,21 @@ selector values to collaborators.
 
 ## Presence is ephemeral and partitioned by origin
 
-`presence.ts`: machine presence refreshes on `CliPresenceRuntime`'s own 30s timer.
-It keeps TWO stores and the distinction is load-bearing: `store` is the workspace-wide
-replica (own writes plus every peer seen in the shared room; read by machine-online
-checks and the PR poller), while `localOriginStore` holds ONLY entries this process
-authored and is the sole payload of the local data plane (`encodeLocalOriginPresence` /
-`subscribeLocalOriginPresence`). Write locally-authored presence exclusively through
-`writeLocalOrigin`/`deleteLocalOrigin`, and never relay the replica —
-`specs/local-first-two-plane.md` explains the partition.
+Read [the presence rules](../../../../../.agents/docs/cli-lib-loro-presence.md) before
+publishing presence or changing `presence.ts`/`session-active-presence.ts`: the origin
+partition and the two stores, the single-owner rule for session active presence, and
+turn-finalization side effects. Intent and the reader contract:
+`specs/loro-ephemeral-presence-channel.md`.
 
-`session-active-presence.ts` alone owns session active presence: it starts once for a
-visible CLI turn, accepts phase updates, heartbeats while active, and clears on the
-owning Effect release. Never publish or clear session presence from `setStatus`, RPC
-dispatch, permission/image callbacks, or watcher recovery paths. Its scope covers ALL
-turn-finalization stages, so optional cloud side effects inside it (usage flush,
-completion notification, Live Activity sync) MUST go through
-`MessageHandler.runTurnCloudSideEffect`; third-party calls (GitHub, model APIs) are a
-different reachability domain and are NOT gated by it.
+A workspace has ONE serial presence queue and the machine heartbeat shares it. Trigger
+a presence write ONLY from a timer, a lifecycle transition, or a user navigation,
+NEVER from a stream/progress/chunk callback however small one payload is, and bound
+every field in `packages/shared/src/presence.ts`. A burst can delay the heartbeat past its 90s freshness window despite a joined room. The `(phase, detail)` dedupe is NOT a rate
+limit: a detail that changes per emit (percentage, counter, label) defeats it.
+
+INVARIANT: `initializing` is bounded per stage from the last phase/detail change; on
+expiry the heartbeat stops and `notifyInitializationStalled` fails the turn. Spec:
+`specs/session-initialization-deadline.md`.
 
 Never reintroduce periodic doc-meta writes (`lastSeen`/`lastRunningSeen`) — they stall
 Loro flush; meta timestamps are written only at status transitions. Durable

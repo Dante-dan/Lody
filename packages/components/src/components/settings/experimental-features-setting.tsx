@@ -1,8 +1,9 @@
 import { useAtom, useAtomValue } from 'jotai';
 import { useTranslation } from 'react-i18next';
-import { Switch } from '@/ui/switch';
+import { Switch } from '@lody/ui/switch';
 import {
   experimentalFeaturesEnabledAtom,
+  roostHistoryExperimentEnabledAtom,
   reviewAgentExperimentEnabledAtom,
 } from '@/atoms/settings';
 import { CompactRow, CompactSection } from './compact-layout';
@@ -17,18 +18,23 @@ import { CompactRow, CompactSection } from './compact-layout';
  */
 export function ExperimentalFeaturesSection() {
   const { t } = useTranslation();
-  const [experimentalEnabled, setExperimentalEnabled] = useAtom(experimentalFeaturesEnabledAtom);
-  const [reviewAgentEnabled, setReviewAgentEnabled] = useAtom(reviewAgentExperimentEnabledAtom);
-
   return (
     <CompactSection title={t('settings.experimental.title', 'Experimental features')}>
-      <CompactRow
-        label={t('settings.experimental.enable', 'Enable experimental features')}
-        helper={t(
-          'settings.experimental.enableHelper',
-          'Show features that are still being built. They can change or break.'
-        )}
-      >
+      <ExperimentalFeatureRows />
+    </CompactSection>
+  );
+}
+
+/** The master switch and, while it is on, each feature's own switch. */
+export function ExperimentalFeatureRows() {
+  const { t } = useTranslation();
+  const [experimentalEnabled, setExperimentalEnabled] = useAtom(experimentalFeaturesEnabledAtom);
+  const [reviewAgentEnabled, setReviewAgentEnabled] = useAtom(reviewAgentExperimentEnabledAtom);
+  const [roostHistoryEnabled, setRoostHistoryEnabled] = useAtom(roostHistoryExperimentEnabledAtom);
+
+  return (
+    <>
+      <CompactRow label={t('settings.experimental.enable', 'Enable experimental features')}>
         <Switch
           checked={experimentalEnabled}
           onCheckedChange={setExperimentalEnabled}
@@ -37,21 +43,36 @@ export function ExperimentalFeaturesSection() {
       </CompactRow>
 
       {experimentalEnabled ? (
-        <CompactRow
-          label={t('settings.experimental.reviewAgent', 'Review agent')}
-          helper={t(
-            'settings.experimental.reviewAgentHelper',
-            'Let a review agent check a branch, hand fixes back to the session, and merge once CI is green. You choose per session.'
-          )}
-        >
-          <Switch
-            checked={reviewAgentEnabled}
-            onCheckedChange={setReviewAgentEnabled}
-            aria-label={t('settings.experimental.reviewAgent', 'Review agent')}
-          />
-        </CompactRow>
+        <>
+          <CompactRow
+            label={t('settings.experimental.reviewAgent', 'Review agent')}
+            helper={t(
+              'settings.experimental.reviewAgentHelper',
+              'Let a review agent check a branch, hand fixes back to the session, and merge once CI is green. You choose per session.'
+            )}
+          >
+            <Switch
+              checked={reviewAgentEnabled}
+              onCheckedChange={setReviewAgentEnabled}
+              aria-label={t('settings.experimental.reviewAgent', 'Review agent')}
+            />
+          </CompactRow>
+          <CompactRow
+            label={t('settings.experimental.roostHistory', 'Roost history')}
+            helper={t(
+              'settings.experimental.roostHistoryHelper',
+              'Use Roost for new conversations. Existing conversations keep their current history backend.'
+            )}
+          >
+            <Switch
+              checked={roostHistoryEnabled}
+              onCheckedChange={setRoostHistoryEnabled}
+              aria-label={t('settings.experimental.roostHistory', 'Roost history')}
+            />
+          </CompactRow>
+        </>
       ) : null}
-    </CompactSection>
+    </>
   );
 }
 

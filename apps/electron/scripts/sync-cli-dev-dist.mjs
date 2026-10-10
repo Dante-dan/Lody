@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url'
 
 import {
   installEmbeddedNodePtyBinding,
+  installEmbeddedKeyringBinding,
+  installEmbeddedRoostBinding,
   installEmbeddedSqliteBinding,
   stageCliRuntimePackages
 } from './cli-native-deps.mjs'
@@ -54,8 +56,11 @@ fs.rmSync(destDir, { recursive: true, force: true })
 copyDir(sourceDir, destDir)
 writeCliPackageMetadata()
 
+fs.rmSync(path.resolve(__dirname, '../resources/roost'), { recursive: true, force: true })
 stageCliRuntimePackages()
 installEmbeddedSqliteBinding({ platform: process.platform, arch: process.arch })
 installEmbeddedNodePtyBinding({ platform: process.platform, arch: process.arch })
+installEmbeddedKeyringBinding({ platform: process.platform, arch: process.arch })
+installEmbeddedRoostBinding({ platform: process.platform, arch: process.arch })
 
 console.log(`Synced CLI dist-dev to ${destDir}`)

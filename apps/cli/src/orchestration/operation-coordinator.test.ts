@@ -1,3 +1,4 @@
+import { withHistoryPort } from '../../tests/history-port-fixture';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -56,6 +57,7 @@ const makeHarness = async (options?: {
   historyFailuresBeforeSuccess?: number;
   beforeRequesterHistoryWrite?: () => Promise<void>;
   materializeTargetOverride?: () => Promise<void>;
+  confirmTargetReadable?: (docId: string, reason: string) => Promise<void>;
   operationKind?: 'session_create' | 'session_create_many' | 'session_chat';
   failProgressHistoryWrites?: boolean;
   progressHistoryFailures?: number;
@@ -119,41 +121,70 @@ const makeHarness = async (options?: {
   const subscribers = new Map<SessionId, Set<() => void>>();
   let historyUpdateAttempt = 0;
   let remainingProgressHistoryFailures = options?.progressHistoryFailures ?? 0;
-  const sessionDoc = (sessionId: SessionId) => ({
-    mirror: {
-      subscribe: (callback: () => void) => {
-        const set = subscribers.get(sessionId) ?? new Set();
-        set.add(callback);
-        subscribers.set(sessionId, set);
-        return () => set.delete(callback);
+  const flushRepo = async () => {
+    if (options?.failProgressFlush) throw new Error('flush unavailable');
+  };
+  const sessionDoc = (sessionId: SessionId) =>
+    withHistoryPort({
+      mirror: {
+        subscribe: (callback: () => void) => {
+          const set = subscribers.get(sessionId) ?? new Set();
+          set.add(callback);
+          subscribers.set(sessionId, set);
+          return () => set.delete(callback);
+        },
       },
-    },
-    getHistory: async () => histories.get(sessionId) ?? [],
-    updateHistory: async (update: (history: SessionHistoryInput[]) => SessionHistoryInput[]) => {
-      const current = histories.get(sessionId) ?? [];
-      const next = update(current);
-      if (sessionId === requesterSessionId) {
-        await options?.beforeRequesterHistoryWrite?.();
-        historyUpdateAttempt += 1;
-        if (historyUpdateAttempt <= (options?.historyFailuresBeforeSuccess ?? 0)) {
-          throw new Error('transient history write failure');
+      // `subscribeSessionChanges` needs the session-data surface; the fake drives
+      // change notification through its own `mirror.subscribe` set above.
+      sessionData: {
+        history: {
+          count: async () => 0,
+          readAt: async () => ({ state: 'missing' as const }),
+          readTurn: async (turnId: string) => {
+            const turn = (histories.get(sessionId) ?? []).find((entry) => entry.id === turnId);
+            return turn ? { state: 'ready' as const, turn } : { state: 'missing' as const };
+          },
+          readRange: async () => [],
+          readDirectory: async () => [],
+          observe: (listener: () => void) => {
+            const set = subscribers.get(sessionId) ?? new Set();
+            set.add(listener);
+            subscribers.set(sessionId, set);
+            return { initial: Promise.resolve([]), unsubscribe: () => set.delete(listener) };
+          },
+        },
+        commands: {},
+        durability: { waitDurable: async () => {} },
+      },
+      getHistory: () => histories.get(sessionId) ?? [],
+      updateHistory: async (update: (history: SessionHistoryInput[]) => SessionHistoryInput[]) => {
+        const current = histories.get(sessionId) ?? [];
+        const next = update(current);
+        if (sessionId === requesterSessionId) {
+          await options?.beforeRequesterHistoryWrite?.();
+          historyUpdateAttempt += 1;
+          if (historyUpdateAttempt <= (options?.historyFailuresBeforeSuccess ?? 0)) {
+            throw new Error('transient history write failure');
+          }
         }
-      }
-      const progressItems = (history: SessionHistoryInput[]) =>
-        history.flatMap(
-          (entry) => entry.items?.filter((item) => item.type === 'operation_progress') ?? []
-        );
-      if (
-        sessionId === requesterSessionId &&
-        JSON.stringify(progressItems(next)) !== JSON.stringify(progressItems(current)) &&
-        (options?.failProgressHistoryWrites === true || remainingProgressHistoryFailures > 0)
-      ) {
-        remainingProgressHistoryFailures = Math.max(0, remainingProgressHistoryFailures - 1);
-        throw new Error('progress history unavailable');
-      }
-      histories.set(sessionId, next);
-    },
-  });
+        const progressItems = (history: SessionHistoryInput[]) =>
+          history.flatMap(
+            (entry) => entry.items?.filter((item) => item.type === 'operation_progress') ?? []
+          );
+        if (
+          sessionId === requesterSessionId &&
+          JSON.stringify(progressItems(next)) !== JSON.stringify(progressItems(current)) &&
+          (options?.failProgressHistoryWrites === true || remainingProgressHistoryFailures > 0)
+        ) {
+          remainingProgressHistoryFailures = Math.max(0, remainingProgressHistoryFailures - 1);
+          throw new Error('progress history unavailable');
+        }
+        histories.set(sessionId, next);
+      },
+      ...(targetInputDurable || options?.failProgressFlush === true
+        ? { flushLocalWrites: flushRepo }
+        : {}),
+    });
   const flockRows = options?.machineAgentConfig
     ? [
         {
@@ -186,9 +217,7 @@ const makeHarness = async (options?: {
     return meta ? { meta } : undefined;
   });
   const repo = {
-    flush: async () => {
-      if (options?.failProgressFlush) throw new Error('flush unavailable');
-    },
+    flush: flushRepo,
     watch: () => ({ unsubscribe: vi.fn() }),
     getDocMeta,
     getMeta: getRepoMeta,
@@ -311,6 +340,7 @@ const makeHarness = async (options?: {
       return { close: vi.fn() };
     },
     materializeTarget,
+    confirmTargetReadable: options?.confirmTargetReadable,
   } satisfies ConstructorParameters<typeof LodyOperationCoordinator>[0];
   const coordinator = new LodyOperationCoordinator(coordinatorOptions);
   const store = new LodyOperationStore(storePath, () => TEST_NOW_MS);
@@ -381,6 +411,63 @@ afterEach(async () => {
 });
 
 describe('LodyOperationCoordinator', () => {
+  it('recovers local creation using daemon authority even when remote Streams is unavailable', async () => {
+    const harness = await makeHarness({
+      targetInputDurable: false,
+      operationKind: 'session_create',
+      targetDocSync: async () => {
+        throw new Error('No remote Streams in OSS');
+      },
+      confirmTargetReadable: async () => {},
+    });
+    harness.coordinator.start();
+    try {
+      await harness.coordinator.idle();
+      expect(
+        harness.histories.get(harness.targetSessionId)?.filter((turn) => turn.id === 'turn-1')
+      ).toHaveLength(1);
+      await harness.coordinator.wake('retry');
+      expect(
+        harness.histories.get(harness.targetSessionId)?.filter((turn) => turn.id === 'turn-1')
+      ).toHaveLength(1);
+      expect(harness.syncRemoteDocOrThrow).not.toHaveBeenCalled();
+      const history = harness.histories.get(harness.targetSessionId);
+      if (!history?.[0]) throw new Error('Missing materialized target');
+      history[0] = { ...history[0], status: 'handled' };
+      history.push({
+        id: 'assistant:turn-1',
+        role: 'assistant',
+        userTurnId: 'turn-1',
+        timestamp: '2026-07-20T00:00:00.500Z',
+        items: [{ type: 'text', text: 'local result' }],
+        fileDiff: [],
+        finished: true,
+      });
+      await harness.coordinator.wake('local-target-finished');
+      await harness.coordinator.wake('duplicate-finish');
+      const store = new LodyOperationStore(harness.storePath, () => TEST_NOW_MS);
+      try {
+        expect(store.get(harness.requesterSessionId, 'review-round-1')).toMatchObject({
+          state: 'finished',
+          completion: {
+            type: 'result',
+            value: { items: [{ status: 'succeeded', output: { text: 'local result' } }] },
+          },
+        });
+        expect(store.listPendingDeliveries('workspace-1' as WorkspaceId)).toEqual([]);
+        expect(
+          harness.histories
+            .get(harness.requesterSessionId)
+            ?.filter((turn) => turn.role === 'assistant')
+        ).toHaveLength(1);
+      } finally {
+        store.close();
+      }
+    } finally {
+      await harness.coordinator.stop();
+    }
+  });
+
   it('retries transient target materialization on its own bounded timer', async () => {
     vi.useFakeTimers();
     const harness = await makeHarness({

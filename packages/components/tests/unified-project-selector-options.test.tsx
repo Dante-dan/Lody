@@ -9,7 +9,7 @@ import {
   UnifiedProjectSelectorView,
   type UnifiedLocalProjectOption,
 } from '../src/components/chat/unified-project-selector';
-import { TooltipProvider } from '../src/ui/tooltip';
+import { Tooltip } from '@lody/ui/tooltip';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -65,7 +65,7 @@ describe('UnifiedProjectSelectorView options', () => {
   it('renders the 20 most recent projects and searches the complete list', async () => {
     await act(async () => {
       root.render(
-        <TooltipProvider>
+        <Tooltip.Provider>
           <UnifiedProjectSelectorView
             value={{ kind: 'none' }}
             onChange={vi.fn()}
@@ -74,7 +74,7 @@ describe('UnifiedProjectSelectorView options', () => {
             onConnectGitRepo={vi.fn()}
             renderLimit={20}
           />
-        </TooltipProvider>
+        </Tooltip.Provider>
       );
     });
 
@@ -83,16 +83,17 @@ describe('UnifiedProjectSelectorView options', () => {
 
     await act(async () => {
       trigger?.dispatchEvent(
-        new TestPointerEvent('pointerdown', {
+        new TestPointerEvent('mousedown', {
           bubbles: true,
           button: 0,
           pointerType: 'mouse',
         })
       );
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
 
     const projectItems = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="menuitem"]')
+      document.querySelectorAll<HTMLElement>('[role^="menuitem"]')
     ).filter((item) => item.textContent?.startsWith('Project '));
 
     expect(projectItems.map((item) => item.textContent)).toEqual(
@@ -108,10 +109,11 @@ describe('UnifiedProjectSelectorView options', () => {
       valueSetter?.call(searchInput, 'Project 25');
       searchInput?.dispatchEvent(new Event('input', { bubbles: true }));
       await Promise.resolve();
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
 
     const searchedProjectItems = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="menuitem"]')
+      document.querySelectorAll<HTMLElement>('[role^="menuitem"]')
     ).filter((item) => item.textContent?.startsWith('Project '));
     expect(searchedProjectItems.map((item) => item.textContent)).toEqual(['Project 25']);
   });
@@ -119,7 +121,7 @@ describe('UnifiedProjectSelectorView options', () => {
   it('keeps every source visible when the caller has no shared recency ranking', async () => {
     await act(async () => {
       root.render(
-        <TooltipProvider>
+        <Tooltip.Provider>
           <UnifiedProjectSelectorView
             value={{ kind: 'none' }}
             onChange={vi.fn()}
@@ -128,19 +130,20 @@ describe('UnifiedProjectSelectorView options', () => {
             onAddLocalProject={vi.fn()}
             onConnectGitRepo={vi.fn()}
           />
-        </TooltipProvider>
+        </Tooltip.Provider>
       );
     });
 
     const trigger = container.querySelector<HTMLButtonElement>('button');
     await act(async () => {
       trigger?.dispatchEvent(
-        new TestPointerEvent('pointerdown', {
+        new TestPointerEvent('mousedown', {
           bubbles: true,
           button: 0,
           pointerType: 'mouse',
         })
       );
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
 
     expect(document.body.textContent).toContain('loro-dev/lody');
@@ -149,7 +152,7 @@ describe('UnifiedProjectSelectorView options', () => {
   it('includes recently used GitHub repositories in the bounded mixed list', async () => {
     await act(async () => {
       root.render(
-        <TooltipProvider>
+        <Tooltip.Provider>
           <UnifiedProjectSelectorView
             value={{ kind: 'none' }}
             onChange={vi.fn()}
@@ -160,23 +163,24 @@ describe('UnifiedProjectSelectorView options', () => {
             onConnectGitRepo={vi.fn()}
             renderLimit={20}
           />
-        </TooltipProvider>
+        </Tooltip.Provider>
       );
     });
 
     const trigger = container.querySelector<HTMLButtonElement>('button');
     await act(async () => {
       trigger?.dispatchEvent(
-        new TestPointerEvent('pointerdown', {
+        new TestPointerEvent('mousedown', {
           bubbles: true,
           button: 0,
           pointerType: 'mouse',
         })
       );
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
 
     const projectItems = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="menuitem"]')
+      document.querySelectorAll<HTMLElement>('[role^="menuitem"]')
     ).filter(
       (item) =>
         item.textContent?.startsWith('Project ') || item.textContent?.includes('loro-dev/lody')
@@ -189,7 +193,7 @@ describe('UnifiedProjectSelectorView options', () => {
   it('reserves a source slot for a GitHub repository with no usage history', async () => {
     await act(async () => {
       root.render(
-        <TooltipProvider>
+        <Tooltip.Provider>
           <UnifiedProjectSelectorView
             value={{ kind: 'none' }}
             onChange={vi.fn()}
@@ -200,23 +204,24 @@ describe('UnifiedProjectSelectorView options', () => {
             onConnectGitRepo={vi.fn()}
             renderLimit={20}
           />
-        </TooltipProvider>
+        </Tooltip.Provider>
       );
     });
 
     const trigger = container.querySelector<HTMLButtonElement>('button');
     await act(async () => {
       trigger?.dispatchEvent(
-        new TestPointerEvent('pointerdown', {
+        new TestPointerEvent('mousedown', {
           bubbles: true,
           button: 0,
           pointerType: 'mouse',
         })
       );
+      await new Promise((resolve) => setTimeout(resolve, 40));
     });
 
     const projectItems = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="menuitem"]')
+      document.querySelectorAll<HTMLElement>('[role^="menuitem"]')
     ).filter(
       (item) =>
         item.textContent?.startsWith('Project ') ||

@@ -4,6 +4,24 @@ The composer footer knobs (Agent / Model / Interaction / Reasoning / Permission)
 Agent Role selection on every surface, attachments, and the two durable run-config
 authorities.
 
+Persisted and draft composers share `useSessionAcpSelectorContext`, which subscribes
+to the exact bound Provider and passes its runtime overrides to model and command
+catalog readers. This keeps extension-enabled Pi catalogs usable while rejecting
+catalogs for removed or changed selections; a missing or mismatched Provider cannot
+lend another launch configuration's catalog.
+
+Independent Plan uses ACP Core's boolean `plan_mode`. Shared capability discovery
+and selector ordering recognize it as Plan; UI changes and semantic run-config
+dispatch send booleans without changing permissions. Static Codex, Grok, Kimi,
+and DeepSeek Harness capabilities use Core's option factory; Claude retains its
+permission-based Plan mode. Kimi and Grok static permission selectors match their
+adapters' independent permission options rather than offering Plan as permission
+or a second interaction selector. DeepSeek's builtin profile mounts the Plan
+service; a runtime snapshot that omits Plan still removes the provisional control.
+Older agents advertising `collaboration_mode` retain
+their `default`/`plan` select values; do not rewrite those cached contracts into
+new wire ids. A live `configOptions` snapshot determines the current controls.
+
 Scope: `packages/components/src/components/sessions`. Binding rules and the
 pointer to this page live in
 [that directory's AGENTS.md](../../packages/components/src/components/sessions/AGENTS.md);
@@ -22,6 +40,16 @@ this page is the full text of the rules summarised there.
   modes; provider interaction modes stay inside the run-config dropdown. Both
   are also used by the desktop chat landing; `DesktopRunConfigMenu` receives an
   explicit agent selection/machine scope rather than reading `SessionMeta`.
+  All side submenus, including Role, anchor to their own trigger rows.
+  Option-only panels use top-edge alignment; searchable Model panels lift their
+  search header above the row so the option area starts beside it when space permits.
+  The shared menu primitive opens toward inline-end
+  (right in LTR); horizontal collisions may flip the side, and vertical collisions
+  shift the popup within the viewport. Searchable model menus use the same trigger
+  anchor while filtering, with dimensions determined by the current results.
+  Submenus do not center against the whole parent
+  popup or clamp to its bottom. Intent:
+  [run-config submenu placement](../../specs/composer-run-config-submenu-placement.md).
   Builtin DeepSeek Harness sessions using a non-Pro model show the same linked
   delegation-cost warning here and in `MobileRunConfigSheet`: until upstream DSH
   fixes child-route inheritance, a delegated child may use the session's
@@ -32,11 +60,28 @@ this page is the full text of the rules summarised there.
   keyboard focus to its trigger; Plan/Fast toggle rows intentionally stay open.
   Once the model list reaches `OPTION_SEARCH_MIN_OPTIONS`
   (`lib/fuzzy-option-filter.ts` — the same threshold and matcher the mobile
-  sheet uses) the Model submenu gains a fuzzy search row over
+  sheet uses) the Model submenu gains a top fuzzy-search field through
   `MenuOptionSearchList`: a provider may publish dozens of models, and scrolling
-  is not a way to find one. A search field inside a Radix menu must be
+  is not a way to find one. A content wrapper inside the popup caps the model
+  list at 20rem and the available height; the options scroll while search stays
+  visible. Filtering changes the content-driven popup size, including the empty-result
+  message. The positioner recalculates against the Model row: a shorter popup returns
+  to option-area alignment when space permits. The searchable panel uses a constant
+  -32px alignment offset (28px search field + 4px gap), determined by the unfiltered
+  catalog's search threshold, not the query. Short menus without search retain zero
+  offset. Neither previous dimensions nor a previous collision-resolved screen
+  position are retained. Results or the empty-result message appear below search.
+  Only options scroll; search stays
+  visible, not at an immutable screen coordinate while filtering.
+  Viewport collision handling and the cap still apply after a resize.
+  `Menu.Content`'s `style` prop reaches the positioner, so putting the
+  height cap there would let the popup outgrow its measured anchor geometry.
+  A search field inside a Radix menu must be
   `DropdownMenuSearchInput`, which owns the fight with the menu's typeahead and
-  roving focus (its jsdoc has the details); the same tasks-side Model submenu
+  roving focus (its jsdoc has the details). `DropdownMenuSubTrigger` preserves
+  that field's focus when a precise pointer keeps moving or clicks over the
+  parent row after opening; touch still requires explicit field activation.
+  The same tasks-side Model submenu
   (`tasks/task-agent-run-config-menu.tsx`) is still an unsearchable clone and
   should adopt it.
   `DesktopRunConfigMenu` gains a **Role** row when the caller passes
@@ -85,7 +130,8 @@ this page is the full text of the rules summarised there.
   explicit selection; only `agentRoleId: null` means None. Keep unsynced catalog
   rows and not-yet-hydrated Session docs in the unknown state — neither may
   turn a durable Role into explicit None. If the catalog row is still unknown,
-  an unsent manual run-config edit drops stale Role provenance to unknown.
+  an unsent manual run-config edit freezes explicit None for the outgoing Turn,
+  so programmatic fallback cannot reattach a stale Role or its memory binding.
   Session provenance remains the legacy fallback when the selected Turn
   predates these fields; never rewrite `SessionMeta.agentRoleId`, which records
   creation provenance only.
@@ -129,8 +175,14 @@ this page is the full text of the rules summarised there.
   deliberately absent: a sentence about what one value allows belongs to the
   Role editor, not to a scan of what is pinned. Its machine is passed
   in rather than looked up, so the pane stays renderable without the workspace's
-  machine-visibility context. The Role editor is a Dialog and is therefore
-  hosted by the composer, NOT inside menu content, where it would unmount with
+  machine-visibility context. Its two
+  panes grow with their content up to 14rem, then scroll
+  independently. Create stays at the bottom of the Role list pane while its
+  rows scroll; it has no separator above it. The detail pane's header flows
+  into the pinned values without a divider. The parent, permission, and Role
+  menus retain the shared `@lody/ui` popup inset; neither list compensates for
+  it with custom horizontal margins. The Role editor is a Dialog and is
+  therefore hosted by the composer, NOT inside menu content, where it would unmount with
   the menu the moment it opened; `AgentRoleEditorDialog` is the one editor,
   shared with Settings.
   Picking a Role flows through the SAME preference channel as that agent's
@@ -139,7 +191,14 @@ this page is the full text of the rules summarised there.
   there instead of being forced in. That channel is a PURE DERIVATION: user
   edits are the only stored selection state, and effective values resolve per
   render (user edit > runtime baseline > turn preference > capability default;
-  a full runtime snapshot owns the non-user config table). Never reintroduce a
+  a full runtime snapshot owns the non-user config table). Existing-session knob
+  edits, including explicit Fast off, live in a sparse account/workspace/session/
+  target-scoped draft. A successful local send consumes only its captured field
+  generations; remote Turns and navigation preserve unsent edits. Returning to the
+  same target restores its draft. Confirmed deletion and account teardown invalidate
+  stale callbacks. See [private run-config drafts](../../specs/session-run-config-drafts.md).
+  Landing and new-session drafts retain their component-local selection lifetime.
+  Never reintroduce a
   reducer that stores the resolved selection or an effect that reconciles it —
   two dispatches disagreeing about a runtime-omitted key plus options rebuilt
   from the selection was a synchronous #185 render loop on session open. The footer names a Role only while
@@ -179,6 +238,17 @@ this page is the full text of the rules summarised there.
   too; hiding it made the control look absent. `None` still leads the list and
   an unavailable Role is still listed, disabled, with its reason (from the
   shared `AGENT_ROLE_UNAVAILABLE_REASON_KEYS`).
+  `useSessionPendingConfig` bridges a locally held send's frozen run config and
+  Role into the same selection inputs while attachments prepare. Its per-session
+  subscription reads the latest entry identity, so progress does not rebuild the
+  selector catalog. Explicit next-draft edits still win, and an older turn's
+  runtime snapshot is suppressed until the held turn becomes a history/queue
+  source. Both representations use the same logical Turn fence. A landed history
+  entry remains the temporary source while its rendered document snapshot catches
+  up; cancellation has no landed entry and releases the source. A newer durable
+  Turn permanently supersedes an observed older local source. Config controls keep
+  their normal faces while submission locks their menus or sheet, including models
+  exposed only through ACP config selectors. Intent: [attachment send boundary](../../specs/session-files.md#61-send-boundary).
   The Role editor is a Dialog, so every composer hosts it outside its menu /
   drawer — and the in-session one mounts it only while OPEN, because it reads
   machine visibility and the composer must stay renderable in hosts that do not
@@ -220,14 +290,23 @@ this page is the full text of the rules summarised there.
   float shadow). The old bottom bar row is gone: machine name + workdir badge moved to
   `SessionHeaderMenu` (`machineName` prop). Mobile keeps the single
   `MobileSessionRunConfig` button + sheet.
-  Pending-attachment state machines: `pendingImages` (images) **and** `pendingFiles`
-  (files; cloud upload via `@/lib/session-file-upload.ts` with sha256/textPreview,
-  abort + part retry). Oversize images (>5 MiB) auto-degrade to files. Send blocks
-  while either is uploading. Desktop same-machine uploads use
-  `@/lib/electron-session-file-sender.ts` / `localProjects.sendSessionFileLocal`, return
-  a `transport:'local'` block into the same `pendingFiles[].uploaded` slot, and fall
-  back to cloud on handoff failure. The composer exposes one unfiltered hidden
-  `<input type="file">` on every platform (Windows included — the renderer no
-  longer crashes once locale `.pak`s ship; see `apps/electron/AGENTS.md`) and
-  routes each selection by MIME into the image or file state machine.
+  Images and files stay as local drafts until Send. Oversize images (>5 MiB)
+  degrade to files using the existing validation. On Send the composer hands the
+  complete input to the shared send admission and clears. A send with unready
+  attachments is held in the workspace runtime's memory, and its pending row owns
+  progress, retry, and cancellation. Existing-session direct/queue/guide and new
+  or child-session sends share this boundary, including attachment-only input.
+  Same-session text waits behind a held send. A held new conversation's metadata
+  is an in-memory placeholder until its first turn is written. Held sends do not
+  survive the page; leaving asks first.
 
+The workspace Effect owner joins upload, local handoff, store borrows, and warmup
+cleanup before closing their dependencies. Successful attachment receipts survive
+retry; cancellation prevents stale completion from publishing history. Desktop
+same-machine files still use `localProjects.sendSessionFileLocal`, including its
+existing cloud fallback and backfill policy. Permanent local references remain a
+[separate proposal](../../specs/local-attachment-references.md).
+
+See the [draft Spec](../../specs/session-files.md) for ownership, accepted loss,
+and acceptance boundaries. Implementation and deterministic tests do not establish
+packaged-device or native-mobile-shell acceptance.

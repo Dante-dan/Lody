@@ -5,7 +5,7 @@ import quietWork from '@/assets/onboarding/intro/quiet-work.png';
 import continuousScroll from '@/assets/onboarding/intro/continuous-scroll.png';
 import readyToBegin from '@/assets/onboarding/intro/ready-to-begin.png';
 import { cn } from '@/lib/utils';
-import { Button } from '@/ui/button';
+import { Button } from '@lody/ui/button';
 import { WINDOW_DRAG_EXEMPT_CLASS } from '@/ui/window-drag-region';
 import type { AudioLayers } from './use-onboarding-audio';
 import { playClick, playCut, playReveal, playSelect } from './ui-sounds';
@@ -142,6 +142,9 @@ const INTRO_MOTION_CSS = `
   from { opacity: 1; transform: translateY(0); }
   to { opacity: 0; transform: translateY(-8px); }
 }
+/* Keep departing copy hidden when reduced motion removes its animation.
+   A running animation still overrides this resting state for the crossfade. */
+.lody-intro-copy-leaving { opacity: 0; }
 @media (prefers-reduced-motion: reduce) {
   .lody-intro-motion { animation: none !important; transition-duration: 0ms !important; }
 }
@@ -370,7 +373,7 @@ export function IntroSequence({
               <div
                 key={`out-${outgoing}`}
                 aria-hidden
-                className="lody-intro-motion absolute inset-0 flex flex-col justify-center"
+                className="lody-intro-motion lody-intro-copy-leaving absolute inset-0 flex flex-col justify-center"
                 style={{ animation: 'lody-intro-copy-out 320ms ease both' }}
               >
                 <IntroCopy chinese={chinese} {...copyFor(outgoing)} />
@@ -392,10 +395,10 @@ export function IntroSequence({
           <div className="mt-[clamp(18px,2.6vh,32px)] flex h-11 items-center">
             {beat.final ? (
               <Button
-                size="lg"
+                size="large"
                 disabled={departing}
                 autoFocus
-                className="lody-intro-motion rounded-md bg-slate-950 px-6 text-white hover:bg-slate-800"
+                className="lody-intro-motion"
                 style={{ animation: `lody-intro-copy-in 520ms ${INTRO_EASE} 300ms both` }}
                 onClick={beginSetup}
               >

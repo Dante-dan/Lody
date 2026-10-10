@@ -1,3 +1,4 @@
+import type { MemoryBinding } from './memory-provider';
 import type {
   ACPSessionConfig,
   AcpConfigOptionValue,
@@ -46,6 +47,7 @@ export type SessionInputHistoryItem =
 export type PendingUserHistoryEntry = {
   userId: string;
   role: 'user';
+  author: { v: 1; kind: 'human'; userId: string };
   items: NonNullable<SessionHistoryInput['items']>;
   timestamp: string;
   status: 'pending' | 'pending_apply';
@@ -60,11 +62,12 @@ export type SessionConversationConfig = {
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, AcpConfigOptionValue>;
+  memory?: MemoryBinding;
   mcpServerIds?: McpServerId[];
-  taskToolsEnabled?: boolean;
   /** Null is an explicit None; undefined means the selected Turn predates this field. */
   agentRoleId?: AgentRoleId | null;
   agentRoleRevision?: number;
+  agentRoleSnapshot?: import('./message-author').AgentRoleSnapshot;
 };
 
 type SessionConversationSource = {
@@ -101,7 +104,14 @@ const collectSessionConversationSources = (
     const entry = history[index];
     if (entry?.role !== 'user') continue;
     sources.push({
-      value: entry.inputConfig,
+      // Read on demand: a windowed index row resolves its send configuration
+      // lazily (a schema parse per turn), and `resolveSessionConversationConfig`
+      // inspects the newest source plus however few older ones it takes to find
+      // an explicit Role. Reading every entry here would parse the whole
+      // conversation to answer a question about its tail.
+      get value() {
+        return entry.inputConfig;
+      },
       configKey: `history:${entry.id}`,
       turnKey: `turn:${entry.id}`,
     });
@@ -162,10 +172,11 @@ export const resolveSessionConversationConfig = (
       ...(inputConfig.configOptionValues && Object.keys(inputConfig.configOptionValues).length > 0
         ? { configOptionValues: inputConfig.configOptionValues }
         : {}),
-      ...(inputConfig.mcpServerIds ? { mcpServerIds: inputConfig.mcpServerIds } : {}),
-      ...(typeof inputConfig.taskToolsEnabled === 'boolean'
-        ? { taskToolsEnabled: inputConfig.taskToolsEnabled }
+      ...(inputConfig.memory ? { memory: inputConfig.memory } : {}),
+      ...(inputConfig.agentRoleSnapshot
+        ? { agentRoleSnapshot: inputConfig.agentRoleSnapshot }
         : {}),
+      ...(inputConfig.mcpServerIds ? { mcpServerIds: inputConfig.mcpServerIds } : {}),
       ...(inputConfig.agentRoleId !== undefined ? { agentRoleId: inputConfig.agentRoleId } : {}),
       ...(typeof inputConfig.agentRoleId === 'string' && inputConfig.agentRoleRevision !== undefined
         ? { agentRoleRevision: inputConfig.agentRoleRevision }
@@ -189,6 +200,7 @@ export const resolveSessionConversationConfig = (
     return {
       ...resolved,
       agentRoleId: older.agentRoleId,
+      ...(older.agentRoleSnapshot ? { agentRoleSnapshot: older.agentRoleSnapshot } : {}),
       ...(older.agentRoleId !== null && older.agentRoleRevision !== undefined
         ? { agentRoleRevision: older.agentRoleRevision }
         : {}),
@@ -260,12 +272,6 @@ export const resolveSessionMcpSelection = (
   history: readonly { id: string; role: unknown; inputConfig?: unknown }[],
   messageQueue: readonly { $cid?: unknown; acpSessionConfig?: unknown }[] = []
 ): McpServerId[] => resolveSessionConversationConfig(history, messageQueue).mcpServerIds ?? [];
-
-/** The Task MCP gate frozen by the latest driving Turn. Missing legacy values are disabled. */
-export const resolveSessionTaskToolsEnabled = (
-  history: readonly { id: string; role: unknown; inputConfig?: unknown }[],
-  messageQueue: readonly { $cid?: unknown; acpSessionConfig?: unknown }[] = []
-): boolean => resolveSessionConversationConfig(history, messageQueue).taskToolsEnabled === true;
 
 const normalizeTextInputBlock = (
   block: Extract<SessionInputBlock, { type: 'text' }>
@@ -494,6 +500,26 @@ export const extractPromptPreviewFromInputBlocks = (
     .join('\n\n');
 };
 
+/**
+ * Resolve the frozen execution input, independently of how the turn is dispatched.
+ * `prompt` owns effective text (including accepted Config/Role instructions);
+ * `inputBlocks` retain authored text for editing and own structured attachments.
+ * Only legacy inputs without a prompt derive execution text from their blocks.
+ * An explicit empty prompt means no execution text, not a request to use raw text.
+ */
+export const resolveSessionExecutionInputBlocks = (input: {
+  prompt?: string;
+  inputBlocks?: unknown;
+}): SessionInputBlock[] => {
+  const blocks = normalizeSessionInputBlocks(input.inputBlocks, '');
+  if (input.prompt === undefined) return blocks;
+
+  const attachments = blocks.filter((block) => block.type !== 'text');
+  const prompt = input.prompt.trim();
+  // Authored spans refer to the raw text, never to the composed execution text.
+  return prompt ? [...attachments, { type: 'text', text: prompt }] : attachments;
+};
+
 export const inputBlocksToHistoryItems = (
   inputBlocks: readonly SessionInputBlock[]
 ): NonNullable<SessionHistoryInput['items']> => {
@@ -626,10 +652,11 @@ export const buildSessionTurnInputConfig = (args: {
   modeId?: string | null;
   modelId?: string | null;
   configOptionValues?: Record<string, AcpConfigOptionValue> | null;
+  memory?: MemoryBinding;
   mcpServerIds?: readonly McpServerId[] | null;
-  taskToolsEnabled?: boolean;
   agentRoleId?: AgentRoleId | null;
   agentRoleRevision?: number;
+  agentRoleSnapshot?: import('./message-author').AgentRoleSnapshot;
   issuePRMentions?: IssuePRMention[];
   resume?: ACPSessionConfig['resume'];
   prompt?: string;
@@ -647,13 +674,15 @@ export const buildSessionTurnInputConfig = (args: {
       args.configOptionValues && Object.keys(args.configOptionValues).length > 0
         ? args.configOptionValues
         : undefined,
+    memory: args.memory,
     mcpServerIds: args.mcpServerIds ? [...args.mcpServerIds] : undefined,
-    ...(args.taskToolsEnabled !== undefined
-      ? { taskToolsEnabled: args.taskToolsEnabled === true }
-      : {}),
     ...(args.agentRoleId !== undefined ? { agentRoleId: args.agentRoleId } : {}),
     ...(typeof args.agentRoleId === 'string' && args.agentRoleRevision !== undefined
       ? { agentRoleRevision: args.agentRoleRevision }
+      : {}),
+    ...(args.agentRoleSnapshot?.id === args.agentRoleId &&
+    args.agentRoleSnapshot?.revision === args.agentRoleRevision
+      ? { agentRoleSnapshot: args.agentRoleSnapshot }
       : {}),
     issuePRMentions: args.issuePRMentions,
     resume: args.resume,
@@ -701,6 +730,7 @@ export const buildPendingUserHistoryEntry = (args: {
   return {
     userId,
     role: 'user',
+    author: { v: 1, kind: 'human', userId },
     items,
     timestamp: args.timestamp,
     status: args.status ?? 'pending',

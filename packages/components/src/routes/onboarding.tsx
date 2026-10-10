@@ -2,7 +2,7 @@ import { useCallback, useRef } from 'react';
 import { createFileRoute, Navigate, useNavigate } from '@tanstack/react-router';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useTranslation } from 'react-i18next';
-import { toast } from 'sonner';
+import { toast } from '@/lib/toast';
 import { desktopOnboardingDraftAtom, desktopOnboardingPhaseAtom } from '@/atoms/onboarding';
 import { currentWorkspaceSlugAtom } from '@/atoms/workspace-context';
 import { OnboardingOverlay, type DesktopOnboardingCompletion } from '@/components/onboarding';
@@ -36,6 +36,7 @@ function DesktopOnboardingExperience() {
   const setPhase = useSetAtom(desktopOnboardingPhaseAtom);
   const setDraft = useSetAtom(desktopOnboardingDraftAtom);
   const inFlightCompletion = useRef<Promise<boolean> | null>(null);
+  const completionAttempt = useRef(0);
   const completeThemeLifecycle = useOnboardingThemeLifecycle();
   const analytics = useOnboardingAnalytics();
 
@@ -52,6 +53,7 @@ function DesktopOnboardingExperience() {
           : 'root';
       const startedAtMs = analytics.now();
       const eventProperties: DesktopOnboardingTraceProperties = {
+        attempt: ++completionAttempt.current,
         entry_point: completion.entryPoint ?? 'unknown',
         destination,
         has_session: Boolean(completion.sessionId),
@@ -94,7 +96,10 @@ function DesktopOnboardingExperience() {
           });
         },
         onDurableCompletion: () => {
-          analytics.capture('onboarding/flow_completed', eventProperties);
+          analytics.capture('onboarding/flow_completed', {
+            ...eventProperties,
+            duration_ms: analytics.durationSince(startedAtMs),
+          });
           analytics.clearFlow();
           setPhase(null);
           setDraft({ provider: null, project: null });
@@ -103,6 +108,7 @@ function DesktopOnboardingExperience() {
           console.error('Failed to persist desktop onboarding completion', error);
           analytics.capture('onboarding/persistence_failed', {
             ...eventProperties,
+            duration_ms: analytics.durationSince(startedAtMs),
             failure_code: error === undefined ? 'completion_ipc_unavailable' : 'persistence_failed',
           });
           toast.error(

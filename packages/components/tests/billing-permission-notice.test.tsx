@@ -102,6 +102,66 @@ describe('BillingSettingsView upgrade permission', () => {
     ) as HTMLButtonElement | undefined;
   }
 
+  function planNameText(): string | undefined {
+    return Array.from(container?.querySelectorAll('p') ?? [])
+      .map((paragraph) => paragraph.textContent?.trim())
+      .find((text) => text === 'Free' || text === 'Plus' || text === 'Enterprise');
+  }
+
+  it('shows the activating Plus plan instead of falling back to Free after checkout', async () => {
+    await renderView({ overview: freeOverview, paymentProcessing: true });
+
+    expect(planNameText()).toBe('Plus');
+    expect(container?.textContent).toContain('Payment received');
+    // The upgrade offer overlaps the activation banner; it must not offer a
+    // second checkout while the first one is still awaiting confirmation.
+    expect(upgradeButton()).toBeUndefined();
+  });
+
+  it.each([true, false])(
+    'gates changing cards on billing permission (%s)',
+    async (canManageBilling) => {
+      let opened = 0;
+      await renderView({
+        overview: {
+          ...freeOverview,
+          billingAccountId: 'billing_1',
+          effectivePlanTier: 'plus',
+          entitlementSource: 'stripe',
+          canManageBilling,
+        },
+        onPaymentMethod: () => {
+          opened += 1;
+        },
+      });
+      const button = Array.from(container!.querySelectorAll('button')).find(
+        (item) => item.textContent === 'Change payment method'
+      );
+      expect(Boolean(button)).toBe(canManageBilling);
+      if (button) {
+        await act(async () => button.click());
+        expect(opened).toBe(1);
+      }
+    }
+  );
+
+  it('disables the payment method action while opening Stripe', async () => {
+    await renderView({
+      overview: {
+        ...freeOverview,
+        billingAccountId: 'billing_1',
+        effectivePlanTier: 'plus',
+        entitlementSource: 'stripe',
+      },
+      pendingAction: 'portal',
+      onPaymentMethod: () => {},
+    });
+    const button = Array.from(container!.querySelectorAll('button')).find(
+      (item) => item.textContent === 'Opening…'
+    );
+    expect(button?.disabled).toBe(true);
+  });
+
   it('offers the upgrade action to a viewer who can manage billing', async () => {
     await renderView({});
 

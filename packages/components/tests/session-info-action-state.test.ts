@@ -1,18 +1,42 @@
 import { describe, expect, it } from 'vitest';
+import type { SessionMeta } from '@lody/shared';
+import { getSessionGitHubState } from '../src/lib/session-github-state';
 import {
   resolveSessionInfoBarGitHubActionIds,
   shouldDisableSessionInfoBarGitHubActionForHydration,
 } from '../src/components/sessions/session-info-action-state';
 
 const BASE_INPUT = {
+  canMutatePr: true,
   canShowGitHubActions: true,
   hasExistingPr: false,
   workspaceDirty: false,
+  workspaceUnpushed: false,
   hasChanges: false,
   isAgentBusy: false,
 };
 
 describe('resolveSessionInfoBarGitHubActionIds', () => {
+  it('uses compact owner PR metadata to replace Create PR in both the conversation and child tab', () => {
+    const owner = {
+      project: { kind: 'local', localProjectId: 'local-1', githubRepoFullName: 'owner/repo' },
+      workspaceDirty: true,
+      pullRequests: [{ url: 'https://github.com/owner/repo/pull/55', status: 'open' }],
+    } as SessionMeta;
+    for (const state of [
+      getSessionGitHubState(owner),
+      getSessionGitHubState({ pullRequests: [] } as unknown as SessionMeta, owner),
+    ]) {
+      expect(state.latestPr).toEqual(owner.pullRequests?.[0]);
+      expect(
+        resolveSessionInfoBarGitHubActionIds({
+          ...BASE_INPUT,
+          ...state,
+          prStatus: state.latestPr?.status,
+        })
+      ).toEqual(['commit-and-push']);
+    }
+  });
   it('offers Create PR and Commit & Push for a dirty GitHub-capable workspace without a PR', () => {
     expect(
       resolveSessionInfoBarGitHubActionIds({
@@ -59,7 +83,7 @@ describe('resolveSessionInfoBarGitHubActionIds', () => {
     ).toEqual([]);
   });
 
-  it('offers Ready for review instead of merge or repair actions for a draft PR', () => {
+  it('offers Commit & Push ahead of Ready for review on a dirty draft PR', () => {
     expect(
       resolveSessionInfoBarGitHubActionIds({
         ...BASE_INPUT,
@@ -70,14 +94,26 @@ describe('resolveSessionInfoBarGitHubActionIds', () => {
         prCiState: 'f',
         prReadiness: 'y',
       })
+    ).toEqual(['commit-and-push', 'ready-for-review']);
+  });
+
+  it('offers only Ready for review on a clean draft PR', () => {
+    expect(
+      resolveSessionInfoBarGitHubActionIds({
+        ...BASE_INPUT,
+        hasExistingPr: true,
+        prStatus: 'draft',
+        prMergeState: 'd',
+        prCiState: 'f',
+        prReadiness: 'y',
+      })
     ).toEqual(['ready-for-review']);
   });
 
-  it('prioritizes conflict repair, CI repair, and direct merge over workspaceDirty', () => {
+  it('ranks conflict repair, CI repair, and direct merge when the worktree is clean', () => {
     const existingPr = {
       ...BASE_INPUT,
       hasExistingPr: true,
-      workspaceDirty: true,
       prStatus: 'open' as const,
     };
 
@@ -88,7 +124,7 @@ describe('resolveSessionInfoBarGitHubActionIds', () => {
         prCiState: 'f',
         prReadiness: 'n',
       })
-    ).toEqual(['resolve-conflicts']);
+    ).toEqual(['resolve-conflicts', 'fix-ci-errors']);
     expect(
       resolveSessionInfoBarGitHubActionIds({
         ...existingPr,
@@ -105,6 +141,56 @@ describe('resolveSessionInfoBarGitHubActionIds', () => {
         prReadiness: 'y',
       })
     ).toEqual(['merge']);
+  });
+
+  it('puts Commit & Push ahead of conflict repair, CI repair, and merge on a dirty PR', () => {
+    // The machine no longer auto-commits at the end of a turn, so a dirty tree
+    // means the PR head is NOT the author's latest work. Merging or "fixing" CI
+    // first would act on a stale head, so the uncommitted work leads and the
+    // rest stay reachable through the chevron.
+    const dirtyPr = {
+      ...BASE_INPUT,
+      hasExistingPr: true,
+      workspaceDirty: true,
+      prStatus: 'open' as const,
+    };
+
+    expect(
+      resolveSessionInfoBarGitHubActionIds({
+        ...dirtyPr,
+        prMergeState: 'd',
+        prCiState: 'f',
+        prReadiness: 'n',
+      })
+    ).toEqual(['commit-and-push', 'resolve-conflicts', 'fix-ci-errors']);
+    expect(
+      resolveSessionInfoBarGitHubActionIds({
+        ...dirtyPr,
+        prMergeState: 'c',
+        prCiState: 's',
+        prReadiness: 'y',
+      })
+    ).toEqual(['commit-and-push', 'merge']);
+  });
+
+  it('keeps Commit & Push ahead of Merge after a commit whose push did not land', () => {
+    // The regression this guards: `workspaceDirty` comes from `git status`, so it
+    // goes false the instant the agent commits. A commit whose push failed leaves
+    // a clean tree while the PR head is still the previous commit — and with only
+    // the dirty flag the bar would drop the action and offer Merge, landing a PR
+    // that is missing the local commits.
+    expect(
+      resolveSessionInfoBarGitHubActionIds({
+        ...BASE_INPUT,
+        hasExistingPr: true,
+        workspaceDirty: false,
+        workspaceUnpushed: true,
+        prStatus: 'open',
+        prMergeState: 'c',
+        prCiState: 's',
+        prReadiness: 'y',
+      })
+    ).toEqual(['commit-and-push', 'merge']);
   });
 
   it('offers no PR action after the PR is terminal', () => {
@@ -155,4 +241,26 @@ describe('shouldDisableSessionInfoBarGitHubActionForHydration', () => {
     );
     expect(shouldDisableSessionInfoBarGitHubActionForHydration('merge', false)).toBe(false);
   });
+});
+
+it('keeps local agent repair actions without offering unavailable hosted mutations', () => {
+  expect(
+    resolveSessionInfoBarGitHubActionIds({
+      ...BASE_INPUT,
+      canMutatePr: false,
+      hasExistingPr: true,
+      prStatus: 'draft',
+      workspaceDirty: true,
+    })
+  ).toEqual(['commit-and-push']);
+  expect(
+    resolveSessionInfoBarGitHubActionIds({
+      ...BASE_INPUT,
+      canMutatePr: false,
+      hasExistingPr: true,
+      prStatus: 'open',
+      prReadiness: 'y',
+      prCiState: 'f',
+    })
+  ).toEqual(['fix-ci-errors']);
 });

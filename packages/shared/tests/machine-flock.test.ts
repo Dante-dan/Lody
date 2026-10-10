@@ -3,9 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   applyMachineFlockRowEvents,
   applyProviderSetupCancellationToFlock,
-  buildMachineArchiveSessionCommand,
   buildMachineDeleteLocalProjectCommand,
-  buildMachineDeleteSessionCommand,
+  buildSessionLaunchConfig,
   deleteAgentConfigFromFlock,
   deleteMachineFlockRowFromFlock,
   getMachineFlockAcpCapabilities,
@@ -20,7 +19,6 @@ import {
   getMachineFlockSessionLaunchConfig,
   getSessionLaunchConfigLegacyFields,
   isMachineFlockDocId,
-  machineDeleteCommandToQueueItem,
   machineFlockKeys,
   mergeSessionLaunchConfig,
   parseMachineFlockDocId,
@@ -81,10 +79,6 @@ class FakeMachineFlock implements MachineFlockWritableFlock {
 
 describe('machine Flock helpers', () => {
   it('builds compact command values', () => {
-    expect(buildMachineArchiveSessionCommand({ requestedAt: 123 })).toEqual({
-      v: 1,
-      requestedAt: 123,
-    });
     expect(buildMachineDeleteLocalProjectCommand({ requestedAt: 234 })).toEqual({
       v: 1,
       requestedAt: 234,
@@ -102,63 +96,6 @@ describe('machine Flock helpers', () => {
       projectName: 'Lody',
       originalRootPath: '/Users/developer/Code/lody',
       cleanupWorktrees: true,
-    });
-
-    expect(
-      buildMachineDeleteSessionCommand({
-        session: {
-          repoFullName: 'owner/repo',
-          branchName: 'lody/session-1',
-          baseBranch: 'main',
-          isWorktree: true,
-        },
-        requestedAt: 456,
-      })
-    ).toEqual({
-      v: 1,
-      repoFullName: 'owner/repo',
-      branchName: 'lody/session-1',
-      baseBranchName: 'main',
-      isWorktree: true,
-      requestedAt: 456,
-    });
-
-    expect(
-      buildMachineDeleteSessionCommand({
-        session: {
-          repoFullName: 'owner/repo',
-          branchName: 'new-branch',
-          isWorktree: true,
-        },
-        requestedAt: 789,
-        existing: {
-          v: 1,
-          requestedAt: 456,
-          branchName: 'old-branch',
-          keptWorktreePath: '/tmp/kept',
-        },
-      })
-    ).toEqual({
-      v: 1,
-      repoFullName: 'owner/repo',
-      branchName: 'new-branch',
-      isWorktree: true,
-      requestedAt: 789,
-    });
-
-    expect(
-      buildMachineDeleteSessionCommand({
-        session: {
-          parentSessionId: 'parent-session' as SessionId,
-          repoFullName: 'owner/repo',
-          isWorktree: true,
-        },
-        requestedAt: 456,
-      })
-    ).toBeNull();
-
-    expect(machineDeleteCommandToQueueItem({ v: 1, requestedAt: 1 })).toEqual({
-      requestedAt: 1,
     });
   });
 
@@ -276,6 +213,7 @@ describe('machine Flock helpers', () => {
     const sessionId = 'session-1' as SessionId;
     const launchConfig = {
       customAcp: { command: 'node', args: ['agent.js'] },
+      runtimeOverrides: { piExtensions: ['/fixture/plugin.ts'] },
       env: { TOKEN: 'secret' },
       worktreeSetup: { scripts: { bash: 'pnpm install' }, timeoutMs: 30_000 },
     };
@@ -289,6 +227,7 @@ describe('machine Flock helpers', () => {
 
     const rows = readMachineFlockRowsFromFlock(flock);
     expect(getMachineFlockSessionLaunchConfig(rows, sessionId)).toEqual(launchConfig);
+    expect(buildSessionLaunchConfig(launchConfig)).toEqual(launchConfig);
     expect(
       mergeSessionLaunchConfig(getMachineFlockSessionLaunchConfig(rows, sessionId), {
         env: { FALLBACK: 'ignored' },
@@ -432,6 +371,50 @@ describe('machine Flock helpers', () => {
       [getAcpCapabilityCacheKey(configId)]: row.value,
       [getAcpCapabilityCacheKey(secondConfigId)]: secondRow.value,
     });
+  });
+
+  it('attaches declared per-model controls only for the matching source version', () => {
+    const flock = new FakeMachineFlock();
+    const configId = 'config-1' as AgentConfigId;
+    const capability = {
+      cliType: 'builtin',
+      agentType: 'codex',
+      cacheVersion: 2,
+      sourceVersion: 'v1',
+      modes: [],
+      models: [],
+      fetchedAt: 1,
+    } as const;
+    const models = { 'gpt-6': { effortValues: ['low', 'max'], fastMode: true } };
+    writeMachineFlockRowToFlock(flock, {
+      key: machineFlockKeys.acpCapability(configId),
+      value: capability,
+    });
+    writeMachineFlockRowToFlock(flock, {
+      key: machineFlockKeys.acpModelCapability(configId),
+      value: { version: 1, sourceVersion: 'v1', models },
+    });
+    const key = getAcpCapabilityCacheKey(configId);
+
+    expect(
+      getMachineFlockAcpCapabilities(readMachineFlockRowsFromFlock(flock))[key]
+        ?.declaredModelControls
+    ).toEqual(models);
+    // The stored capability row itself never carries the per-model controls.
+    expect(
+      getMachineFlockAcpCapabilities(
+        readMachineFlockRowsFromFlock(flock, { families: ['acpCapability'] })
+      )[key]?.declaredModelControls
+    ).toBeUndefined();
+
+    writeMachineFlockRowToFlock(flock, {
+      key: machineFlockKeys.acpModelCapability(configId),
+      value: { version: 1, sourceVersion: 'v0', models },
+    });
+    expect(
+      getMachineFlockAcpCapabilities(readMachineFlockRowsFromFlock(flock))[key]
+        ?.declaredModelControls
+    ).toBeUndefined();
   });
 
   it('extracts agent config rows', () => {
@@ -600,8 +583,9 @@ describe('machine Flock helpers', () => {
   });
 
   it('extracts rate limit rows', () => {
+    const configId = 'config-codex' as AgentConfigId;
     const row = {
-      key: machineFlockKeys.rateLimit('codex', 'codex_bengalfox'),
+      key: machineFlockKeys.rateLimit(configId, 'codex', 'codex_bengalfox'),
       value: {
         limitId: 'codex_bengalfox',
         used: 10,
@@ -614,7 +598,7 @@ describe('machine Flock helpers', () => {
         [serializeMachineFlockKey(row.key)]: row,
       })
     ).toEqual({
-      [getRateLimitEntryKey('codex', 'codex_bengalfox')]: row.value,
+      [getRateLimitEntryKey('codex', 'codex_bengalfox', configId)]: row.value,
     });
   });
 
@@ -697,6 +681,32 @@ describe('machine Flock helpers', () => {
       expect(optOuts(flock)).toEqual(new Set());
     });
 
+    it('deleting a provider removes only its scoped rate limits', () => {
+      const flock = new FakeMachineFlock();
+      const first = kimi('a');
+      const second = kimi('b');
+      writeAgentConfigToFlock(flock, first);
+      writeAgentConfigToFlock(flock, second);
+      writeMachineFlockRowToFlock(flock, {
+        key: machineFlockKeys.rateLimit(first.id, 'kimi', 'kimi'),
+        value: { limitId: 'kimi', scope: { providerId: 'kimi' }, windows: [] },
+      });
+      writeMachineFlockRowToFlock(flock, {
+        key: machineFlockKeys.rateLimit(second.id, 'kimi', 'kimi'),
+        value: { limitId: 'kimi', scope: { providerId: 'kimi' }, windows: [] },
+      });
+
+      deleteAgentConfigFromFlock(flock, first, 1700);
+
+      expect(getMachineFlockRateLimits(readMachineFlockRowsFromFlock(flock))).toEqual({
+        [getRateLimitEntryKey('kimi', 'kimi', second.id)]: {
+          limitId: 'kimi',
+          scope: { providerId: 'kimi' },
+          windows: [],
+        },
+      });
+    });
+
     it('does not rewrite an existing opt-out on repeated deletes', () => {
       // The opt-out carries a timestamp, so a rewrite broadcasts a change to every peer; with
       // the row already gone and the opt-out already there, nothing must change.
@@ -734,7 +744,12 @@ describe('machine Flock helpers', () => {
       // Cancelling a published setup is also removing the provider; without the opt-out the CLI
       // adds it back on the next startup.
       const flock = new FakeMachineFlock();
-      writeAgentConfigToFlock(flock, kimi('setup-1'));
+      const config = kimi('setup-1');
+      writeAgentConfigToFlock(flock, config);
+      writeMachineFlockRowToFlock(flock, {
+        key: machineFlockKeys.rateLimit(config.id, 'kimi', 'kimi'),
+        value: { limitId: 'kimi', scope: { providerId: 'kimi' }, windows: [] },
+      });
 
       applyProviderSetupCancellationToFlock(flock, {
         v: 1,
@@ -744,6 +759,7 @@ describe('machine Flock helpers', () => {
       });
 
       expect(getMachineFlockAgentConfigs(readMachineFlockRowsFromFlock(flock))).toEqual({});
+      expect(getMachineFlockRateLimits(readMachineFlockRowsFromFlock(flock))).toEqual({});
       expect(optOuts(flock)).toEqual(new Set(['kimi']));
     });
 
@@ -771,4 +787,34 @@ describe('machine Flock helpers', () => {
       });
     });
   });
+});
+
+it('reads, updates and deletes validated memory association rows without mixing machine scope', async () => {
+  const { getMachineFlockMemories } = await import('../src/machine-flock');
+  const flock = new FakeMachineFlock();
+  const entry = {
+    providerId: 'nowledge-mem',
+    memoryId: 'reviewer',
+    machineId: 'a',
+    name: 'Reviewer',
+    description: 'Lessons',
+  };
+  const key = machineFlockKeys.memory(entry.providerId, entry.memoryId);
+  writeMachineFlockRowToFlock(flock, { key, value: entry });
+  flock.set(machineFlockKeys.memory('nowledge-mem', 'wrong-key'), entry);
+  flock.set(machineFlockKeys.memory('nowledge-mem', 'secret'), {
+    ...entry,
+    memoryId: 'secret',
+    token: 'not-allowed',
+  });
+  const rows = readMachineFlockRowsFromFlock(flock, { families: ['memory'] });
+  expect(getMachineFlockMemories(rows, 'a' as MachineId)).toEqual([entry]);
+  expect(getMachineFlockMemories(rows, 'b' as MachineId)).toEqual([]);
+  const updated = applyMachineFlockRowEvents(rows, [{ key, value: { ...entry, name: 'Edited' } }]);
+  expect(getMachineFlockMemories(updated, 'a' as MachineId)).toEqual([
+    { ...entry, name: 'Edited' },
+  ]);
+  expect(
+    getMachineFlockMemories(applyMachineFlockRowEvents(updated, [{ key }]), 'a' as MachineId)
+  ).toEqual([]);
 });

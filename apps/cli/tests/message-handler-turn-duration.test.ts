@@ -1,3 +1,4 @@
+import { updateTestHistory } from './history-port-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LoroRepo } from 'loro-repo';
 
@@ -17,6 +18,7 @@ const createSilentLogger = (): Logger => ({
   error: () => {},
   success: () => {},
   debug: () => {},
+  trace: () => {},
   setLevel: () => {},
   child: () => createSilentLogger(),
   close: async () => {},
@@ -109,11 +111,11 @@ describe('MessageHandler turn duration (finalize stamps)', () => {
     const { repo, doc, handler } = await createHandlerHarness(sessionId);
 
     try {
-      await doc.updateHistory((history) => [...history, assistantEntry()]);
+      await updateTestHistory(doc, (history) => [...history, assistantEntry()]);
 
       const now = vi.spyOn(Date, 'now').mockReturnValue(TURN_ENDED_AT);
       await handler.finalizeACPState(sessionId);
-      expect((await doc.getHistory())[0]).toMatchObject({
+      expect((await doc.sessionData.history.readAll())[0]).toMatchObject({
         finished: true,
         endedAt: TURN_ENDED_AT,
       });
@@ -121,7 +123,7 @@ describe('MessageHandler turn duration (finalize stamps)', () => {
       now.mockReturnValue(APP_CLOSED_AT);
       await handler.finalizeACPState(sessionId);
 
-      expect((await doc.getHistory())[0]?.endedAt).toBe(TURN_ENDED_AT);
+      expect((await doc.sessionData.history.readAll())[0]?.endedAt).toBe(TURN_ENDED_AT);
     } finally {
       await repo.destroy();
     }
@@ -132,12 +134,12 @@ describe('MessageHandler turn duration (finalize stamps)', () => {
     const { repo, doc, handler } = await createHandlerHarness(sessionId);
 
     try {
-      await doc.updateHistory((history) => [...history, assistantEntry()]);
+      await updateTestHistory(doc, (history) => [...history, assistantEntry()]);
 
       vi.spyOn(Date, 'now').mockReturnValue(APP_CLOSED_AT);
       await handler.finalizeACPState(sessionId);
 
-      expect((await doc.getHistory())[0]).toMatchObject({
+      expect((await doc.sessionData.history.readAll())[0]).toMatchObject({
         finished: true,
         endedAt: APP_CLOSED_AT,
       });

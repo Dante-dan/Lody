@@ -1,25 +1,110 @@
 # Settings surfaces
 
-Parent `AGENTS.md` files also apply. `CLAUDE.md` is a symlink to this file; edit
-`AGENTS.md` only.
+`CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only.
+Parent `AGENTS.md` files also apply.
 
-- A settings row (`compact-layout.tsx`) is one grid: the label column takes the
-  remaining space and the control column hugs its content. Never size either column
-  from a viewport breakpoint — settings render in a panel far narrower than the window,
-  and the panel clips its overflow, so a `md:`-width label column silently hides the
-  control.
+Settings owns the workspace catalog surfaces (Providers, MCP servers, Agent
+Roles). The catalog's durability rule — a local Flock write is durable, and the
+upload that follows it is not something a settings surface waits on, reports, or
+rolls back — is in the root [AGENTS.md](../../../../../AGENTS.md).
+
+## Layout and components
+
+- Desktop overlay close is `absolute` on the RIGHT pane only (equal `top`/`right`
+  inset); the pane's in-scroll `padding-right` keeps chrome off that column.
+- Settings style in StyleX from `surface.ts`/`compact-layout.tsx`. The desktop pane
+  header names every page; a page hands it actions and a one-line lead through
+  `settings-page-header.tsx`, never its own title. Groups are flat in `settingsFlat`
+  (pane, project window), else cards. Group by meaning, no one-row groups; a helper
+  says what the label cannot. Split master/detail by fill; type: `type.stylex.ts`.
+- Preferences grammar: `CompactRow`, one answer; records: name, state, menu/detail.
+  Its four switches bind translated labels and rendered helpers.
+- `share-management-setting.tsx` lists published static copies via the scoped cloud
+  query. Ordinary members see their publications; admins see the workspace inventory.
+  Draft uploads are not published shares. Reuse `useSessionShareLinkActions` for
+  copy/reset/revoke; settings must never reconstruct a credential from cloud data.
+  Key state by user/workspace and gate the whole surface with `teamSharing`.
+  A share outlives its source, so both "View conversation" and "Update deployment"
+  require the session in the local metadata cache; opening it closes the desktop
+  settings overlay. Rationale:
+  [share inventory jump](../../../../../.agents/notes/implemented/feature/2026-09-15-share-inventory-session-jump.md).
+
+- Desktop Settings > Projects stacks every source (each machine, then GitHub
+  owners) as a `CompactSection` of ruled project rows. Clicking a project opens
+  a nested project window (header, page tabs) — never inline the editor beside the list.
+  Mobile keeps the previous stacked list. Local-project deletion reuses
+  `useRemoveLocalProject` / `RemoveLocalProjectDialog` (nested overlay like MCP);
+  do not add a second confirm. Pending removal stays listed until the owning
+  machine finishes. Do not RPC-probe worktree/skills on offline remotes, and
+  never surface `machine_rpc_unavailable` as an editor error. The GitHub source
+  row must paint from `lody:githubReposCache` on first frame; do not wait on
+  `listWorkspaceReposWithStatus` to decide whether GitHub exists.
+- Settings rows (`compact-layout.tsx`) give labels remaining width and controls their
+  content width. Never size columns from viewport breakpoints: the panel
+  clips controls. Desktop Settings nav follows panel width; keep categories/drafts,
+  reveal the selection and wrap actions.
 - Agent configuration lives in `agent-config-dialog.tsx` plus `env-vars-textarea.tsx`.
   DeepSeek Harness official vs custom endpoint is dialog form state only: persist
   `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` (official always writes
-  `https://api.deepseek.com`) and never a new AgentConfigMeta field. Model ids come from
-  the endpoint's OpenAI-compatible discovery response during live verification; do not
+  `https://api.deepseek.com/anthropic`) and never a new AgentConfigMeta field. Model ids come from
+  the endpoint's OpenAI-compatible discovery response during live verification; official
+  Messages and legacy Chat roots share the provider's official `/models` endpoint. Do not
   add a parallel manual catalog field. Additional env cannot override either connection
   key, and changing endpoint or credential invalidates the dialog's prior live
   verification.
-- Keep optional three.js/R3F usage behind the lazy usage-calendar module so lightweight
-  and SSR consumers do not evaluate its renderer graph.
-- Interface and terminal font choices exclude the known symbol families in
-  `lib/local-fonts.ts`; persisted selections use the same filter. Font option names
-  use the default interface font so they remain readable.
-- The Codex reset forecast chip in the provider row must not fetch on mount and must
-  pass `nestedInDialog` for its dialog: [../codex-reset/AGENTS.md](../codex-reset/AGENTS.md).
+- Keep three.js/R3F behind the lazy usage-calendar module so lightweight and SSR
+  consumers never evaluate its renderer graph.
+- Charts follow [timeline rules](../../../../../specs/usage-timeline.md).
+  Cache bounded day snapshots per auth session/workspace/date for one hour;
+  refresh expiry without blanking data. Keep auth/capability gates
+  ([cache](../../../../../specs/usage-detail-cache.md)).
+- Interface/terminal fonts exclude symbol families in `lib/local-fonts.ts`; option
+  names stay on the default interface font. Five tiers write `--ui-font-size`;
+  sizes use `@lody/ui` text tokens. Font ligatures in the Text group writes
+  `--lody-font-ligatures` for conversation, code, and tool output.
+- The Codex reset forecast chip in the provider row must not fetch on mount:
+  [../codex-reset/AGENTS.md](../codex-reset/AGENTS.md).
+- The usage share card is a fixed-format report, not a second `ChatShareCard`:
+  fixed aspects, period = page range, headline = range total.
+  Derive numbers through `usage-share-stats.ts` (stamp the metric on stats,
+  never pass it beside them). Money: `formatUsdCompact` headline,
+  `formatUsdTight` cells — never `truncate`. Tokens/member anonymity are
+  defaults; cost substitutes for tokens; member slices never include email.
+  Both cards reuse `lib/share-image-export.ts` and `components/share-theme-scope.ts`;
+  never fork them. Pinned cards bind product and avatar StyleX themes locally;
+  inherited aliases keep the app's resolved colours.
+  `StatsSettingsView` gates its lazy dialog with opt-in `shareCard` for public-landing
+  reuse. Type and spacing use `TEXT`, `PAD_X`, and `RHYTHM`, never fresh `text-[…]`
+  or off-grid padding. `PAD_X` aligns every band, including the footer.
+  `ASPECT_SIZE` includes the backdrop; size against the
+  48px-shorter framed case. Keep every band but the headline `shrink-0`.
+  The graphic follows the range
+  (hour skyline, day-by-hour grid, or 53-week calendar, as on the Usage screen);
+  every kind fits the one `GRAPHIC_H` box so card height never depends on range. Leave the space beside the headline empty.
+
+## Agent Roles
+
+Roles are read and written from Settings, mentioned from the composer, and
+resolved by CLI MCP creation, so these are cross-surface rules rather than
+component details.
+
+- Before changing Role settings or dispatch, read the authoritative
+  [shared Role contracts](../../../../shared/AGENTS.md#workspace-mcp-and-agent-roles).
+  The editor clears its memory reference when the target machine changes;
+  discovery and creation use that exact machine's Provider RPC. Memory settings
+  reuse Agents machine tabs/pills and catalog rows. A missing nmem install stays
+  on the page with the provider URL; it must not open a blocking dialog.
+  The Role Memory tab lists saved machine-Flock associations and shares the
+  Configuration tab's draft/save boundary. Role settings retain all machine groups;
+  memory shortcuts locate a group without adding machine tabs or filtering. Only a ready Provider
+  inventory can mark an identity missing; deleting a link never deletes provider data.
+
+## Workspace ownership
+
+- Ownership transfer is an owner-only danger-zone slot shared by desktop and mobile.
+  `workspace-ownership-transfer.tsx` collects an existing member and exact workspace
+  name, then calls the cloud mutation through `account-setting.tsx`. Refresh session
+  and active organization after success; cache refresh failure must not claim transfer
+  failed. Card changes use the billing Portal separately; transfer keeps the current card.
+
+- Nightly downloads live below Download apps in desktop/Web About.

@@ -16,8 +16,9 @@ this page is the full text of the rules summarised there.
   appending, and must never reorder the others. Note the separate, deliberately
   different order in `session-info-bar.tsx` for choosing which item opens on the
   stage (context first, as the most informative default) — that is stage
-  preference, not cluster order, and the two are not meant to match. Stage = the rightmost item. Invariants: no items → the bar
-  hides; with items, EXACTLY one is always expanded on the stage (there is no
+  preference, not cluster order, and the two are not meant to match. Stage = the rightmost item.
+  The bar hides only when items, execution-machine identity and ambient sync are
+  all absent. With items, EXACTLY one is always expanded on the stage (there is no
   fully-collapsed state, and the stage never empties). Click semantics
   (researched; do not overload a second click): cluster chip = promote onto
   stage; stage ICON = inert marker (NOT a button — clicking the rightmost
@@ -63,7 +64,13 @@ labelClassName`) so the stage diffstat never clips. Wired from
   content, right after the PR number, so it is only visible when the PR is
   expanded; one click toggles its check-run popover (`PrCiRun[]` is
   presentational; production maps the active PR's live GitHub check-run fetch
-  into it). Color budget: ambient
+  into it via `mapGitHubCheckRunToPrCiRun`). The verdict reads only the newest
+  attempt of each check (`selectLatestCheckRuns` keys by app + name, highest id
+  wins), so a re-run that went green clears an earlier failure; cancelled/stale
+  runs render as `cancelled` and never make CI "failed" nor enter the Fix CI
+  snapshot. The same shared summary feeds the PR tab: its verdict ignores
+  cancelled/stale runs unless nothing else ran, and PR-cache entries read back
+  from IndexedDB are re-derived with `normalizeCheckRunsSummary`. Color budget: ambient
   chips (status/goal/schedule) render NEUTRAL (goal state reads from its
   pulse + popover, not an inline tint); color is reserved for genuine
   status — the expanded PR status icon and the ±diff counts.
@@ -79,17 +86,36 @@ labelClassName`) so the stage diffstat never clips. Wired from
   The context stage is also the single owner of agent-driven GitHub/worktree actions:
   a changed GitHub-capable workspace without a PR shows `Create PR` + `Commit & Push`,
   including a direct Local Project with a resolved GitHub repository. For an open
-  associated PR, compact poller state selects exactly one higher-priority path:
-  conflicts show `Resolve Conflicts` (an immediate agent prompt), failed/error CI
-  shows `Fix CI Errors` (refresh details, include a bounded failed-check snapshot,
-  then send an agent prompt), and proven readiness shows the shared Merge split-button.
-  Its dropdown selects merge/squash/rebase without merging; the primary half performs
-  the selected method. Other dirty PRs retain `Commit & Push`. Do not infer that PR
+  associated PR, `resolveSessionInfoBarGitHubActionIds` returns EVERY applicable
+  action in priority order rather than picking one, because the collapse below keeps
+  the rest reachable. `Commit & Push` is the TOP priority whenever the session has
+  UNPUBLISHED WORK — ahead of `Resolve Conflicts`, `Fix CI Errors`,
+  `Ready for review`, and Merge. That ranking is load-bearing, not cosmetic: turn
+  finalization no longer commits or pushes on the session's behalf (see
+  `apps/cli/src/session/turn-post-processing-service.ts`), so unpublished work means
+  the PR head is NOT the author's latest work, and this action item is the only signal
+  that stops a user from merging or reviewing a stale PR.
+  "Unpublished" is `SessionMeta.workspaceDirty` OR `workspaceUnpushed`, both surfaced
+  raw by `getSessionGitHubState` and OR-ed at the one point of use. BOTH are required
+  and neither is redundant: `workspaceDirty` comes from `git status --porcelain`, so it goes false the
+  instant the agent commits, while a commit whose push failed leaves the PR head a
+  commit behind. Gating this action on `workspaceDirty` alone drops it exactly there
+  and promotes Merge against a stale remote head. `workspaceDirty` alone still gates
+  the no-PR `Commit & Push`, where there is no remote branch to be behind. Below it, conflicts show
+  `Resolve Conflicts` (an immediate agent prompt), failed/error CI shows
+  `Fix CI Errors` (refresh details, include a bounded failed-check snapshot, then send
+  an agent prompt), and proven readiness shows the shared Merge split-button. Its
+  dropdown selects merge/squash/rebase without merging; the primary half performs the
+  selected method. A terminal (merged/closed) PR offers nothing. Do not infer that PR
   review comments are actionable, so there is no automatic `Fix PR Comments` action.
   The action array is priority ordered:
   the first action renders as the single explicit TEXT button in the `StageChip` trailing slot;
   when more actions exist, a small chevron beside it opens the remaining actions in an
-  upward-opening menu. The primary action + chevron form one subtle, borderless background
+  upward-opening menu. A DEMOTED merge action must stay in that menu (as one item that
+  performs the already-selected method) instead of being filtered out — dropping it
+  would make proven readiness unreachable on exactly the dirty sessions that rank
+  Commit & Push first. Regression coverage: `tests/session-info-bar-actions.test.tsx`
+  + the `DirtyWorktreeOutranksMerge` story. The primary action + chevron form one subtle, borderless background
   surface with a low-contrast internal divider (single actions use the same surface without the chevron). Neither half
   leaves an external focus outline/ring; keyboard focus stays visible as an internal background tint.
   Under 420px,
@@ -129,7 +155,10 @@ labelClassName`) so the stage diffstat never clips. Wired from
   gate destructive history rewrites and expose an explicit Codex Pause control.
   ScheduleChip reuses `useResolvedScheduledTasks`/`ScheduledTaskList` from
   `scheduled-tasks-panel.tsx` (same adaptive countdown clock, cannot drift).
-  The message queue intentionally stays OUT of the bar. The bar renders on
+  The message queue intentionally stays OUT of the bar's items; the bar only
+  hosts it in the `queue` slot above the pill (or alone, glued to the composer,
+  when the bar is otherwise empty), because only the bar knows whether it renders.
+  The bar renders on
   BOTH desktop and mobile from `session-chat-interface.tsx` (status + goal +
   schedule + context); it fully replaced the sticky `SessionGoalBanner`, the
   in-composer `ScheduledTasksPanel`, the mobile `SessionStatusStrip`
@@ -140,3 +169,32 @@ labelClassName`) so the stage diffstat never clips. Wired from
   decision feed. An inactive proven-ready session replaces its sidebar diff stat
   with the green bordered Mergeable pill; the active row hides both because the
   Info Bar owns the merge control.
+
+## Related-Sessions chip
+
+`session-relations-chip.tsx` renders a `MessagesSquare` chip in the info bar's
+cluster zone, via the bar's `relations` slot, whenever the current Session sits
+in an opened-by tree (`lib/session-relation-tree.ts`). Like Preview it is a
+plain action, never staged: one click toggles `PopoverActionChip`'s popover,
+which anchors to the pill (the `@lody/ui` Popover `anchor` resolving the enclosing
+`[data-info-bar-surface]`) and takes its width.
+
+The popover shows the complete tree: every ancestor from the topmost live
+opener down, and every descendant. Edges connect rows (root Sessions); a Tab
+opener resolves to its root like the sidebar tree, without the sidebar's depth
+cap. A row is its root Session plus its top Tabs as equal pills; closed Tabs
+are hidden unless current. Each pill is agent icon, live title, and the sidebar's
+`SessionRowStatusIndicator` (waiting > working > unread); the current Session is
+highlighted. Tab pills navigate with root + exact tab ids. The page reads only
+a boolean (`useHasSessionRelations`); the chip builds the tree in the leaf.
+Decision: [relations note](../notes/implemented/feature/2026-09-24-session-relations-chip.md).
+
+## Execution-machine identity (review patch)
+
+The optional `executionMachine` identity stays outside cluster/stage selection.
+It resolves `sessionMachine.ownerUserId` against existing workspace members,
+never Session ownership. The owner avatar/name and machine name remain visible
+when context/status changes; below a 600px bar width the controls move beneath it.
+Unknown ownership is explicit, and absence of machine metadata does not synthesize
+an identity. See the [draft Spec](../../specs/composer-machine-owner.md) and
+[review decision](../notes/proposed/feature/2026-10-07-composer-machine-owner.md).

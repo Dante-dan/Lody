@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { startProcessLegacy } from '@lody/shared/node/process'
 import { appendFileSync, existsSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
@@ -26,8 +26,6 @@ import {
   shouldUseSparkleUpdater,
   sparklePackageJsonPathFromModuleEntry
 } from './app-updater-sparkle-policy'
-
-const SPARKLE_ED_PUBLIC_KEY_PLACEHOLDER = 'SPARKLE_ED_PUBLIC_KEY_PLACEHOLDER'
 
 const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000
 const LODY_UPDATER_STATE_EVENT = IPC_PUSH_CHANNELS.updaterState
@@ -303,8 +301,16 @@ export class AppUpdaterService {
 
     this.installInFlight = true
     try {
-      const result = await runLinuxDebInstall(plan, (command, args) =>
-        spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'] })
+      // Not a process group: pkexec is setuid, and nothing here signals it.
+      const result = await runLinuxDebInstall(
+        plan,
+        (command, args) =>
+          startProcessLegacy({
+            command,
+            args,
+            options: { stdio: ['ignore', 'ignore', 'pipe'] },
+            processGroup: false
+          }).child
       )
       if (!result.ok) {
         this.recordError(result.error)
@@ -386,8 +392,7 @@ export class AppUpdaterService {
       appcastUrl: resolveSparkleAppcastUrl({
         configuredAppcastUrl: readNonEmptyString(process.env.SPARKLE_APPCAST_URL)
       }),
-      publicEdKey:
-        readNonEmptyString(process.env.SPARKLE_ED_PUBLIC_KEY) ?? SPARKLE_ED_PUBLIC_KEY_PLACEHOLDER
+      publicEdKey: readNonEmptyString(process.env.SPARKLE_ED_PUBLIC_KEY)
     })
     if (!initialized) {
       log('init failed')

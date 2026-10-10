@@ -15,8 +15,11 @@ import type {
   SessionImageGroupContent,
   SessionImagePayload,
   SessionFilePayload,
+  SessionHistoryInput,
+  SessionHistoryChange,
   SessionTurnInputConfig,
   AcpCapabilityCacheEntry,
+  SessionGoalAction,
 } from '.';
 import type {
   PreviewCandidateReportRequest,
@@ -25,6 +28,8 @@ import type {
   SessionPreviewCreateResponse,
   SessionPreviewRevokeRequest,
   SessionPreviewRevokeResponse,
+  SessionPreviewStatusRequest,
+  SessionPreviewStatusResponse,
 } from './preview';
 import type { ProjectSkillsResult } from './acp/skills';
 import type { RpcSecretPublicKey } from './rpc-secret';
@@ -43,6 +48,8 @@ export type {
   SessionPreviewEndpointReleaseResponse,
   SessionPreviewRevokeRequest,
   SessionPreviewRevokeResponse,
+  SessionPreviewStatusRequest,
+  SessionPreviewStatusResponse,
 } from './preview';
 
 // ============================================
@@ -131,6 +138,8 @@ export interface SessionCancelRequest {
   workspaceId: WorkspaceId;
   /** Target assistant turn id. This is intentionally not the userTurnId. */
   turnId: string;
+  /** When present, cancel only this native subagent; never cancel the parent turn. */
+  subagentTaskId?: string;
 }
 
 export interface SessionCancelResponse {
@@ -159,7 +168,36 @@ export interface SessionSteerResponse {
   userTurnId: string;
   /** True only after adapter activation and CLI turn-ownership commit. */
   applied: boolean;
-  disposition: 'applied' | 'unsupported' | 'no-active-turn' | 'stale-turn' | 'busy' | 'error';
+  /** The daemon owns recovery; clients must not republish a dispatch pointer. */
+  recoveryOwned?: boolean;
+  disposition:
+    | 'applied'
+    | 'unsupported'
+    | 'no-active-turn'
+    | 'stale-turn'
+    | 'busy'
+    | 'delivery-unknown'
+    /** Proven undelivered, but durable promotion failed; clients may repair dispatch. */
+    | 'promotion-failed'
+    | 'error';
+  error?: string;
+}
+
+/**
+ * Answer to a goal control request.
+ *
+ * `accepted` means the machine took responsibility for the action, including
+ * when it is queued. `disposition` says how it reached the agent, which the
+ * caller cannot otherwise see: `applied` completed out of band, `turn_started`
+ * runs inside a prompt Lody just opened, and `queued` waits for the turn that
+ * currently owns the session's prompt slot.
+ */
+export interface SessionGoalResponse {
+  type: 'session/goal_response';
+  sessionId: SessionId;
+  action: SessionGoalAction;
+  accepted: boolean;
+  disposition: 'applied' | 'turn_started' | 'queued' | 'unsupported' | 'error';
   error?: string;
 }
 
@@ -216,6 +254,14 @@ export interface MachineStatusResponse {
   success: boolean;
   resources?: MachineResourceInfo;
   lifecycle?: MachineLifecycleCapability;
+  error?: string;
+}
+
+export interface MachinePreviewControlResponse {
+  type: 'machine/preview-control_response';
+  machineId: MachineId;
+  success: boolean;
+  runtimeNonce?: string;
   error?: string;
 }
 
@@ -295,6 +341,13 @@ export interface MachineAcpCapabilitiesRefreshRequest {
   machineId: MachineId;
   workspaceId: WorkspaceId;
   configId: AgentConfigId;
+  /**
+   * Start the agent even when the persisted entry still matches the launch
+   * inputs. Reserved for requests a user or a setup workflow made on purpose
+   * (Settings refresh, post-authentication verification, provider setup); the
+   * default path answers from the cache when it can.
+   */
+  force?: boolean;
 }
 
 export interface MachineAcpCapabilitiesRefreshResponse {
@@ -447,6 +500,7 @@ export interface MachineAcpAuthenticationProgressMessage {
     | 'auth-methods'
     | 'authorization'
     | 'input-required'
+    | 'runtime-download'
     | 'output'
     | 'authenticated'
     | 'cancelled'
@@ -471,6 +525,10 @@ export interface MachineAcpAuthenticationProgressMessage {
   stream?: 'stdout' | 'stderr';
   output?: string;
   error?: string;
+  /** Managed runtime installed before the login process can spawn. */
+  runtimeName?: string;
+  runtimePhase?: 'downloading' | 'verifying' | 'extracting' | 'publishing' | 'complete';
+  runtimePercent?: number;
 }
 
 /**
@@ -702,6 +760,74 @@ export interface SessionFileSendLocalResponse {
   files?: SessionFilePayload[];
 }
 
+/**
+ * Local renderer bridge for history owned by a machine-side backend such as
+ * Roost. The payload is deliberately storage-neutral: the CLI resolves the
+ * selected SessionBackend and the renderer never receives physical segments.
+ */
+export interface SessionHistoryReadRequest {
+  type: 'session/history-read';
+  machineId: MachineId;
+  workspaceId: WorkspaceId;
+  sessionId: SessionId;
+  query: SessionHistoryReadQuery;
+}
+
+/** Bounded logical reads over the owner session's active history branch. */
+export type SessionHistoryReadQuery =
+  | { readonly kind: 'count' }
+  | { readonly kind: 'readAt'; readonly position: number }
+  | { readonly kind: 'readTurn'; readonly turnId: string }
+  | { readonly kind: 'readRange'; readonly from: number; readonly to: number }
+  | { readonly kind: 'readDirectory'; readonly from: number; readonly to: number }
+  | { readonly kind: 'readLatestPage'; readonly limit: number }
+  | { readonly kind: 'readOlderPage'; readonly cursor: string; readonly limit: number }
+  | { readonly kind: 'readAll' }
+  | { readonly kind: 'readTurnOutput'; readonly userTurnId: string };
+
+export interface SessionHistoryReadResponse {
+  type: 'session/history-read_response';
+  sessionId: SessionId;
+  success: boolean;
+  result?: unknown;
+  /** One locally durable observation, including the bounded page's bodies. */
+  historyRevision?: number;
+  historyCount?: number;
+  historyChange?: SessionHistoryChange | null;
+  pageTurns?: readonly SessionHistoryInput[];
+  error?: string;
+}
+
+export type SessionHistoryWriteOperation =
+  | 'append'
+  | 'replace'
+  | 'respond_permission'
+  | 'apply_action'
+  | 'replace_editable_tail'
+  | 'apply_import'
+  | 'copy_history';
+
+export interface SessionHistoryWriteRequest {
+  type: 'session/history-write';
+  machineId: MachineId;
+  workspaceId: WorkspaceId;
+  sessionId: SessionId;
+  operation: SessionHistoryWriteOperation;
+  payload: unknown;
+}
+
+export interface SessionHistoryWriteResponse {
+  type: 'session/history-write_response';
+  sessionId: SessionId;
+  operation: SessionHistoryWriteOperation;
+  success: boolean;
+  result?: unknown;
+  historyRevision?: number;
+  historyCount?: number;
+  historyChange?: SessionHistoryChange | null;
+  error?: string;
+}
+
 // Local CLI control (Electron -> local CLI) message subsets
 export type LocalSessionControlRequest =
   | SessionCreateRequest
@@ -720,9 +846,12 @@ export type LocalSessionControlRequest =
   | SessionImageUploadRequest
   | SessionFileUploadRequest
   | SessionFileSendLocalRequest
+  | SessionHistoryReadRequest
+  | SessionHistoryWriteRequest
   | PreviewCandidateReportRequest
   | SessionPreviewCreateRequest
-  | SessionPreviewRevokeRequest;
+  | SessionPreviewRevokeRequest
+  | SessionPreviewStatusRequest;
 
 export type LocalSessionControlResponse =
   | SessionCreateAck
@@ -731,6 +860,7 @@ export type LocalSessionControlResponse =
   | SessionChatResponse
   | SessionCancelResponse
   | SessionSteerResponse
+  | SessionGoalResponse
   | MachineStatusResponse
   | MachinePingResponse
   | MachineRestartResponse
@@ -745,9 +875,12 @@ export type LocalSessionControlResponse =
   | SessionImageUploadResponse
   | SessionFileUploadResponse
   | SessionFileSendLocalResponse
+  | SessionHistoryReadResponse
+  | SessionHistoryWriteResponse
   | PreviewCandidateReportResponse
   | SessionPreviewCreateResponse
-  | SessionPreviewRevokeResponse;
+  | SessionPreviewRevokeResponse
+  | SessionPreviewStatusResponse;
 
 export type LocalProjectFileListResult = {
   paths: string[];

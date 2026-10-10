@@ -3,6 +3,7 @@ productName: Lody OSS
 protocols:
   - name: Lody OSS Desktop
     schemes:
+      - lody
       - lody-oss
 directories:
   buildResources: build
@@ -15,10 +16,11 @@ files:
   - '!src/*'
   - '!scripts/*'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.eslintcache,eslint.config.mjs,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
   - '!**/node_modules/electron-sparkle-updater/native/vendor/**'
+  - '!**/node_modules/electron-sparkle-updater/native/sparkle-chain.tar.xz'
   - '!**/*.map'
   - '!**/*.{md,markdown,mkd}'
   - '!**/{test,tests,__tests__,testing,__mocks__,mocks,spec,examples,example,stories,storybook}/**'
@@ -33,6 +35,7 @@ files:
   # Exclude transitive runtime-unneeded utility/tooling libs.
   - '!node_modules/effect/**'
   - '!node_modules/prettier/**'
+  - '!node_modules/oxfmt/**'
   - '!node_modules/@cloudflare/workers-types/**'
   - '!node_modules/esbuild/**'
   - '!node_modules/@esbuild/**'
@@ -77,7 +80,10 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
-  entitlementsInherit: build/entitlements.mac.plist
+  # Nested binaries need one more exception than the top-level app: the embedded
+  # CLI and ACP agents run as Lody Helper and load runtime-installed native
+  # addons, which library validation rejects. See the inherit plist's comment.
+  entitlementsInherit: build/entitlements.mac.inherit.plist
   extraFiles:
     - from: node_modules/electron-sparkle-updater/native/vendor/Sparkle.framework
       to: Frameworks/Sparkle.framework

@@ -11,6 +11,11 @@ end-to-end map. The WS/DO control-plane path is DEPRECATED; do not add to it.
 
 ## Composition and transports
 
+- GitHub auth: conversation-owner personal → matching-owner machine → repo App,
+  once per source. Failures advance without a policy RPC; local context grants
+  machine eligibility. Never persist managed tokens or replay uncertain writes.
+  Checkout/LFS share the pinned helper context. Contract: [identity fallback](../../../../specs/github-identity-fallback.md).
+
 - `cloud-cli-port.ts` is the sole official-build composition root for cloud clients and
   endpoint-derived adapters. Daemon runtime modules must not construct cloud SDK
   clients or read `LODY_AUTH_URL` / `LODY_AUTH_SITE_URL` / `LODY_SERVER_URL`. The local
@@ -22,6 +27,8 @@ end-to-end map. The WS/DO control-plane path is DEPRECATED; do not add to it.
   declarations and private workspace packages are forbidden. Prime the token provider
   before reading `getGatewayBaseUrl()`, and never let runtime transports or Machine RPC
   require `LODY_LORO_STREAMS_BASE_URL` as a parallel hidden composition path.
+- `cloud-pr-association.ts`: use `authSiteUrl`, not `authBaseUrl` (internal proxy).
+  Six failures/workspace/repo, no eviction; reset on client recreation. Log once.
 - Local session control preserves every intermediate response: new clients negotiate
   NDJSON, legacy clients keep the buffered JSON envelope. `MachineRuntime` may collect
   responses for completion, but must also forward each to the streaming observer as it
@@ -38,6 +45,9 @@ end-to-end map. The WS/DO control-plane path is DEPRECATED; do not add to it.
   reintroduce a proxy-authoring path (invariants in `specs/local-first-two-plane.md`).
   Local dispatch triggers off the renderer-authored `latestUserMsgId` doc-meta write
   plus the local Machine RPC fast path.
+
+- INVARIANT: agent PATH merges keep the session's `gh` shim dir first
+  ([note](../../../../.agents/notes/implemented/bug-fix/2026-09-26-gh-shim-broker-and-path.md)).
 
 ## Local Loro data plane
 
@@ -60,14 +70,12 @@ never pushed to renderers as local room health.
   anything looks like pressure; re-check with a short delay before failing a turn; keep
   eviction bounded per call. The threshold is a safety MARGIN, never "what a turn
   needs". [Per-OS signals](../../../../.agents/docs/cli-lib-memory-pressure.md).
-- **Session file attachments** (spec: `specs/session-files.md`): read the
-  [lifecycle rules](../../../../.agents/docs/cli-lib-session-files.md) before changing
-  upload, dispatch materialization, or backfill. Dispatch sends ACP `resource_link`
-  blocks with `file://` URIs; never degrade this to text-only paths. Backfill commits
-  are gated by an authorization generation plus an AbortController owned by
-  `MessageHandler`, so `disableRemoteBackfill` (offline/revoke) aborts the in-flight
-  upload and supersedes started tasks (S5/D10). Accept agent `resource_link file://...`
-  output only inside the session workspace.
+- **Session attachments**: before changing preparation, transfer, materialization,
+  or backfill, read the [lifecycle rules](../../../../.agents/docs/cli-lib-session-files.md).
+  CLI/MCP input preparation must finish before history/dispatch; recovery uses frozen
+  references, never source paths. [Input contract](../../../../specs/cli-session-attachments.md).
+  Keep ACP `resource_link` file URIs, workspace-contained agent output, and
+  MessageHandler-owned authorization-generation/AbortController backfill fencing.
 - [acp/AGENTS.md](acp/AGENTS.md) specifies ACP buffering/flush in `message-handler.ts`,
   turn-evidence persistence, shutdown ordering, the non-expiring late-ACP target in
   `session-transient-store.ts`, and the `awaitTurnHistoryGate` requirement for
@@ -76,11 +84,21 @@ never pushed to renderers as local room health.
 
 ## Projects, providers, tasks
 
-- Builtin Codex local-project history import is read-only: require
+- Builtin Codex/DeepSeek local-project history import is read-only: require
   `_meta.lody.sessionHistory` v1 and call the Core-defined history method; never fall
   back to `loadSession`, which resumes the thread. Publish an imported Session only
   after history and its cursor are durable; legacy `metadata_only` shells stay
   selectable so a later import finishes hydration.
+- Imported history keeps source hashes/ids separate from its stored-content baseline.
+  Bind the baseline to the doc cursor, not metadata; compare existing content exactly,
+  never sanitize it to hide edits. Write history and capture its baseline without an
+  async gap, before publishing meta. Legacy history without a baseline is not migrated.
+- History import validates the selected Provider machine/id/type; never fall back
+  from a missing selection. Legacy requests use the sole same-type Provider. Catalogs
+  are Provider-scoped; replay/import keys stay stable. Bind an earlier unbound import only when the selected Provider
+  lists its source; never replace a binding or merge another account's native ID.
+  Refresh loads through the import's own binding. Every import write records the
+  load-reported selection on the last imported user turn via `applyAcpRuntimeConfigPatch`.
 - Removing a local project archives every unarchived Session for that machine/project
   before deleting the project row, found through the existence and metadata indexes
   rather than by opening every Session document; a failed archive keeps the delete
@@ -95,20 +113,5 @@ never pushed to renderers as local room health.
   single publish commit, cancellation, when the queue may start in cloud versus OSS
   local mode, and the rule that a setup row never carries authorization URLs, codes,
   tokens, or raw provider output.
-- `task-doc.ts`: only creation passes `initialState` to the Mirror
-  (`seedEmptyDocument`); every other path must treat an absent document as absent, or
-  `readTask` answers with a placeholder meta and TASK_NOT_FOUND stops existing. Each
-  write republishes the index row from the document's post-write state. Persisted Task
-  documents get a repo `e/task-<id>` existence entry and no duplicated `m/*` business
-  meta. **Never write the agent field here**: it is the automation consent, so
-  `applyAgentTaskUpdate` covers every other scalar without an `agent` branch. Anything
-  needing every visible Task uses `listWorkspaceTaskIds`, which merges existence with
-  index rows, repairs a missing projection, and never revives an index tombstone.
-  `status`/`ownerId`/`projects` writes here can make a task automation-eligible and
-  start a session. Contract: specs/tasks.md.
-- `task-image-upload.ts` reads local images with `O_NOFOLLOW`.
-- `task-automation/`: an agent counts as busy while its task is **in progress**, not
-  merely while being dispatched, or one agent gets two concurrent sessions in one
-  working copy.
 - **A `file-preview/` preview must never activate Code Collab**: no workspace watch, no
   All Changes recompute, no Flock publish.

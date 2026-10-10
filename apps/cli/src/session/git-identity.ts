@@ -1,6 +1,7 @@
-import { execFileSync } from 'node:child_process';
-
+import { toShared } from '@/platform/process-options';
 import { isMissingEmail } from '@lody/shared';
+
+import { runCommandTextSyncLegacy } from '@lody/shared/node/process';
 
 export const DEFAULT_AI_GIT_AUTHOR_NAME = 'LodyAI';
 export const DEFAULT_AI_GIT_AUTHOR_EMAIL = 'agent@lody.ai';
@@ -13,6 +14,17 @@ export type GitIdentity = {
 type PartialGitIdentity = {
   name?: string | null;
   email?: string | null;
+};
+
+export type GitIdentityResolutionOptions = {
+  /** Only machine-owner turns may read and prefer the machine's Git identity. */
+  preferMachineIdentity: boolean;
+  /**
+   * The requester chose "Act as you" for GitHub. Their Lody identity then wins
+   * over the machine's Git configuration, matching the credential precedence.
+   */
+  personalIdentityEnabled?: boolean;
+  machineIdentity?: PartialGitIdentity;
 };
 
 const trimNonEmpty = (value?: string | null): string | undefined => {
@@ -53,54 +65,65 @@ const normalizeName = (name: string | undefined, email: string): string => {
   return email;
 };
 
-const readGitConfig = (key: 'user.name' | 'user.email', cwd?: string): string | undefined => {
+/** `git config` blocks the caller's event loop, so a wedged git cannot stall it for long. */
+const GIT_CONFIG_TIMEOUT_MS = 5_000;
+
+// Only global identity is a host default; shared bare-repo config belongs to agents.
+const readGitConfig = (key: 'user.name' | 'user.email'): string | undefined => {
   try {
-    const output = execFileSync('git', ['config', key], {
-      cwd,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      windowsHide: true,
-    });
-    return trimNonEmpty(output);
+    const { stdout } = runCommandTextSyncLegacy(
+      {
+        command: 'git',
+        args: ['config', '--global', key],
+        timeout: GIT_CONFIG_TIMEOUT_MS,
+        check: 'exit-0',
+      },
+      toShared()
+    );
+    return trimNonEmpty(stdout);
   } catch {
     return undefined;
   }
 };
 
-export const readHostDefaultGitIdentity = (cwd?: string): PartialGitIdentity => ({
+export const readHostDefaultGitIdentity = (): PartialGitIdentity => ({
   name:
     trimNonEmpty(process.env.GIT_AUTHOR_NAME) ??
     trimNonEmpty(process.env.GIT_COMMITTER_NAME) ??
-    readGitConfig('user.name', cwd),
+    readGitConfig('user.name'),
   email:
     trimNonEmpty(process.env.GIT_AUTHOR_EMAIL) ??
     trimNonEmpty(process.env.GIT_COMMITTER_EMAIL) ??
-    readGitConfig('user.email', cwd),
+    readGitConfig('user.email'),
 });
 
 export const resolveSessionGitIdentity = (
   requested: PartialGitIdentity,
-  defaultIdentity?: PartialGitIdentity,
-  cwd?: string
+  options: GitIdentityResolutionOptions
 ): GitIdentity => {
-  const resolvedDefaultIdentity = defaultIdentity ?? readHostDefaultGitIdentity(cwd);
-  // Missing-email addresses are auth placeholders, not commit identities.
-  // Rejected: exporting them as GIT_AUTHOR_EMAIL masks the user's repo/global
-  // git config because Git gives environment variables higher priority.
+  // Missing-email addresses are auth placeholders, not commit identities. A
+  // non-owner must never fall back to the machine owner's Git configuration.
   const requestedEmail = trimNonEmpty(requested.email);
-  if (isUsableEmail(requestedEmail)) {
-    return {
-      name: normalizeName(trimNonEmpty(requested.name), requestedEmail),
-      email: requestedEmail,
-    };
+  const requestedIdentity = isUsableEmail(requestedEmail)
+    ? { name: normalizeName(trimNonEmpty(requested.name), requestedEmail), email: requestedEmail }
+    : undefined;
+  if (options.personalIdentityEnabled && requestedIdentity) {
+    return requestedIdentity;
   }
 
-  const defaultEmail = trimNonEmpty(resolvedDefaultIdentity.email);
-  if (isUsableEmail(defaultEmail)) {
-    return {
-      name: normalizeName(trimNonEmpty(resolvedDefaultIdentity.name), defaultEmail),
-      email: defaultEmail,
-    };
+  if (options.preferMachineIdentity) {
+    const machineIdentity = options.machineIdentity ?? readHostDefaultGitIdentity();
+    const machineEmail = trimNonEmpty(machineIdentity.email);
+    if (isUsableEmail(machineEmail)) {
+      return {
+        name: normalizeName(trimNonEmpty(machineIdentity.name), machineEmail),
+        email: machineEmail,
+      };
+    }
+  }
+
+  if (requestedIdentity) {
+    return requestedIdentity;
   }
 
   return {

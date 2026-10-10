@@ -1,20 +1,24 @@
+import { toShared } from '@/platform/process-options';
+import { GITHUB_CREDENTIAL_ENV_KEYS } from '@/lib/gh-token-env';
 import { RepoId, SessionId } from '@lody/shared';
 import { resolveLocalProjectBranchAtRootPath } from '@lody/shared/node/local-project';
-import spawn from 'cross-spawn';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Logger } from '@/utils/logger';
 import { withFileLock } from '@/utils/file-lock';
 import { redactUrlAuth } from '@/utils/github';
-import {
-  buildCredentialHelperValueForHost,
-  ensureCredentialHelperScript,
-  getCredentialHelperHostPath,
-} from '@/lib/git-credential-helper-script';
+import { getCredentialHelperHostPath } from '@/lib/git-credential-helper-script';
 import { formatErrorMessage } from '@/utils/format-error';
-import { getLodyDataDir } from '@lody/shared/node/installation-profile';
+import { runCommandTextLegacy } from '@lody/shared/node/process';
+
+import { CommandTimedOut } from '@lody/shared/node/process';
+import type { NodeProcessApi } from '@lody/shared/node/process';
+import { ensureLodyDataDir, getLodyDataDir } from '@lody/shared/node/installation-profile';
 import { mapGitSpawnError } from './git-process-error';
-import { resolveAvailableBranchName } from './branch-name-allocation';
+import {
+  getAllocatedSessionBranchName,
+  resolveAvailableBranchName,
+} from './branch-name-allocation';
 
 const SAFE_SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const LODY_LOCAL_BRANCH_PREFIX = 'lody/';
@@ -90,6 +94,8 @@ export interface WorktreeManagerConfig {
   source?: WorktreeManagerSource;
   repoUrl?: string;
   logger: Logger;
+  /** OS process seam of the process layer; tests substitute a fake. */
+  nodeProcess?: NodeProcessApi;
 }
 
 type RepoFetchMode = 'skip' | 'best-effort' | 'required';
@@ -109,21 +115,50 @@ type RepoFetchMode = 'skip' | 'best-effort' | 'required';
  * caches by `repoId` alone, so two workspaces sharing a repo share one instance.
  */
 export type GitCredentialBrokerAuth = {
+  /** Host-derived ownership; absent is not permission to inherit machine tokens. */
+  allowLocalAuth?: boolean;
   workspaceId: string;
   url: string;
   token: string;
+  contextToken: string;
+  stateFilePath?: string;
+  /** Prepared per-call routing, never shared on the cached WorktreeManager. */
+  transportEnv: Record<string, string>;
 };
 
 const buildBrokerAuthEnv = (auth: GitCredentialBrokerAuth | undefined): NodeJS.ProcessEnv =>
   auth
     ? {
+        ...auth.transportEnv,
+        ...(!auth.allowLocalAuth
+          ? Object.fromEntries(
+              [
+                ...GITHUB_CREDENTIAL_ENV_KEYS,
+                ...Object.keys(process.env).filter((key) =>
+                  GITHUB_CREDENTIAL_ENV_KEYS.includes(key.toUpperCase())
+                ),
+              ].map((key) => [key, undefined])
+            )
+          : {}),
         LODY_GIT_CRED_BROKER_URL: auth.url,
         LODY_GIT_CRED_BROKER_TOKEN: auth.token,
+        LODY_GIT_CRED_CONTEXT_TOKEN: auth.contextToken,
+        LODY_GIT_CRED_CONTEXT_FILE: undefined,
+        LODY_GIT_CRED_BROKER_STATE_FILE: auth.stateFilePath,
+        LODY_GIT_OPERATION: 'read',
       }
-    : {};
+    : {
+        LODY_GIT_CRED_BROKER_URL: undefined,
+        LODY_GIT_CRED_BROKER_TOKEN: undefined,
+        LODY_GIT_CRED_CONTEXT_TOKEN: undefined,
+        LODY_GIT_CRED_CONTEXT_FILE: undefined,
+        LODY_GIT_CRED_BROKER_STATE_FILE: undefined,
+      };
 
 export type RemoveWorktreeOptions = {
   baseBranchName?: string;
+  /** Keep the session branch; only the worktree directory goes away. */
+  preserveBranch?: boolean;
 };
 
 const DEFAULT_ARCHIVE_BACKUP_AUTHOR_NAME = 'Lody Archive';
@@ -133,6 +168,10 @@ const DEFAULT_ARCHIVE_BACKUP_AUTHOR_EMAIL = 'archive@lody.ai';
 // staleness window (30 min) so a stalled git process releases the repo lock
 // by failing instead of looking like a live holder.
 const GIT_OPERATION_TIMEOUT_MS = 10 * 60 * 1000;
+// Git output used to be collected without a ceiling. `status --porcelain` or
+// `for-each-ref` in a large repository can exceed the process layer's 1 MiB
+// default, so git keeps a ceiling that only a runaway command reaches.
+const GIT_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 /**
  * Per-repo file lock for git operations (cross-process safe)
@@ -208,11 +247,11 @@ const isTerminalPromptsDisabledErrorMessage = (message: string): boolean => {
 // may block indefinitely in non-interactive clone/fetch paths.
 export const buildGitHubCredentialConfigArgs = (helperValue: string): string[] => [
   '-c',
-  'credential.helper=',
+  'credential.https://github.com.helper=',
   '-c',
-  `credential.helper=${helperValue}`,
+  `credential.https://github.com.helper=${helperValue}`,
   '-c',
-  'credential.useHttpPath=true',
+  'credential.https://github.com.useHttpPath=true',
 ];
 
 type HelperDebugEntry = {
@@ -258,6 +297,7 @@ export class WorktreeManager {
   private source: WorktreeManagerSource;
   private repoUrl?: string;
   private readonly logger: Logger;
+  private readonly nodeProcess?: NodeProcessApi;
 
   /** Base directory on host: <active installation data root>/repos */
   private readonly baseDir: string;
@@ -275,6 +315,7 @@ export class WorktreeManager {
     this.source = config.source ?? { kind: 'github', repoUrl: config.repoUrl };
     this.repoUrl = this.source.kind === 'github' ? this.source.repoUrl : undefined;
     this.logger = config.logger;
+    this.nodeProcess = config.nodeProcess;
 
     this.baseDir = path.join(getLodyDataDir(), 'repos');
     this.repoDir = path.join(this.baseDir, this.repoId);
@@ -308,96 +349,44 @@ export class WorktreeManager {
     }
   }
 
-  private runGit(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
+  private async runGit(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<string> {
     const mergedEnv: NodeJS.ProcessEnv = {
       ...process.env,
       ...env,
       GIT_TERMINAL_PROMPT: '0',
     };
     this.logger.debug(`[${this.repoId}] Running git ${args.join(' ')}`);
-    return new Promise<string>((resolve, reject) => {
-      let child: ReturnType<typeof spawn>;
-      try {
-        child = spawn('git', args, {
-          cwd,
-          env: mergedEnv,
-          stdio: ['ignore', 'pipe', 'pipe'],
-          windowsHide: true,
-        });
-      } catch (error) {
-        reject(mapGitSpawnError(error, cwd));
-        return;
-      }
-
-      let stdout = '';
-      let stderr = '';
-      let timedOut = false;
-
+    let result: { code: number | null; stdout: string; stderr: string };
+    try {
       // Git has no deadline of its own for stalled network operations; without this a
       // hung fetch/clone would pin the per-repo worktree lock until the file-lock
-      // staleness window frees it.
-      const timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        child.kill('SIGKILL');
-      }, GIT_OPERATION_TIMEOUT_MS);
-      timeoutTimer.unref();
-
-      // Use setEncoding to handle UTF-8 multibyte boundaries correctly
-      // (e.g., non-ASCII branch names, file paths, user.name)
-      child.stdout?.setEncoding('utf8');
-      child.stderr?.setEncoding('utf8');
-
-      child.stdout?.on('data', (chunk: string) => {
-        stdout += chunk;
-      });
-
-      child.stderr?.on('data', (chunk: string) => {
-        stderr += chunk;
-      });
-
-      child.on('error', (error) => {
-        clearTimeout(timeoutTimer);
-        reject(mapGitSpawnError(error, cwd));
-      });
-
-      child.on('close', (code) => {
-        clearTimeout(timeoutTimer);
-        if (timedOut) {
-          reject(new Error(`git ${args.join(' ')} timed out after ${GIT_OPERATION_TIMEOUT_MS}ms`));
-          return;
-        }
-        if (code !== 0) {
-          const details = (stderr || stdout || '').trim();
-          reject(new Error(details ? details : `git exited with code ${code}`));
-          return;
-        }
-        resolve(stdout.trim());
-      });
-    });
-  }
-
-  private buildGitAuthArgs(): string[] {
-    if (!this.repoUrl) {
-      return [];
-    }
-
-    // Only enable the GitHub credential helper for GitHub HTTPS remotes.
-    // For non-GitHub/local remotes, avoid touching installation-owned credential state.
-    try {
-      const url = new URL(this.repoUrl);
-      const host = normalizeGitHubHost(url.hostname.toLowerCase());
-      const isGitHubHost = host === 'github.com';
-      const isHttps = url.protocol === 'https:';
-      if (!isGitHubHost || !isHttps) {
-        return [];
+      // staleness window frees it. The timeout ends git's whole process tree
+      // (remote helpers, credential helpers), not just git itself.
+      result = await runCommandTextLegacy(
+        {
+          command: 'git',
+          args,
+          cwd,
+          env: mergedEnv,
+          timeout: GIT_OPERATION_TIMEOUT_MS,
+          maxOutputBytes: GIT_MAX_OUTPUT_BYTES,
+          check: 'none',
+        },
+        toShared({ nodeProcess: this.nodeProcess })
+      );
+    } catch (error) {
+      if (error instanceof CommandTimedOut) {
+        throw new Error(`git ${args.join(' ')} timed out after ${GIT_OPERATION_TIMEOUT_MS}ms`, {
+          cause: error,
+        });
       }
-    } catch {
-      return [];
+      throw mapGitSpawnError(error, cwd);
     }
-
-    ensureCredentialHelperScript(this.repoId);
-    const helperValue = buildCredentialHelperValueForHost(this.repoId);
-    return buildGitHubCredentialConfigArgs(helperValue);
+    if (result.code !== 0) {
+      const details = (result.stderr || result.stdout || '').trim();
+      throw new Error(details ? details : `git exited with code ${result.code}`);
+    }
+    return result.stdout.trim();
   }
 
   private isLocalSharedSource(): boolean {
@@ -410,6 +399,13 @@ export class WorktreeManager {
 
   private async ensureLocalSharedRepoLocked(): Promise<void> {
     if (this.source.kind !== 'local-shared') return;
+
+    // A local-shared repo keeps its git data in the user's own project, but its
+    // worktrees still live under the installation data directory — the same
+    // `fs.mkdirSync` the bare branch of `ensureRepoLocked` performs. Without it the
+    // only thing that would create the directory is `git worktree add`, which reports
+    // the failure as a path git was handed rather than as Lody's own data root.
+    fs.mkdirSync(this.worktreesDir, { recursive: true });
 
     const originalRootPath = this.source.originalRootPath;
     let stat: fs.Stats;
@@ -516,7 +512,10 @@ export class WorktreeManager {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${brokerToken}`,
           },
-          body: JSON.stringify({ repoFullName: remote.repoFullName }),
+          body: JSON.stringify({
+            repoFullName: remote.repoFullName,
+            contextToken: options.brokerAuth?.contextToken,
+          }),
           signal: controller.signal,
         });
 
@@ -600,39 +599,19 @@ export class WorktreeManager {
     env: NodeJS.ProcessEnv;
   }): Promise<{ exitCode: number | null; returnedCredentials: boolean; stderrNonEmpty: boolean }> {
     const input = `protocol=https\nhost=${options.host}\npath=/${options.repoFullName}.git\n\n`;
-    return await new Promise((resolve, reject) => {
-      const child = spawn('node', [options.helperPath, 'get'], {
+    const { code, stdout, stderr } = await runCommandTextLegacy(
+      {
+        command: 'node',
+        args: [options.helperPath, 'get'],
         env: options.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        windowsHide: true,
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      // Use setEncoding to handle UTF-8 multibyte boundaries correctly
-      child.stdout?.setEncoding('utf8');
-      child.stderr?.setEncoding('utf8');
-
-      child.stdout?.on('data', (chunk: string) => {
-        stdout += chunk;
-      });
-      child.stderr?.on('data', (chunk: string) => {
-        stderr += chunk;
-      });
-
-      child.on('error', (error) => reject(error));
-      child.on('close', (code) => {
-        const returnedCredentials =
-          stdout.includes('username=') && stdout.includes('\npassword=') && stdout.includes('\n\n');
-        resolve({ exitCode: code, returnedCredentials, stderrNonEmpty: stderr.trim().length > 0 });
-      });
-
-      if (child.stdin) {
-        child.stdin.write(input);
-        child.stdin.end();
-      }
-    });
+        input,
+        check: 'none',
+      },
+      toShared({ nodeProcess: this.nodeProcess })
+    );
+    const returnedCredentials =
+      stdout.includes('username=') && stdout.includes('\npassword=') && stdout.includes('\n\n');
+    return { exitCode: code, returnedCredentials, stderrNonEmpty: stderr.trim().length > 0 };
   }
 
   /**
@@ -741,6 +720,10 @@ export class WorktreeManager {
     fetchMode: RepoFetchMode = 'best-effort',
     brokerAuth?: GitCredentialBrokerAuth
   ): Promise<void> {
+    // Both branches below build every path they hand git out of this root, so prove it
+    // is reachable once, here, and report it as Lody's own directory when it is not.
+    ensureLodyDataDir();
+
     if (this.source.kind === 'local-shared') {
       await this.ensureLocalSharedRepoLocked();
       return;
@@ -766,7 +749,7 @@ export class WorktreeManager {
       const cloneUrl = this.repoUrl;
       try {
         await this.runGit(
-          [...this.buildGitAuthArgs(), 'clone', '--bare', cloneUrl, this.bareGitDir],
+          ['clone', '--bare', cloneUrl, this.bareGitDir],
           this.baseDir,
           buildBrokerAuthEnv(brokerAuth)
         );
@@ -802,7 +785,7 @@ export class WorktreeManager {
     this.logger.debug(`[${this.repoId}] Fetching latest changes from origin (mode=${fetchMode})`);
     try {
       await this.runGit(
-        [...this.buildGitAuthArgs(), 'fetch', 'origin', '--prune'],
+        ['fetch', 'origin', '--prune'],
         this.bareGitDir,
         buildBrokerAuthEnv(brokerAuth)
       );
@@ -974,42 +957,42 @@ export class WorktreeManager {
    * - `origin/master`
    * - `origin/HEAD` (symbolic ref if configured)
    */
-  private async resolvePrimaryRemoteBaseRef(): Promise<string | null> {
+  private async resolvePrimaryRemoteBaseRef(env?: NodeJS.ProcessEnv): Promise<string | null> {
     if (!this.repoUrl) {
       return null;
     }
 
-    if (await this.hasCommitish('origin/main')) {
+    if (await this.hasCommitish('origin/main', env)) {
       return 'origin/main';
     }
 
-    if (await this.hasCommitish('origin/master')) {
+    if (await this.hasCommitish('origin/master', env)) {
       return 'origin/master';
     }
 
     const originHead = await this.resolveDefaultRemoteRef();
-    if (originHead && (await this.hasCommitish(originHead))) {
+    if (originHead && (await this.hasCommitish(originHead, env))) {
       return originHead;
     }
 
     return null;
   }
 
-  private async hasCommitish(rev: string): Promise<boolean> {
+  private async hasCommitish(rev: string, env?: NodeJS.ProcessEnv): Promise<boolean> {
     try {
-      await this.runGit(['rev-parse', '--verify', `${rev}^{commit}`], this.getGitAdminCwd());
+      await this.runGit(['rev-parse', '--verify', `${rev}^{commit}`], this.getGitAdminCwd(), env);
       return true;
     } catch {
       return false;
     }
   }
 
-  private async resolveBaseRef(preferredBranch?: string): Promise<string> {
+  private async resolveBaseRef(preferredBranch?: string, env?: NodeJS.ProcessEnv): Promise<string> {
     if (this.source.kind === 'local-shared') {
       const preferred = preferredBranch?.trim();
       if (preferred) {
         if (preferred.startsWith('refs/heads/') || preferred.startsWith('refs/remotes/')) {
-          if (await this.hasCommitish(preferred)) return preferred;
+          if (await this.hasCommitish(preferred, env)) return preferred;
           throw new Error(`Local project branch not found: ${preferred}`);
         }
         // `preferred` can still be a pre-selector bare name, which git itself
@@ -1020,7 +1003,7 @@ export class WorktreeManager {
           })
         ).refName;
       }
-      if (await this.hasCommitish('HEAD')) return 'HEAD';
+      if (await this.hasCommitish('HEAD', env)) return 'HEAD';
       throw new Error(`[${this.repoId}] Local repository has no commit to use as a worktree base`);
     }
 
@@ -1032,7 +1015,7 @@ export class WorktreeManager {
       }
       candidates.push(preferredBranch);
     } else if (this.repoUrl) {
-      const primary = await this.resolvePrimaryRemoteBaseRef();
+      const primary = await this.resolvePrimaryRemoteBaseRef(env);
       if (primary) {
         candidates.push(primary);
       }
@@ -1052,7 +1035,7 @@ export class WorktreeManager {
     candidates.push('main', 'master');
 
     for (const candidate of candidates) {
-      if (await this.hasCommitish(candidate)) {
+      if (await this.hasCommitish(candidate, env)) {
         return candidate;
       }
     }
@@ -1096,14 +1079,7 @@ export class WorktreeManager {
   }
 
   private getDefaultSessionBranchName(sessionId: SessionId): string {
-    if (this.isLocalSharedSource()) {
-      const shortId = sessionId
-        .slice(0, 12)
-        .replace(/[^A-Za-z0-9_-]/g, '')
-        .slice(0, 12);
-      return `${LODY_LOCAL_BRANCH_PREFIX}${shortId || sessionId.slice(0, 8)}`;
-    }
-    return `session/${sessionId.slice(0, 8)}`;
+    return getAllocatedSessionBranchName(sessionId, this.isLocalSharedSource());
   }
 
   private isLodyManagedLocalBranch(branchName: string): boolean {
@@ -1198,9 +1174,13 @@ export class WorktreeManager {
     );
   }
 
-  private async runWorktreeAddWithPruneRetry(args: string[], cwd: string): Promise<void> {
+  private async runWorktreeAddWithPruneRetry(
+    args: string[],
+    cwd: string,
+    env: NodeJS.ProcessEnv
+  ): Promise<void> {
     try {
-      await this.runGit(args, cwd);
+      await this.runGit(args, cwd, env);
     } catch (error) {
       if (!this.isLikelyStaleWorktreeError(error)) {
         throw error;
@@ -1215,7 +1195,7 @@ export class WorktreeManager {
           `[${this.repoId}] git worktree prune failed before retry: ${formatErrorMessage(pruneError)}`
         );
       }
-      await this.runGit(args, cwd);
+      await this.runGit(args, cwd, env);
     }
   }
 
@@ -1231,12 +1211,13 @@ export class WorktreeManager {
     sessionId: SessionId,
     worktreePath: string,
     startPoint: string,
-    cwd: string
+    cwd: string,
+    env: NodeJS.ProcessEnv
   ): Promise<void> {
     const branchName = await this.resolveAvailableSessionBranchName(sessionId);
     const createArgs = ['worktree', 'add', '-b', branchName, worktreePath, startPoint];
     try {
-      await this.runGit(createArgs, cwd);
+      await this.runGit(createArgs, cwd, env);
       return;
     } catch (error) {
       if (!this.isLikelyStaleWorktreeError(error)) {
@@ -1259,13 +1240,14 @@ export class WorktreeManager {
       // conflict must never take this path.
       if (!this.isBranchNameConflictError(error) && (await this.hasLocalBranch(branchName))) {
         const [branchHead, startPointHead] = await Promise.all([
-          this.runGit(['rev-parse', '--verify', `${branchName}^{commit}`], cwd),
-          this.runGit(['rev-parse', '--verify', `${startPoint}^{commit}`], cwd),
+          this.runGit(['rev-parse', '--verify', `${branchName}^{commit}`], cwd, env),
+          this.runGit(['rev-parse', '--verify', `${startPoint}^{commit}`], cwd, env),
         ]);
         if (branchHead === startPointHead) {
           await this.runWorktreeAddWithPruneRetry(
             ['worktree', 'add', worktreePath, branchName],
-            cwd
+            cwd,
+            env
           );
           return;
         }
@@ -1274,7 +1256,11 @@ export class WorktreeManager {
       // The branch was not created by the failed command (or another writer won
       // its name). Allocate a new suffix instead of attaching to that ref.
       const retryBranchName = await this.resolveAvailableSessionBranchName(sessionId);
-      await this.runGit(['worktree', 'add', '-b', retryBranchName, worktreePath, startPoint], cwd);
+      await this.runGit(
+        ['worktree', 'add', '-b', retryBranchName, worktreePath, startPoint],
+        cwd,
+        env
+      );
     }
   }
 
@@ -1302,7 +1288,8 @@ export class WorktreeManager {
     sessionId: SessionId,
     baseBranch?: string,
     restoreBranchName?: string,
-    exactStartPoint?: string
+    exactStartPoint?: string,
+    brokerAuth?: GitCredentialBrokerAuth
   ): Promise<WorktreeInfo> {
     return withRepoLock(this.repoId, async () => {
       assertSafeSessionId(sessionId);
@@ -1325,6 +1312,13 @@ export class WorktreeManager {
         return info;
       }
 
+      // A lost cache must be cloned before validating a persisted restore branch.
+      // Existing caches are fetched only once below; first clones also need that
+      // fetch to populate origin/* after installing the bare-clone refspec.
+      if (!this.isLocalSharedSource() && !fs.existsSync(this.bareGitDir)) {
+        await this.ensureRepoLocked('skip', brokerAuth);
+      }
+      const gitEnv = buildBrokerAuthEnv(brokerAuth);
       const existingBranchName = await this.resolveRestoreBranchName(restoreBranchName);
 
       // Cutting a fresh branch needs up-to-date origin refs for its base, so the
@@ -1332,14 +1326,16 @@ export class WorktreeManager {
       // needs local refs; fetch best-effort so an unreachable origin (offline,
       // dead proxy) does not block the restore.
       await this.ensureRepoLocked(
-        this.repoUrl ? (existingBranchName ? 'best-effort' : 'required') : 'skip'
+        this.repoUrl ? (existingBranchName ? 'best-effort' : 'required') : 'skip',
+        brokerAuth
       );
 
       if (existingBranchName) {
         if (exactStartPoint) {
           const existingHead = await this.runGit(
             ['rev-parse', '--verify', `${existingBranchName}^{commit}`],
-            gitAdminCwd
+            gitAdminCwd,
+            gitEnv
           );
           if (existingHead !== exactStartPoint) {
             throw new Error(
@@ -1353,13 +1349,15 @@ export class WorktreeManager {
         );
         await this.runWorktreeAddWithPruneRetry(
           ['worktree', 'add', worktreePath, existingBranchName],
-          gitAdminCwd
+          gitAdminCwd,
+          gitEnv
         );
       } else {
         if (exactStartPoint) {
           const verifiedStartPoint = await this.runGit(
             ['rev-parse', '--verify', `${exactStartPoint}^{commit}`],
-            gitAdminCwd
+            gitAdminCwd,
+            gitEnv
           );
           if (verifiedStartPoint !== exactStartPoint) {
             throw new Error(
@@ -1373,10 +1371,11 @@ export class WorktreeManager {
             sessionId,
             worktreePath,
             exactStartPoint,
-            gitAdminCwd
+            gitAdminCwd,
+            gitEnv
           );
         } else {
-          const resolvedBase = await this.resolveBaseRef(baseBranch);
+          const resolvedBase = await this.resolveBaseRef(baseBranch, gitEnv);
           this.logger.debug(
             `[${this.repoId}] Creating new worktree (sessionId=${sessionId} base=${resolvedBase}): ${worktreePath}`
           );
@@ -1384,7 +1383,8 @@ export class WorktreeManager {
             sessionId,
             worktreePath,
             resolvedBase,
-            gitAdminCwd
+            gitAdminCwd,
+            gitEnv
           );
         }
       }
@@ -1470,7 +1470,7 @@ export class WorktreeManager {
         deleteBranch: true,
         branchName,
       });
-      if (resolvedBranchName) {
+      if (resolvedBranchName && options?.preserveBranch !== true) {
         if (this.shouldDeleteRemovedBranch(resolvedBranchName, options)) {
           await this.cleanupBranch(resolvedBranchName);
         }

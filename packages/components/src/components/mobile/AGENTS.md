@@ -37,9 +37,8 @@ before touching gestures.
 
 ## Home and chat lists
 
-- Inbox renders only on `showInboxTab`, Tasks only on `showTasksTab`
-  (`../tasks/AGENTS.md`). Keep the chat/projects group mounted-but-hidden so
-  pull-to-refresh and scroll position survive tab round-trips.
+- Inbox renders only on `showInboxTab`. Keep the chat/projects group
+  mounted so pull-to-refresh and scroll position survive tab round-trips.
   `../chat/chat-landing.tsx` owns the default home tab; the workspace stack only
   keeps `/chat` base context mounted under drawers.
 - The sticky home header is ONE chrome row (workspace | search |
@@ -74,7 +73,7 @@ before touching gestures.
   live status via ONE derived atom over `sessionLiveStatusAtomFamily` (never a
   loop of `useAtomValue`) and unread via `lastMessageAt > lastReadAt`.
 - Conversation rows follow the shared tab order (main first, NOT time) with no
-  close/check affordance; `requestPermission` is the warning-tone hand
+  check affordance; close buttons use the shared tab-close action. `requestPermission` is the warning-tone hand
   outranking the spinner; the header tab badge stays two-state; `Files` leads
   the Viewers card unconditionally. The menu sheet stays flat, and its Owner row
   (multi-member only, writes `SessionMeta.userId`) is a DISCLOSURE, not a list.
@@ -91,11 +90,10 @@ before touching gestures.
 
 ## Run config, pickers, and sheets
 
-- ONE control (`mobile-session-run-config.tsx`) serves both the in-session
-  composer and the new-chat sheet: it takes `agentSelection` (no SessionMeta
-  dependency) plus model/mode/config props. Explicit permission selectors
-  outrank legacy ACP modes, and closing the sheet must not restore focus to the
-  composer.
+- `mobile-session-run-config.tsx` serves both composers using `agentSelection`
+  (no SessionMeta) and model/mode/config props. Explicit permissions outrank
+  legacy ACP modes; closing the sheet must not focus the composer.
+- Provider picker IDs use `run-config-option:`; built-in rows use `run-config-`.
 - The Role row renders whenever the caller passes `agentRoles` — both composers
   do (`../sessions/AGENTS.md`) — even with nothing to list, reading `None`. It
   sits above Agent as an inline picker ordered `None`, Roles by emoji + name,
@@ -127,3 +125,5 @@ before touching gestures.
   in `from`. Nested Back returns to the settings list; top-level Back restores
   that validated source path (including the Projects Local/GitHub query),
   falling back to context-free Chat only on direct entry.
+- Keyboard shortcuts is desktop-only: the mobile catalog hides `desktopOnly`
+  tabs, and its route redirects back to the settings list.

@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import os from 'node:os';
 import path from 'node:path';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { AgentConfigCliTypeSchema, ProjectRefSchema, type SessionId } from '@lody/shared';
+import { getLodyDataDir } from '@lody/shared/node/installation-profile';
 
 /**
  * Machine-local discovery index for in-flight worktree-fork operations.
@@ -84,6 +84,8 @@ const SessionForkOperationMarkerSchema = z
     createdAt: z.string().min(1),
     /** Target session title, for republishing meta after a mid-commit crash. */
     title: z.string().min(1),
+    /** History backend selected by the source session, for crash-safe target repair. */
+    historyBackend: z.enum(['loro', 'roost']).optional(),
     /**
      * The worktree's real branch name, recorded by the saga once git answers.
      * Absent on markers whose saga never reached the commit block.
@@ -104,7 +106,7 @@ export type SessionForkOperationStore = {
 };
 
 function getStoreRoot(): string {
-  return path.join(os.homedir(), '.lody', 'session-fork-operations');
+  return path.join(getLodyDataDir(), 'session-fork-operations');
 }
 
 function getMarkerPath(targetSessionId: SessionId): string {

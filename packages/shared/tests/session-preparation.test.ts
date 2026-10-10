@@ -46,14 +46,6 @@ describe('session preparation run config', () => {
     ]);
   });
 
-  it('keeps the Task tool gate in preparation and dedup identity', () => {
-    const enabled = buildSessionPreparationRunConfig({ taskToolsEnabled: true });
-
-    expect(enabled).toEqual({ taskToolsEnabled: true });
-    expect(normalizeSessionPreparationRunConfigForDedup(enabled)).toEqual([null, null, null, true]);
-    expect(buildSessionPreparationRunConfig({ taskToolsEnabled: false })).toBeUndefined();
-  });
-
   it('omits an empty selection', () => {
     expect(
       buildSessionPreparationRunConfig({
@@ -106,4 +98,16 @@ describe('session preparation run config', () => {
     );
     expect(buildSessionPreparationClaimKey(first)).toBe(buildSessionPreparationClaimKey(changed));
   });
+});
+
+it('does not reuse preparation between different memory identities', () => {
+  const config = buildSessionPreparationRunConfig({
+    memory: { providerId: 'nowledge-mem', memoryId: 'reviewer' },
+  });
+  expect(config?.memory?.memoryId).toBe('reviewer');
+  expect(normalizeSessionPreparationRunConfigForDedup(config)).not.toEqual(
+    normalizeSessionPreparationRunConfigForDedup({
+      memory: { providerId: 'nowledge-mem', memoryId: 'designer' },
+    })
+  );
 });

@@ -16,6 +16,9 @@ import type {
   GitHubMergeableState,
   GitHubMergeMethod,
   GitHubPullRequestDetails,
+  GitHubCommitComparison,
+  GitHubPullRequestCommit,
+  GitHubPullRequestFile,
   GitHubPullRequestState,
   GitHubReactionRollup,
   GitHubReview,
@@ -100,6 +103,49 @@ const GithubMentionIssuesResponseSchema = z.array(GithubMentionIssueOrPrSchema);
 const GithubPullRequestHeadSchema = z
   .object({
     head: z.object({ sha: z.string() }).passthrough(),
+  })
+  .passthrough();
+
+const GithubPullRequestCommitSchema = z
+  .object({
+    sha: z.string(),
+    html_url: z.string().url().nullable().optional(),
+    commit: z
+      .object({
+        message: z.string(),
+        author: z
+          .object({ date: z.string().nullable().optional() })
+          .passthrough()
+          .nullable()
+          .optional(),
+      })
+      .passthrough(),
+    author: z.object({ login: z.string() }).passthrough().nullable().optional(),
+    parents: z.array(z.object({ sha: z.string() }).passthrough()).optional(),
+  })
+  .passthrough();
+
+const GithubPullRequestCommitsSchema = z.array(GithubPullRequestCommitSchema);
+
+const GithubCompareFileSchema = z
+  .object({
+    filename: z.string(),
+    previous_filename: z.string().nullable().optional(),
+    status: z.string(),
+    additions: z.number().optional(),
+    deletions: z.number().optional(),
+    changes: z.number().optional(),
+    sha: z.string().optional(),
+    blob_url: z.string().url().nullable().optional(),
+    raw_url: z.string().url().nullable().optional(),
+    patch: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+const GithubCompareResponseSchema = z
+  .object({
+    merge_base_commit: z.object({ sha: z.string() }).passthrough().nullable().optional(),
+    files: z.array(GithubCompareFileSchema).nullable().optional(),
   })
   .passthrough();
 
@@ -326,7 +372,6 @@ export type GitHubCreateReviewCommentInput = {
   side: 'LEFT' | 'RIGHT';
   startLine?: number | null;
   startSide?: 'LEFT' | 'RIGHT' | null;
-  subjectType?: 'line' | 'file';
 };
 
 // ============================================================================
@@ -1784,6 +1829,10 @@ export async function githubFetchPRReviewComments(
   return groupGitHubReviewComments(recent);
 }
 
+/**
+ * Create a line-anchored review comment. GitHub validates the body against a
+ * oneOf schema whose `line` variant rejects `subject_type`, so it is omitted.
+ */
 export async function githubCreatePRReviewComment(
   token: string,
   repoFullName: string,
@@ -1796,7 +1845,6 @@ export async function githubCreatePRReviewComment(
     path: input.path,
     line: input.line,
     side: input.side,
-    subject_type: input.subjectType ?? 'line',
   };
   if (input.startLine !== undefined && input.startLine !== null) {
     payload.start_line = input.startLine;
@@ -1905,7 +1953,7 @@ const GithubPullRequestDetailsSchema = z
     merged: z.boolean().optional(),
     draft: z.boolean().optional(),
     html_url: z.string(),
-    base: z.object({ ref: z.string() }).passthrough(),
+    base: z.object({ ref: z.string(), sha: z.string().optional() }).passthrough(),
     head: z.object({ ref: z.string(), sha: z.string() }).passthrough(),
     user: GithubUserSchema.nullable(),
     created_at: z.string(),
@@ -1931,6 +1979,7 @@ const GithubPullRequestDetailsSchema = z
       draft: item.draft ?? false,
       htmlUrl: item.html_url,
       baseRef: item.base.ref,
+      baseSha: item.base.sha ?? undefined,
       headRef: item.head.ref,
       headSha: item.head.sha,
       user: item.user,
@@ -2053,6 +2102,88 @@ export async function githubFetchPullRequestDetails(
   );
 }
 
+/** Fetch commits in GitHub's oldest-to-newest pull request order. */
+export async function githubFetchPullRequestCommits(
+  token: string,
+  repoFullName: string,
+  prNumber: number,
+  options?: GitHubReadRequestOptions
+): Promise<GitHubPullRequestCommit[]> {
+  const commits: GitHubPullRequestCommit[] = [];
+  let nextUrl: string | null =
+    `https://api.github.com/repos/${repoFullName}/pulls/${prNumber}/commits?per_page=100`;
+  while (nextUrl && commits.length < 250) {
+    const response = await fetch(nextUrl, { headers: authHeaders(token), cache: options?.cache });
+    const text = await response.text();
+    if (!response.ok) {
+      if (response.status === 401) throw new GitHubAuthError();
+      throw new Error(`GitHub API error: ${response.status} ${text}`);
+    }
+    const page = GithubPullRequestCommitsSchema.parse(JSON.parse(text) as unknown);
+    commits.push(
+      ...page.map((item): GitHubPullRequestCommit => ({
+        sha: item.sha,
+        message: item.commit.message.split('\n')[0] ?? item.commit.message,
+        authorLogin: item.author?.login ?? null,
+        authoredAt: item.commit.author?.date ?? null,
+        htmlUrl: item.html_url ?? null,
+        parentSha: item.parents?.[0]?.sha ?? null,
+      }))
+    );
+    nextUrl = parseNextLink(response.headers.get('link'));
+  }
+  return commits.slice(0, 250);
+}
+
+/** Compare two immutable refs and return the changed files. */
+export async function githubCompareCommits(
+  token: string,
+  repoFullName: string,
+  from: string,
+  to: string,
+  options?: GitHubReadRequestOptions
+): Promise<GitHubCommitComparison> {
+  const compareRef = `${from}...${to}`;
+  const files: z.infer<typeof GithubCompareFileSchema>[] = [];
+  let mergeBaseSha: string | null = null;
+  let nextUrl: string | null =
+    `https://api.github.com/repos/${repoFullName}/compare/${encodeURIComponent(compareRef)}?per_page=100`;
+  while (nextUrl && files.length < 300) {
+    const response = await fetch(nextUrl, {
+      headers: authHeaders(token),
+      cache: options?.cache,
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      if (response.status === 401) throw new GitHubAuthError();
+      throw new Error(`GitHub API error: ${response.status} ${text}`);
+    }
+    const result = GithubCompareResponseSchema.parse(JSON.parse(text) as unknown);
+    mergeBaseSha ??= result.merge_base_commit?.sha ?? null;
+    files.push(...(result.files ?? []));
+    nextUrl = parseNextLink(response.headers.get('link'));
+  }
+  return {
+    mergeBaseSha,
+    files: files.slice(0, 300).map((item): GitHubPullRequestFile => ({
+      path: item.filename,
+      previousPath: item.previous_filename ?? null,
+      status: (item.status === 'deleted'
+        ? 'removed'
+        : ['added', 'modified', 'removed', 'renamed', 'copied', 'changed'].includes(item.status)
+          ? item.status
+          : 'changed') as GitHubPullRequestFile['status'],
+      additions: item.additions ?? 0,
+      deletions: item.deletions ?? 0,
+      changes: item.changes ?? 0,
+      sha: item.sha ?? null,
+      blobUrl: item.blob_url ?? null,
+      rawUrl: item.raw_url ?? null,
+      patch: item.patch ?? null,
+    })),
+  };
+}
+
 /**
  * Fetch the general PR conversation comments (not code-line review comments).
  * Paginates up to 200 most recent items.
@@ -2107,6 +2238,38 @@ export async function githubCreatePRIssueComment(
   );
 }
 
+/**
+ * Keep only the newest attempt of each check. A re-run (or a second trigger on
+ * the same SHA) adds another check run with the same app and name; the earlier
+ * attempt is history, so a failure that was later re-run green must not keep
+ * the commit red. Check run ids are allocated monotonically, so the highest id
+ * is the latest attempt.
+ */
+export function selectLatestCheckRuns(runs: readonly GitHubCheckRun[]): GitHubCheckRun[] {
+  const latest = new Map<string, GitHubCheckRun>();
+  for (const run of runs) {
+    const key = `${run.appName ?? ''}\u0000${run.name}`;
+    const current = latest.get(key);
+    if (!current || run.id > current.id) latest.set(key, run);
+  }
+  return [...latest.values()];
+}
+
+function summarizeLatestCheckRuns(runs: readonly GitHubCheckRun[]): GitHubCheckRunsSummary {
+  return summarizeCheckRuns(
+    selectLatestCheckRuns(runs).sort((a, b) => a.name.localeCompare(b.name))
+  );
+}
+
+/**
+ * Re-derive a summary under the current rules. Summaries persisted by older
+ * builds (e.g. the PR tab's IndexedDB cache) may still list superseded
+ * attempts and a verdict computed from them.
+ */
+export function normalizeCheckRunsSummary(summary: GitHubCheckRunsSummary): GitHubCheckRunsSummary {
+  return summarizeLatestCheckRuns(summary.runs);
+}
+
 function summarizeCheckRuns(runs: GitHubCheckRun[]): GitHubCheckRunsSummary {
   if (runs.length === 0) {
     return { status: 'none', conclusion: null, total: 0, runs };
@@ -2121,13 +2284,20 @@ function summarizeCheckRuns(runs: GitHubCheckRun[]): GitHubCheckRunsSummary {
 
   let conclusion: GitHubCheckRunConclusion = null;
   if (status === 'completed') {
-    if (runs.some((run) => run.conclusion === 'failure' || run.conclusion === 'timed_out')) {
+    // Cancelled/stale runs were aborted, not judged: they decide the verdict
+    // only when nothing else ran.
+    const decisive = runs.filter(
+      (run) => run.conclusion !== 'cancelled' && run.conclusion !== 'stale'
+    );
+    if (decisive.some((run) => run.conclusion === 'failure' || run.conclusion === 'timed_out')) {
       conclusion = 'failure';
-    } else if (runs.some((run) => run.conclusion === 'action_required')) {
+    } else if (decisive.some((run) => run.conclusion === 'action_required')) {
       conclusion = 'action_required';
-    } else if (runs.some((run) => run.conclusion === 'cancelled')) {
+    } else if (decisive.length === 0) {
       conclusion = 'cancelled';
-    } else if (runs.every((run) => run.conclusion === 'success' || run.conclusion === 'skipped')) {
+    } else if (
+      decisive.every((run) => run.conclusion === 'success' || run.conclusion === 'skipped')
+    ) {
       conclusion = 'success';
     } else {
       conclusion = 'neutral';
@@ -2347,6 +2517,5 @@ export async function githubFetchCheckRuns(
     throw new Error(`GitHub API error: ${res.status} ${text}`);
   }
   const payload = GithubCheckRunsResponseSchema.parse(JSON.parse(text) as unknown);
-  const runs = [...payload.check_runs].sort((a, b) => a.name.localeCompare(b.name));
-  return summarizeCheckRuns(runs);
+  return summarizeLatestCheckRuns(payload.check_runs);
 }

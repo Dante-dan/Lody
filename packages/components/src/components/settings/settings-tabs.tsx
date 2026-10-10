@@ -2,6 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import type { PlatformCapability } from '@lody/platform';
 import { useAppCapabilityCheck } from '../../lib/app-platform';
 import {
+  Brain,
   Bot,
   Building2,
   ChartNoAxesCombined,
@@ -13,7 +14,9 @@ import {
   Monitor,
   Palette,
   Plug,
+  FileText,
   SlidersHorizontal,
+  Share2,
   UserRound,
   UserRoundCog,
 } from 'lucide-react';
@@ -26,10 +29,13 @@ export type SettingsTabId =
   | 'appearance'
   | 'keyboard-shortcuts'
   | 'workspace'
+  | 'shares'
   | 'people'
   | 'machines'
   | 'agents'
+  | 'memory'
   | 'agent-roles'
+  | 'prompt-shortcuts'
   | 'mcp'
   | 'projects'
   | 'github'
@@ -43,10 +49,13 @@ export type SettingsPath =
   | '/$workspaceName/settings/appearance'
   | '/$workspaceName/settings/keyboard-shortcuts'
   | '/$workspaceName/settings/workspace'
+  | '/$workspaceName/settings/shares'
   | '/$workspaceName/settings/people'
   | '/$workspaceName/settings/machines'
   | '/$workspaceName/settings/agents'
+  | '/$workspaceName/settings/memory'
   | '/$workspaceName/settings/agent-roles'
+  | '/$workspaceName/settings/prompt-shortcuts'
   | '/$workspaceName/settings/mcp'
   | '/$workspaceName/settings/projects'
   | '/$workspaceName/settings/github'
@@ -64,6 +73,8 @@ export type SettingsTabConfig = {
   capability?: PlatformCapability;
   /** The workspace machine inventory has no useful distinction in a solo workspace. */
   multiMemberOnly?: boolean;
+  /** Keyboard-centric surfaces are hidden from the mobile settings list. */
+  desktopOnly?: boolean;
   path: SettingsPath;
 };
 
@@ -101,6 +112,7 @@ export const SETTINGS_TAB_CONFIGS: SettingsTabConfig[] = [
     labelKey: 'settings.tabs.keyboardShortcuts',
     descriptionKey: 'settings.categories.keyboardShortcuts.description',
     icon: Keyboard,
+    desktopOnly: true,
     path: '/$workspaceName/settings/keyboard-shortcuts',
   },
   {
@@ -140,12 +152,28 @@ export const SETTINGS_TAB_CONFIGS: SettingsTabConfig[] = [
     path: '/$workspaceName/settings/agent-roles',
   },
   {
+    id: 'memory',
+    section: 'workspace',
+    labelKey: 'settings.tabs.memory',
+    descriptionKey: 'settings.memory.description',
+    icon: Brain,
+    path: '/$workspaceName/settings/memory',
+  },
+  {
     id: 'mcp',
     section: 'workspace',
     labelKey: 'settings.tabs.mcp',
     descriptionKey: 'settings.categories.mcp.description',
     icon: Plug,
     path: '/$workspaceName/settings/mcp',
+  },
+  {
+    id: 'prompt-shortcuts',
+    section: 'workspace',
+    labelKey: 'settings.tabs.promptShortcuts',
+    descriptionKey: 'settings.categories.promptShortcuts.description',
+    icon: FileText,
+    path: '/$workspaceName/settings/prompt-shortcuts',
   },
   {
     id: 'projects',
@@ -172,6 +200,15 @@ export const SETTINGS_TAB_CONFIGS: SettingsTabConfig[] = [
     icon: ChartNoAxesCombined,
     capability: 'usageAnalytics',
     path: '/$workspaceName/settings/ai-usage',
+  },
+  {
+    id: 'shares',
+    section: 'workspace',
+    labelKey: 'settings.tabs.shares',
+    descriptionKey: 'settings.shares.description',
+    icon: Share2,
+    capability: 'teamSharing',
+    path: '/$workspaceName/settings/shares',
   },
   {
     id: 'billing',
@@ -213,12 +250,15 @@ export function getActiveSettingsTabId(pathname: string): SettingsTabId | null {
     ['/settings/keyboard-shortcuts', 'keyboard-shortcuts'],
     ['/settings/my-machines', 'machines'],
     ['/settings/workspace', 'workspace'],
+    ['/settings/shares', 'shares'],
     ['/settings/people', 'workspace'],
     ['/settings/machines', 'machines'],
     ['/settings/devices', 'machines'],
     ['/settings/agents', 'agents'],
     ['/settings/agent-config', 'agents'],
+    ['/settings/memory', 'memory'],
     ['/settings/agent-roles', 'agent-roles'],
+    ['/settings/prompt-shortcuts', 'prompt-shortcuts'],
     ['/settings/mcp', 'mcp'],
     ['/settings/projects', 'projects'],
     ['/settings/github', 'github'],

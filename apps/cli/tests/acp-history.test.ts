@@ -1,9 +1,11 @@
+import { updateTestHistory } from './history-port-fixture';
 import { describe, expect, it } from 'vitest';
 
 import { LoroRepo } from 'loro-repo';
 import { v4 as uuidv4 } from 'uuid';
 
 import {
+  appendACPNotificationsToAssistantEntry,
   applyMessageContentsBatch,
   ensurePermissionRequestOnToolCall,
   updatePermissionOutcomeInHistory,
@@ -14,7 +16,13 @@ import {
 } from '../src/lib/acp/history-apply';
 import { SessionDocument } from '../src/lib/loro/doc';
 import type { RequestPermissionRequest, RequestPermissionResponse } from '@agentclientprotocol/sdk';
-import type { MessageContent, SessionHistoryInput, SessionId, ToolCallContent } from '@lody/shared';
+import type {
+  AcpSessionNotification,
+  MessageContent,
+  SessionHistoryInput,
+  SessionId,
+  ToolCallContent,
+} from '@lody/shared';
 import type { Logger } from '../src/utils/logger';
 
 const createSilentLogger = (): Logger => ({
@@ -23,12 +31,82 @@ const createSilentLogger = (): Logger => ({
   error: () => {},
   success: () => {},
   debug: () => {},
+  trace: () => {},
   setLevel: () => {},
   child: () => createSilentLogger(),
   close: async () => {},
 });
 
 describe('acp history batch', () => {
+  it('keeps operation IDs aligned when invalid and non-history notifications are filtered', async () => {
+    const text: AcpSessionNotification = {
+      sessionId: 'synthetic-session',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'kept' },
+      },
+    };
+    const invalid = {
+      sessionId: 'synthetic-session',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 42 },
+      },
+    } as unknown as AcpSessionNotification;
+    const nonHistory = {
+      sessionId: 'synthetic-session',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'resource', resource: { uri: 'file:///tmp/resource.txt' } },
+      },
+    } as unknown as AcpSessionNotification;
+    const applied: unknown[] = [];
+    const backend = {
+      applyAgentBatch: async (input: unknown) => {
+        applied.push(input);
+      },
+    };
+    const doc = { sessionId: 'synthetic-session' } as SessionDocument;
+
+    await appendACPNotificationsToAssistantEntry(
+      doc,
+      [invalid, nonHistory, text],
+      'assistant-entry',
+      {
+        logger: createSilentLogger(),
+        backend: backend as never,
+        operationIds: ['invalid-id', 'filtered-id', 'kept-id'],
+      }
+    );
+
+    expect(applied).toEqual([
+      expect.objectContaining({
+        notifications: [text],
+        operationIds: ['kept-id'],
+      }),
+    ]);
+  });
+
+  it('rejects an operation ID list that does not match its notification batch', async () => {
+    const backend = { applyAgentBatch: async () => undefined };
+    const doc = { sessionId: 'synthetic-session' } as SessionDocument;
+
+    await expect(
+      appendACPNotificationsToAssistantEntry(
+        doc,
+        {
+          sessionId: 'synthetic-session',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'kept' },
+          },
+        },
+        'assistant-entry',
+        { backend: backend as never, operationIds: [] }
+      )
+    ).rejects.toThrow('ACP notification operation IDs must match the input batch length');
+  });
+
   it('merges text deltas into last assistant entry', () => {
     const history: SessionHistoryInput[] = [
       {
@@ -931,7 +1009,7 @@ describe('acp history permission', () => {
     ];
 
     await doc.initOffline();
-    await doc.updateHistory(() => initialHistory);
+    await updateTestHistory(doc, () => initialHistory);
 
     try {
       const request: RequestPermissionRequest = {
@@ -970,7 +1048,7 @@ describe('acp history permission', () => {
 
       await expect(ensurePermissionRequestOnToolCall(doc, 'req1', request)).resolves.toBe(true);
 
-      let history = await doc.getHistory();
+      let history = await doc.sessionData.history.readAll();
       expect(history).toHaveLength(1);
       let contents = (history[0]!.items ?? []) as MessageContent[];
       const toolCall = contents[0] as Extract<MessageContent, { type: 'tool_call' }>;
@@ -983,7 +1061,7 @@ describe('acp history permission', () => {
       };
       await updatePermissionOutcomeInHistory(doc, 'req1', outcome, logger);
 
-      history = await doc.getHistory();
+      history = await doc.sessionData.history.readAll();
       contents = (history[0]!.items ?? []) as MessageContent[];
       const updated = contents[0] as Extract<MessageContent, { type: 'tool_call' }>;
       expect(updated.permissionRequest?.outcome).toEqual(outcome);
@@ -1010,7 +1088,7 @@ describe('acp history permission', () => {
     ];
 
     await doc.initOffline();
-    await doc.updateHistory(() => initialHistory);
+    await updateTestHistory(doc, () => initialHistory);
 
     try {
       const request: RequestPermissionRequest = {
@@ -1032,7 +1110,7 @@ describe('acp history permission', () => {
 
       await expect(ensurePermissionRequestOnToolCall(doc, 'req1', request)).resolves.toBe(true);
 
-      let history = await doc.getHistory();
+      let history = await doc.sessionData.history.readAll();
       expect(history).toHaveLength(1);
       expect(history[0]!.id).toBe('turn-1');
       let contents = (history[0]!.items ?? []) as MessageContent[];
@@ -1042,7 +1120,7 @@ describe('acp history permission', () => {
       expect(toolCall.toolCallId).toBe('tc_late');
       expect(toolCall.permissionRequest?.requestId).toBe('req1');
 
-      await doc.updateHistory((currentHistory) =>
+      await updateTestHistory(doc, (currentHistory) =>
         applyMessageContentsBatch(currentHistory, [
           {
             type: 'tool_call',
@@ -1054,7 +1132,7 @@ describe('acp history permission', () => {
         ])
       );
 
-      history = await doc.getHistory();
+      history = await doc.sessionData.history.readAll();
       expect(history).toHaveLength(1);
       expect(history[0]!.id).toBe('turn-1');
       contents = (history[0]!.items ?? []) as MessageContent[];
@@ -1073,7 +1151,7 @@ describe('acp history permission', () => {
     const doc = new SessionDocument(repo, sessionId);
 
     await doc.initOffline();
-    await doc.updateHistory(() => [
+    await updateTestHistory(doc, () => [
       {
         id: 'user-1',
         role: 'user',
@@ -1106,7 +1184,7 @@ describe('acp history permission', () => {
 
       await expect(ensurePermissionRequestOnToolCall(doc, 'req1', request)).resolves.toBe(false);
 
-      const history = await doc.getHistory();
+      const history = await doc.sessionData.history.readAll();
       expect(history).toHaveLength(1);
       expect(history[0]!.role).toBe('user');
     } finally {
@@ -1121,7 +1199,7 @@ describe('acp history permission', () => {
     const doc = new SessionDocument(repo, sessionId);
 
     await doc.initOffline();
-    await doc.updateHistory(() => [
+    await updateTestHistory(doc, () => [
       {
         id: 'turn-1',
         role: 'assistant',
@@ -1167,7 +1245,7 @@ describe('acp history permission', () => {
 
       await expect(ensurePermissionRequestOnToolCall(doc, 'req1', request)).resolves.toBe(true);
 
-      const history = await doc.getHistory();
+      const history = await doc.sessionData.history.readAll();
       expect(history).toHaveLength(1);
       expect(history[0]!.id).toBe('turn-1');
       const contents = (history[0]!.items ?? []) as MessageContent[];
@@ -1190,7 +1268,7 @@ describe('acp history permission', () => {
       };
       await updatePermissionOutcomeInHistory(doc, 'req1', outcome, logger);
 
-      const updatedHistory = await doc.getHistory();
+      const updatedHistory = await doc.sessionData.history.readAll();
       const updatedJson = JSON.stringify(updatedHistory);
       expect(updatedJson.includes(oldSentinel)).toBe(false);
       expect(updatedJson.includes(newSentinel)).toBe(false);

@@ -1,10 +1,39 @@
 import { describe, expect, it } from 'vitest';
 import {
   LocalMachineRpcResponseSchema,
+  LocalMachineRpcRequestSchema,
   safeParseLocalMachineRpcRequest,
 } from '../src/local-machine-rpc';
 
 describe('local Machine RPC', () => {
+  it('allows Pi discovery by saved config reference but never caller launch inputs', () => {
+    const request = {
+      machineId: 'machine-1',
+      workspaceId: 'workspace-1',
+      method: 'machine/pi-extensions',
+      params: { configId: 'pi-config' },
+    };
+    expect(safeParseLocalMachineRpcRequest(JSON.stringify(request)).success).toBe(true);
+    for (const fields of [
+      { command: 'pi' },
+      { env: { NODE_OPTIONS: '--require untrusted' } },
+      { path: '/untrusted' },
+    ]) {
+      expect(
+        safeParseLocalMachineRpcRequest(
+          JSON.stringify({ ...request, params: { ...request.params, ...fields } })
+        ).success
+      ).toBe(false);
+    }
+    const response = {
+      ok: true,
+      result: {
+        success: true,
+        discovery: { version: 1, agentDir: '/fixture', extensions: [], warnings: [] },
+      },
+    };
+    expect(LocalMachineRpcResponseSchema.parse(response)).toEqual(response);
+  });
   it.each([
     {
       method: 'session/get-active-invocation-context',
@@ -261,4 +290,24 @@ describe('local Machine RPC', () => {
       }).success
     ).toBe(false);
   });
+});
+
+it('accepts typed memory operations and rejects caller-provided commands', () => {
+  const request = {
+    machineId: 'machine',
+    workspaceId: 'workspace',
+    method: 'machine/memory',
+    params: {
+      action: 'create',
+      providerId: 'nowledge-mem',
+      input: { id: 'reviewer', name: 'Reviewer' },
+    },
+  };
+  expect(LocalMachineRpcRequestSchema.safeParse(request).success).toBe(true);
+  expect(
+    LocalMachineRpcRequestSchema.safeParse({
+      ...request,
+      params: { ...request.params, command: 'other' },
+    }).success
+  ).toBe(false);
 });

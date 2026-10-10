@@ -1,14 +1,17 @@
-import { useCallback, useEffect, useMemo, useRef, type MouseEvent } from 'react';
+import * as stylex from '@stylexjs/stylex';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Check, GripVertical, Pencil, X, type LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MessageQueueItem, SessionId } from '@lody/shared';
 import { normalizeSessionInputBlocks } from '@lody/shared';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/ui/tooltip';
+import { Tooltip } from '@lody/ui/tooltip';
 import { isImeComposingKeyboardEvent } from '@/lib/ime';
 import { cn } from '@/lib/utils';
 import { QueuedImagePreview, type QueuedImageBlock } from './queued-image-preview';
+import { queueSurface } from './surface';
+import { shouldShowQueuedItemSteer } from './queued-message-steer';
 import { getEditableTaskText } from './use-message-queue-editing';
 
 const MAX_INLINE_IMAGES = 3;
@@ -19,6 +22,7 @@ export type MessageQueueRowProps = {
   index: number;
   isFirst: boolean;
   showSteerAction: boolean;
+  nativeSteerAvailable: boolean;
   canReorder: boolean;
   isEditing: boolean;
   editValue: string;
@@ -89,7 +93,12 @@ export function MessageQueueRow(props: MessageQueueRowProps) {
       ref={sortable.setNodeRef}
       style={style}
       className={cn(
-        'group/row relative flex items-start gap-2 px-2 py-1.5',
+        'group/row relative items-start gap-2 px-2 py-1.5',
+        stylex.props(queueSurface.row).className,
+        // Dividers go between rows only. (`divide-y` on the list also lined the
+        // last row, because dnd-kit appends hidden nodes after it, and that
+        // line doubled the composer's top border into a shadow-like band.)
+        '[&+&]:border-t [&+&]:border-border/30',
         'transition-colors',
         sortable.isDragging && 'z-10 bg-muted/40 opacity-90 shadow-sm',
         isEditing && 'bg-background/60'
@@ -101,6 +110,11 @@ export function MessageQueueRow(props: MessageQueueRowProps) {
     </div>
   );
 }
+
+/* The index sits on the task text's first line: its box is exactly that line
+   box (`text-xs leading-snug` = 0.75rem × 1.375), so both share one center. */
+const LEADING_HANDLE_BOX_CLASS =
+  'flex h-[calc(0.75rem*1.375)] w-4 shrink-0 items-center justify-center';
 
 function LeadingHandle({
   index,
@@ -115,7 +129,10 @@ function LeadingHandle({
     return (
       <div
         aria-hidden="true"
-        className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center text-[10px] font-medium tabular-nums text-muted-foreground/60"
+        className={cn(
+          LEADING_HANDLE_BOX_CLASS,
+          'text-[10px] font-medium tabular-nums text-muted-foreground/60'
+        )}
       >
         {index + 1}
       </div>
@@ -123,30 +140,34 @@ function LeadingHandle({
   }
 
   return (
-    <Tooltip delayDuration={300}>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          ref={sortable.setActivatorNodeRef}
-          className={cn(
-            'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded',
-            'text-[10px] font-medium tabular-nums text-muted-foreground/60',
-            'cursor-grab transition-colors active:cursor-grabbing',
-            'hover:bg-muted hover:text-foreground',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40'
-          )}
-          aria-label={label}
-          {...sortable.attributes}
-          {...sortable.listeners}
-        >
-          <span className="block group-hover/row:hidden group-focus-within/row:hidden">
-            {index + 1}
-          </span>
-          <GripVertical className="hidden h-3 w-3 group-hover/row:block group-focus-within/row:block" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
-    </Tooltip>
+    <Tooltip.Root>
+      <Tooltip.Trigger
+        delay={300}
+        render={
+          <button
+            type="button"
+            ref={sortable.setActivatorNodeRef}
+            className={cn(
+              LEADING_HANDLE_BOX_CLASS,
+              'rounded',
+              'text-[10px] font-medium tabular-nums text-muted-foreground/60',
+              'cursor-grab transition-colors active:cursor-grabbing',
+              'hover:bg-hover hover:text-foreground',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40'
+            )}
+            aria-label={label}
+            {...sortable.attributes}
+            {...sortable.listeners}
+          >
+            <span className="block group-hover/row:hidden group-focus-within/row:hidden">
+              {index + 1}
+            </span>
+            <GripVertical className="hidden h-3 w-3 group-hover/row:block group-focus-within/row:block" />
+          </button>
+        }
+      />
+      <Tooltip.Content side="top">{label}</Tooltip.Content>
+    </Tooltip.Root>
   );
 }
 
@@ -166,6 +187,13 @@ function RowBody(props: MessageQueueRowProps & EditCommitProps) {
   const inlineImages = imageBlocks.slice(0, MAX_INLINE_IMAGES);
   const overflowImageCount = Math.max(0, imageBlocks.length - inlineImages.length);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const focusEditorAtEnd = useCallback((textarea: HTMLTextAreaElement | null) => {
+    textareaRef.current = textarea;
+    if (!textarea) return;
+    textarea.focus();
+    textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+    textarea.scrollTop = textarea.scrollHeight;
+  }, []);
 
   if (isEditing) {
     // Enter, the confirm button, and clicking away all commit; Shift+Enter inserts a
@@ -180,23 +208,30 @@ function RowBody(props: MessageQueueRowProps & EditCommitProps) {
           )}
         >
           <textarea
-            ref={textareaRef}
+            // The synced editing flag can arrive before startEdit resolves; attach when enabled.
+            ref={isPending ? null : focusEditorAtEnd}
             value={editValue}
             rows={3}
             className={cn(
               'block w-full resize-none border-transparent bg-transparent',
               'px-2 pt-1 text-xs leading-snug text-foreground',
-              // The base layer paints `box-shadow: inset 0 0 0 1px` on any focused
-              // textarea. That used to land exactly on this field's own border; now
-              // that the shell owns the border, it would draw a second rectangle
-              // inside the box. The composer suppresses it the same way.
-              'outline-none focus-visible:outline-hidden focus-visible:ring-0 focus-visible:ring-offset-0'
+              // The shell owns the focus ring; the base layer's inset shadow
+              // would draw another rectangle on the textarea.
+              'outline-none focus-visible:outline-hidden focus-visible:shadow-none'
             )}
-            autoFocus
             disabled={isPending}
             aria-label={t('sessions.messageQueue.editMessage', 'Edit queued message')}
             onChange={(event) => onEditValueChange(event.currentTarget.value)}
-            onBlur={onCommitEdit}
+            onBlur={(event) => {
+              // Folding is display-only: moving to its header must not save or
+              // discard this draft. The panel remains mounted while hidden.
+              if (
+                event.relatedTarget instanceof Element &&
+                event.relatedTarget.closest('[data-message-queue-toggle]')
+              )
+                return;
+              onCommitEdit();
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 event.preventDefault();
@@ -210,16 +245,19 @@ function RowBody(props: MessageQueueRowProps & EditCommitProps) {
               onCommitEdit();
             }}
           />
-          {/* A footer strip rather than an overlay: the button keeps the bottom-right
-              corner without long text ever scrolling underneath it. Suppressing
-              mousedown keeps focus in the textarea, so the click commits through
-              onCommitEdit instead of racing the blur handler for the same write. */}
-          <div className="flex justify-end px-1 pb-1">
+          {/* Keep footer presses from blur-saving before focus or confirmation. */}
+          <div
+            className="flex justify-end px-1 pb-1"
+            onMouseDown={(event) => {
+              event.preventDefault();
+              if (event.button === 0 && event.target === event.currentTarget)
+                focusEditorAtEnd(textareaRef.current);
+            }}
+          >
             <IconAction
               icon={Check}
               label={t('sessions.messageQueue.saveEdit', 'Save changes (Enter)')}
               disabled={isPending}
-              onMouseDown={(event) => event.preventDefault()}
               onClick={onCommitEdit}
             />
           </div>
@@ -263,7 +301,10 @@ function RowBody(props: MessageQueueRowProps & EditCommitProps) {
         </div>
       ) : null}
       <div
-        className="min-w-0 flex-1 overflow-hidden text-xs leading-snug text-foreground/80"
+        className={cn(
+          'min-w-0 flex-1 overflow-hidden text-xs leading-snug text-foreground/80',
+          stylex.props(queueSurface.text).className
+        )}
         style={{
           display: '-webkit-box',
           WebkitLineClamp: 2,
@@ -278,7 +319,16 @@ function RowBody(props: MessageQueueRowProps & EditCommitProps) {
 
 function RowActions(props: MessageQueueRowProps) {
   const { t } = useTranslation();
-  const { item, isFirst, showSteerAction, isEditing, onStartEdit, onRemove, onSteer } = props;
+  const {
+    item,
+    isFirst,
+    showSteerAction,
+    nativeSteerAvailable,
+    isEditing,
+    onStartEdit,
+    onRemove,
+    onSteer,
+  } = props;
 
   // In edit mode the textarea owns the row: it carries its own confirm button, so we
   // render no row-level actions that would compete for the click mid-edit.
@@ -287,8 +337,8 @@ function RowActions(props: MessageQueueRowProps) {
   }
 
   return (
-    <div className="flex shrink-0 items-center gap-0.5">
-      {isFirst && showSteerAction ? (
+    <div className={cn('flex shrink-0 items-center', stylex.props(queueSurface.actions).className)}>
+      {shouldShowQueuedItemSteer({ showSteerAction, isFirst, nativeSteerAvailable }) ? (
         <TextAction
           text={t('sessions.messageQueue.guideAction', 'Steer')}
           ariaLabel={t(
@@ -317,7 +367,7 @@ function RowActions(props: MessageQueueRowProps) {
   );
 }
 
-function TextAction({
+export function TextAction({
   text,
   ariaLabel,
   onClick,
@@ -332,8 +382,9 @@ function TextAction({
       aria-label={ariaLabel}
       className={cn(
         'flex h-5 shrink-0 items-center justify-center rounded px-1.5',
+        stylex.props(queueSurface.action).className,
         'text-[11px] font-medium text-muted-foreground transition-colors',
-        'hover:bg-muted hover:text-foreground',
+        'hover:bg-hover hover:text-foreground',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40'
       )}
       onClick={onClick}
@@ -343,43 +394,44 @@ function TextAction({
   );
 }
 
-function IconAction({
+export function IconAction({
   icon: Icon,
   label,
   destructive,
   disabled,
   onClick,
-  onMouseDown,
 }: {
   icon: LucideIcon;
   label: string;
   destructive?: boolean;
   disabled?: boolean;
   onClick: () => void;
-  onMouseDown?: (event: MouseEvent<HTMLButtonElement>) => void;
 }) {
   return (
-    <Tooltip delayDuration={300}>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          disabled={disabled}
-          className={cn(
-            'flex h-5 w-5 items-center justify-center rounded',
-            'text-muted-foreground/60 transition-colors',
-            'hover:bg-muted hover:text-foreground',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
-            'disabled:pointer-events-none disabled:opacity-50',
-            destructive && 'hover:text-destructive'
-          )}
-          onClick={onClick}
-          onMouseDown={onMouseDown}
-        >
-          <Icon className="h-3 w-3" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="top">{label}</TooltipContent>
-    </Tooltip>
+    <Tooltip.Root>
+      <Tooltip.Trigger
+        delay={300}
+        render={
+          <button
+            type="button"
+            aria-label={label}
+            disabled={disabled}
+            className={cn(
+              'flex h-5 w-5 items-center justify-center rounded',
+              stylex.props(queueSurface.action).className,
+              'text-muted-foreground/60 transition-colors',
+              'hover:bg-hover hover:text-foreground',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40',
+              'disabled:pointer-events-none disabled:opacity-50',
+              destructive && 'hover:text-destructive'
+            )}
+            onClick={onClick}
+          >
+            <Icon className="h-3 w-3" />
+          </button>
+        }
+      />
+      <Tooltip.Content side="top">{label}</Tooltip.Content>
+    </Tooltip.Root>
   );
 }

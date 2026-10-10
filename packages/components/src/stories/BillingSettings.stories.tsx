@@ -168,6 +168,7 @@ function Harness({
       onUpgrade={() => {}}
       onSwitchInterval={() => {}}
       switchIntervalPending={switchIntervalPending}
+      onPaymentMethod={() => {}}
       onCancelSubscription={() => {}}
       onResumeSubscription={() => {}}
       onRedeemCode={() => {}}
@@ -223,10 +224,11 @@ export const CheckoutPendingMonthly: Story = {
   },
 };
 
-export const FreeWithOffers: Story = {
+export const FreeWithLockedPrices: Story = {
   args: {
     overview: {
       ...freeOverview,
+      yearlyEarlyBirdEligible: true,
       pricing: {
         monthlyAmountCents: 500,
         yearlyAmountCents: 6000,

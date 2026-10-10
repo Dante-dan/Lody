@@ -7,7 +7,10 @@ import { SESSION_GOAL_COMMANDS, type SessionGoalMessage } from '@lody/shared';
 import { SessionInfoBar } from '../src/components/sessions/session-info-bar';
 
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
+  useTranslation: () => ({
+    t: (_key: string, fallback: string | { defaultValue: string }) =>
+      typeof fallback === 'string' ? fallback : fallback.defaultValue,
+  }),
 }));
 
 (
@@ -46,6 +49,46 @@ describe('SessionInfoBar syncing indicator', () => {
     container.remove();
   });
 
+  it('keeps execution-machine ownership visible without context and while status changes', () => {
+    const machine = { name: 'Mac Studio', owner: { name: 'Zhang San' } };
+    act(() => root.render(<SessionInfoBar {...CONTEXT_LESS_PROPS} executionMachine={machine} />));
+    expect(container.querySelector('[data-info-bar-surface]')).not.toBeNull();
+    expect(container.querySelector('[data-execution-machine]')?.textContent).toContain('Zhang San');
+    act(() =>
+      root.render(
+        <SessionInfoBar
+          {...CONTEXT_LESS_PROPS}
+          executionMachine={machine}
+          status={{ kind: 'machine-offline', machineName: machine.name }}
+        />
+      )
+    );
+    expect(container.querySelector('[data-execution-machine]')?.textContent).toContain('Zhang San');
+    expect(container.querySelector('[data-execution-machine]')?.textContent).toContain(
+      'Mac Studio'
+    );
+  });
+
+  it('labels my machine and unresolved ownership without guessing a session owner', () => {
+    act(() =>
+      root.render(
+        <SessionInfoBar
+          {...CONTEXT_LESS_PROPS}
+          executionMachine={{ name: 'Mac Studio', isMine: true }}
+        />
+      )
+    );
+    expect(container.querySelector('[data-execution-machine]')?.textContent).toContain('You');
+    act(() =>
+      root.render(
+        <SessionInfoBar {...CONTEXT_LESS_PROPS} executionMachine={{ name: 'Remote workstation' }} />
+      )
+    );
+    expect(container.querySelector('[data-execution-machine]')?.textContent).toContain(
+      'Unknown owner'
+    );
+  });
+
   it('renders the bar for syncing alone on a context-less session', () => {
     act(() => {
       root.render(<SessionInfoBar {...CONTEXT_LESS_PROPS} syncing />);
@@ -59,12 +102,57 @@ describe('SessionInfoBar syncing indicator', () => {
     expect(wrapper?.textContent).toContain('Syncing');
   });
 
+  it('says Updating while a cached conversation catches up, and hides for a null status', () => {
+    act(() => {
+      root.render(<SessionInfoBar {...CONTEXT_LESS_PROPS} syncStatus="updating" />);
+    });
+    expect(container.querySelector('.ml-auto')?.textContent).toContain('Updating');
+
+    // An explicit null status wins over the legacy flag: nothing to announce.
+    act(() => {
+      root.render(<SessionInfoBar {...CONTEXT_LESS_PROPS} syncing syncStatus={null} />);
+    });
+    expect(container.textContent).toBe('');
+  });
+
   it('still hides the bar entirely with no items and no syncing', () => {
     act(() => {
       root.render(<SessionInfoBar {...CONTEXT_LESS_PROPS} />);
     });
 
-    expect(container.innerHTML).toBe('');
+    // No bar is shown: only the hidden spacer that keeps the composer's gap.
+    expect(container.textContent).toBe('');
+    expect(container.querySelector('button, [role]')).toBeNull();
+    expect(container.children).toHaveLength(1);
+    expect(container.firstElementChild?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('renders a simulator-only action and keeps browser and simulator actions independent', () => {
+    const simulator = vi.fn();
+    const browser = vi.fn();
+    act(() =>
+      root.render(<SessionInfoBar {...CONTEXT_LESS_PROPS} onOpenIosSimulator={simulator} />)
+    );
+    const action = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="iOS Simulator"]'
+    )!;
+    expect(action).not.toBeNull();
+    act(() => action.click());
+    expect(simulator).toHaveBeenCalledOnce();
+    act(() =>
+      root.render(
+        <SessionInfoBar
+          {...CONTEXT_LESS_PROPS}
+          onOpenIosSimulator={simulator}
+          onOpenBrowser={browser}
+        />
+      )
+    );
+    act(() =>
+      container.querySelector<HTMLButtonElement>('button[aria-label="Open preview"]')!.click()
+    );
+    expect(browser).toHaveBeenCalledOnce();
+    expect(simulator).toHaveBeenCalledOnce();
   });
 
   it('renders and activates a reported preview action without staged context', () => {

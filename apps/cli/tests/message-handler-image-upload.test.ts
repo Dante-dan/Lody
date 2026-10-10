@@ -1,3 +1,4 @@
+import { withHistoryPort } from './history-port-fixture';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -15,6 +16,7 @@ import type { LoroDocumentManager } from '../src/lib/loro/doc';
 import type { SessionManager } from '../src/session/session-manager';
 import type { Logger } from '../src/utils/logger';
 import { createTestCloudPort } from './test-cloud-port';
+import { fakeSessionData } from './session-data-test-double';
 
 const createSilentLogger = (): Logger => ({
   info: () => {},
@@ -22,21 +24,28 @@ const createSilentLogger = (): Logger => ({
   error: () => {},
   success: () => {},
   debug: () => {},
+  trace: () => {},
   setLevel: () => {},
   child: () => createSilentLogger(),
   close: async () => {},
 });
 
+const presenceInternals = (handler: MessageHandler) =>
+  handler as unknown as {
+    startSessionActivePresence: (id: SessionId) => void;
+    setSessionActivePresencePhase: (
+      id: SessionId,
+      phase: 'thinking' | 'image_generation' | 'finalizing'
+    ) => void;
+    sessionActivePresence: { getStatus: (id: SessionId) => SessionStatus | null };
+  };
+
 /**
- * Mark a session as having active presence so async status callbacks are allowed
- * to write working statuses (see session-activity-status.ts).
+ * Mark a session as having active presence so image activity can retarget
+ * thinking ↔ image_generation (see session-activity-status.ts).
  */
 const injectActivePresence = (handler: MessageHandler, sessionId: SessionId): void => {
-  (
-    handler as unknown as {
-      startSessionActivePresence: (id: SessionId) => void;
-    }
-  ).startSessionActivePresence(sessionId);
+  presenceInternals(handler).startSessionActivePresence(sessionId);
 };
 
 type TestHarness = {
@@ -58,7 +67,7 @@ const createHarness = (): TestHarness => {
     status: { type: 'idle' } as SessionStatus,
   };
 
-  const sessionDoc = {
+  const sessionDoc = withHistoryPort({
     getMetaState: vi.fn(async () => ({
       isArchived: false,
       status: state.status,
@@ -74,7 +83,11 @@ const createHarness = (): TestHarness => {
     setStatus: vi.fn(async (status: SessionStatus) => {
       state.status = status;
     }),
-  };
+  });
+  (sessionDoc as { sessionData?: unknown }).sessionData = fakeSessionData(
+    sessionDoc.updateHistory as never
+  );
+  Object.assign(sessionDoc, { agentWrites: (sessionDoc as any).sessionData.agentWrites });
 
   const workspaceDocument = {
     isTransportConnected: vi.fn(() => true),
@@ -141,16 +154,13 @@ describe('MessageHandler image upload flow', () => {
     }
   });
 
-  it('publishes and clears Codex image generation activity status', async () => {
+  it('publishes and clears Codex image generation activity on presence only', async () => {
     const harness = createHarness();
     handlers.push(harness.handler);
 
     const sessionId = 'session-1' as SessionId;
     await harness.sessionDoc.setStatus({ type: 'running' } as SessionStatus);
     harness.sessionDoc.setStatus.mockClear();
-
-    // Image-generation status is only sustainable while active presence is live;
-    // simulate the in-flight turn that owns this activity.
     injectActivePresence(harness.handler, sessionId);
 
     (harness.host.handleImageGenerationBegin as (sessionId: SessionId, event: unknown) => void)(
@@ -161,12 +171,11 @@ describe('MessageHandler image upload flow', () => {
       }
     );
 
-    await vi.waitFor(() => {
-      expect(harness.sessionDoc.setStatus).toHaveBeenCalledWith({
-        type: 'running',
-        activity: 'image_generation',
-      });
+    expect(presenceInternals(harness.handler).sessionActivePresence.getStatus(sessionId)).toEqual({
+      type: 'running',
+      activity: 'image_generation',
     });
+    expect(harness.sessionDoc.setStatus).not.toHaveBeenCalled();
 
     (harness.host.handleImageGenerationEnd as (sessionId: SessionId, event: unknown) => void)(
       sessionId,
@@ -177,17 +186,49 @@ describe('MessageHandler image upload flow', () => {
       }
     );
 
-    await vi.waitFor(() => {
-      expect(harness.sessionDoc.setStatus).toHaveBeenLastCalledWith({ type: 'running' });
+    expect(presenceInternals(harness.handler).sessionActivePresence.getStatus(sessionId)).toEqual({
+      type: 'running',
+    });
+    expect(harness.sessionDoc.setStatus).not.toHaveBeenCalled();
+  });
+
+  it('contains an activity failure and updates presence on the next image event', () => {
+    const harness = createHarness();
+    handlers.push(harness.handler);
+    const sessionId = 'session-image-activity-error' as SessionId;
+    const host = presenceInternals(harness.handler);
+    injectActivePresence(harness.handler, sessionId);
+    vi.spyOn(host.sessionActivePresence, 'getStatus').mockImplementationOnce(() => {
+      throw new Error('Presence unavailable');
+    });
+
+    expect(() =>
+      harness.host.handleImageGenerationBegin(sessionId, {
+        acpSessionId: 'acp-1',
+        callId: 'ig-error',
+      })
+    ).not.toThrow();
+    expect(host.sessionActivePresence.getStatus(sessionId)).toEqual({ type: 'running' });
+
+    harness.host.handleImageGenerationBegin(sessionId, {
+      acpSessionId: 'acp-1',
+      callId: 'ig-next',
+    });
+    expect(host.sessionActivePresence.getStatus(sessionId)).toEqual({
+      type: 'running',
+      activity: 'image_generation',
     });
   });
 
-  it('does not resurrect image generation activity after durable status is idle', async () => {
+  it('does not retarget image activity after the turn has started finalizing', async () => {
     const harness = createHarness();
     handlers.push(harness.handler);
 
     const sessionId = 'session-idle-image-generation' as SessionId;
     injectActivePresence(harness.handler, sessionId);
+    presenceInternals(harness.handler).setSessionActivePresencePhase(sessionId, 'finalizing');
+    await harness.sessionDoc.setStatus({ type: 'idle' });
+    harness.sessionDoc.setStatus.mockClear();
 
     (harness.host.handleImageGenerationBegin as (sessionId: SessionId, event: unknown) => void)(
       sessionId,
@@ -197,10 +238,43 @@ describe('MessageHandler image upload flow', () => {
       }
     );
 
-    await vi.waitFor(() => {
-      expect(harness.sessionDoc.getMetaState).toHaveBeenCalled();
+    expect(presenceInternals(harness.handler).sessionActivePresence.getStatus(sessionId)).toEqual({
+      type: 'running',
+      phase: 'finalizing',
     });
     expect(harness.sessionDoc.setStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not let a late image end undo finalizing or idle', async () => {
+    const harness = createHarness();
+    handlers.push(harness.handler);
+    const sessionId = 'session-image-finalization-race' as SessionId;
+    const host = presenceInternals(harness.handler);
+    await harness.sessionDoc.setStatus({ type: 'running' });
+    harness.sessionDoc.setStatus.mockClear();
+    injectActivePresence(harness.handler, sessionId);
+    harness.host.handleImageGenerationBegin(sessionId, {
+      acpSessionId: 'acp-1',
+      callId: 'ig-race',
+    });
+    expect(host.sessionActivePresence.getStatus(sessionId)).toEqual({
+      type: 'running',
+      activity: 'image_generation',
+    });
+    expect(harness.sessionDoc.setStatus).not.toHaveBeenCalled();
+
+    host.setSessionActivePresencePhase(sessionId, 'finalizing');
+    await harness.sessionDoc.setStatus({ type: 'idle' });
+    harness.host.handleImageGenerationEnd(sessionId, {
+      acpSessionId: 'acp-1',
+      callId: 'ig-race',
+      status: 'completed',
+    });
+    expect(host.sessionActivePresence.getStatus(sessionId)).toEqual({
+      type: 'running',
+      phase: 'finalizing',
+    });
+    expect((await harness.sessionDoc.getMetaState()).status).toEqual({ type: 'idle' });
   });
 
   it('attaches uploaded images as partial success when a later upload fails', async () => {
@@ -594,7 +668,9 @@ describe('MessageHandler image upload flow', () => {
       const validatePath = harness.host.validateSessionImageUploadPath as (
         filePath: string
       ) => Promise<unknown>;
-      await expect(validatePath(linkPath)).rejects.toThrow(/must not be a symlink/);
+      await expect(validatePath.call(harness.handler, linkPath)).rejects.toThrow(
+        /must not be a symlink/
+      );
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

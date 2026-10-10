@@ -1,9 +1,15 @@
+import { SessionPendingSendsHost } from '../components/chat/session-pending-sends-host';
 import { useEffect, useRef, type ReactNode } from 'react';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, useStore } from 'jotai';
 import { LODY_PRESENCE_HEARTBEAT_MS, type MachineId, type WorkspaceId } from '@lody/shared';
 import { authTokenAtom, runtimeAtom } from '@/atoms/runtime';
-import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom } from '@/atoms';
-import { clearDocMetaCacheAtom, docMetaSubscriptionAtom } from '@/atoms/doc-meta';
+import { setSessionRunConfigDraftAccountAtom } from '@/atoms/session-run-config-drafts';
+import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom, userAtom } from '@/atoms';
+import {
+  clearDocMetaCacheAtom,
+  docMetaSubscriptionAtom,
+  readReadyDocMetaCache,
+} from '@/atoms/doc-meta';
 import {
   clearLodyPresenceStatesAtom,
   setLodyPresenceNowMsAtom,
@@ -28,13 +34,15 @@ import { createWorkspaceRuntime } from './create-workspace-runtime';
 import { resolveCloudPlatformRuntimePolicy } from './cloud-platform-runtime-policy';
 import type { EagerSyncSurface } from './background-sync-coordinator';
 import { resolveEffectiveWorkspaceId } from './resolve-effective-workspace-id';
-import { useImplicitLocalWorkspace } from './local-platform-provider';
+import { getLocalWorkspaceSlug, useImplicitLocalWorkspace } from './local-platform-provider';
+import { isWarmWindow } from '@/lib/desktop-window';
 import { capturePostHogEvent } from '@/lib/posthog-analytics';
 import { maybeClearLodyCacheOnBoot } from '@/lib/clear-local-cache';
 import { isElectronRenderer } from '@/lib/electron';
 import { isNativeAppShell } from '@/lib/native-platform';
 import { usePlatform } from '@lody/platform/react';
 import { useVisibleMachineMetas } from '@/hooks/use-visible-machine-metas';
+import { subscribeLocalAuthStateCleared } from '@/lib/auth';
 
 const isExpectedRuntimeShutdownError = (error: unknown): boolean => {
   if (!(error instanceof Error)) {
@@ -65,14 +73,17 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   const platform = usePlatform();
   // Use workspaceSlug for runtime initialization (available immediately from URL)
   // Use workspaceId for WebSocket connections (requires server response)
-  const workspaceSlug = useAtomValue(currentWorkspaceSlugAtom);
+  const routeWorkspaceSlug = useAtomValue(currentWorkspaceSlugAtom);
   const workspaceId = useAtomValue(currentWorkspaceIdAtom);
   const localProbeResult = useAtomValue(localProbeResultAtom);
   const localProbeAttempted = useAtomValue(localProbeAttemptedAtom);
   const localAgentEnabled = useAtomValue(localAgentEnabledAtom);
   const token = useAtomValue(authTokenAtom);
+  const currentUser = useAtomValue(userAtom);
+  const previousShutdown = useRef<Promise<void>>(Promise.resolve());
   const runtime = useAtomValue(runtimeAtom);
   const setRuntime = useSetAtom(runtimeAtom);
+  const store = useStore();
   const setControlConnectionState = useSetAtom(lodyControlConnectionStateAtom);
   const setRuntimeInitializing = useSetAtom(runtimeInitializingAtom);
   const setBrowserOnline = useSetAtom(browserOnlineAtom);
@@ -113,8 +124,38 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
   // Local (open-source) platform: the effective workspace id is the CLI's
   // implicit workspace — no cached/server id arbitration, no auth involved.
   const isLocalPlatform = platform.sync.mode === 'local';
+  const accountId = currentUser?.id ?? (isLocalPlatform ? 'local' : null);
+  const draftAccountId = currentUser?.id ?? null;
+  const setRunConfigDraftAccount = useSetAtom(setSessionRunConfigDraftAccountAtom);
+  useEffect(() => {
+    // An absent auth snapshot can be hydration. Only confirmed logout below
+    // ends ownership; a positive identity also handles direct account changes.
+    if (draftAccountId) setRunConfigDraftAccount(draftAccountId);
+  }, [draftAccountId, setRunConfigDraftAccount]);
+  useEffect(() => {
+    // A fresh authenticated token can establish a new login for the same user
+    // even when the cached user id never changed. Merely clearing the owner
+    // must not re-arm it from the unchanged, pre-logout identity/token.
+    if (token && draftAccountId) setRunConfigDraftAccount(draftAccountId);
+  }, [token, draftAccountId, setRunConfigDraftAccount]);
+  useEffect(() => {
+    const unsubscribe = subscribeLocalAuthStateCleared(() => setRunConfigDraftAccount(null));
+    return () => {
+      unsubscribe();
+      setRunConfigDraftAccount(null);
+    };
+    // This is the app owner, not the workspace runtime. Route/workspace changes
+    // and transport restarts must preserve unsent drafts.
+  }, [setRunConfigDraftAccount]);
   const telemetryEnabled = platform.capabilities.has('telemetry');
   const implicitLocalWorkspace = useImplicitLocalWorkspace();
+  // Start the local Repo and metadata sync while the spare still has no route.
+  // A matching claim keeps these effect keys unchanged and retains the runtime.
+  const workspaceSlug =
+    routeWorkspaceSlug ??
+    (isLocalPlatform && isWarmWindow() && implicitLocalWorkspace
+      ? getLocalWorkspaceSlug(implicitLocalWorkspace)
+      : null);
   const { ready: localAgentRuntimeReady } = resolveCloudPlatformRuntimePolicy({
     electron: isElectronRenderer(),
     localAgentEnabled,
@@ -233,8 +274,10 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     const { workspaceIdSource } = workspaceIdResolutionLogRef.current;
     setControlConnectionState('idle');
 
-    void (async () => {
+    const initialization = (async () => {
       try {
+        await previousShutdown.current;
+        if (disposed) return;
         // If the user requested a cache clear before the last reload, delete all
         // lody* IndexedDB + Cache Storage now — before the runtime opens the repo
         // DB, while nothing holds those databases open. No-op on normal boots.
@@ -253,6 +296,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
           eagerSyncSurface,
         });
         workspaceRuntime = await createWorkspaceRuntime({
+          accountId,
           workspaceSlug,
           workspaceId: effectiveWorkspaceId,
           apiBaseUrl: API_BASE_URL,
@@ -264,9 +308,13 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
             const snapshot = authorizedMachineIdsRef.current;
             return snapshot?.workspaceId === effectiveWorkspaceId ? snapshot.machineIds : null;
           },
+          readDocMetaCache: (repo) => readReadyDocMetaCache(store, repo),
           ...(telemetryEnabled
             ? {
-                onAnalyticsEvent: (event: { name: string; properties?: Record<string, unknown> }) => {
+                onAnalyticsEvent: (event: {
+                  name: string;
+                  properties?: Record<string, unknown>;
+                }) => {
                   capturePostHogEvent(postHogRef.current, event.name, event.properties);
                 },
               }
@@ -346,13 +394,15 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       setRuntimeInitializing(true);
       clearDocMetaCache();
       clearPresenceStates();
-      if (workspaceRuntime) {
-        void workspaceRuntime.dispose().catch((error: unknown) => {
-          logRuntimeOperationError('cleanup dispose', error);
-        });
-      }
+      previousShutdown.current = initialization.then(async () => {
+        if (workspaceRuntime) await workspaceRuntime.dispose();
+      });
+      void previousShutdown.current.catch((error: unknown) => {
+        logRuntimeOperationError('cleanup dispose', error);
+      });
     };
   }, [
+    accountId,
     clearDocMetaCache,
     clearPresenceStates,
     isLocalPlatform,
@@ -362,6 +412,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     setRuntime,
     setPresenceStates,
     setPresenceSyncState,
+    store,
     telemetryEnabled,
     workspaceSlug,
     effectiveWorkspaceId,
@@ -373,6 +424,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
       setControlConnectionState('idle');
       return;
     }
+    if (runtime.accountId !== accountId) return;
     if (!token) {
       setControlConnectionState('idle');
       void runtime.setAuthToken(null).catch((error: unknown) => {
@@ -383,7 +435,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     void runtime.setAuthToken(token).catch((error: unknown) => {
       logRuntimeOperationError('set auth token', error);
     });
-  }, [runtime, setControlConnectionState, token]);
+  }, [accountId, runtime, setControlConnectionState, token]);
 
   useEffect(() => {
     if (!runtime || !localProbeAttempted) {
@@ -406,5 +458,10 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     };
   }, [setBrowserOnline]);
 
-  return children;
+  return (
+    <>
+      {children}
+      <SessionPendingSendsHost runtime={runtime} />
+    </>
+  );
 }

@@ -1,3 +1,23 @@
+import {
+  MemoryProviderRequestSchema,
+  MemoryProviderResponseSchema,
+  type MemoryProviderRequest,
+  type MemoryProviderResponse,
+} from '@lody/shared';
+import {
+  IosSimulatorRequestSchema,
+  IosSimulatorResponseSchema,
+  IosSimulatorRemoteResponseSchema,
+  RpcSecretPublicKeySchema,
+  type IosSimulatorRemoteResponse,
+  type IosSimulatorRequest,
+  type IosSimulatorResponse,
+} from '@lody/shared';
+import {
+  DEFAULT_PREVIEW_CREATE_TIMEOUT_MS,
+  PreviewControlProofSchema,
+  type PreviewControlProof,
+} from '@lody/shared';
 import { z } from 'zod';
 import {
   StreamsClient,
@@ -35,6 +55,7 @@ import type {
   MachineAcpAuthenticateResponse,
   MachineAcpAuthenticationProgressMessage,
   MachineAcpCapabilitiesRefreshResponse,
+  MachinePiExtensionsResponse,
   RpcSecretEnvelope,
   RpcSecretPublicKey,
   PreviewTarget,
@@ -43,8 +64,11 @@ import type {
   MachinePingResponse,
   MachineRestartResponse,
   MachineStatusResponse,
+  MachinePreviewControlResponse,
   MachineUpgradeResponse,
   SessionCancelResponse,
+  SessionGoalAction,
+  SessionGoalResponse,
   SessionPreparationCancelSpec,
   SessionPreparationSpec,
   SessionPrepareCancelResponse,
@@ -56,10 +80,15 @@ import type {
   SessionForkResponse,
   SessionForkSpec,
   SessionId,
+  SessionHistoryReadQuery,
   SessionSteerResponse,
   SessionPreviewCreateResponse,
   SessionPreviewRevokeResponse,
+  SessionPreviewStatusResponse,
   SessionTurnInputConfig,
+  SessionHistoryReadResponse,
+  SessionHistoryWriteOperation,
+  SessionHistoryWriteResponse,
   FilePreviewV3Request,
   FilePreviewV3Response,
 } from '@lody/shared';
@@ -84,12 +113,14 @@ import {
   MachineAcpAuthenticateResponseSchema,
   MachineAcpAuthenticationProgressMessageSchema,
   MachineAcpCapabilitiesRefreshResponseSchema,
+  MachinePiExtensionsResponseSchema,
   RpcSecretEnvelopeSchema,
   PreviewTargetSchema,
   MachineBugReportResponseSchema,
   MachinePingResponseSchema,
   MachineRestartResponseSchema,
   MachineStatusResponseSchema,
+  MachinePreviewControlResponseSchema,
   MachineUpgradeResponseSchema,
   SessionCancelResponseSchema,
   SessionPreparationCancelSpecSchema,
@@ -106,11 +137,20 @@ import {
   sessionEditAndResendFailure,
   sessionForkFailure,
   SessionSteerResponseSchema,
+  SessionGoalResponseSchema,
+  SESSION_GOAL_ACTIONS,
   SessionPreviewCreateResponseSchema,
   SessionPreviewRevokeResponseSchema,
+  SessionPreviewStatusResponseSchema,
+  SessionHistoryReadResponseSchema,
+  SessionHistoryReadQuerySchema,
+  SessionHistoryWriteResponseSchema,
+  SessionHistoryWriteOperationSchema,
 } from '@lody/shared';
 import {
   encryptRpcSecret,
+  getIosSimulatorViewerSecretContext,
+  type RpcSecretRecipient,
   getMachineAcpAuthenticationInputSecretContext,
   getMachineAcpAuthorizationCodeSecretContext,
 } from './rpc-secret';
@@ -165,6 +205,8 @@ export const normalizeLoroGatewayBaseUrl = (baseUrl?: string | null): string => 
 
 export const LoroStreamsRpcMethodSchema = z.enum([
   'machine/status',
+  'machine/preview-control',
+  'ios-simulator/control',
   'machine/ping',
   'machine/restart',
   'machine/upgrade',
@@ -173,6 +215,8 @@ export const LoroStreamsRpcMethodSchema = z.enum([
   'machine/acp-authenticate',
   'machine/acp-binary-status',
   'machine/acp-binary-install',
+  'machine/memory',
+  'machine/pi-extensions',
   'machine/bug-report',
   'code-collab/open-text',
   'code-collab/refresh-text',
@@ -189,14 +233,18 @@ export const LoroStreamsRpcMethodSchema = z.enum([
   'session/cancel',
   'session/live-status',
   'session/steer',
+  'session/goal',
   'session/terminate',
   'session/fork',
   'session/edit-and-resend',
   'session/dispatch-turn',
   'session/prepare',
   'session/prepare-cancel',
+  'session/history-read',
+  'session/history-write',
   'session/preview-create',
   'session/preview-revoke',
+  'session/preview-status',
   'local-project/git-state',
   'local-project/control',
 ]);
@@ -228,6 +276,11 @@ const BaseRpcRequestSchema = z
 
 export const LoroMachineStatusRpcRequestSchema = BaseRpcRequestSchema.extend({
   method: z.literal('machine/status'),
+  params: z.object({}).strict(),
+}).strict();
+
+export const LoroMachinePreviewControlRpcRequestSchema = BaseRpcRequestSchema.extend({
+  method: z.literal('machine/preview-control'),
   params: z.object({}).strict(),
 }).strict();
 
@@ -268,6 +321,7 @@ export const LoroMachineAcpCapabilitiesRefreshRpcRequestSchema = BaseRpcRequestS
   params: z
     .object({
       configId: AgentConfigIdSchema,
+      force: z.boolean().optional(),
     })
     .strict(),
 }).strict();
@@ -332,6 +386,20 @@ export const LoroMachineAcpBinaryInstallRpcRequestSchema = BaseRpcRequestSchema.
   params: z
     .object({
       agentType: z.string().trim().min(1),
+    })
+    .strict(),
+}).strict();
+
+export const LoroMemoryProviderRpcRequestSchema = BaseRpcRequestSchema.extend({
+  method: z.literal('machine/memory'),
+  params: MemoryProviderRequestSchema,
+}).strict();
+
+export const LoroMachinePiExtensionsRpcRequestSchema = BaseRpcRequestSchema.extend({
+  method: z.literal('machine/pi-extensions'),
+  params: z
+    .object({
+      configId: AgentConfigIdSchema.optional(),
     })
     .strict(),
 }).strict();
@@ -419,7 +487,10 @@ export const LoroFilePreviewRpcRequestSchema = BaseRpcRequestSchema.extend({
  * new method that reuses the envelope.
  */
 export const isOwnerScopedEncryptedRpcMethod = (method: string): boolean =>
-  method.startsWith('code-collab/') || method === 'file/preview';
+  method.startsWith('code-collab/') ||
+  method === 'file/preview' ||
+  method === 'session/history-read' ||
+  method === 'session/history-write';
 
 export const LoroSessionCancelRpcRequestSchema = BaseRpcRequestSchema.extend({
   method: z.literal('session/cancel'),
@@ -427,6 +498,7 @@ export const LoroSessionCancelRpcRequestSchema = BaseRpcRequestSchema.extend({
     .object({
       sessionId: SessionIdSchema,
       turnId: z.string().trim().min(1),
+      subagentTaskId: z.string().trim().min(1).optional(),
     })
     .strict(),
 }).strict();
@@ -436,6 +508,18 @@ export const LoroSessionLiveStatusRpcRequestSchema = BaseRpcRequestSchema.extend
   params: z
     .object({
       sessionId: z.string().trim().min(1),
+    })
+    .strict(),
+}).strict();
+
+export const LoroSessionGoalRpcRequestSchema = BaseRpcRequestSchema.extend({
+  method: z.literal('session/goal'),
+  params: z
+    .object({
+      sessionId: z.string().trim().min(1),
+      action: z.enum(SESSION_GOAL_ACTIONS),
+      objective: z.string().trim().min(1).optional(),
+      userId: z.string().trim().min(1),
     })
     .strict(),
 }).strict();
@@ -507,12 +591,36 @@ export const LoroSessionPrepareCancelRpcRequestSchema = BaseRpcRequestSchema.ext
   params: SessionPreparationCancelSpecSchema,
 }).strict();
 
+/** Roost history payloads are encrypted with the owner-session envelope. */
+export const LoroSessionHistoryReadRpcRequestSchema = BaseRpcRequestSchema.extend({
+  method: z.literal('session/history-read'),
+  params: CodeCollabV2RpcContentEnvelopeSchema,
+}).strict();
+
+export const LoroSessionHistoryWriteRpcRequestSchema = BaseRpcRequestSchema.extend({
+  method: z.literal('session/history-write'),
+  params: CodeCollabV2RpcContentEnvelopeSchema,
+}).strict();
+
+export const SessionHistoryReadRpcPayloadSchema = z
+  .object({ sessionId: SessionIdSchema, query: SessionHistoryReadQuerySchema })
+  .strict();
+
+export const SessionHistoryWriteRpcPayloadSchema = z
+  .object({
+    sessionId: SessionIdSchema,
+    operation: SessionHistoryWriteOperationSchema,
+    payload: z.record(z.string(), z.unknown()),
+  })
+  .strict();
+
 export const LoroSessionPreviewCreateRpcRequestSchema = BaseRpcRequestSchema.extend({
   method: z.literal('session/preview-create'),
   params: z
     .object({
       sessionId: z.string().trim().min(1),
       requestedByUserId: z.string().trim().min(1),
+      proof: PreviewControlProofSchema,
       target: PreviewTargetSchema,
       approval: z
         .object({
@@ -523,7 +631,27 @@ export const LoroSessionPreviewCreateRpcRequestSchema = BaseRpcRequestSchema.ext
           confirmedAt: z.number().int().nonnegative(),
         })
         .strict(),
-      replaceExisting: z.boolean().optional(),
+      restart: z.boolean().optional(),
+    })
+    .strict(),
+}).strict();
+
+export const LoroIosSimulatorRpcRequestSchema = BaseRpcRequestSchema.extend({
+  method: z.literal('ios-simulator/control'),
+  params: IosSimulatorRequestSchema.extend({
+    proof: PreviewControlProofSchema,
+    responseKey: RpcSecretPublicKeySchema,
+  }).strict(),
+}).strict();
+
+export const LoroSessionPreviewStatusRpcRequestSchema = BaseRpcRequestSchema.extend({
+  method: z.literal('session/preview-status'),
+  params: z
+    .object({
+      sessionId: z.string().trim().min(1),
+      requestedByUserId: z.string().trim().min(1),
+      proof: PreviewControlProofSchema,
+      renewEndpointId: z.string().trim().min(1).optional(),
     })
     .strict(),
 }).strict();
@@ -534,6 +662,7 @@ export const LoroSessionPreviewRevokeRpcRequestSchema = BaseRpcRequestSchema.ext
     .object({
       sessionId: z.string().trim().min(1),
       requestedByUserId: z.string().trim().min(1),
+      proof: PreviewControlProofSchema,
       reason: z.string().trim().min(1).optional(),
     })
     .strict(),
@@ -560,6 +689,7 @@ export const LoroLocalProjectControlRpcRequestSchema = BaseRpcRequestSchema.exte
 
 export const LoroStreamsRpcRequestSchema = z.discriminatedUnion('method', [
   LoroMachineStatusRpcRequestSchema,
+  LoroMachinePreviewControlRpcRequestSchema,
   LoroMachinePingRpcRequestSchema,
   LoroMachineRestartRpcRequestSchema,
   LoroMachineUpgradeRpcRequestSchema,
@@ -568,6 +698,8 @@ export const LoroStreamsRpcRequestSchema = z.discriminatedUnion('method', [
   LoroMachineAcpAuthenticateRpcRequestSchema,
   LoroMachineAcpBinaryStatusRpcRequestSchema,
   LoroMachineAcpBinaryInstallRpcRequestSchema,
+  LoroMemoryProviderRpcRequestSchema,
+  LoroMachinePiExtensionsRpcRequestSchema,
   LoroMachineBugReportRpcRequestSchema,
   LoroCodeCollabV2OpenTextRpcRequestSchema,
   LoroCodeCollabV2RefreshTextRpcRequestSchema,
@@ -582,14 +714,19 @@ export const LoroStreamsRpcRequestSchema = z.discriminatedUnion('method', [
   LoroSessionCancelRpcRequestSchema,
   LoroSessionLiveStatusRpcRequestSchema,
   LoroSessionSteerRpcRequestSchema,
+  LoroSessionGoalRpcRequestSchema,
   LoroSessionTerminateRpcRequestSchema,
   LoroSessionForkRpcRequestSchema,
   LoroSessionEditAndResendRpcRequestSchema,
   LoroSessionDispatchTurnRpcRequestSchema,
   LoroSessionPrepareRpcRequestSchema,
   LoroSessionPrepareCancelRpcRequestSchema,
+  LoroSessionHistoryReadRpcRequestSchema,
+  LoroSessionHistoryWriteRpcRequestSchema,
   LoroSessionPreviewCreateRpcRequestSchema,
   LoroSessionPreviewRevokeRpcRequestSchema,
+  LoroSessionPreviewStatusRpcRequestSchema,
+  LoroIosSimulatorRpcRequestSchema,
   LoroLocalProjectGitStateRpcRequestSchema,
   LoroLocalProjectControlRpcRequestSchema,
 ]);
@@ -688,6 +825,9 @@ export type LoroMachineAcpBinaryStatusRpcRequest = z.infer<
 export type LoroMachineAcpBinaryInstallRpcRequest = z.infer<
   typeof LoroMachineAcpBinaryInstallRpcRequestSchema
 >;
+export type LoroMachinePiExtensionsRpcRequest = z.infer<
+  typeof LoroMachinePiExtensionsRpcRequestSchema
+>;
 export type LoroMachineBugReportRpcRequest = z.infer<typeof LoroMachineBugReportRpcRequestSchema>;
 export type LoroCodeCollabV2OpenTextRpcRequest = z.infer<
   typeof LoroCodeCollabV2OpenTextRpcRequestSchema
@@ -725,6 +865,12 @@ export type LoroSessionEditAndResendRpcRequest = z.infer<
 export type LoroSessionPrepareRpcRequest = z.infer<typeof LoroSessionPrepareRpcRequestSchema>;
 export type LoroSessionPrepareCancelRpcRequest = z.infer<
   typeof LoroSessionPrepareCancelRpcRequestSchema
+>;
+export type LoroSessionHistoryReadRpcRequest = z.infer<
+  typeof LoroSessionHistoryReadRpcRequestSchema
+>;
+export type LoroSessionHistoryWriteRpcRequest = z.infer<
+  typeof LoroSessionHistoryWriteRpcRequestSchema
 >;
 export type LoroSessionPreviewCreateRpcRequest = z.infer<
   typeof LoroSessionPreviewCreateRpcRequestSchema
@@ -1408,6 +1554,7 @@ const base64UrlToBytes = (value: string): Uint8Array => {
 
 export type LoroMachineRpcResult =
   | MachineStatusResponse
+  | MachinePreviewControlResponse
   | MachinePingResponse
   | MachineRestartResponse
   | MachineUpgradeResponse
@@ -1420,18 +1567,25 @@ export type LoroMachineRpcResult =
   | MachineAcpBinaryStatusResponse
   | MachineAcpBinaryInstallResponse
   | MachineAcpBinaryProgressMessage
+  | MemoryProviderResponse
+  | MachinePiExtensionsResponse
   | MachineBugReportResponse
   | SessionCancelResponse
   | LoroSessionLiveStatusRpcResponse
   | SessionSteerResponse
+  | SessionGoalResponse
   | SessionTerminateResponse
   | SessionForkResponse
   | SessionEditAndResendResponse
   | SessionDispatchTurnResponse
   | SessionPrepareResponse
   | SessionPrepareCancelResponse
+  | SessionHistoryReadResponse
+  | SessionHistoryWriteResponse
   | SessionPreviewCreateResponse
   | SessionPreviewRevokeResponse
+  | SessionPreviewStatusResponse
+  | IosSimulatorRemoteResponse
   | LocalProjectGitStateRpcResponse
   | LocalProjectControlResponse;
 
@@ -1451,6 +1605,7 @@ const toLegacyRpcErrorResponse = (
   forkContext?: { sourceSessionId: string; targetSessionId: string },
   editAndResendContext?: { sessionId: string; replacementUserTurnId: string },
   steerContext?: { sessionId: string; userTurnId: string },
+  goalContext?: { sessionId: string; action: SessionGoalAction },
   previewContext?: { sessionId: string },
   localProjectContext?: {
     workspaceId?: string;
@@ -1458,8 +1613,18 @@ const toLegacyRpcErrorResponse = (
     type?: LocalProjectControlRequest['type'];
   },
   dispatchContext?: { sessionId: string; userTurnId: string },
-  preparationContext?: { preparationId: string; sessionId: string }
+  preparationContext?: { preparationId: string; sessionId: string },
+  historyContext?: { sessionId: string; operation?: SessionHistoryWriteOperation }
 ): LoroMachineRpcResult => {
+  if (method === 'machine/preview-control') {
+    return {
+      type: 'machine/preview-control_response',
+      machineId: machineId as MachinePreviewControlResponse['machineId'],
+      success: false,
+      error: `${error.code}: ${error.message}`,
+    };
+  }
+
   if (method === 'machine/status') {
     return {
       type: 'machine/status_response',
@@ -1549,6 +1714,13 @@ const toLegacyRpcErrorResponse = (
     };
   }
 
+  if (method === 'machine/memory')
+    return { type: 'machine/memory', status: 'error', memories: [], error: error.message };
+
+  if (method === 'machine/pi-extensions') {
+    return { success: false, error: error.message };
+  }
+
   if (method === 'machine/bug-report') {
     return {
       type: 'machine/bug-report_response',
@@ -1603,6 +1775,17 @@ const toLegacyRpcErrorResponse = (
     );
   }
 
+  if (method === 'session/goal') {
+    return {
+      type: 'session/goal_response',
+      sessionId: (goalContext?.sessionId ?? '') as SessionGoalResponse['sessionId'],
+      action: goalContext?.action ?? 'pause',
+      accepted: false,
+      disposition: 'error',
+      error: `${error.code}: ${error.message}`,
+    };
+  }
+
   if (method === 'session/steer') {
     return {
       type: 'session/steer_response',
@@ -1647,6 +1830,25 @@ const toLegacyRpcErrorResponse = (
     };
   }
 
+  if (method === 'session/history-read') {
+    return {
+      type: 'session/history-read_response',
+      sessionId: (historyContext?.sessionId ?? '') as SessionHistoryReadResponse['sessionId'],
+      success: false,
+      error: `${error.code}: ${error.message}`,
+    };
+  }
+
+  if (method === 'session/history-write') {
+    return {
+      type: 'session/history-write_response',
+      sessionId: (historyContext?.sessionId ?? '') as SessionHistoryWriteResponse['sessionId'],
+      operation: historyContext?.operation ?? 'append',
+      success: false,
+      error: `${error.code}: ${error.message}`,
+    };
+  }
+
   if (method === 'file/preview') {
     const parsedData = FilePreviewV3ErrorSchema.safeParse(error.data);
     if (parsedData.success) {
@@ -1681,6 +1883,24 @@ const toLegacyRpcErrorResponse = (
       retryable: error.code === 'request_failed' || error.code === 'machine_rpc_unavailable',
     };
   }
+
+  if (method === 'ios-simulator/control')
+    return {
+      type: 'ios-simulator/control_response',
+      sessionId: previewContext?.sessionId ?? '',
+      success: false,
+      error: 'failed',
+      message: error.message,
+    };
+
+  if (method === 'session/preview-status')
+    return {
+      type: 'session/preview-status_response',
+      sessionId: (previewContext?.sessionId ?? '') as SessionId,
+      success: false,
+      error: 'internal_error',
+      message: `${error.code}: ${error.message}`,
+    };
 
   if (method === 'session/preview-create') {
     return {
@@ -1744,6 +1964,11 @@ const parseRpcSuccessResult = async (
     const parsed = MachineStatusResponseSchema.safeParse(response.result);
     return parsed.success ? (parsed.data as MachineStatusResponse) : null;
   }
+
+  if (response.method === 'machine/preview-control') {
+    const parsed = MachinePreviewControlResponseSchema.safeParse(response.result);
+    return parsed.success ? (parsed.data as MachinePreviewControlResponse) : null;
+  }
   if (response.method === 'machine/ping') {
     const parsed = MachinePingResponseSchema.safeParse(response.result);
     return parsed.success ? (parsed.data as MachinePingResponse) : null;
@@ -1772,6 +1997,14 @@ const parseRpcSuccessResult = async (
     const parsed = MachineAcpBinaryInstallResponseSchema.safeParse(response.result);
     return parsed.success ? (parsed.data as MachineAcpBinaryInstallResponse) : null;
   }
+  if (response.method === 'machine/memory') {
+    const parsed = MemoryProviderResponseSchema.safeParse(response.result);
+    return parsed.success ? parsed.data : null;
+  }
+  if (response.method === 'machine/pi-extensions') {
+    const parsed = MachinePiExtensionsResponseSchema.safeParse(response.result);
+    return parsed.success ? (parsed.data as MachinePiExtensionsResponse) : null;
+  }
   if (response.method === 'machine/bug-report') {
     const parsed = MachineBugReportResponseSchema.safeParse(response.result);
     return parsed.success ? (parsed.data as MachineBugReportResponse) : null;
@@ -1787,6 +2020,10 @@ const parseRpcSuccessResult = async (
   if (response.method === 'session/steer') {
     const parsed = SessionSteerResponseSchema.safeParse(response.result);
     return parsed.success ? (parsed.data as SessionSteerResponse) : null;
+  }
+  if (response.method === 'session/goal') {
+    const parsed = SessionGoalResponseSchema.safeParse(response.result);
+    return parsed.success ? (parsed.data as SessionGoalResponse) : null;
   }
   if (response.method === 'session/terminate') {
     const parsed = SessionTerminateResponseSchema.safeParse(response.result);
@@ -1821,11 +2058,27 @@ const parseRpcSuccessResult = async (
       envelope.data,
       expectedCodeCollabOwnerSessionId
     );
+    if (response.method === 'session/history-read') {
+      const parsed = SessionHistoryReadResponseSchema.safeParse(decrypted);
+      return parsed.success ? (parsed.data as SessionHistoryReadResponse) : null;
+    }
+    if (response.method === 'session/history-write') {
+      const parsed = SessionHistoryWriteResponseSchema.safeParse(decrypted);
+      return parsed.success ? (parsed.data as SessionHistoryWriteResponse) : null;
+    }
     if (response.method === 'file/preview') {
       const previewParsed = FilePreviewV3ResponseSchema.safeParse(decrypted);
       return previewParsed.success ? previewParsed.data : null;
     }
     const parsed = CodeCollabV2RpcResponseSchema.safeParse(decrypted);
+    return parsed.success ? parsed.data : null;
+  }
+  if (response.method === 'ios-simulator/control') {
+    const parsed = IosSimulatorRemoteResponseSchema.safeParse(response.result);
+    return parsed.success ? parsed.data : null;
+  }
+  if (response.method === 'session/preview-status') {
+    const parsed = SessionPreviewStatusResponseSchema.safeParse(response.result);
     return parsed.success ? parsed.data : null;
   }
   if (response.method === 'session/preview-create') {
@@ -1861,6 +2114,7 @@ export type LoroStreamsRpcPendingRegistration = {
   forkContext?: { sourceSessionId: string; targetSessionId: string };
   editAndResendContext?: { sessionId: string; replacementUserTurnId: string };
   steerContext?: { sessionId: string; userTurnId: string };
+  goalContext?: { sessionId: string; action: SessionGoalAction };
   previewContext?: { sessionId: string };
   localProjectContext?: {
     workspaceId?: string;
@@ -1869,6 +2123,7 @@ export type LoroStreamsRpcPendingRegistration = {
   };
   dispatchContext?: { sessionId: string; userTurnId: string };
   preparationContext?: { preparationId: string; sessionId: string };
+  historyContext?: { sessionId: string; operation?: SessionHistoryWriteOperation };
   codeCollabOwnerSessionId?: string;
   onAcpBinaryProgress?: (message: MachineAcpBinaryProgressMessage) => void;
   onAcpAuthenticationProgress?: (message: MachineAcpAuthenticationProgressMessage) => void;
@@ -1879,6 +2134,14 @@ export type LoroStreamsRpcPendingRequest = LoroStreamsRpcPendingRegistration & {
   appendFinishedAtMs?: number;
   resolve: (value: LoroMachineRpcResult | null) => void;
   timeoutId: ReturnType<typeof setTimeout>;
+  /**
+   * When the current `timeoutId` was armed. `startedAtMs` still marks the
+   * request, so traces can report the whole wait and the silent tail of it
+   * separately.
+   */
+  timeoutArmedAtMs: number;
+  /** Progress frames seen for this request, for the timeout trace. */
+  progressFrames: number;
 };
 
 export class LoroStreamsRpcResponseDispatcher {
@@ -1939,40 +2202,76 @@ export class LoroStreamsRpcResponseDispatcher {
     return await this.startedPromise;
   }
 
+  /**
+   * Registers a pending call under an INACTIVITY deadline, not an absolute one.
+   *
+   * `timeoutMs` is a backstop for a daemon that died without replying, so it
+   * has to measure silence. An absolute timer measures the machine's work
+   * instead, and then a request the machine is actively reporting progress on
+   * expires anyway — which is the failure the budget in
+   * `@lody/shared/acp-startup-budget` claims cannot happen. Every progress
+   * frame re-arms the timer through {@link renewPending}; that machine is by
+   * definition alive, and the deadline for the work itself is the machine's,
+   * not ours.
+   */
   registerPending(
     requestId: string,
     registration: LoroStreamsRpcPendingRegistration
   ): Promise<LoroMachineRpcResult | null> {
     return new Promise<LoroMachineRpcResult | null>((resolve) => {
-      const timeoutId = setTimeout(() => {
-        const pending = this.pending.get(requestId);
-        this.pending.delete(requestId);
-        const elapsedMs = Date.now() - registration.startedAtMs;
-        this.options.trace?.('machine rpc transport response timeout', {
-          workspaceId: this.options.workspaceId,
-          machineId: registration.machineId,
-          method: registration.method,
-          rpcRequestId: requestId,
-          timeoutMs: registration.timeoutMs,
-          elapsedMs,
-          responseAfterAppendMs:
-            pending?.appendFinishedAtMs === undefined
-              ? undefined
-              : Date.now() - pending.appendFinishedAtMs,
-          responseStreamId: this.responseStreamId,
-        });
-        // A timed-out call with no response is the only signal that an SSE
-        // connection is open but not delivering appends; the transport-level
-        // read looks perfectly healthy in that failure.
-        this.noteLiveModeResponseTimeout();
-        resolve(null);
-      }, registration.timeoutMs);
       this.pending.set(requestId, {
         ...registration,
         resolve,
-        timeoutId,
+        timeoutId: this.armTimeout(requestId, registration),
+        timeoutArmedAtMs: Date.now(),
+        progressFrames: 0,
       });
     });
+  }
+
+  private armTimeout(
+    requestId: string,
+    registration: LoroStreamsRpcPendingRegistration
+  ): ReturnType<typeof setTimeout> {
+    return setTimeout(() => {
+      const pending = this.pending.get(requestId);
+      this.pending.delete(requestId);
+      const now = Date.now();
+      this.options.trace?.('machine rpc transport response timeout', {
+        workspaceId: this.options.workspaceId,
+        machineId: registration.machineId,
+        method: registration.method,
+        rpcRequestId: requestId,
+        timeoutMs: registration.timeoutMs,
+        elapsedMs: now - registration.startedAtMs,
+        // The two numbers that separate "never started" from "went quiet
+        // halfway": how long the machine had been silent, and whether it had
+        // said anything at all before that.
+        silentMs: pending === undefined ? undefined : now - pending.timeoutArmedAtMs,
+        progressFrames: pending?.progressFrames,
+        responseAfterAppendMs:
+          pending?.appendFinishedAtMs === undefined ? undefined : now - pending.appendFinishedAtMs,
+        responseStreamId: this.responseStreamId,
+      });
+      // A timed-out call with no response is the only signal that an SSE
+      // connection is open but not delivering appends; the transport-level
+      // read looks perfectly healthy in that failure.
+      this.noteLiveModeResponseTimeout();
+      pending?.resolve(null);
+    }, registration.timeoutMs);
+  }
+
+  /**
+   * Restarts the inactivity deadline after a progress frame.
+   *
+   * Only frames that belong to a live pending call reach this, so a stale or
+   * unknown id cannot hold a request open.
+   */
+  private renewPending(requestId: string, pending: LoroStreamsRpcPendingRequest): void {
+    clearTimeout(pending.timeoutId);
+    pending.timeoutId = this.armTimeout(requestId, pending);
+    pending.timeoutArmedAtMs = Date.now();
+    pending.progressFrames += 1;
   }
 
   markAppendFinished(requestId: string, appendFinishedAtMs: number = Date.now()): void {
@@ -2140,6 +2439,10 @@ export class LoroStreamsRpcResponseDispatcher {
     if (!parsed.data.error) {
       const progress = MachineAcpBinaryProgressMessageSchema.safeParse(parsed.data.result);
       if (progress.success) {
+        // The machine is alive and working. Restart the silence deadline
+        // before handing the frame on, so a long runtime download cannot
+        // expire the call that is reporting it.
+        this.renewPending(parsed.data.id, pending);
         pending.onAcpBinaryProgress?.(progress.data as MachineAcpBinaryProgressMessage);
         return;
       }
@@ -2147,6 +2450,7 @@ export class LoroStreamsRpcResponseDispatcher {
         parsed.data.result
       );
       if (authenticationProgress.success) {
+        this.renewPending(parsed.data.id, pending);
         pending.onAcpAuthenticationProgress?.(
           authenticationProgress.data as MachineAcpAuthenticationProgressMessage
         );
@@ -2195,10 +2499,12 @@ export class LoroStreamsRpcResponseDispatcher {
           finalPending.forkContext,
           finalPending.editAndResendContext,
           finalPending.steerContext,
+          finalPending.goalContext,
           finalPending.previewContext,
           finalPending.localProjectContext,
           finalPending.dispatchContext,
-          finalPending.preparationContext
+          finalPending.preparationContext,
+          finalPending.historyContext
         )
       );
       return;
@@ -2227,10 +2533,12 @@ export class LoroStreamsRpcResponseDispatcher {
           finalPending.forkContext,
           finalPending.editAndResendContext,
           finalPending.steerContext,
+          finalPending.goalContext,
           finalPending.previewContext,
           finalPending.localProjectContext,
           finalPending.dispatchContext,
-          finalPending.preparationContext
+          finalPending.preparationContext,
+          finalPending.historyContext
         )
       );
       return;
@@ -2305,6 +2613,16 @@ export class LoroStreamsMachineRpcClient {
     })) as MachineStatusResponse | null;
   }
 
+  async requestPreviewControl(options?: {
+    timeoutMs?: number;
+  }): Promise<MachinePreviewControlResponse | null> {
+    return (await this.sendRequest({
+      method: 'machine/preview-control',
+      timeoutMs: options?.timeoutMs ?? 15_000,
+      params: {},
+    })) as MachinePreviewControlResponse | null;
+  }
+
   async requestMachinePing(options: {
     requestId: string;
     timeoutMs?: number;
@@ -2356,6 +2674,7 @@ export class LoroStreamsMachineRpcClient {
 
   async requestMachineAcpCapabilitiesRefresh(options: {
     configId: AgentConfigId;
+    force?: boolean;
     onProgress?: (message: MachineAcpBinaryProgressMessage) => void;
     signal?: AbortSignal;
     timeoutMs?: number;
@@ -2367,6 +2686,7 @@ export class LoroStreamsMachineRpcClient {
       signal: options.signal,
       params: {
         configId: options.configId,
+        ...(options.force ? { force: true } : {}),
       },
     })) as MachineAcpCapabilitiesRefreshResponse | null;
   }
@@ -2535,6 +2855,29 @@ export class LoroStreamsMachineRpcClient {
     })) as MachineAcpBinaryInstallResponse | null;
   }
 
+  async requestMemoryProvider(
+    params: MemoryProviderRequest
+  ): Promise<MemoryProviderResponse | null> {
+    return (await this.sendRequest({
+      method: 'machine/memory',
+      timeoutMs: 60_000,
+      params,
+    })) as MemoryProviderResponse | null;
+  }
+
+  async requestMachinePiExtensions(options: {
+    configId?: AgentConfigId;
+    timeoutMs: number;
+  }): Promise<MachinePiExtensionsResponse | null> {
+    return (await this.sendRequest({
+      method: 'machine/pi-extensions',
+      timeoutMs: options.timeoutMs,
+      params: {
+        configId: options.configId,
+      },
+    })) as MachinePiExtensionsResponse | null;
+  }
+
   async requestMachineBugReport(options: {
     description: string;
     reporterUserId: string;
@@ -2555,6 +2898,7 @@ export class LoroStreamsMachineRpcClient {
   async requestSessionCancel(options: {
     sessionId: SessionId;
     turnId: string;
+    subagentTaskId?: string;
     timeoutMs?: number;
   }): Promise<SessionCancelResponse | null> {
     const result = await this.sendRequest({
@@ -2563,6 +2907,7 @@ export class LoroStreamsMachineRpcClient {
       params: {
         sessionId: options.sessionId,
         turnId: options.turnId,
+        subagentTaskId: options.subagentTaskId,
       },
     });
     return result as SessionCancelResponse | null;
@@ -2600,6 +2945,25 @@ export class LoroStreamsMachineRpcClient {
         inputConfig: options.inputConfig,
       },
     })) as SessionSteerResponse | null;
+  }
+
+  async requestSessionGoal(options: {
+    sessionId: string;
+    action: SessionGoalAction;
+    objective?: string;
+    userId: string;
+    timeoutMs?: number;
+  }): Promise<SessionGoalResponse | null> {
+    return (await this.sendRequest({
+      method: 'session/goal',
+      timeoutMs: options.timeoutMs ?? 10_000,
+      params: {
+        sessionId: options.sessionId,
+        action: options.action,
+        ...(options.objective ? { objective: options.objective } : {}),
+        userId: options.userId,
+      },
+    })) as SessionGoalResponse | null;
   }
 
   async requestSessionTerminate(options: {
@@ -2705,6 +3069,39 @@ export class LoroStreamsMachineRpcClient {
         requestedByUserId: options.requestedByUserId,
       },
     })) as SessionPrepareCancelResponse | null;
+  }
+
+  async requestSessionHistoryRead(options: {
+    sessionId: SessionId;
+    query: SessionHistoryReadQuery;
+    ownerSessionId?: string;
+    timeoutMs?: number;
+  }): Promise<SessionHistoryReadResponse | null> {
+    return (await this.sendRequest({
+      method: 'session/history-read',
+      timeoutMs: options.timeoutMs ?? 30_000,
+      ownerSessionId: options.ownerSessionId ?? options.sessionId,
+      params: { sessionId: options.sessionId, query: options.query },
+    })) as SessionHistoryReadResponse | null;
+  }
+
+  async requestSessionHistoryWrite(options: {
+    sessionId: SessionId;
+    ownerSessionId?: string;
+    operation: SessionHistoryWriteOperation;
+    payload: Record<string, unknown>;
+    timeoutMs?: number;
+  }): Promise<SessionHistoryWriteResponse | null> {
+    return (await this.sendRequest({
+      method: 'session/history-write',
+      timeoutMs: options.timeoutMs ?? 30_000,
+      ownerSessionId: options.ownerSessionId ?? options.sessionId,
+      params: {
+        sessionId: options.sessionId,
+        operation: options.operation,
+        payload: options.payload,
+      },
+    })) as SessionHistoryWriteResponse | null;
   }
 
   async requestCodeCollabOpenText(
@@ -2877,27 +3274,77 @@ export class LoroStreamsMachineRpcClient {
   async requestSessionPreviewCreate(options: {
     sessionId: string;
     requestedByUserId: string;
+    proof: PreviewControlProof;
     target: PreviewTarget;
     approval: PreviewTargetApproval;
-    replaceExisting?: boolean;
+    restart?: boolean;
     timeoutMs?: number;
   }): Promise<SessionPreviewCreateResponse | null> {
     return (await this.sendRequest({
       method: 'session/preview-create',
-      timeoutMs: options.timeoutMs ?? 30_000,
+      timeoutMs: options.timeoutMs ?? DEFAULT_PREVIEW_CREATE_TIMEOUT_MS,
       params: {
         sessionId: options.sessionId,
         requestedByUserId: options.requestedByUserId,
+        proof: options.proof,
         target: options.target,
         approval: options.approval,
-        replaceExisting: options.replaceExisting,
+        restart: options.restart,
       },
     })) as SessionPreviewCreateResponse | null;
+  }
+
+  async requestIosSimulatorControl(
+    options: IosSimulatorRequest & {
+      proof: PreviewControlProof;
+      responseRecipient: RpcSecretRecipient;
+      timeoutMs?: number;
+    }
+  ): Promise<IosSimulatorResponse | null> {
+    const { timeoutMs, responseRecipient, ...params } = options;
+    const result = (await this.sendRequest({
+      method: 'ios-simulator/control',
+      timeoutMs: timeoutMs ?? 15_000,
+      params: { ...params, responseKey: responseRecipient.publicKey },
+    })) as IosSimulatorRemoteResponse | null;
+    if (!result?.preview) return result;
+    const { viewerUrlEnvelope, ...preview } = result.preview;
+    const viewerUrl = viewerUrlEnvelope
+      ? await responseRecipient.decrypt(
+          viewerUrlEnvelope,
+          getIosSimulatorViewerSecretContext({
+            ...this.options,
+            sessionId: params.sessionId,
+            requestId: params.proof.requestId,
+          })
+        )
+      : undefined;
+    return IosSimulatorResponseSchema.parse({ ...result, preview: { ...preview, viewerUrl } });
+  }
+
+  async requestSessionPreviewStatus(options: {
+    sessionId: string;
+    requestedByUserId: string;
+    proof: PreviewControlProof;
+    renewEndpointId?: string;
+    timeoutMs?: number;
+  }): Promise<SessionPreviewStatusResponse | null> {
+    return (await this.sendRequest({
+      method: 'session/preview-status',
+      timeoutMs: options.timeoutMs ?? 15_000,
+      params: {
+        sessionId: options.sessionId,
+        requestedByUserId: options.requestedByUserId,
+        proof: options.proof,
+        renewEndpointId: options.renewEndpointId,
+      },
+    })) as SessionPreviewStatusResponse | null;
   }
 
   async requestSessionPreviewRevoke(options: {
     sessionId: string;
     requestedByUserId: string;
+    proof: PreviewControlProof;
     reason?: string;
     timeoutMs?: number;
   }): Promise<SessionPreviewRevokeResponse | null> {
@@ -2907,6 +3354,7 @@ export class LoroStreamsMachineRpcClient {
       params: {
         sessionId: options.sessionId,
         requestedByUserId: options.requestedByUserId,
+        proof: options.proof,
         reason: options.reason,
       },
     })) as SessionPreviewRevokeResponse | null;
@@ -2960,7 +3408,7 @@ export class LoroStreamsMachineRpcClient {
   private async sendRequest(
     args:
       | {
-          method: 'machine/status';
+          method: 'machine/status' | 'machine/preview-control';
           timeoutMs: number;
           params: {};
         }
@@ -3035,6 +3483,14 @@ export class LoroStreamsMachineRpcClient {
             agentType: string;
           };
         }
+      | { method: 'machine/memory'; timeoutMs: number; params: MemoryProviderRequest }
+      | {
+          method: 'machine/pi-extensions';
+          timeoutMs: number;
+          params: {
+            configId?: AgentConfigId;
+          };
+        }
       | {
           method: 'machine/bug-report';
           timeoutMs: number;
@@ -3050,6 +3506,7 @@ export class LoroStreamsMachineRpcClient {
           params: {
             sessionId: SessionId;
             turnId: string;
+            subagentTaskId?: string;
           };
         }
       | {
@@ -3069,6 +3526,16 @@ export class LoroStreamsMachineRpcClient {
             userId: string;
             timestamp: string;
             inputConfig: SessionTurnInputConfig;
+          };
+        }
+      | {
+          method: 'session/goal';
+          timeoutMs: number;
+          params: {
+            sessionId: string;
+            action: SessionGoalAction;
+            objective?: string;
+            userId: string;
           };
         }
       | {
@@ -3108,6 +3575,22 @@ export class LoroStreamsMachineRpcClient {
           method: 'session/prepare-cancel';
           timeoutMs: number;
           params: SessionPreparationCancelSpec;
+        }
+      | {
+          method: 'session/history-read';
+          timeoutMs: number;
+          ownerSessionId: string;
+          params: { sessionId: SessionId; query: SessionHistoryReadQuery };
+        }
+      | {
+          method: 'session/history-write';
+          timeoutMs: number;
+          ownerSessionId: string;
+          params: {
+            sessionId: SessionId;
+            operation: SessionHistoryWriteOperation;
+            payload: Record<string, unknown>;
+          };
         }
       | {
           method: 'code-collab/open-text';
@@ -3172,17 +3655,37 @@ export class LoroStreamsMachineRpcClient {
           method: 'session/preview-create';
           timeoutMs: number;
           params: {
+            proof: PreviewControlProof;
             sessionId: string;
             requestedByUserId: string;
             target: PreviewTarget;
             approval: PreviewTargetApproval;
-            replaceExisting?: boolean;
+            restart?: boolean;
+          };
+        }
+      | {
+          method: 'ios-simulator/control';
+          timeoutMs: number;
+          params: IosSimulatorRequest & {
+            proof: PreviewControlProof;
+            responseKey: RpcSecretPublicKey;
+          };
+        }
+      | {
+          method: 'session/preview-status';
+          timeoutMs: number;
+          params: {
+            proof: PreviewControlProof;
+            sessionId: string;
+            requestedByUserId: string;
+            renewEndpointId?: string;
           };
         }
       | {
           method: 'session/preview-revoke';
           timeoutMs: number;
           params: {
+            proof: PreviewControlProof;
             sessionId: string;
             requestedByUserId: string;
             reason?: string;
@@ -3227,7 +3730,9 @@ export class LoroStreamsMachineRpcClient {
       args.method === 'code-collab/init-directory' ||
       args.method === 'code-collab/lsp-definition' ||
       args.method === 'code-collab/lsp-references' ||
-      args.method === 'file/preview'
+      args.method === 'file/preview' ||
+      args.method === 'session/history-read' ||
+      args.method === 'session/history-write'
         ? args.ownerSessionId
         : undefined;
     this.options.trace?.('machine rpc transport request start', traceContext);
@@ -3283,6 +3788,10 @@ export class LoroStreamsMachineRpcClient {
         args.method === 'session/steer'
           ? { sessionId: args.params.sessionId, userTurnId: args.params.userTurnId }
           : undefined,
+      goalContext:
+        args.method === 'session/goal'
+          ? { sessionId: args.params.sessionId, action: args.params.action }
+          : undefined,
       dispatchContext:
         args.method === 'session/dispatch-turn'
           ? { sessionId: args.params.sessionId, userTurnId: args.params.userTurnId }
@@ -3295,7 +3804,10 @@ export class LoroStreamsMachineRpcClient {
             }
           : undefined,
       previewContext:
-        args.method === 'session/preview-create' || args.method === 'session/preview-revoke'
+        args.method === 'session/preview-create' ||
+        args.method === 'session/preview-revoke' ||
+        args.method === 'session/preview-status' ||
+        args.method === 'ios-simulator/control'
           ? { sessionId: args.params.sessionId }
           : undefined,
       localProjectContext:
@@ -3304,6 +3816,15 @@ export class LoroStreamsMachineRpcClient {
           : args.method === 'local-project/control'
             ? { type: args.params.request.type }
             : undefined,
+      historyContext:
+        args.method === 'session/history-read' || args.method === 'session/history-write'
+          ? {
+              sessionId: args.params.sessionId,
+              ...(args.method === 'session/history-write'
+                ? { operation: args.params.operation }
+                : {}),
+            }
+          : undefined,
       codeCollabOwnerSessionId,
       onAcpBinaryProgress:
         args.method === 'machine/acp-capabilities-refresh' ||
@@ -3356,6 +3877,7 @@ export class LoroStreamsMachineRpcClient {
       let request: LoroStreamsRpcRequest;
       switch (args.method) {
         case 'machine/status':
+        case 'machine/preview-control':
           request = { ...envelope, method: args.method, params: {} };
           break;
         case 'machine/ping':
@@ -3379,6 +3901,12 @@ export class LoroStreamsMachineRpcClient {
         case 'machine/acp-binary-install':
           request = { ...envelope, method: args.method, params: args.params };
           break;
+        case 'machine/memory':
+          request = { ...envelope, method: args.method, params: args.params };
+          break;
+        case 'machine/pi-extensions':
+          request = { ...envelope, method: args.method, params: args.params };
+          break;
         case 'machine/bug-report':
           request = { ...envelope, method: args.method, params: args.params };
           break;
@@ -3389,6 +3917,9 @@ export class LoroStreamsMachineRpcClient {
           request = { ...envelope, method: args.method, params: args.params };
           break;
         case 'session/steer':
+          request = { ...envelope, method: args.method, params: args.params };
+          break;
+        case 'session/goal':
           request = { ...envelope, method: args.method, params: args.params };
           break;
         case 'session/terminate':
@@ -3408,6 +3939,14 @@ export class LoroStreamsMachineRpcClient {
           break;
         case 'session/prepare-cancel':
           request = { ...envelope, method: args.method, params: args.params };
+          break;
+        case 'session/history-read':
+        case 'session/history-write':
+          request = {
+            ...envelope,
+            method: args.method,
+            params: await encryptCodeCollabV2RpcPayload(args.ownerSessionId, args.params),
+          };
           break;
         case 'code-collab/open-text':
           request = {
@@ -3483,6 +4022,10 @@ export class LoroStreamsMachineRpcClient {
           request = { ...envelope, method: args.method, params: args.params };
           break;
         case 'session/preview-revoke':
+        case 'session/preview-status':
+          request = { ...envelope, method: args.method, params: args.params };
+          break;
+        case 'ios-simulator/control':
           request = { ...envelope, method: args.method, params: args.params };
           break;
         case 'local-project/git-state':
@@ -3579,10 +4122,12 @@ export class LoroStreamsMachineRpcClient {
         pending.forkContext,
         pending.editAndResendContext,
         pending.steerContext,
+        pending.goalContext,
         pending.previewContext,
         pending.localProjectContext,
         pending.dispatchContext,
-        pending.preparationContext
+        pending.preparationContext,
+        pending.historyContext
       );
       pending.resolve(errorResponse);
       return errorResponse;

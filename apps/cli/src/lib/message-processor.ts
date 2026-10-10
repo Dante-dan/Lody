@@ -181,6 +181,8 @@ export class MessageProcessor extends EventEmitter<ProcessorEvents> {
       case 'session/create':
       case 'session/chat':
       case 'session/image-upload':
+      case 'session/history-read':
+      case 'session/history-write':
       case 'session/code-collab-host-start':
       case 'session/preview-candidate-report':
       case 'session/preview-create':
@@ -199,12 +201,23 @@ export class MessageProcessor extends EventEmitter<ProcessorEvents> {
    * Most session work shares the main lane so create/chat ordering stays intact.
    * Image uploads intentionally use a dedicated lane per session to avoid deadlocking when a
    * running prompt invokes the Lody MCP upload tool and waits for the response.
+   *
+   * ACP authentication `start` blocks until the provider's login process exits (or the
+   * authentication timeout fires), so it gets its own lane; `cancel`/`submit-*` share a
+   * control lane that bypasses the in-flight start, otherwise a cancel could never take
+   * effect while the login it targets is still running.
    */
   private extractQueueKey(message: QueuedControlMessage): MessageQueueKey | null {
     switch (message.type) {
       case 'session/create':
       case 'session/chat':
         return `session:${message.sessionId}:main`;
+      case 'session/history-read':
+      case 'session/history-write':
+        // History requests must not wait behind a long-running ACP prompt.
+        // Roost streaming is machine-owned and the renderer polls it while
+        // that prompt is still active.
+        return `session:${message.sessionId}:history`;
       case 'session/image-upload':
         return `session:${message.sessionId}:image-upload`;
       case 'session/code-collab-host-start':
@@ -213,6 +226,10 @@ export class MessageProcessor extends EventEmitter<ProcessorEvents> {
       case 'session/preview-create':
       case 'session/preview-revoke':
         return `session:${message.sessionId}:preview`;
+      case 'machine/acp-authenticate':
+        return message.action === 'start'
+          ? 'machine:acp-authenticate:start'
+          : 'machine:acp-authenticate:control';
       case 'session/cancel':
         return null;
       default:

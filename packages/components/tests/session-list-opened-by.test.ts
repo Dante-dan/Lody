@@ -267,6 +267,26 @@ describe('SessionList opened-by rendering', () => {
     expect(onSelectSession).not.toHaveBeenCalled();
   });
 
+  it('lets the disclosure toggle own keyboard activation without navigating', () => {
+    const { onSelectSession } = renderList(makeOpenerGroupRows());
+    const toggle = container?.querySelector<HTMLButtonElement>('[data-session-opened-by-toggle]');
+    expect(toggle).not.toBeNull();
+
+    const keydown = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+    });
+    flushSync(() => {
+      toggle?.dispatchEvent(keydown);
+      toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+
+    expect(keydown.defaultPrevented).toBe(false);
+    expect(onSelectSession).not.toHaveBeenCalled();
+    expect(container?.querySelector('[data-sidebar-session-id="opened-1"]')).toBeNull();
+  });
+
   it('offers the same collapse action from the opener context menu', () => {
     renderList(makeOpenerGroupRows());
     const opener = container?.querySelector('[data-sidebar-session-id="opener"]');
@@ -303,7 +323,7 @@ describe('SessionList opened-by rendering', () => {
     expect(openerSlot?.querySelector('[data-session-row-indicator]')).toBeNull();
 
     const openerEnd = opener?.querySelector('[data-session-row-end-slot]');
-    expect(openerEnd?.querySelector('[data-session-working-spinner]')).not.toBeNull();
+    expect(openerEnd?.querySelector('[data-session-working-indicator]')).not.toBeNull();
   });
 
   it('keeps collapse reachable from the context menu while the opener is working', () => {
@@ -348,7 +368,7 @@ describe('SessionList opened-by rendering', () => {
     }
 
     expect(endOf('opened-1')?.querySelector('[data-session-row-indicator]')).toBeNull();
-    expect(endOf('opened-2')?.querySelector('[data-session-working-spinner]')).not.toBeNull();
+    expect(endOf('opened-2')?.querySelector('[data-session-working-indicator]')).not.toBeNull();
     expect(endOf('opened-3')?.querySelector('[data-session-row-indicator] span')).not.toBeNull();
   });
 
@@ -390,9 +410,9 @@ describe('SessionList opened-by rendering', () => {
         ?.querySelector(`[data-sidebar-session-id="${sessionId}"]`)
         ?.querySelector('[data-session-row-end-slot]');
 
-    expect(endOf('idle')?.textContent).toContain('+12');
+    expect(endOf('idle')?.textContent).not.toContain('+12');
     expect(endOf('busy')?.textContent).not.toContain('+12');
-    expect(endOf('busy')?.querySelector('[data-session-working-spinner]')).not.toBeNull();
+    expect(endOf('busy')?.querySelector('[data-session-working-indicator]')).not.toBeNull();
   });
 
   it('renders an active opened session as the selected row', () => {
@@ -416,7 +436,7 @@ describe('SessionList opened-by rendering', () => {
     });
 
     const row = container?.querySelector('[data-sidebar-session-id="opened-2"]');
-    expect(row?.className).toContain('bg-sidebar-foreground/10');
-    expect(row?.querySelector('[data-session-working-spinner]')).not.toBeNull();
+    expect(row?.className).toContain('bg-sidebar-selection');
+    expect(row?.querySelector('[data-session-working-indicator]')).not.toBeNull();
   });
 });

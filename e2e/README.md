@@ -26,6 +26,14 @@ its bundled CLI cannot attach to the normal local daemon. Teardown first asks
 Electron to quit through its production shutdown barrier, then verifies the
 port can be rebound before deleting temporary state.
 
+The harness keeps E2E windows hidden and disables Chromium background throttling,
+so regression and CI runs do not activate or focus Lody while preserving renderer
+timers and performance instrumentation. Use headed mode only for visual debugging:
+
+```bash
+LODY_E2E_SHOW_WINDOW=1 pnpm e2e:full
+```
+
 ## Commands
 
 ```bash
@@ -37,6 +45,8 @@ pnpm e2e:full
 pnpm e2e:scout
 pnpm e2e:scout -- --journey review --iterations 50
 pnpm e2e:scout:ablation -- --iterations 12
+pnpm e2e:load -- --sessions 24 --body-bytes 1024,8192,65536
+pnpm e2e:load -- --sessions 100 --samples 8
 pnpm e2e:acceptance -- --subject desktop-local-bootstrap
 pnpm e2e:acceptance -- --subject desktop-session-lifecycle \
   --before before.json --after after.json --retained-path retained-path.txt
@@ -50,7 +60,8 @@ pnpm --filter @lody/e2e journey:coverage
 
 `e2e:build` prepares the renderer and synchronized CLI once. The other commands
 never rebuild, which keeps scenario timing about product behavior rather than
-toolchain work. `e2e:acceptance` creates a unique round under
+toolchain work. `e2e:check` also dry-runs every Cucumber scenario so ambiguous
+or undefined step bindings fail before Electron starts. `e2e:acceptance` creates a unique round under
 `e2e/artifacts/acceptance/`; it never overwrites an earlier round. Supported
 subjects are `desktop-local-bootstrap`, `desktop-session-lifecycle`,
 `desktop-review-lifecycle`, `desktop-work-lifecycle`, and `desktop-lifecycle`.
@@ -58,6 +69,43 @@ Optional before/after JSON and a retained-path summary are copied into the
 round, then covered by its checksummed manifest.
 Scout operation, classification, and triage are specified in
 [the Scout contract](./SCOUT.md).
+
+The load lane first creates synthetic persisted Sessions through the real
+Electron/CLI/ACP path, then closes and relaunches the same isolated profile.
+The warm launch proves that the expected Session count, a representative
+message, an editable composer, and a scroll action remain usable while the
+harness records preload milestones, textless-frame/blank-surface samples, and
+process/resource snapshots. It writes
+`artifacts/load/<round>/load-result.json`, `seed/boot.json`,
+`reopen/boot.json`, `reopen/runtime.json`, `reopen/heavy-session.png`, and a
+Playwright `reopen/trace.zip`. The default 24-session run is a bounded baseline;
+larger counts are opt-in and do not establish a performance threshold.
+
+## Codex account acceptance
+
+The opt-in [Codex recorder](scripts/acceptance-codex-profiles.mts) exercises the built
+desktop, bundled CLI, real managed Codex, and macOS system keychain. Only external
+device-auth and model wires are simulated by [the synthetic provider](fixtures/codex-external-wire.mjs).
+It proves two independent ChatGPT accounts, restoring A after B, two simultaneous native
+requests on account A held until both reach a deterministic response barrier, a custom API session,
+rejected key replacement preserving the old key, and UI deletion cleaning the API vault.
+The successful video, screenshots, result, and cleanup evidence remain under the ignored
+`artifacts/acceptance/` directory. This is acceptance, not a promoted regression journey.
+
+On macOS with `openssl` and an unlocked user keychain:
+
+```bash
+pnpm e2e:build
+LODY_CODEX_ACCEPTANCE_RUNTIME_DIR=/absolute/path/to/isolated-runtime-cache \
+  pnpm --dir e2e exec tsx --tsconfig ../apps/cli/tsconfig.json scripts/acceptance-codex-profiles.mts
+```
+
+The runtime cache is owned by this command and prepared through the normal checksum-verified
+public runtime downloader before recording. Every run uses a fresh application profile;
+the fixture CA is process-scoped, never installed as system trust. The OS `HOME` remains
+available for keychain access, while `CODEX_HOME`, Lody data, userData, workspace, and host
+endpoint are isolated. Cleanup targets only synthetic profile entries and retains history.
+Windows/Linux vaults, real-account refresh, and remote desktop transport need separate gates.
 
 ## Journey registry
 
@@ -82,9 +130,10 @@ they never generate selectors, shell commands, or executable product code.
 
 The local Journey Foundry takes one eligible backlog row at a time under the
 [restricted authoring contract](./journeys/AUTHORING.md). It requires a clean
-maintainer checkout, Node.js 22+, the pinned pnpm, macOS desktop prerequisites,
-and an authenticated Codex CLI. `codex login` may use the maintainer's ChatGPT
-account; GitHub receives neither that login nor an API key.
+maintainer checkout, Node.js 22.14-22.x or 23.6+ (Node-API 10+), the pinned pnpm,
+macOS desktop prerequisites, and an authenticated Codex CLI. `codex login` may
+use the maintainer's ChatGPT account; GitHub receives neither that login nor an
+API key.
 
 The author command creates an ephemeral detached worktree and invokes Codex
 there with a restricted environment, ignored user configuration, an ephemeral

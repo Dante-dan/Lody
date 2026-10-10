@@ -17,6 +17,8 @@ import type { SessionActivePresencePhase } from '@/lib/loro/session-active-prese
  * 会话配置
  */
 export interface SessionConfig {
+  codexAuth?: import('@lody/shared').CodexAuthProfile;
+  codexProfile?: import('../agent/codex-profile-store').ResolvedCodexProfile;
   workspaceId: WorkspaceId;
   requesterUserId: string;
   machineId: string;
@@ -24,11 +26,11 @@ export interface SessionConfig {
   agentCliType: AgentConfigCliType;
   agentType: string;
   /** Config selected by the driving turn and carried into ACP session startup. */
+  modelId?: SessionTurnInputConfig['modelId'];
   configOptionValues?: SessionTurnInputConfig['configOptionValues'];
   /** Selection carried by the dispatching turn; ACP startup must not re-read history for it. */
+  memory?: import('@lody/shared').MemoryBinding;
   mcpServerIds: McpServerId[];
-  /** Whether this driving Turn mounts the built-in Lody Task MCP tools. */
-  taskToolsEnabled: boolean;
   /** Launch spec for this execution request; durable default lives on the agent config. */
   customAcp?: CustomAcpLaunchSpec;
   /** Advanced runtime binary override for builtin Claude/Codex. */
