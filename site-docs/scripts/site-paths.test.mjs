@@ -45,10 +45,10 @@ await test('compare docs are prerendered even when omitted from sidebar meta', (
 
   const docsEn = path.join(packageRoot, 'content/docs/en');
   const rootMeta = JSON.parse(readFileSync(path.join(docsEn, 'meta.json'), 'utf8'));
-  const featuresMeta = JSON.parse(readFileSync(path.join(docsEn, '(features)/meta.json'), 'utf8'));
+  const guidesMeta = JSON.parse(readFileSync(path.join(docsEn, '(guides)/meta.json'), 'utf8'));
   const sidebar = collectSidebarEntries(docsEn);
   assert.equal(rootMeta.pages.includes('compare'), false);
-  assert.equal(featuresMeta.pages.includes('share-link-vs-live-handoff'), false);
+  assert.equal(guidesMeta.pages.includes('share-link-vs-live-handoff'), false);
   assert.equal(sidebar.includes('compare'), false);
   assert.equal(sidebar.includes('share-link-vs-live-handoff'), false);
 });
