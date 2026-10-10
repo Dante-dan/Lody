@@ -1,3 +1,4 @@
+import { RuntimeCapabilitiesRequestSchema, MachineRuntimeCapabilitiesResponseSchema } from './runtime-capabilities';
 import { MemoryProviderRequestSchema, MemoryProviderResponseSchema } from './memory-provider';
 import {
   IosSimulatorCommandSchema,
@@ -108,6 +109,7 @@ export const SessionToolResultSchema = z
   .strict();
 
 export const LocalMachineRpcRequestSchema = z.discriminatedUnion('method', [
+  BaseLocalMachineRpcRequestSchema.extend({ method: z.literal('machine/runtime-capabilities'), params: z.object({ configId: AgentConfigIdSchema, request: RuntimeCapabilitiesRequestSchema }).strict() }).strict(),
   BaseLocalMachineRpcRequestSchema.extend({
     method: z.literal('ios-simulator/agent-control'),
     params: z.object({ sessionId: SessionIdSchema, command: IosSimulatorCommandSchema }).strict(),
@@ -378,6 +380,7 @@ export const LocalMachineRpcResultSchema = z.union([
   SessionGoalResponseSchema,
   SessionTerminateResponseSchema,
   MachinePiExtensionsResponseSchema,
+  MachineRuntimeCapabilitiesResponseSchema,
 ]);
 export type LocalMachineRpcResult = z.infer<typeof LocalMachineRpcResultSchema>;
 

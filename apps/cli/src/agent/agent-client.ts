@@ -1,3 +1,8 @@
+import {
+  isRuntimeCapabilitiesResponse,
+  type RuntimeCapabilitiesRequest,
+  type RuntimeCapabilitiesResponse,
+} from 'acp-extension-core';
 import type {
   LodyClientExtensionCapabilities,
   LodyWorktreeProject,
@@ -1363,6 +1368,21 @@ export class AgentClient implements acp.Client {
     this.ensureSessionMatch(params.sessionId as ACPSessionId);
     await this.terminalManager.killTerminal(params.sessionId, params.terminalId);
     return {};
+  }
+
+  async runtimeCapabilities(
+    request: RuntimeCapabilitiesRequest
+  ): Promise<RuntimeCapabilitiesResponse> {
+    if (this.lodyExtensionCapabilities.runtimeCapabilities?.version !== 1 || !this.connection) {
+      throw new Error('Agent did not advertise runtime capability management');
+    }
+    const result = await this.connection.request<
+      Record<string, unknown>,
+      RuntimeCapabilitiesRequest
+    >(LODY_EXTENSION_METHODS.runtimeCapabilities, request);
+    if (!isRuntimeCapabilitiesResponse(result))
+      throw new Error('Invalid runtime capability response');
+    return result;
   }
 
   async getRateLimits(request: RateLimitsGetRequest = {}): Promise<RateLimitsSnapshot> {

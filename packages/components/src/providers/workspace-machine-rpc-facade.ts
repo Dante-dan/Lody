@@ -1,3 +1,5 @@
+import { machineSupportsProtocolCapability, MACHINE_PROTOCOL_CAPABILITIES } from '@lody/shared';
+import { MachineRuntimeCapabilitiesResponseSchema, type RuntimeCapabilitiesRequest, type MachineRuntimeCapabilitiesResponse } from '@lody/shared';
 import {
   MemoryProviderResponseSchema,
   machineSupportsMemoryProviders,
@@ -1459,6 +1461,20 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     }
   };
 
+  const requestMachineRuntimeCapabilities = async (machineId: MachineId, configId: AgentConfigId, request: RuntimeCapabilitiesRequest): Promise<MachineRuntimeCapabilitiesResponse> => {
+    try {
+      await targetRouter.resolvePlaneForMachine(machineId, { timeoutMs: LOCAL_MACHINE_ID_READY_TIMEOUT_MS });
+      if (targetRouter.getPlaneForMachine(machineId) !== 'local') return { success: false, error: 'Capability setup requires a local machine.' };
+      const protocolCapabilities = await deps.getMachineProtocolCapabilities(machineId);
+      if (!machineSupportsProtocolCapability({ protocolCapabilities }, MACHINE_PROTOCOL_CAPABILITIES.runtimeCapabilitiesLocal, 1)) return { success: false, error: 'This machine does not support capability setup. Update the local agent.' };
+      const sender = getLocalMachineRpcSender();
+      if (!sender) return { success: false, error: 'Local Machine RPC is unavailable.' };
+      const response = await sender({ machineId, workspaceId, method: 'machine/runtime-capabilities', params: { configId, request }, timeoutMs: 1_800_000 });
+      if (!response.ok) return { success: false, error: response.error };
+      return MachineRuntimeCapabilitiesResponseSchema.parse(response.result);
+    } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) }; }
+  };
+
   const requestMachinePiExtensions = async (
     machineId: MachineId,
     options?: { configId?: AgentConfigId }
@@ -1586,5 +1602,6 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     requestMachineBugReport,
     requestMemoryProvider,
     requestMachinePiExtensions,
+    requestMachineRuntimeCapabilities,
   };
 }

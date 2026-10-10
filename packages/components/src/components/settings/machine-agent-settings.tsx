@@ -1259,6 +1259,7 @@ export function MachineAgentSettings({
         machine={dialogMachine}
         onSubmit={handleDialogSubmit}
         onRefreshCapabilities={refreshCapabilities}
+        onRuntimeCapabilities={runtime ? ({ machineId, configId, request }) => runtime.requestMachineRuntimeCapabilities(machineId, configId, request) : undefined}
         onScanPiExtensions={
           runtime
             ? ({ machineId, configId }) =>

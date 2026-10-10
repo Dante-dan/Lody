@@ -6651,6 +6651,11 @@ export class MessageHandler {
         return await this.terminateAcpSession(request.params.sessionId as SessionId);
       case 'machine/memory':
         return await handleMemoryProviderRequest(request.params);
+      case 'machine/runtime-capabilities':
+        return await this.executionService.manageMachineRuntimeCapabilities(
+          request.params.configId as AgentConfigId,
+          request.params.request
+        );
       case 'machine/pi-extensions':
         return await this.executionService.listMachinePiExtensions(
           request.params.configId as AgentConfigId | undefined

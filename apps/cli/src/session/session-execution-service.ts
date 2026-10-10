@@ -1,3 +1,5 @@
+import { manageRuntimeCapabilities } from '@/agent/runtime-capabilities';
+import type { RuntimeCapabilitiesRequest, MachineRuntimeCapabilitiesResponse } from '@lody/shared';
 import {
   acpOwnsSessionTitleGeneration,
   type AcpModelControls,
@@ -6683,6 +6685,34 @@ export class SessionExecutionService {
       },
       options
     );
+  }
+
+  async manageMachineRuntimeCapabilities(
+    configId: AgentConfigId,
+    request: RuntimeCapabilitiesRequest
+  ): Promise<MachineRuntimeCapabilitiesResponse> {
+    try {
+      const config = await this.deps.workspaceDocument.getAgentConfigForMachineLaunch(
+        configId,
+        this.deps.machineId
+      );
+      if (!config || config.cliType !== 'builtin' || config.agentType !== 'kimi') {
+        return {
+          success: false,
+          error: 'Provider must be a saved builtin Kimi provider on this machine.',
+        };
+      }
+      const result = await manageRuntimeCapabilities({
+        agentType: config.agentType,
+        env: config.env,
+        runtimeOverrides: config.runtimeOverrides,
+        request,
+        logger: this.deps.logger,
+      });
+      return { success: true, result };
+    } catch (error) {
+      return { success: false, error: formatErrorMessage(error) };
+    }
   }
 
   async listMachinePiExtensions(configId?: AgentConfigId): Promise<MachinePiExtensionsResponse> {

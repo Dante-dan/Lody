@@ -1,3 +1,4 @@
+import type { RuntimeCapabilitiesRequest, MachineRuntimeCapabilitiesResponse } from '@lody/shared';
 import type { MemoryProviderRequest, MemoryProviderResponse } from '@lody/shared';
 import type { PendingSessionSends } from '../lib/session-pending-sends';
 import type { SessionSendResources } from '@/lib/session-send-resources';
@@ -517,6 +518,7 @@ export type WorkspaceRuntime = {
     machineId: MachineId,
     request: MemoryProviderRequest
   ) => Promise<MemoryProviderResponse>;
+  requestMachineRuntimeCapabilities: (machineId: MachineId, configId: AgentConfigId, request: RuntimeCapabilitiesRequest) => Promise<MachineRuntimeCapabilitiesResponse>;
   requestMachinePiExtensions: (
     machineId: MachineId,
     options?: { configId?: AgentConfigId }

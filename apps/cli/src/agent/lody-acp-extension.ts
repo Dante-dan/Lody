@@ -50,6 +50,7 @@ const VersionOneSchema = z.object({ version: z.literal(1) });
 const GoalActionSchema = z.enum(['set', 'pause', 'resume', 'clear']);
 const LodyCapabilitiesSchema = z
   .object({
+    runtimeCapabilities: VersionOneSchema.optional().catch(undefined),
     sessionTitle: VersionOneSchema.optional().catch(undefined),
     subagentEvents: VersionOneSchema.optional().catch(undefined),
     usage: VersionOneSchema.optional(),

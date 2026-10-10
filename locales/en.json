@@ -4872,5 +4872,19 @@
   "sessions.messageAuthor.source": "Open source conversation",
   "sessions.messageAuthor.on": "On",
   "sessions.messageAuthor.off": "Off",
-  "settings.memory.rolePromptHint": "Memory providers may inject role definitions into the prompt. Check for duplication or conflicts with your Lody configuration."
+  "settings.memory.rolePromptHint": "Memory providers may inject role definitions into the prompt. Check for duplication or conflicts with your Lody configuration.",
+  "agents.runtimeCapabilities.title": "Kimi capabilities",
+  "agents.runtimeCapabilities.refresh": "Browse and refresh status",
+  "agents.runtimeCapabilities.working": "Checking or installing capability…",
+  "agents.runtimeCapabilities.permissions": "Open system Privacy & Security settings and grant Accessibility and Screen Recording access to Kimi CU, then refresh status.",
+  "agents.runtimeCapabilities.extension": "Connect the WebBridge browser extension to the running daemon, then refresh status. Installing the runtime capability alone does not grant browser access.",
+  "agents.runtimeCapabilities.consent": "Allow Kimi to download and install this capability. OS permissions and browser extension setup may require separate action.",
+  "agents.runtimeCapabilities.install": "Install",
+  "agents.runtimeCapabilities.states.not_installed": "Not installed",
+  "agents.runtimeCapabilities.states.partial": "Prerequisites missing",
+  "agents.runtimeCapabilities.states.ready": "Ready",
+  "agents.runtimeCapabilities.states.unsupported": "Unsupported",
+  "agents.runtimeCapabilities.steps.ok": "Ready",
+  "agents.runtimeCapabilities.steps.missing": "Missing",
+  "agents.runtimeCapabilities.steps.failed": "Failed"
 }

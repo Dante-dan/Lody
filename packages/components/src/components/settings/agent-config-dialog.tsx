@@ -1,3 +1,5 @@
+import { RuntimeCapabilitiesField } from './runtime-capabilities-field';
+import type { RuntimeCapabilitiesRequest, MachineRuntimeCapabilitiesResponse } from '@lody/shared';
 import {
   useCallback,
   useEffect,
@@ -1218,6 +1220,7 @@ export type AgentConfigDialogProps = {
   machine: MachineViewMeta;
   onSubmit: (payload: AgentConfigSubmitPayload) => Promise<void>;
   onRefreshCapabilities: (args: RefreshArgs) => Promise<MachineAcpCapabilitiesRefreshResponse>;
+  onRuntimeCapabilities?: (args: { machineId: MachineId; configId: AgentConfigId; request: RuntimeCapabilitiesRequest }) => Promise<MachineRuntimeCapabilitiesResponse>;
   onScanPiExtensions?: (args: {
     machineId: MachineId;
     configId?: AgentConfigId;
@@ -1518,6 +1521,7 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
     onSubmit,
     onRefreshCapabilities,
     onScanPiExtensions,
+    onRuntimeCapabilities,
     onCheckBinaryStatus,
     onInstallBinary,
     onManagedRuntimeSelected,
@@ -3299,6 +3303,10 @@ export function AgentConfigDialog(props: AgentConfigDialogProps) {
               />
             </Section>
           </div>
+
+          {formData.cliType === 'builtin' && formData.agentType === 'kimi' && mode.kind === 'edit' && onRuntimeCapabilities && (
+            <RuntimeCapabilitiesField key={`${machine.id}:${mode.config.id}`} onRequest={request => onRuntimeCapabilities({ machineId: machine.id, configId: mode.config.id, request })} />
+          )}
 
           {formData.cliType === 'builtin' && formData.agentType === 'pi' && (
             <PiExtensionsField

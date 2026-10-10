@@ -4872,5 +4872,19 @@
   "sessions.messageAuthor.source": "打开来源会话",
   "sessions.messageAuthor.on": "开启",
   "sessions.messageAuthor.off": "关闭",
-  "settings.memory.rolePromptHint": "记忆 Provider 可能向提示词注入角色定义，请留意是否与 Lody 中的配置重复或冲突。"
+  "settings.memory.rolePromptHint": "记忆 Provider 可能向提示词注入角色定义，请留意是否与 Lody 中的配置重复或冲突。",
+  "agents.runtimeCapabilities.title": "Kimi 能力",
+  "agents.runtimeCapabilities.refresh": "浏览并刷新状态",
+  "agents.runtimeCapabilities.working": "正在检查或安装能力…",
+  "agents.runtimeCapabilities.permissions": "打开系统隐私与安全性设置，为 Kimi CU 授予辅助功能和屏幕录制权限，然后刷新状态。",
+  "agents.runtimeCapabilities.extension": "将 WebBridge 浏览器扩展连接到正在运行的 daemon，然后刷新状态。仅安装运行时能力不会授予浏览器访问权限。",
+  "agents.runtimeCapabilities.consent": "允许 Kimi 下载并安装此能力。系统权限与浏览器扩展设置可能需要单独操作。",
+  "agents.runtimeCapabilities.install": "安装",
+  "agents.runtimeCapabilities.states.not_installed": "未安装",
+  "agents.runtimeCapabilities.states.partial": "前置条件缺失",
+  "agents.runtimeCapabilities.states.ready": "已就绪",
+  "agents.runtimeCapabilities.states.unsupported": "不支持",
+  "agents.runtimeCapabilities.steps.ok": "已就绪",
+  "agents.runtimeCapabilities.steps.missing": "缺失",
+  "agents.runtimeCapabilities.steps.failed": "失败"
 }
