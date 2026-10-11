@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, createRef, StrictMode, type ReactElement } from 'react';
+import { act, createRef, StrictMode, useState, type ReactElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { SessionId } from '@lody/shared';
@@ -46,6 +46,8 @@ type Ctx = {
   root: ReturnType<typeof createRoot>;
   handle: { current: ConversationListHandle | null };
   state: { current: ConversationScrollerState | null };
+  /** Every offset the list reported through `onScroll`. */
+  scrolls: number[];
   setKeys: (keys: string[]) => void;
   viewport: () => HTMLElement;
   settle: () => Promise<void>;
@@ -77,27 +79,46 @@ function mount(
   sessionId: SessionId,
   initialKeys: string[],
   harnessToReuse?: FrameHarness,
-  { strict = false, suppress }: { strict?: boolean; suppress?: { current: boolean } } = {}
+  {
+    strict = false,
+    suppress,
+    hidden,
+    feedback = false,
+    tickOnScroll = false,
+  }: {
+    strict?: boolean;
+    suppress?: { current: boolean };
+    /** The tab is inactive: `display: none`, so every offset and size reads 0. */
+    hidden?: { current: boolean };
+    /** A view whose state flips whenever it is told the offset is 0. */
+    feedback?: boolean;
+    /** A view that setStates on every onScroll, like the top-fade flag. */
+    tickOnScroll?: boolean;
+  } = {}
 ): Ctx {
   let keys = initialKeys;
   const px = (value: string | undefined) => parseFloat(value ?? '0') || 0;
+  const isHidden = () => hidden?.current === true;
   const harness =
     harnessToReuse ??
     createFrameHarness({
-      viewportHeight: () => VIEWPORT,
+      viewportHeight: () => (isHidden() ? 0 : VIEWPORT),
       scrollHeightOf: (viewport) => {
+        if (isHidden()) return 0;
         const container = viewport.firstElementChild as HTMLElement | null;
         const spacer = container?.nextElementSibling as HTMLElement | null;
         return px(container?.style.height) + px(spacer?.style.height);
       },
       sizeOf: (element) => {
         const el = element as HTMLElement;
+        if (isHidden()) return 0;
         if (el.hasAttribute('data-message-selection-scroll')) return VIEWPORT;
         if (el.hasAttribute('data-virtual-index')) return ROW;
         return undefined;
       },
       rectOf: (element, scrollTop) => {
         const el = element as HTMLElement;
+        if (isHidden()) return { top: 0, height: 0 };
         if (el.hasAttribute('data-message-selection-scroll')) return { top: 0, height: VIEWPORT };
         if (
           el.parentElement?.hasAttribute('data-message-selection-scroll') &&
@@ -122,18 +143,30 @@ function mount(
       harness.attachViewport(next.scrollElement);
     }
   };
-  const render = () => {
-    const list = (
+  const scrolls: number[] = [];
+  function List({ listKeys }: { listKeys: string[] }) {
+    // Stands in for the view's position-derived state (hydration window,
+    // outline): at offset 0 it changes the rows, which commits the list again.
+    const [flipped, setFlipped] = useState(false);
+    const [, setTick] = useState(0);
+    const shown = flipped ? ['flipped', ...listKeys] : listKeys;
+    return (
       <EngineConversationScroller
         sessionId={sessionId}
-        rows={keys.map((key): ReactElement => (
+        rows={shown.map((key): ReactElement => (
           <div key={key} data-row-key={key}>
             {key}
           </div>
         ))}
-        rowMeta={keys.map((key, index) => meta(key, index))}
+        rowMeta={shown.map((key, index) => meta(key, index))}
         item={Row}
         initialWindowReady
+        hidden={isHidden()}
+        onScroll={(offset) => {
+          scrolls.push(offset);
+          if (feedback && offset === 0) setFlipped((value) => !value);
+          if (tickOnScroll) setTick((n) => n + 1);
+        }}
         suppressAutoScrollRef={suppress}
         onStateChange={onStateChange}
         layoutKey="14"
@@ -141,6 +174,9 @@ function mount(
         handleRef={handle}
       />
     );
+  }
+  const render = () => {
+    const list = <List listKeys={keys} />;
     root.render(strict ? <StrictMode>{list}</StrictMode> : list);
   };
   act(render);
@@ -150,6 +186,7 @@ function mount(
     root,
     handle,
     state,
+    scrolls,
     viewport: () => host.firstElementChild as HTMLElement,
     setKeys(next) {
       keys = next;
@@ -326,9 +363,7 @@ it('an upward wheel scrolling a nested code block or terminal keeps following', 
     });
     // A downward wheel and a pinch zoom are not the reader leaving the end either.
     await act(async () => {
-      rowElement(ctx, 'r38').dispatchEvent(
-        new WheelEvent('wheel', { deltaY: 120, bubbles: true })
-      );
+      rowElement(ctx, 'r38').dispatchEvent(new WheelEvent('wheel', { deltaY: 120, bubbles: true }));
       rowElement(ctx, 'r38').dispatchEvent(
         new WheelEvent('wheel', { deltaY: -120, ctrlKey: true, bubbles: true })
       );
@@ -362,7 +397,9 @@ it('an upward navigation key in the conversation stops following; typing and oth
 
     await act(async () => {
       document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }));
+      ctx.harness.frame();
     });
+    expect(ctx.state.current?.isSticky).toBe(true);
     ctx.harness.nativeScrollTo(BOTTOM(42) - 400);
     await ctx.settle();
     expect(ctx.state.current?.isSticky).toBe(false);
@@ -376,6 +413,64 @@ it('an upward navigation key in the conversation stops following; typing and oth
   }
 });
 
+it.each(['edge wheel', 'body key', 'cancelled key', 'button space', 'idle wheel', 'idle key'])(
+  '%s leaves no input evidence for later unowned movement',
+  async (input) => {
+    const { ctx } = await openFollowing(`engine-no-scroll-${input}`);
+    try {
+      if (input === 'idle key') {
+        await act(async () => ctx.handle.current!.scrollRowToTop(30, { smooth: false }));
+        await ctx.settle();
+      }
+      await act(async () => {
+        if (input.includes('wheel'))
+          ctx.viewport().dispatchEvent(
+            new WheelEvent('wheel', {
+              deltaY: input === 'edge wheel' ? 120 : -120,
+              bubbles: true,
+            })
+          );
+        else {
+          let target = input === 'body key' ? document.body : rowElement(ctx, 'r38');
+          if (input === 'button space') {
+            const button = document.createElement('button');
+            target.append(button);
+            target = button;
+          }
+          if (input === 'cancelled key')
+            target.addEventListener('keydown', (event) => event.preventDefault(), { once: true });
+          target.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: input === 'button space' ? ' ' : input === 'idle key' ? 'End' : 'PageUp',
+              shiftKey: input === 'button space',
+              bubbles: true,
+              cancelable: true,
+            })
+          );
+        }
+      });
+      // No movement or scrollend. Expiry follows the native animation-start frame.
+      await ctx.settle();
+      if (input === 'idle wheel' || input === 'idle key') {
+        // Reading remains deliberate. Unowned arrival at the
+        // exact bottom must not restore it from expired wheel/key evidence.
+        ctx.harness.nativeScrollTo(BOTTOM(40) - 100);
+        await ctx.settle();
+        ctx.harness.nativeScrollTo(BOTTOM(40));
+        await ctx.settle();
+        expect(ctx.state.current?.isSticky).toBe(false);
+      } else {
+        ctx.harness.nativeScrollTo(BOTTOM(40) - 100);
+        await ctx.settle();
+        expect(ctx.harness.scrollTop).toBe(BOTTOM(40));
+        expect(ctx.state.current?.isSticky).toBe(true);
+      }
+    } finally {
+      unmount(ctx);
+    }
+  }
+);
+
 it('an upward move with no pointer or touch is corrected back to the end', async () => {
   const { ctx } = await openFollowing('engine-unowned-move');
   try {
@@ -388,6 +483,107 @@ it('an upward move with no pointer or touch is corrected back to the end', async
   }
 });
 
+it.each(['up', 'down'])(
+  'recognizes a %s wheel delivered after its native offset',
+  async (direction) => {
+    const { ctx } = await openFollowing(`engine-offset-first-${direction}`);
+    try {
+      if (direction === 'down') {
+        await act(async () => ctx.handle.current!.scrollRowToTop(30, { smooth: false }));
+        await ctx.settle();
+      }
+      const target = direction === 'up' ? 0 : BOTTOM(40);
+      ctx.harness.nativeScrollTo(target);
+      await act(async () =>
+        ctx.viewport().dispatchEvent(
+          new WheelEvent('wheel', {
+            deltaY: direction === 'up' ? -4000 : 1200,
+            bubbles: true,
+          })
+        )
+      );
+      await ctx.settle();
+      expect(ctx.harness.scrollTop).toBe(target);
+      expect(ctx.state.current?.isSticky).toBe(direction === 'down');
+    } finally {
+      unmount(ctx);
+    }
+  }
+);
+
+it.each(['wheel', 'delayed wheel', 'key', 'delayed key', 'touch'])(
+  'downward %s input re-arms only after a near-edge scroll ends',
+  async (input) => {
+    const { ctx } = await openFollowing(`engine-down-${input}`);
+    try {
+      await act(async () => ctx.handle.current!.scrollRowToTop(30, { smooth: false }));
+      await ctx.settle();
+      await act(async () => {
+        const viewport = ctx.viewport();
+        if (input === 'wheel' || input === 'delayed wheel')
+          viewport.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, bubbles: true }));
+        else if (input === 'key' || input === 'delayed key')
+          viewport.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+        else {
+          viewport.dispatchEvent(touch('touchstart', [[100, 140]]));
+          viewport.dispatchEvent(touch('touchend', [[100, 100]]));
+        }
+      });
+      if (input.startsWith('delayed')) {
+        // Compositor-driven wheel/key motion can follow multiple callbacks.
+        await act(async () => {
+          for (let frame = 0; frame < 3; frame++) ctx.harness.frame();
+        });
+      }
+      ctx.harness.nativeScrollTo(BOTTOM(40) - 3);
+      await ctx.settle();
+      expect(ctx.state.current?.isSticky).toBe(false);
+      expect(ctx.harness.scrollTop).toBe(BOTTOM(40) - 3);
+      await act(async () => ctx.viewport().dispatchEvent(new Event('scrollend')));
+      await ctx.settle();
+      expect(ctx.state.current?.isSticky).toBe(true);
+      expect(ctx.harness.scrollTop).toBe(BOTTOM(40));
+    } finally {
+      unmount(ctx);
+    }
+  }
+);
+
+it.each(['focus', 'typing', 'pointer'])(
+  'composer %s clears old conversation momentum before browser movement',
+  async (input) => {
+    const { ctx, keys } = await openFollowing('engine-composer-focus');
+    const composer = document.createElement('textarea');
+    document.body.append(composer);
+    try {
+      if (input !== 'focus') await act(async () => composer.focus());
+      await act(async () => {
+        ctx.viewport().dispatchEvent(touch('touchstart', [[100, 100]]));
+        ctx.viewport().dispatchEvent(touch('touchend', [[100, 140]]));
+      });
+      ctx.harness.nativeScrollTo(BOTTOM(40) - 100);
+      await ctx.settle();
+      await act(async () => {
+        if (input === 'focus') composer.focus();
+        else
+          composer.dispatchEvent(
+            new Event(input === 'typing' ? 'beforeinput' : 'pointerdown', { bubbles: true })
+          );
+      });
+      ctx.harness.nativeScrollTo(BOTTOM(40) - 3);
+      await ctx.settle();
+      await act(async () => ctx.viewport().dispatchEvent(new Event('scrollend')));
+      await ctx.settle();
+      expect(ctx.state.current?.isSticky).toBe(false);
+      await appendRows(ctx, keys);
+      expect(ctx.harness.scrollTop).toBe(BOTTOM(40) - 3);
+    } finally {
+      composer.remove();
+      unmount(ctx);
+    }
+  }
+);
+
 it.each([
   [
     'a held scrollbar thumb',
@@ -397,8 +593,8 @@ it.each([
   ],
   [
     'a touch pan',
-    (viewport: HTMLElement) => viewport.dispatchEvent(new Event('touchstart', { bubbles: true })),
-    (viewport: HTMLElement) => viewport.dispatchEvent(new Event('touchend', { bubbles: true })),
+    (viewport: HTMLElement) => viewport.dispatchEvent(touch('touchstart', [[100, 100]])),
+    (viewport: HTMLElement) => viewport.dispatchEvent(touch('touchend', [[100, 140]])),
   ],
 ])('an upward move under %s stops following', async (_name, press, lift) => {
   const { ctx, keys } = await openFollowing(`engine-held-${_name}`);
@@ -410,6 +606,103 @@ it.each([
     expect(ctx.state.current?.isSticky).toBe(false);
     await appendRows(ctx, keys);
     expect(ctx.harness.scrollTop).toBe(BOTTOM(40) - 300);
+  } finally {
+    unmount(ctx);
+  }
+});
+
+function touch(type: string, points: Array<[number, number]>) {
+  const contacts = points.map(([clientX, clientY], identifier) => ({
+    identifier,
+    clientX,
+    clientY,
+  })) as Touch[];
+  return new TouchEvent(type, {
+    bubbles: true,
+    touches: type === 'touchend' || type === 'touchcancel' ? [] : contacts,
+    changedTouches: contacts,
+  });
+}
+
+it.each(['move', 'end'])(
+  'an upward touch %s releases before a delayed scroll or streaming commit',
+  async (delivery) => {
+    const { ctx, keys } = await openFollowing(`engine-touch-${delivery}`);
+    try {
+      await act(async () => {
+        ctx.viewport().dispatchEvent(touch('touchstart', [[100, 100]]));
+        ctx.viewport().dispatchEvent(touch(`touch${delivery}`, [[100, 140]]));
+      });
+      expect(ctx.state.current?.isSticky).toBe(false);
+      // New output can commit before the native scroll event reaches JavaScript.
+      await appendRows(ctx, keys);
+      expect(ctx.harness.scrollTop).toBe(BOTTOM(40));
+      if (delivery === 'move') {
+        await act(async () => ctx.viewport().dispatchEvent(touch('touchend', [[100, 140]])));
+      }
+      for (let step = 1; step <= 4; step++) {
+        const offset = BOTTOM(40) - 60 - step * 12;
+        ctx.harness.nativeScrollTo(offset);
+        await ctx.settle();
+        expect(ctx.harness.scrollTop).toBe(offset);
+      }
+    } finally {
+      unmount(ctx);
+    }
+  }
+);
+
+it.each([
+  ['tap', [[100, 100]]],
+  ['downward pan', [[100, 60]]],
+  ['horizontal pan', [[160, 110]]],
+  [
+    'pinch',
+    [
+      [100, 140],
+      [160, 160],
+    ],
+  ],
+  ['nested scroller', [[100, 140]]],
+  ['nested downward pan', [[100, 60]]],
+  ['cancelled touch', [[100, 140]]],
+] as const)('%s does not release conversation following', async (name, points) => {
+  const { ctx, keys } = await openFollowing(`engine-touch-${name}`);
+  try {
+    const nested = document.createElement('div');
+    nested.style.overflowY = 'auto';
+    nested.scrollTop = 80;
+    Object.defineProperty(nested, 'scrollHeight', { value: 400 });
+    Object.defineProperty(nested, 'clientHeight', { value: 100 });
+    rowElement(ctx, 'r38').append(nested);
+    const target = name.startsWith('nested') ? nested : ctx.viewport();
+    await act(async () => {
+      target.dispatchEvent(touch('touchstart', [[100, 100]]));
+      if (name !== 'cancelled touch') {
+        target.dispatchEvent(
+          touch(
+            'touchmove',
+            points.map(([x, y]) => [x, y])
+          )
+        );
+      }
+      target.dispatchEvent(
+        touch(
+          name === 'cancelled touch' ? 'touchcancel' : 'touchend',
+          points.map(([x, y]) => [x, y])
+        )
+      );
+    });
+    expect(ctx.state.current?.isSticky).toBe(true);
+    if (name !== 'downward pan') {
+      // Non-scroll touches must not leave stale momentum evidence behind.
+      ctx.harness.nativeScrollTo(BOTTOM(40) - 60);
+      await ctx.settle();
+      expect(ctx.harness.scrollTop).toBe(BOTTOM(40));
+      expect(ctx.state.current?.isSticky).toBe(true);
+    }
+    await appendRows(ctx, keys);
+    expect(ctx.harness.scrollTop).toBe(BOTTOM(42));
   } finally {
     unmount(ctx);
   }
@@ -438,6 +731,48 @@ it('keeps scrolling under StrictMode, whose development remount reruns effect cl
     });
     await ctx.settle();
     expect(screenTopOf(ctx, 'r10')).toBe(0);
+  } finally {
+    unmount(ctx);
+  }
+});
+
+it('a hidden tab reports no offset, so a view feeding it back cannot loop; shown again, it reads where it was', async () => {
+  const hidden = { current: false };
+  const { ctx, keys } = await openFollowing('engine-hidden', { hidden, feedback: true });
+  try {
+    await act(async () => {
+      ctx.handle.current?.scrollRowToTop(20, { smooth: false, offset: 0 });
+    });
+    await ctx.settle();
+    expect(screenTopOf(ctx, 'r20')).toBe(0);
+    const reported = ctx.scrolls.length;
+
+    // Switching tabs hides this one (dropping its offset) while it streams on.
+    hidden.current = true;
+    ctx.harness.nativeScrollTo(0);
+    const grown = [...keys, 'r40', 'r41'];
+    ctx.setKeys(grown);
+    await ctx.settle();
+    expect(ctx.scrolls.length).toBe(reported);
+
+    hidden.current = false;
+    ctx.setKeys(grown);
+    await ctx.settle();
+    expect(screenTopOf(ctx, 'r20')).toBe(0);
+    expect(ctx.state.current?.isSticky).toBe(false);
+    expect(ctx.scrolls.at(-1)).toBe(ctx.harness.scrollTop);
+  } finally {
+    unmount(ctx);
+  }
+});
+
+it('a view that setStates on every onScroll does not nested-update-loop', async () => {
+  const { ctx } = await openFollowing('engine-scroll-tick', { tickOnScroll: true });
+  try {
+    expect(ctx.harness.scrollTop).toBe(BOTTOM(40));
+    expect(ctx.state.current?.revealed).toBe(true);
+    expect(ctx.scrolls.length).toBeGreaterThan(0);
+    expect(ctx.scrolls.length).toBeLessThan(20);
   } finally {
     unmount(ctx);
   }

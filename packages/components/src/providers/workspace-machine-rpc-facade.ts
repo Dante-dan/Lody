@@ -1,3 +1,10 @@
+import {
+  MemoryProviderResponseSchema,
+  machineSupportsMemoryProviders,
+  type MemoryProviderRequest,
+  type MemoryProviderResponse,
+} from '@lody/shared';
+import { createRpcSecretRecipient } from '@lody/loro-streams-rpc';
 import type { PreviewControlOperation } from '@lody/shared';
 import { mintPreviewControlProof } from '@/lib/preview-control-api';
 import type { LocalFilePreviewResource } from '@lody/shared/local-file-preview';
@@ -6,12 +13,22 @@ import type {
   LocalProjectGitStateRpcResponse,
 } from '@lody/loro-streams-rpc';
 import {
+  McpToolListResultSchema,
+  MACHINE_PROTOCOL_CAPABILITIES,
+  MCP_TOOL_DISCOVERY_PROTOCOL_VERSION,
+  machineSupportsProtocolCapability,
+  type WorkspaceMcpServerMeta,
   DEFAULT_PREVIEW_CREATE_TIMEOUT_MS,
   getServerNow,
   machineSupportsLocalFileResourcesProtocol,
   machineSupportsPiExtensions,
   machineSupportsSubagentCancellation,
+  machineSupportsIosSimulatorProtocol,
   machineSupportsPreviewControlProtocol,
+  IosSimulatorResponseSchema,
+  type IosSimulatorCommand,
+  type IosSimulatorResponse,
+  machineSupportsSessionHistoryProtocol,
   type MachineProtocolCapabilities,
   type AgentConfigId,
   type CodeCollabV2Error,
@@ -68,6 +85,10 @@ import {
   type SessionEditAndResendResponse,
   type SessionEditAndResendSpec,
   type SessionTurnInputConfig,
+  type SessionHistoryReadResponse,
+  type SessionHistoryReadQuery,
+  type SessionHistoryWriteOperation,
+  type SessionHistoryWriteResponse,
   type WorkspaceId,
   sessionForkFailure,
   sessionEditAndResendFailure,
@@ -131,6 +152,17 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     }
   };
 
+  const resolveMachineTargetPlane = async (
+    machineId: MachineId,
+    options?: { timeoutMs?: number }
+  ): Promise<'local' | 'cloud'> => {
+    const existing = targetRouter.getPlaneForMachine(machineId);
+    if (existing) return existing;
+    return await targetRouter.resolvePlaneForMachine(machineId, {
+      timeoutMs: options?.timeoutMs ?? LOCAL_MACHINE_ID_READY_TIMEOUT_MS,
+    });
+  };
+
   const canUseLocalMachineRpc = async (machineId: MachineId): Promise<boolean> => {
     await waitForMachineRoute(machineId);
     return Boolean(
@@ -178,6 +210,62 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
       ? {}
       : { ownerSessionId: options.ownerSessionId.toString() };
 
+  const requireSessionHistoryCapability = async (machineId: MachineId): Promise<void> => {
+    if (
+      !machineSupportsSessionHistoryProtocol({
+        protocolCapabilities: await deps.getMachineProtocolCapabilities(machineId),
+      })
+    ) {
+      throw new Error('This machine does not support Roost session history. Update the machine.');
+    }
+  };
+
+  const requestSessionHistoryRead = async (
+    machineId: MachineId,
+    sessionId: SessionId,
+    query: SessionHistoryReadQuery,
+    options?: { timeoutMs?: number }
+  ): Promise<SessionHistoryReadResponse> => {
+    await requireSessionHistoryCapability(machineId);
+    const plane = await resolveMachineTargetPlane(machineId);
+    if (plane === 'local') {
+      throw new Error('Local Roost history must use the local session control bridge.');
+    }
+    const response = await (
+      await getMachineRpcClient(machineId)
+    ).requestSessionHistoryRead({
+      sessionId,
+      query,
+      timeoutMs: options?.timeoutMs ?? 30_000,
+    });
+    if (!response) throw new Error('Roost session history read request timed out.');
+    return response;
+  };
+
+  const requestSessionHistoryWrite = async (
+    machineId: MachineId,
+    args: {
+      sessionId: SessionId;
+      operation: SessionHistoryWriteOperation;
+      payload: Record<string, unknown>;
+    },
+    options?: { timeoutMs?: number }
+  ): Promise<SessionHistoryWriteResponse> => {
+    await requireSessionHistoryCapability(machineId);
+    const plane = await resolveMachineTargetPlane(machineId);
+    if (plane === 'local') {
+      throw new Error('Local Roost history must use the local session control bridge.');
+    }
+    const response = await (
+      await getMachineRpcClient(machineId)
+    ).requestSessionHistoryWrite({
+      ...args,
+      timeoutMs: options?.timeoutMs ?? 30_000,
+    });
+    if (!response) throw new Error('Roost session history write request timed out.');
+    return response;
+  };
+
   /**
    * File Preview v3. Its own transport wrapper (rather than `requestCodeCollab`)
    * so a transport failure surfaces as a typed `FilePreviewV3Error` instead of a
@@ -203,13 +291,7 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
           // Streams RPC plane. Until the target router identifies the machine,
           // returning a retryable error is safer than sending a local path to
           // the server; once identified, remote machines still use Streams.
-          await targetRouter.resolvePlaneForMachine(machineId, {
-            timeoutMs: LOCAL_MACHINE_ID_READY_TIMEOUT_MS,
-          });
-          const plane = targetRouter.getPlaneForMachine(machineId);
-          if (plane === null) {
-            throw new Error('Local Machine RPC routing is not available.');
-          }
+          const plane = await resolveMachineTargetPlane(machineId);
           if (plane === 'cloud') {
             const client = await getMachineRpcClient(machineId);
             return await client.requestFilePreview({
@@ -967,17 +1049,6 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     }
   };
 
-  const resolveMachineTargetPlane = async (
-    machineId: MachineId,
-    options?: { timeoutMs?: number }
-  ): Promise<'local' | 'cloud'> => {
-    const existing = targetRouter.getPlaneForMachine(machineId);
-    if (existing) return existing;
-    return await targetRouter.resolvePlaneForMachine(machineId, {
-      timeoutMs: options?.timeoutMs ?? LOCAL_MACHINE_ID_READY_TIMEOUT_MS,
-    });
-  };
-
   const requestSessionPreviewEndpointAcquire = async (
     machineId: MachineId,
     sessionId: SessionId,
@@ -1131,6 +1202,86 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     }
   };
 
+  const iosSimulatorFailure = (
+    sessionId: SessionId,
+    error: NonNullable<IosSimulatorResponse['error']>,
+    message: string
+  ): IosSimulatorResponse => ({
+    type: 'ios-simulator/control_response',
+    sessionId,
+    success: false,
+    error,
+    message,
+  });
+
+  /**
+   * One authenticated Machine RPC for every simulator command. The local plane
+   * goes straight to this machine's daemon and never touches the cloud; the
+   * remote plane signs the exact command with the preview-control proof.
+   */
+  const requestIosSimulatorControl = async ({
+    machineId,
+    sessionId,
+    requestedByUserId,
+    command,
+    timeoutMs = 15_000,
+  }: {
+    machineId: MachineId;
+    sessionId: SessionId;
+    requestedByUserId: string;
+    command: IosSimulatorCommand;
+    timeoutMs?: number;
+  }): Promise<IosSimulatorResponse> => {
+    try {
+      await waitForMachineRoute(machineId);
+      if (targetRouter.getPlaneForMachine(machineId) === 'local') {
+        const response = await getLocalMachineRpcSender()?.({
+          method: 'ios-simulator/control',
+          machineId,
+          workspaceId,
+          params: { sessionId, requestedByUserId, command },
+          timeoutMs,
+        });
+        if (!response) throw new Error('Local simulator control is unavailable.');
+        if (!response.ok) throw new Error(response.error);
+        return IosSimulatorResponseSchema.parse(response.result);
+      }
+      if (
+        !machineSupportsIosSimulatorProtocol({
+          protocolCapabilities: await deps.getMachineProtocolCapabilities(machineId),
+        })
+      ) {
+        return iosSimulatorFailure(
+          sessionId,
+          'unsupported',
+          'Update Lody on this machine to preview simulators.'
+        );
+      }
+      const responseRecipient = await createRpcSecretRecipient();
+      const response = await (
+        await getMachineRpcClient(machineId)
+      ).requestIosSimulatorControl({
+        sessionId,
+        requestedByUserId,
+        command,
+        responseRecipient,
+        proof: await previewProof(machineId, sessionId, requestedByUserId, {
+          action: 'ios-simulator',
+          command,
+          responseKey: responseRecipient.publicKey,
+        }),
+        timeoutMs,
+      });
+      return response ?? iosSimulatorFailure(sessionId, 'failed', 'The machine did not answer.');
+    } catch (error) {
+      return iosSimulatorFailure(
+        sessionId,
+        'failed',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  };
+
   const requestSessionPreviewRevoke = async (
     machineId: MachineId,
     sessionId: SessionId,
@@ -1266,6 +1417,48 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     }
   };
 
+  const requestMemoryProvider = async (
+    machineId: MachineId,
+    params: MemoryProviderRequest
+  ): Promise<MemoryProviderResponse> => {
+    const fail = (error: string): MemoryProviderResponse => ({
+      type: 'machine/memory',
+      status: 'error',
+      memories: [],
+      error,
+    });
+    try {
+      await targetRouter.resolvePlaneForMachine(machineId, {
+        timeoutMs: LOCAL_MACHINE_ID_READY_TIMEOUT_MS,
+      });
+      const capabilities = await deps.getMachineProtocolCapabilities(machineId);
+      if (!machineSupportsMemoryProviders({ protocolCapabilities: capabilities ?? undefined }))
+        return fail('Update this machine to use memory providers.');
+      const plane = targetRouter.getPlaneForMachine(machineId);
+      if (plane === null) return fail('Machine RPC routing is not available.');
+      if (plane === 'local') {
+        const sender = getLocalMachineRpcSender();
+        if (!sender) return fail('Local Machine RPC is not available.');
+        const response = await sender({
+          machineId,
+          workspaceId,
+          method: 'machine/memory',
+          params,
+          timeoutMs: 60_000,
+        });
+        return response.ok
+          ? MemoryProviderResponseSchema.parse(response.result)
+          : fail(response.error);
+      }
+      return (
+        (await (await getMachineRpcClient(machineId)).requestMemoryProvider(params)) ??
+        fail('Memory request timed out.')
+      );
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   const requestMachinePiExtensions = async (
     machineId: MachineId,
     options?: { configId?: AgentConfigId }
@@ -1335,7 +1528,30 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     }
   };
 
+  const requestLocalMcpTools = async (machineId: MachineId, server: WorkspaceMcpServerMeta) => {
+    const protocolCapabilities = await deps.getMachineProtocolCapabilities(machineId);
+    if (
+      !machineSupportsProtocolCapability(
+        { protocolCapabilities },
+        MACHINE_PROTOCOL_CAPABILITIES.mcpToolDiscovery,
+        MCP_TOOL_DISCOVERY_PROTOCOL_VERSION
+      ) ||
+      !(await canUseLocalMachineRpc(machineId))
+    ) {
+      throw new Error('MCP tool discovery requires a supported local daemon.');
+    }
+    const result = await sendLocalMachineRpcRequest({
+      machineId,
+      workspaceId,
+      method: 'mcp/list-tools',
+      params: { server },
+      timeoutMs: 35_000,
+    });
+    return McpToolListResultSchema.parse(result);
+  };
+
   return {
+    requestLocalMcpTools,
     requestSessionCancel,
     requestSessionSteer,
     requestSessionGoal,
@@ -1345,6 +1561,8 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     requestSessionDispatchTurn,
     requestSessionPrepare,
     requestSessionPrepareCancel,
+    requestSessionHistoryRead,
+    requestSessionHistoryWrite,
     requestFilePreview,
     requestLocalCodeCollabFileIndex,
     requestCodeCollabOpenText,
@@ -1362,9 +1580,11 @@ export function createWorkspaceMachineRpcFacade(deps: WorkspaceMachineRpcFacadeD
     requestSessionPreviewEndpointRelease,
     requestSessionPreviewRevoke,
     requestSessionPreviewStatus,
+    requestIosSimulatorControl,
     requestLocalProjectGitState,
     requestLocalProjectControl,
     requestMachineBugReport,
+    requestMemoryProvider,
     requestMachinePiExtensions,
   };
 }

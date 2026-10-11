@@ -4,6 +4,18 @@ Scope: `packages/components`. The binding rules live in
 [that package's AGENTS.md](../../packages/components/AGENTS.md) and its child scopes;
 this page keeps the reasoning that would otherwise crowd them out.
 
+Workspace durable synchronization is composed by `providers/workspace-streams-transport.ts`.
+Its [content boundary](../../specs/workspace-streams-content.md) keeps ordinary SDK bytes
+and persistence intact while exposing protection and snapshot handling to future callers.
+The protected seam is not a product E2EE entry point or a persisted-mode resolver.
+The owning transport suite also composes merged P07 signature/AEAD and P08 current
+ledger replay through the published Repo 0.22.0 interfaces, using a synthetic
+native test signer. It checks v0 batches, compressed snapshots, safe error reasons
+and durable state/cursor retention. This [P10 preparation](../notes/implemented/testing/2026-10-11-e2ee-sdk-preparation.md)
+does not supply historical-author authorization, a production signer, host snapshot
+admission or client recovery from an unusable remote snapshot.
+
+
 ## Crash surfaces
 
 Recovery and diagnostic contracts, including callers outside `lib/`, are owned by
@@ -13,9 +25,12 @@ A crash the user cannot read or copy is a crash we never hear about, which is wh
 `ErrorBoundary` fallback shows the real error text and offers a one-click copy of the
 full report on every build rather than only in development.
 
-Automatic recovery is deliberately bounded. A crash screen that reloads or resets by
-itself can loop forever on a deterministic error, so `resetKeys` recovery stops after
-`MAX_AUTOMATIC_RESETS` for a repeating error and hands control back to the user.
+Crash screens wait for explicit user recovery; `resetKeys` cannot clear an error.
+Authenticated cloud queries retry opaque server failures before reaching a boundary,
+with a shared, finite budget. Pending retries return loading rather than stale access
+rows. Structured application failures and exhausted retries still throw; the runtime
+provider has its own page boundary because it sits above the Outlet boundary. See the
+[query adapter](../../packages/components/src/hooks/README.md#cloud-query-recovery).
 
 Both cache-recovery levels defer their asynchronous deletes to the next boot because
 `deleteDatabase()` blocks while the runtime still holds a connection; synchronous
@@ -64,6 +79,22 @@ primitives into product surfaces and may add layout or interaction constraints,
 while the primitive's props remain the owner of its visual variant, size, tone,
 and shape.
 
+For appearance-only migrations, keep each product component's visual rules in a
+module-level `stylex.create` definition and name styles by their semantic role.
+Reuse existing area surfaces and product tokens where they match; retain exact
+CSS variables and dimensions when no equivalent token exists. Keep runtime
+geometry and styles owned by external rendering engines at their existing dynamic
+boundary. Configure shared primitives through their documented props when those
+props reproduce the existing appearance. The [progressive StyleX migration note](../notes/implemented/simplification/2026-10-04-complex-surfaces-stylex.md) records the retained legacy overrides and
+the current application of these rules.
+
+Settings' `CompactRow` keeps its label and helper in separate text nodes. Its
+optional `labelId` and `helperId` let a caller associate a control with those
+nodes through `aria-labelledby` and `aria-describedby`; visual adjacency alone
+does not name a control. The Preferences switches use this association with the
+existing translated copy. See the
+[decision and browser regression](../notes/implemented/bug-fix/2026-10-01-preferences-switch-names.md).
+
 `--input` is the theme's raw `input.background` and doubles as a muted chip/composer
 slab, so in a light theme it can sit below the page color and read as a disabled field.
 `--input-field` is derived in `lib/vscode-theme/vscode-theme-css.ts` as the lighter of
@@ -88,5 +119,16 @@ against the route and the dev server answers with the SPA fallback HTML.
 request storm. Loading only when a user opens a surface, coalescing concurrent callers
 onto one in-flight request, and clamping the served `Cache-Control: max-age` to 1m–5m
 (the endpoint's CDN-shaped 4h is wrong for someone who just opened the panel) keep it to
-roughly one 304 per interaction. An always-visible composer band was rejected because it
-would have to load in the background to know whether to render at all.
+roughly one 304 per interaction. Settings puts a stable read-only remaining-quota
+summary, a flat direct Reset forecast action, and a Provider action menu in the row.
+The action opens the existing forecast dialog in one step; there is no quota-details
+interstitial repeating visible data. Forecast probabilities appear only in that
+dialog, never beside the row's remaining-quota percentages. See the
+[provider quota overview draft](../../specs/provider-quota-overview.md).
+An always-visible composer band was rejected because it would have to load in the
+background to know whether to render at all.
+
+The parser also normalizes `scheduled_reset` independently of `active_watch`. Both entry
+points and the dialog prioritize an announced schedule over the forecast probability.
+The local scheduled time is optional; crossing it shows pending execution confirmation.
+See the [API compatibility decision](../notes/implemented/bug-fix/2026-10-02-codex-scheduled-reset.md).

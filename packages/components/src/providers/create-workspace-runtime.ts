@@ -1,5 +1,6 @@
-import { createWorkspaceSessionSendJournal } from './workspace-session-send-journal';
-import { throwIfSendAborted } from '../lib/session-send-resources';
+import { createWorkspacePendingSends } from './workspace-pending-sends';
+import { createLoroSyncErrorTools } from '@lody/shared/loro-sync-errors';
+import { migrateLegacySessionSends } from '../lib/legacy-session-send-migration';
 import { createSessionSendResources } from '@/lib/session-send-resources';
 import { waitForScheduleWriteSync, withScheduleWrite } from './schedule-write-sync';
 import {
@@ -22,7 +23,13 @@ import {
   type MachineProtocolCapabilities,
   negotiatedAcpCapabilitiesRefreshForce,
 } from '@lody/shared';
-import { LoroRepo, type RepoRoomSubscription, type RepoWatchHandle } from 'loro-repo';
+import {
+  LoroRepo,
+  RepoSyncError,
+  RepoTransportError,
+  type RepoRoomSubscription,
+  type RepoWatchHandle,
+} from 'loro-repo';
 import { IndexedDBStorageAdaptor } from 'loro-repo/storage/indexeddb';
 import type { StreamsTransportAdapter } from 'loro-repo/transport/streams';
 import { StreamsCrdt, createLoroDocAdapter } from '@loro-dev/streams-crdt/loro';
@@ -48,6 +55,7 @@ import {
   getSessionRoomId,
   getMachineFlockAgentConfigs,
   getMachineFlockDocId,
+  resolveSessionHistoryBackendKind,
   isSessionDocRoomId,
   isLoroRepoDocDeleted,
   readSessionOperationTargets,
@@ -63,6 +71,7 @@ import {
   type SessionCancelResponse,
   type SessionChatResponse,
   type SessionId,
+  type SessionHistoryBackendKind,
   type MachineId,
   type MachineStatusResponse,
   type MachinePingResponse,
@@ -89,7 +98,10 @@ import {
 import { LocalLoroTransportAdapter } from '@lody/shared/local-loro-transport';
 import type { WorkspaceId } from '@lody/shared';
 import { createDirectWorkspaceWriter } from './workspace-writer-impl';
-import { createConversationSession } from '@/lib/conversation-view';
+import {
+  createConversationSession,
+  type ConversationSessionDataFactory,
+} from '@/lib/conversation-view';
 import {
   WorkspaceTargetRouter,
   type WorkspaceTransportRoom,
@@ -149,6 +161,10 @@ import { createWorkspaceMachineRpcFacade } from './workspace-machine-rpc-facade'
 import { resyncMachineFlockRows } from '@/hooks/use-machine-flock-rows';
 import { createCodeCollabFileIndexCache } from '@/lib/code-collab-file-index-cache';
 import { getIpcServices, onIpcEvent, sendLocalSessionControl } from '@/lib/electron-ipc-client';
+import {
+  createLocalRoostSessionDataFactory,
+  createRemoteRoostSessionDataFactory,
+} from '@/lib/roost-session-bridge';
 
 declare global {
   interface Window {
@@ -163,6 +179,8 @@ declare global {
  * the PostHog wrappers. Rejected: importing posthog-js here directly — the
  * runtime must stay framework-agnostic and unit-testable without a client.
  */
+const { formatLoroSyncError } = createLoroSyncErrorTools({ RepoSyncError, RepoTransportError });
+
 export type WorkspaceRuntimeAnalyticsEvent = {
   name: string;
   properties: Record<string, unknown>;
@@ -185,11 +203,8 @@ export function resolveWorkspaceRuntimeCacheIdentity(
 }
 
 type RuntimeDeps = {
-  getSendAdmissionContext?: () => {
-    entitlement?: import('@lody/shared').BillingQuotaEntitlement;
-    sessionCount: number | null;
-  };
-
+  /** Cancels an initialization retired by the provider before publication. */
+  signal?: AbortSignal;
   accountId?: string | null;
   /**
    * Used for caching the (slug, id) mapping in localStorage.
@@ -235,6 +250,8 @@ type RuntimeDeps = {
    * scan.
    */
   readDocMetaCache?: ReadDocMetaCache;
+  /** Optional backend-owned SessionData composition; defaults to Loro. */
+  createSessionData?: ConversationSessionDataFactory;
 };
 
 type LoroStreamsTokenProvider = ReturnType<typeof createLoroStreamsTokenProvider>;
@@ -252,6 +269,8 @@ class SupersededAttachError extends Error {
 }
 
 const formatTransportError = (error: unknown): string => {
+  const syncError = formatLoroSyncError(error);
+  if (syncError) return syncError;
   if (typeof error !== 'object' || error === null) {
     return String(error);
   }
@@ -431,6 +450,7 @@ function createPendingResponseRegistry<T>(defaultTimeoutMs: number) {
 }
 
 export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<WorkspaceRuntime> {
+  deps.signal?.throwIfAborted();
   const cacheIdentity = resolveWorkspaceRuntimeCacheIdentity(deps.workspaceId, desktopWindowId());
   const createDeferred = <T>() => {
     let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
@@ -506,17 +526,21 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     onRouteChange: () => notifyTargetRouteChange(),
   });
   resolveRoomTransportsImpl = (room) => targetRouter.resolveTransportRoute(room);
+  let localTransportAttachPromise: Promise<void> | null = null;
   let localLoroTransport: LocalLoroTransportAdapter | null = null;
   let localMachineMonitorTransport: WorkspaceLocalMachineMonitorTransport | null = null;
   let localDataPlaneConnectionDispose: (() => void) | null = null;
   let localPresenceUnsubscribe: (() => void) | null = null;
   let transportAttached = false;
   let authToken: string | null = null;
+  // Assigned once the send resources exist; runs after the first meta sync.
+  let startLegacySendMigration: (() => void) | null = null;
   let cloudTransportAttached = false;
   let cloudTransportAttachPromise: Promise<void> | null = null;
   let metaSub: RepoRoomSubscription | null = null;
   let cloudMetaTracker: RoomSyncTracker | null = null;
   let streamsTokenProvider: LoroStreamsTokenProvider | null = null;
+  let streamsTokenAbort: AbortController | null = null;
   // One long-lived auth callback per provider. `createAuthCallback()` remembers
   // the last token it handed out, which is the only fallback left when a
   // transport reports `unauthorized` without a `previousToken`. A callback
@@ -650,6 +674,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   // recovery). An attach belongs to the generation it started in; once that
   // generation is torn down it must not publish provider, transport or state.
   let webAttachGeneration = 0;
+  const pendingWebAttaches = new Set<Promise<void>>();
+  const pendingCloudRejoins = new Set<Promise<void>>();
   // loro-repo registers a transport synchronously when addTransport starts and
   // only resolves after routing live rooms, so an in-flight add is already live.
   // Generations do not wait for each other, so adds of several generations can
@@ -1025,6 +1051,28 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   >();
   const machineRpcClients = new Map<MachineId, LoroStreamsMachineRpcClient>();
   let machineRpcResponseDispatcher: LoroStreamsRpcResponseDispatcher | null = null;
+  const machineProtocolCapabilitiesCache = new Map<MachineId, MachineProtocolCapabilities>();
+  const machineProtocolCapabilitiesReads = new Map<
+    MachineId,
+    Promise<MachineProtocolCapabilities | undefined>
+  >();
+  const machineProtocolCapabilitiesEpoch = new Map<MachineId, number>();
+
+  const invalidateMachineProtocolCapabilities = (machineId: MachineId): void => {
+    machineProtocolCapabilitiesCache.delete(machineId);
+    machineProtocolCapabilitiesReads.delete(machineId);
+    machineProtocolCapabilitiesEpoch.set(
+      machineId,
+      (machineProtocolCapabilitiesEpoch.get(machineId) ?? 0) + 1
+    );
+  };
+
+  const invalidateMachineProtocolCapabilitiesForDoc = (docId: string): void => {
+    if (!docId.startsWith(MACHINE_DOC_PREFIX)) return;
+    const machineId = docId.slice(MACHINE_DOC_PREFIX.length).trim();
+    if (machineId) invalidateMachineProtocolCapabilities(machineId as MachineId);
+  };
+
   const emitControlConnectionState = () => {
     if (disposePromise) {
       return;
@@ -1442,6 +1490,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       if (event.kind !== 'doc-metadata') {
         return;
       }
+      invalidateMachineProtocolCapabilitiesForDoc(event.docId);
       targetRouter.observeDocMeta(event.docId, event.patch);
       deps.onDocMetaPatch?.(event.docId, event.patch);
     },
@@ -1623,11 +1672,19 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   };
 
   const ensureStreamsTokenProvider = (): LoroStreamsTokenProvider => {
+    if (disposePromise) throw new Error('Runtime disposed');
     if (!streamsTokenProvider) {
+      const controller = new AbortController();
+      streamsTokenAbort = controller;
       streamsTokenProvider = createLoroStreamsTokenProvider({
         endpoint: buildLoroStreamsTokenEndpoint(import.meta.env.VITE_CONVEX_SITE_URL),
         workspaceId,
         authToken: () => authToken,
+        fetchImpl: (input, init) =>
+          fetch(input, {
+            ...init,
+            signal: controller.signal,
+          }),
         onEvent: logTokenProviderEvent,
       });
       eagerSyncAuthCallback = streamsTokenProvider.createAuthCallback();
@@ -1647,6 +1704,9 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     }
     const provider = ensureStreamsTokenProvider();
     await provider.getToken();
+    if (disposePromise || provider !== streamsTokenProvider) {
+      throw new SupersededAttachError();
+    }
     const streamsBaseUrl = getStreamsBaseUrlForProvider(provider);
     transportStreamsBaseUrl = streamsBaseUrl;
     return { provider, streamsBaseUrl };
@@ -1781,6 +1841,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     requestSessionDispatchTurn,
     requestSessionPrepare,
     requestSessionPrepareCancel,
+    requestSessionHistoryRead,
+    requestSessionHistoryWrite,
     requestFilePreview,
     requestLocalCodeCollabFileIndex,
     requestCodeCollabOpenText,
@@ -1797,9 +1859,12 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     requestSessionPreviewEndpointRelease,
     requestSessionPreviewRevoke,
     requestSessionPreviewStatus,
+    requestIosSimulatorControl,
     requestLocalProjectGitState,
     requestLocalProjectControl,
     requestMachineBugReport,
+    requestLocalMcpTools,
+    requestMemoryProvider,
     requestMachinePiExtensions,
   } = createWorkspaceMachineRpcFacade({
     getSessionToken: () => authToken,
@@ -1818,8 +1883,33 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   async function getMachineProtocolCapabilities(
     machineId: MachineId
   ): Promise<MachineProtocolCapabilities | undefined> {
-    const entry = await repo.getDocMeta(getMachineRoomId(machineId));
-    return (entry?.meta as Partial<MachineMeta> | undefined)?.protocolCapabilities;
+    if (machineProtocolCapabilitiesCache.has(machineId)) {
+      return machineProtocolCapabilitiesCache.get(machineId);
+    }
+
+    const existingRead = machineProtocolCapabilitiesReads.get(machineId);
+    if (existingRead) return await existingRead;
+
+    const epoch = machineProtocolCapabilitiesEpoch.get(machineId) ?? 0;
+    const read = (async () => {
+      const entry = await repo.getDocMeta(getMachineRoomId(machineId));
+      const capabilities = (entry?.meta as Partial<MachineMeta> | undefined)?.protocolCapabilities;
+      if (
+        capabilities !== undefined &&
+        (machineProtocolCapabilitiesEpoch.get(machineId) ?? 0) === epoch
+      ) {
+        machineProtocolCapabilitiesCache.set(machineId, capabilities);
+      }
+      return capabilities;
+    })();
+    machineProtocolCapabilitiesReads.set(machineId, read);
+    try {
+      return await read;
+    } finally {
+      if (machineProtocolCapabilitiesReads.get(machineId) === read) {
+        machineProtocolCapabilitiesReads.delete(machineId);
+      }
+    }
   }
 
   const dispatchMachineStatusViaRpc = async (
@@ -2762,6 +2852,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       transportStreamsBaseUrl = null;
     }
     if (invalidateTokenProvider) {
+      streamsTokenAbort?.abort();
+      streamsTokenAbort = null;
       streamsTokenProvider?.invalidate();
       streamsTokenProvider = null;
       eagerSyncAuthCallback = null;
@@ -2794,10 +2886,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     eagerSyncWorkerClient?.cancelAll();
     // Remove both planes' transports (loro-repo keeps room leases; their
     // bindings report 'detached' until a later attach).
-    if (transportAttached || cloudAddWasInFlight) {
+    if (transportAttached || localLoroTransport || cloudAddWasInFlight) {
       // An add still routing rooms is removed now, not when it resolves, so a
       // sign-out never returns with the old credentials' transport registered.
-      if (transportAttached) {
+      if (transportAttached || localLoroTransport) {
         await repo.removeTransport('local', { close: true }).catch(() => undefined);
       }
       await repo.removeTransport('cloud', { close: true }).catch(() => undefined);
@@ -2909,6 +3001,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     // construction); per-room cloud bindings notify their own subscribers, so
     // the mux-era member-status side channel is gone by design.
     await repo.addTransport('local', localLoroTransport);
+    if (disposePromise) throw new Error('Runtime disposed');
 
     // Keep local and cloud snapshots independently: the local plane carries
     // only what the local CLI itself authors and is authoritative for that
@@ -2984,7 +3077,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   }) => {
     const shouldStartPresence = options.startPresence;
     const assertCurrentGeneration = () => {
-      if (options.generation !== webAttachGeneration) {
+      if (disposePromise || options.generation !== webAttachGeneration) {
         throw new SupersededAttachError();
       }
     };
@@ -3025,7 +3118,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       } finally {
         webCloudAddsInFlight.delete(options.generation);
       }
-      if (options.generation !== webAttachGeneration) {
+      if (disposePromise || options.generation !== webAttachGeneration) {
         // Torn down while addTransport ran: that teardown already removed this
         // transport. Removing 'cloud' again here could hit the next
         // generation's transport of the same id.
@@ -3098,11 +3191,13 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         throw error;
       }
     })();
+    pendingWebAttaches.add(pending);
     const current = { generation, promise: pending };
     webTransportAttach = current;
     try {
       await pending;
     } finally {
+      pendingWebAttaches.delete(pending);
       if (webTransportAttach === current) {
         webTransportAttach = null;
       }
@@ -3190,6 +3285,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
   };
 
   const detachCloudPlaneTransport = async (): Promise<void> => {
+    streamsTokenAbort?.abort();
     const pendingAttach = cloudTransportAttachPromise;
     if (pendingAttach) {
       await pendingAttach.catch(() => undefined);
@@ -3215,6 +3311,8 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     jsonStreamClient = null;
     machineRpcStreamsClientReady = null;
     transportStreamsBaseUrl = null;
+    streamsTokenAbort?.abort();
+    streamsTokenAbort = null;
     streamsTokenProvider?.invalidate();
     streamsTokenProvider = null;
     eagerSyncAuthCallback = null;
@@ -3235,14 +3333,21 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     metaTracker = currentMetaTracker;
     emitControlConnectionState();
     console.debug('Joining repo meta room', { workspaceId });
+    const generation = webAttachGeneration;
     const joinStartedAt = Date.now();
     const joinCursorBypassed = isMetaRemoteCursorBypassActive();
     try {
-      metaSub = await repo.joinMetaRoom();
+      const joined = await repo.joinMetaRoom();
+      if (disposePromise || generation !== webAttachGeneration) {
+        joined.unsubscribe();
+        return;
+      }
+      metaSub = joined;
       if (cloudTransportAttached) {
         attachCloudMetaHealthTracker();
       }
     } catch (error) {
+      if (disposePromise || generation !== webAttachGeneration) return;
       initialMetaSyncCompleted = false;
       initialMetaSyncFailed = true;
       currentMetaTracker.markFirstSyncFailed();
@@ -3297,6 +3402,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
           }
           initialMetaSyncCompleted = true;
           initialMetaSyncFailed = false;
+          startLegacySendMigration?.();
           currentMetaTracker.markFirstSynced();
           // Dual watches its local binding here; its marker is cleared by the
           // cloud Meta binding instead (attachCloudMetaHealthTracker).
@@ -3434,12 +3540,18 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     );
   };
 
-  const ensureMetaRoomSynced = async (syncPhase: 'initial' | 'recovery' = 'initial') => {
+  const ensureMetaRoomSynced = async (
+    syncPhase: 'initial' | 'recovery' = 'initial'
+  ): Promise<void> => {
     if (metaSub) {
       return;
     }
     if (metaRoomJoinPromise) {
       await metaRoomJoinPromise;
+      // A join retired by sign-out cannot supply the replacement generation.
+      if (!disposePromise && transportAttached && !metaSub) {
+        await ensureMetaRoomSynced(syncPhase);
+      }
       return;
     }
 
@@ -3842,19 +3954,23 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
           );
           const sweepDeadline = Date.now() + CLOUD_REJOIN_SWEEP_BUDGET_MS;
           for (let i = 0; i < errored.length; i += CLOUD_REJOIN_SWEEP_CONCURRENCY) {
-            if (Date.now() >= sweepDeadline) {
+            if (disposePromise || Date.now() >= sweepDeadline) {
               break;
             }
             await Promise.all(
-              errored
-                .slice(i, i + CLOUD_REJOIN_SWEEP_CONCURRENCY)
-                .map((entry) =>
-                  withTimeout(
-                    entry.subscription.rejoin(),
-                    CLOUD_REJOIN_TIMEOUT_MS,
-                    `Timeout rejoining cloud binding (room=${entry.room.kind}:${entry.room.id})`
-                  ).catch(() => undefined)
-                )
+              errored.slice(i, i + CLOUD_REJOIN_SWEEP_CONCURRENCY).map((entry) => {
+                // The timeout releases the retry loop, not the underlying SDK
+                // work. Retain every attempt until it actually settles.
+                const rejoin = entry.subscription.rejoin().finally(() => {
+                  pendingCloudRejoins.delete(rejoin);
+                });
+                pendingCloudRejoins.add(rejoin);
+                return withTimeout(
+                  rejoin,
+                  CLOUD_REJOIN_TIMEOUT_MS,
+                  `Timeout rejoining cloud binding (room=${entry.room.kind}:${entry.room.id})`
+                ).catch(() => undefined);
+              })
             );
           }
         }
@@ -3878,13 +3994,6 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         });
       },
     });
-  }
-
-  if (electronLocalDataPlane) {
-    await attachLocalLoroDataPlaneTransport();
-    await ensureMetaRoomSynced();
-  } else if (deps.token != null && deps.token !== '') {
-    await setAuthToken(deps.token);
   }
 
   const ensureDocStream = async (roomId: string): Promise<void> => {
@@ -3999,7 +4108,10 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
 
   const createSessionStore = async (sessionId: SessionId): Promise<SessionDocStore> => {
     const roomId = getSessionRoomId(sessionId);
-
+    // Backend selection is part of the persisted session identity, so resolve it
+    // before composing the reader even when this runtime has no injected factory.
+    // That lets createConversationSession fail closed for a Roost session instead
+    // of silently constructing a Loro history reader.
     // Merge bootstrap state before Repo adopts a cold document and before its
     // history reader subscribes. Existing live documents retain their identity.
     const persistedDoc = await openSessionWithSnapshot(repo, roomId, () =>
@@ -4016,15 +4128,69 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       )
     );
     const sessionDoc = persistedDoc.doc as LoroDoc;
+    // Read metadata after the bootstrap merge. Otherwise a cold remote Roost
+    // session can be composed with the legacy Loro reader before its catalog
+    // row becomes visible in this Repo instance.
+    const sessionMeta = (await repo.getDocMeta(roomId))?.meta as
+      | { historyBackend?: SessionHistoryBackendKind; machineId?: MachineId }
+      | undefined;
 
-    const {
-      mirror,
-      history,
-      sessionData,
-      dispose: disposeConversation,
-    } = createConversationSession(sessionDoc, {
-      sessionId,
-    });
+    const backendKind = resolveSessionHistoryBackendKind(sessionMeta);
+    let rendererSessionDataFactory = deps.createSessionData;
+    let conversation: ReturnType<typeof createConversationSession>;
+    try {
+      if (!rendererSessionDataFactory && backendKind === 'roost') {
+        const machineId = sessionMeta?.machineId;
+        if (!machineId) {
+          throw new Error(`Roost session ${sessionId} has no owning machine`);
+        }
+        const plane = await targetRouter.resolvePlaneForMachine(machineId, {
+          timeoutMs: LOCAL_MACHINE_ID_READY_TIMEOUT_MS,
+        });
+        if (plane === 'local') {
+          if (!getIpcServices()) {
+            throw new Error(
+              `Roost session ${sessionId} is local, but the Electron session-control bridge is unavailable`
+            );
+          }
+          rendererSessionDataFactory = createLocalRoostSessionDataFactory({
+            accountId: deps.accountId,
+            workspaceId,
+            machineId,
+          });
+        } else {
+          rendererSessionDataFactory = createRemoteRoostSessionDataFactory({
+            accountId: deps.accountId,
+            workspaceId,
+            machineId,
+            requestHistoryRead: async (targetMachineId, targetSessionId, query) =>
+              await requestSessionHistoryRead(targetMachineId, targetSessionId, query),
+            requestHistoryWrite: async ({
+              machineId: targetMachineId,
+              sessionId: targetSessionId,
+              operation,
+              payload,
+            }) =>
+              await requestSessionHistoryWrite(targetMachineId, {
+                sessionId: targetSessionId,
+                operation,
+                payload,
+              }),
+          });
+        }
+      }
+      conversation = createConversationSession(sessionDoc, {
+        sessionId,
+        backendKind,
+        ...(rendererSessionDataFactory ? { createSessionData: rendererSessionDataFactory } : {}),
+      });
+    } catch (error) {
+      // A Roost session without its renderer adapter fails closed. Release the
+      // cold repo handle before the cache gets a chance to retry the open.
+      await repo.unloadDoc(roomId).catch(() => {});
+      throw error;
+    }
+    const { mirror, history, sessionData, dispose: disposeConversation } = conversation;
 
     const syncTracker = createTrackedRoomSyncTracker(roomId);
     // Track subscription for cleanup
@@ -4146,6 +4312,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     return {
       sessionId,
       roomId,
+      historyBackend: resolveSessionHistoryBackendKind(sessionMeta),
       doc: persistedDoc.doc as LoroDoc,
       firstSynced,
       acquireSync,
@@ -4638,17 +4805,25 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     });
   };
 
-  const dispose = async () => {
+  const dispose = () => {
     if (disposePromise) {
       return disposePromise;
     }
 
-    windowBootstrap?.close();
-    sharedWindowDocuments.clear();
-    disposePromise = (async () => {
+    // Publish retirement before any cancellation callback or asynchronous close runs.
+    disposePromise = Promise.resolve().then(async () => {
+      windowBootstrap?.close();
+      sharedWindowDocuments.clear();
+      streamsTokenAbort?.abort();
+      const reconnectsClosed = Promise.all([
+        localReconnectLoop?.close(),
+        cloudReconnectLoop?.close(),
+        webAttachReconnectLoop?.close(),
+      ]);
+      // Held sends are in memory only: closing the workspace drops them.
+      pendingSends.dispose();
       // Cancel and join send I/O while its cache, transport and repo still exist.
       await sendResources.dispose();
-      await sendJournal?.close();
       cancelDelayedBackgroundSyncStart?.();
       cancelDelayedBackgroundSyncStart = null;
       cancelDelayedStartupAcpCapabilitiesRefresh?.();
@@ -4714,6 +4889,11 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       machineAcpBinaryProgressListeners.clear();
       machineAcpBinaryProgressSnapshots.clear();
       machineAcpAuthenticationProgressListeners.clear();
+      for (const machineId of machineProtocolCapabilitiesReads.keys()) {
+        invalidateMachineProtocolCapabilities(machineId);
+      }
+      machineProtocolCapabilitiesCache.clear();
+      machineProtocolCapabilitiesReads.clear();
 
       for (const handle of watchHandles) {
         try {
@@ -4743,6 +4923,19 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
         }
       }
 
+      // Teardown first fences/removes live bindings; SDK work can then unwind.
+      // Joining includes superseded generations, not just the latest attach.
+      await Promise.allSettled([
+        ...pendingWebAttaches,
+        metaRoomJoinPromise,
+        localTransportAttachPromise,
+      ]);
+      await reconnectsClosed;
+      // No reconnect sweep can add work after its loop has closed. Timed-out
+      // attempts may still be running, including attempts from earlier sweeps.
+      await Promise.allSettled(pendingCloudRejoins);
+      if (window.repo === repo) delete window.repo;
+
       let destroyError: unknown = null;
       try {
         await repo.destroy();
@@ -4761,7 +4954,7 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
       if (codeCollabFileIndexCacheDisposeError) {
         throw codeCollabFileIndexCacheDisposeError;
       }
-    })();
+    });
 
     return disposePromise;
   };
@@ -4841,57 +5034,77 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     acquire: sessionStoreCache.acquire,
     releaseRef: sessionStoreCache.releaseRef,
   });
-  const sendJournal = deps.accountId
-    ? createWorkspaceSessionSendJournal({
-        accountId: deps.accountId,
-        getAdmissionContext: deps.getSendAdmissionContext,
-        token: () => authToken,
-        localMachineId: () => sendLocalMachineId,
-        sourceReplica: cacheIdentity.repoDbName,
+  const isMachineRpcUnreachable = (machineId: MachineId) =>
+    targetRouter.getPlaneForMachine(machineId) === 'cloud' && !isBrowserOnline();
+  const pendingSends = createWorkspacePendingSends({
+    runtime: {
+      repo,
+      writer: workspaceWriter,
+      sendResources,
+      requestSessionDispatchTurn,
+      requestSessionSteer,
+      isMachineRpcUnreachable,
+    },
+    token: () => authToken,
+    localMachineId: () => sendLocalMachineId,
+  });
+  if (deps.accountId) {
+    const accountId = deps.accountId;
+    let migrationStarted = false;
+    startLegacySendMigration = () => {
+      if (migrationStarted || disposePromise) return;
+      migrationStarted = true;
+      void migrateLegacySessionSends({
+        accountId,
+        workspaceId,
         runtime: {
-          workspaceId,
           repo,
           writer: workspaceWriter,
           sendResources,
           requestSessionDispatchTurn,
           requestSessionSteer,
         },
-        waitForTargetSync: async (sessionId, signal) => {
-          await waitForPromiseOrAbort(transportReady.promise, signal);
-          throwIfSendAborted(signal);
-          await targetRouter.prepareSessionTarget(sessionId);
-          throwIfSendAborted(signal);
-          const roomId = getSessionRoomId(sessionId);
-          const plane = targetRouter.getReadinessTransportForRoom({ kind: 'doc', id: roomId });
-          // Imported prepared operations do not emit subscribeLocalUpdates. Explicit
-          // sync exports the missing operations and reuses the transport's room.
-          // Upstream sync races its AbortSignal without joining raw stream.sync();
-          // omit that signal here so our owner retains dependencies until it settles.
-          const report = await repo.sync({
-            scope: 'full',
-            docIds: [roomId],
-            flockDocIds: [],
-            requireTransports: [plane],
-          });
-          throwIfSendAborted(signal);
-          if (
-            !report.transports.some(
-              (transport) => transport.transportId === plane && transport.ok
-            ) ||
-            targetRouter.getReadinessTransportForRoom({ kind: 'doc', id: roomId }) !== plane
-          ) {
-            throw new Error('Target synchronization is not confirmed');
-          }
-        },
-      })
-    : null;
+      }).catch((error: unknown) => {
+        console.warn('Legacy pending messages could not be migrated', error);
+      });
+    };
+    if (initialMetaSyncCompleted) startLegacySendMigration();
+  }
+  // All acquired connection resources have a close path before startup can fail.
+  const abortInitialization = () => {
+    void dispose().catch(() => {});
+  };
+  deps.signal?.addEventListener('abort', abortInitialization, { once: true });
+  try {
+    deps.signal?.throwIfAborted();
+    if (electronLocalDataPlane) {
+      localTransportAttachPromise = attachLocalLoroDataPlaneTransport();
+      await localTransportAttachPromise;
+      await ensureMetaRoomSynced();
+    } else if (deps.token != null && deps.token !== '') {
+      await setAuthToken(deps.token);
+    }
+    deps.signal?.throwIfAborted();
+  } catch (error) {
+    try {
+      await dispose();
+    } catch (cleanupError) {
+      // eslint-disable-next-line preserve-caught-error -- Both failures are retained in AggregateError.errors.
+      throw new AggregateError([error, cleanupError], 'Workspace startup and cleanup failed', {
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    deps.signal?.removeEventListener('abort', abortInitialization);
+  }
   return {
     workspaceSlug: deps.workspaceSlug,
     workspaceId,
     repo,
-    sourceReplica: cacheIdentity.repoDbName,
     accountId: deps.accountId ?? null,
-    sendJournal,
+    pendingSends,
+    isMachineRpcUnreachable,
     codeCollabFileIndexCache,
     sendResources,
     writer: workspaceWriter,
@@ -4999,9 +5212,12 @@ export async function createWorkspaceRuntime(deps: RuntimeDeps): Promise<Workspa
     requestSessionPreviewEndpointRelease,
     requestSessionPreviewRevoke,
     requestSessionPreviewStatus,
+    requestIosSimulatorControl,
     requestLocalProjectGitState,
     requestLocalProjectControl,
     requestMachineBugReport,
+    requestLocalMcpTools,
+    requestMemoryProvider,
     requestMachinePiExtensions,
     dispose,
   };

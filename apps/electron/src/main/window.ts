@@ -1,4 +1,5 @@
-import { guardRendererSendClose } from './services/renderer-send-lifecycle'
+import { installRendererUnloadConfirmation } from './renderer-unload'
+import { parseSessionLink } from '@lody/shared/session-link'
 import { getWindowTargetPath, presentWindowTarget } from './window-target'
 import { app, BrowserWindow, dialog, nativeTheme, shell } from 'electron'
 import { is } from '@electron-toolkit/utils'
@@ -24,6 +25,7 @@ import {
   getMainWindowBackgroundColor,
   getMainWindowTitleBarOverlay
 } from './window-theme'
+import { readStartupThemeSource } from './theme-settings'
 import { formatUnknownError, normalizeExternalHttpUrl } from './utils'
 import { describeDeepLinkForAuthDebug } from './auth-debug'
 import { captureElectronMainException } from './posthog-error-reporting'
@@ -233,6 +235,10 @@ function installNavigationGuard(window: BrowserWindow, targets: readonly ReloadT
     if (isTrustedNavigation(event.url, targets)) return
 
     event.preventDefault()
+    if (parseSessionLink(event.url)) {
+      window.webContents.send('app.deepLink', event.url)
+      return
+    }
     const externalUrl = normalizeExternalHttpUrl(event.url)
     if (externalUrl) {
       void shell.openExternal(externalUrl)
@@ -277,9 +283,7 @@ function attachMainWindowDiagnostics(window: BrowserWindow, recoveryTarget: Relo
       })
       return response
     },
-    reload: () => {
-      void requestRendererReload(window)
-    },
+    reload: () => requestRendererReload(window),
     quit: () => app.exit(1)
   })
   window.on('unresponsive', () => {
@@ -373,7 +377,8 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
   if (options.icon) productWindowIcon = options.icon
   if (!options.auxiliary)
     nativeTheme.themeSource = getInitialMainWindowThemeSource(
-      options.initialPath === '/onboarding' ? '/onboarding' : '/'
+      options.initialPath === '/onboarding' ? '/onboarding' : '/',
+      readStartupThemeSource()
     )
   const resolvedTheme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
   const window = new BrowserWindow({
@@ -383,12 +388,13 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
     backgroundColor: getMainWindowBackgroundColor(resolvedTheme),
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon: productWindowIcon } : {}),
+    // Keep equal 16px window insets and the first light's 23px centre on the
+    // sidebar navigation icons' 23px centreline (15px start + 8px half-width).
     ...(process.platform === 'darwin'
-      ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 20, y: 16 } }
+      ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 16, y: 16 } }
       : {}),
-    // Windows: hide the native title bar (its neutral gray clashes with the
-    // app canvas) and keep only the OS-drawn caption buttons as an overlay
-    // tinted to match the theme.
+    // Windows: hide the native title bar and retain OS-drawn caption buttons
+    // over a transparent background, with glyphs tinted to match the theme.
     ...(process.platform === 'win32'
       ? {
           titleBarStyle: 'hidden',
@@ -413,12 +419,7 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
     pendingInitialMaximize.add(window)
   }
   registerProductWindow(window, options.warm ?? false)
-  guardRendererSendClose(window, () => {
-    const hidesInsteadOfClosing =
-      !options.auxiliary &&
-      (process.platform === 'darwin' || (process.platform === 'win32' && isWindowsTrayAvailable()))
-    return !isAppQuitting() && !hidesInsteadOfClosing
-  })
+  installRendererUnloadConfirmation(window)
   if (!options.auxiliary) trackMainWindowState(window)
   const initialDevbarEnabled = isDevbarRendererEnabled()
   const mainTarget = resolveMainRendererTarget(
@@ -466,6 +467,10 @@ export function createMainWindow(options: CreateMainWindowOptions): BrowserWindo
   })
 
   window.webContents.setWindowOpenHandler((details) => {
+    if (parseSessionLink(details.url)) {
+      window.webContents.send('app.deepLink', details.url)
+      return { action: 'deny' }
+    }
     const externalUrl = normalizeExternalHttpUrl(details.url)
     if (externalUrl) {
       void shell.openExternal(externalUrl)

@@ -1,3 +1,4 @@
+import { MemoryBindingSchema, type MemoryBinding } from './memory-provider';
 import type { AgentConfigId, AgentRoleId, MachineId } from './ids';
 import { isSensitiveAcpConfigOptionId } from './session-preparation';
 
@@ -31,6 +32,7 @@ export type AgentRoleVisibility = 'private' | 'workspace';
  * module — a Role stores only the primitive shapes an option selector produces.
  */
 export type AgentRoleRunConfig = {
+  memory?: MemoryBinding;
   modeId?: string;
   modelId?: string;
   configOptionValues?: Record<string, string | boolean>;
@@ -43,6 +45,8 @@ export type AgentRole = {
   visibility: AgentRoleVisibility;
 
   name: string;
+  /** Short guidance for other agents deciding when to invoke this Role. */
+  description?: string;
   /** Optional single glyph shown before the name wherever the Role is listed. */
   emoji?: string;
 
@@ -76,6 +80,12 @@ export const isAgentRoleVisibility = (value: unknown): value is AgentRoleVisibil
 /** Long enough to stay readable inline, short enough not to dominate a prompt. */
 export const AGENT_ROLE_MENTION_SLUG_MAX_LENGTH = 40;
 export const AGENT_ROLE_NAME_MAX_LENGTH = 60;
+export const AGENT_ROLE_DESCRIPTION_MAX_LENGTH = 140;
+
+export const normalizeAgentRoleDescription = (value: string | undefined): string =>
+  Array.from(value ?? '')
+    .slice(0, AGENT_ROLE_DESCRIPTION_MAX_LENGTH)
+    .join('');
 /**
  * A few code points: one emoji, including a ZWJ sequence or a skin-tone
  * modifier, without becoming a second name field.
@@ -193,6 +203,7 @@ export const normalizeAgentRoleRunConfig = (value: unknown): AgentRoleRunConfig 
   const modelId = typeof value.modelId === 'string' ? value.modelId.trim() : '';
   const configOptionValues = normalizeAgentRoleConfigOptionValues(value.configOptionValues);
   return {
+    ...(value.memory === undefined ? {} : { memory: MemoryBindingSchema.parse(value.memory) }),
     ...(modeId ? { modeId } : {}),
     ...(modelId ? { modelId } : {}),
     ...(configOptionValues ? { configOptionValues } : {}),
@@ -209,7 +220,12 @@ const serializeRunConfig = (value: AgentRoleRunConfig): string => {
   const options = Object.entries(normalized.configOptionValues ?? {}).sort(([left], [right]) =>
     left.localeCompare(right)
   );
-  return JSON.stringify([normalized.modeId ?? '', normalized.modelId ?? '', options]);
+  return JSON.stringify([
+    normalized.modeId ?? '',
+    normalized.modelId ?? '',
+    options,
+    normalized.memory ?? null,
+  ]);
 };
 
 const runConfigsEqual = (left: AgentRoleRunConfig, right: AgentRoleRunConfig): boolean =>
@@ -243,8 +259,15 @@ export const isAgentRole = (value: unknown): value is AgentRole => {
     return false;
   }
   if (value.emoji !== undefined && typeof value.emoji !== 'string') return false;
+  if (value.description !== undefined && typeof value.description !== 'string') return false;
   if (value.promptPrefix !== undefined && typeof value.promptPrefix !== 'string') return false;
   if (value.runConfig !== undefined && !isRecord(value.runConfig)) return false;
+  if (
+    isRecord(value.runConfig) &&
+    value.runConfig.memory !== undefined &&
+    !MemoryBindingSchema.safeParse(value.runConfig.memory).success
+  )
+    return false;
   // A name that normalizes to nothing (only punctuation the token strips) has no
   // mention token, so it could never be used for what a Role is for.
   return getAgentRoleMentionSlug({ name: value.name.trim() }).length > 0;
@@ -259,6 +282,7 @@ export const isAgentRole = (value: unknown): value is AgentRole => {
 export const normalizeAgentRole = (value: unknown): AgentRole | undefined => {
   if (!isAgentRole(value)) return undefined;
   const emoji = normalizeAgentRoleEmoji(value.emoji);
+  const description = normalizeAgentRoleDescription(value.description);
   const promptPrefix = value.promptPrefix?.trim();
   return {
     v: AGENT_ROLE_VERSION,
@@ -266,6 +290,7 @@ export const normalizeAgentRole = (value: unknown): AgentRole | undefined => {
     ownerUserId: value.ownerUserId.trim(),
     visibility: value.visibility,
     name: value.name.trim(),
+    ...(description ? { description } : {}),
     ...(emoji ? { emoji } : {}),
     machineId: value.machineId.trim() as MachineId,
     agentConfigId: value.agentConfigId.trim() as AgentConfigId,
@@ -285,6 +310,7 @@ export const normalizeAgentRole = (value: unknown): AgentRole | undefined => {
  */
 export const isAgentRoleContentEqual = (left: AgentRole, right: AgentRole): boolean =>
   left.name === right.name &&
+  (left.description ?? '') === (right.description ?? '') &&
   (left.emoji ?? '') === (right.emoji ?? '') &&
   left.visibility === right.visibility &&
   left.machineId === right.machineId &&
@@ -316,6 +342,7 @@ export const listAccessibleAgentRoles = (
 // ---------------------------------------------------------------------------
 
 export type AgentRoleUnavailableReason =
+  | 'memory_unsupported'
   | 'machine_unknown'
   | 'machine_offline'
   | 'agent_config_missing'
@@ -330,6 +357,7 @@ export type AgentRoleAvailability =
 export type AgentRoleAvailabilityContext = {
   /** Machines the current user may reach at all. */
   authorizedMachineIds: ReadonlySet<MachineId>;
+  memoryProviderMachineIds?: ReadonlySet<MachineId>;
   onlineMachineIds: ReadonlySet<MachineId>;
   /** Agent config id -> the machine it belongs to. */
   agentConfigMachineIds: ReadonlyMap<AgentConfigId, MachineId>;
@@ -362,53 +390,7 @@ export const resolveAgentRoleAvailability = (
   if (!context.onlineMachineIds.has(role.machineId)) {
     return { kind: 'unavailable', reason: 'machine_offline' };
   }
+  if (role.runConfig.memory && !context.memoryProviderMachineIds?.has(role.machineId))
+    return { kind: 'unavailable', reason: 'memory_unsupported' };
   return { kind: 'available' };
 };
-
-// ---------------------------------------------------------------------------
-// Work-context scope
-// ---------------------------------------------------------------------------
-
-/**
- * Where the mentioned Role is allowed to run, given what the composer is
- * attached to.
- *
- * - `machine`: a Local Project, or a child Session that shares this physical
- *   workspace — the target has to be the same machine.
- * - `authorized_machines`: plain chat or a GitHub project whose target Session
- *   can clone the repo itself on another authorized machine.
- */
-export type AgentRoleMentionScope =
-  | { kind: 'machine'; machineId: MachineId | null }
-  | { kind: 'authorized_machines'; machineIds: ReadonlySet<MachineId> };
-
-export const isAgentRoleInMentionScope = (
-  role: AgentRole,
-  scope: AgentRoleMentionScope
-): boolean =>
-  scope.kind === 'machine'
-    ? scope.machineId !== null && role.machineId === scope.machineId
-    : scope.machineIds.has(role.machineId);
-
-/**
- * The Roles a composer may execute: readable by this user, executable right now,
- * and inside the current work context.
- *
- * Order is visibility- and scope-independent so the menu stays stable: name
- * first, id as the tie-break.
- */
-export const selectMentionableAgentRoles = (
-  roles: readonly AgentRole[],
-  options: {
-    currentUserId: string | null | undefined;
-    scope: AgentRoleMentionScope;
-    getAvailability: (role: AgentRole) => AgentRoleAvailability;
-  }
-): AgentRole[] =>
-  listAccessibleAgentRoles(roles, options.currentUserId)
-    .filter(
-      (role) =>
-        isAgentRoleInMentionScope(role, options.scope) &&
-        options.getAvailability(role).kind === 'available'
-    )
-    .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id));

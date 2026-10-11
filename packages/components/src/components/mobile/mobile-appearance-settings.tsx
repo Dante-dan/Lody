@@ -6,7 +6,13 @@ import type { SupportedLanguage } from '@lody/shared';
 import { Check, ChevronDown, Monitor, Moon, Sun } from 'lucide-react';
 import { motion } from 'framer-motion';
 
-import { conversationFontSizeAtom, fontLigaturesEnabledAtom, languageAtom } from '@/atoms';
+import {
+  conversationFontSizeAtom,
+  extendedCodeLanguagesEnabledAtom,
+  fontLigaturesEnabledAtom,
+  inlineMathEnabledAtom,
+  languageAtom,
+} from '@/atoms';
 import {
   MobileInlineMenu,
   MobileInlinePickerCoordinator,
@@ -30,6 +36,10 @@ export function MobileAppearanceSettings() {
   const [language, setLanguage] = useAtom(languageAtom);
   const [conversationFontSize, setConversationFontSize] = useAtom(conversationFontSizeAtom);
   const [fontLigaturesEnabled, setFontLigaturesEnabled] = useAtom(fontLigaturesEnabledAtom);
+  const [inlineMathEnabled, setInlineMathEnabled] = useAtom(inlineMathEnabledAtom);
+  const [extendedCodeLanguagesEnabled, setExtendedCodeLanguagesEnabled] = useAtom(
+    extendedCodeLanguagesEnabledAtom
+  );
   const postHog = usePostHog();
   const selectedThemeLabel =
     theme === 'light'
@@ -130,6 +140,31 @@ export function MobileAppearanceSettings() {
             />
           </MobileSettingsRow>
         </MobileInlinePickerRowSlot>
+        <MobileSettingsRow
+          label={t('settings.inlineMath.label', 'Render inline math')}
+          helper={t('settings.inlineMath.helper', 'Typeset $...$ and \\(...\\) in Markdown.')}
+          hasDivider
+        >
+          <Switch
+            checked={inlineMathEnabled}
+            onCheckedChange={setInlineMathEnabled}
+            aria-label={t('settings.inlineMath.label', 'Render inline math')}
+          />
+        </MobileSettingsRow>
+        <MobileSettingsRow
+          label={t('settings.extendedCodeLanguages.label', 'Extended code languages')}
+          helper={t(
+            'settings.extendedCodeLanguages.helper',
+            'Adds more syntax grammars, including Lean and Rocq. Each grammar loads when first used and can slow that render.'
+          )}
+          hasDivider
+        >
+          <Switch
+            checked={extendedCodeLanguagesEnabled}
+            onCheckedChange={setExtendedCodeLanguagesEnabled}
+            aria-label={t('settings.extendedCodeLanguages.label', 'Extended code languages')}
+          />
+        </MobileSettingsRow>
       </MobileSettingsSection>
 
       <MobileSettingsSection>

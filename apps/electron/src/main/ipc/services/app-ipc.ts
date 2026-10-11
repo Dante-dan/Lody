@@ -1,9 +1,8 @@
-import {
-  registerRendererSendLifecycle,
-  resolveRendererSendLifecycle,
-  prepareRendererSendsForExit
-} from '../../services/renderer-send-lifecycle'
 import { assertProductWindowSender } from '../assert-sender'
+import { parseSessionLink, INSTALLATION_LINK_SCHEMES } from '@lody/shared/session-link'
+import { desktopInstallationProfile } from '../../platform'
+import { getDesktopCallbackProtocol } from '../../desktop-channel'
+import { isDefaultLodyProtocolClient, setDefaultLodyProtocolClient } from '../../protocol-client'
 import { parseAppIconName } from '../../services/app-icon-core'
 import { productWindows } from '../../window-state'
 import { parseWindowTarget, openSessionWindow, type WindowTarget } from '../../session-windows'
@@ -42,7 +41,12 @@ import {
   persistRendererFatalError,
   requestRendererReload
 } from '../../renderer-recovery'
-import { applyResolvedWindowTheme, resolveNativeWindowTheme } from '../../window-theme'
+import {
+  applyResolvedWindowTheme,
+  isNativeWindowThemeSource,
+  resolveNativeWindowTheme
+} from '../../window-theme'
+import { writeStartupThemeSource } from '../../theme-settings'
 import { formatUnknownError, normalizeExternalHttpUrl } from '../../utils'
 import {
   applyAutoLaunchSettings,
@@ -112,18 +116,41 @@ export class AppIpc extends IpcService {
   static override readonly groupName = 'app'
 
   @IpcMethod()
-  async registerSendLifecycle() {
-    const { event } = getIpcContext()
-    assertProductWindowSender(event)
-    const window = BrowserWindow.fromWebContents(event.sender)
-    if (window) registerRendererSendLifecycle(window)
+  async getDefaultLinkHandler() {
+    assertProductWindowSender(getIpcContext().event)
+    return { isDefault: isDefaultLodyProtocolClient() }
   }
 
   @IpcMethod()
-  async replySendLifecycle(input: unknown) {
-    const { event } = getIpcContext()
-    assertProductWindowSender(event)
-    resolveRendererSendLifecycle(event.sender.id, input)
+  async setDefaultLinkHandler() {
+    assertProductWindowSender(getIpcContext().event)
+    const requested = setDefaultLodyProtocolClient()
+    return { requested, isDefault: isDefaultLodyProtocolClient() }
+  }
+
+  @IpcMethod()
+  async getLinkInstallations() {
+    assertProductWindowSender(getIpcContext().event)
+    return INSTALLATION_LINK_SCHEMES.flatMap((scheme) => {
+      if (scheme === getDesktopCallbackProtocol(desktopInstallationProfile)) return []
+      const name = app.getApplicationNameForProtocol(`${scheme}://session/probe`)
+      return name ? [{ scheme, name }] : []
+    })
+  }
+
+  @IpcMethod()
+  async openSessionInInstallation(raw: string, scheme: string) {
+    assertProductWindowSender(getIpcContext().event)
+    if (
+      !INSTALLATION_LINK_SCHEMES.includes(scheme) ||
+      typeof raw !== 'string' ||
+      !parseSessionLink(raw)?.workspaceId
+    ) {
+      throw new Error('Invalid installation link')
+    }
+    const target = new URL(raw)
+    target.protocol = `${scheme}:`
+    await shell.openExternal(target.href)
   }
 
   @IpcMethod()
@@ -170,11 +197,7 @@ export class AppIpc extends IpcService {
     const { event } = getIpcContext()
     assertProductWindowSender(event)
     for (const window of productWindows) {
-      if (window.webContents !== event.sender) {
-        if (!(await prepareRendererSendsForExit('close', window)))
-          throw new Error('Cache clearing was cancelled')
-        window.destroy()
-      }
+      if (window.webContents !== event.sender) window.destroy()
     }
   }
 
@@ -420,6 +443,12 @@ export class AppIpc extends IpcService {
 
   @IpcMethod()
   async openExternalUrl(urlRaw: string) {
+    if (typeof urlRaw === 'string' && parseSessionLink(urlRaw)) {
+      const { event } = getIpcContext()
+      assertProductWindowSender(event)
+      event.sender.send('app.deepLink', urlRaw)
+      return { opened: true, url: urlRaw }
+    }
     const externalUrl = normalizeExternalHttpUrl(urlRaw)
     if (!externalUrl) {
       return { opened: false, error: 'invalid_url' }
@@ -529,9 +558,23 @@ export class AppIpc extends IpcService {
 
   @IpcMethod()
   async setNativeTheme(source: NativeThemeSource) {
-    if (source === 'dark' || source === 'light' || source === 'system') {
+    if (isNativeWindowThemeSource(source)) {
       nativeTheme.themeSource = source
       syncNativeThemeWindows()
+    }
+  }
+
+  /**
+   * Records the theme the next launch should open in.
+   *
+   * Deliberately separate from `setNativeTheme`, which also follows a preview
+   * (hovering a theme in Settings) so the native chrome tracks what the user is
+   * looking at. Only a committed choice belongs on disk.
+   */
+  @IpcMethod()
+  async setStartupThemeSource(source: NativeThemeSource) {
+    if (isNativeWindowThemeSource(source)) {
+      writeStartupThemeSource(source)
     }
   }
 
@@ -558,6 +601,6 @@ export class AppIpc extends IpcService {
   async requestRendererReload() {
     const { event } = getIpcContext()
     const window = findWindow(event.sender)
-    if (window) await requestRendererReload(window)
+    if (window) requestRendererReload(window)
   }
 }

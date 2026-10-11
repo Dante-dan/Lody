@@ -15,9 +15,13 @@ setup, verification, retry, cancellation, and session-selection workflow.
 
 The execution machine owns each opaque profile, its isolated Codex home, and its
 credentials. Shared provider state contains only the profile reference, mode, and
-normalized endpoint. ChatGPT uses Codex's native keyring, never file fallback; API
-keys use the host system credential store. Unsupported or locked storage fails
-closed. Existing providers without a profile keep their native behavior and history.
+normalized endpoint. New ChatGPT profiles use Codex's native credential-storage
+default inside their private home; a machine without a keyring can store
+`auth.json` there. Existing keyring-backed profiles keep using keyring so an
+upgrade does not disconnect them. Lody never swaps or copies a global auth file
+between profiles. API keys use the host system credential store and fail closed
+when it is unavailable or locked. Existing providers without a profile keep
+their native behavior and history.
 
 Remote secret input uses the existing request-bound encrypted Machine RPC. No
 hosted credential service or model proxy is introduced. OSS composition remains
@@ -35,6 +39,12 @@ profiles reject custom runtime and identity-changing environment overrides.
 Preparation, start, resume, fork, edit/resend, verification, and title fallbacks
 resolve the same host binding before launch.
 
+Provider rate-limit snapshots use that same binding. The execution machine stores
+each snapshot under the owning provider configuration and limit tier, so one Codex
+account cannot replace or display another account's quota. A bound provider never
+claims a legacy machine/type-wide snapshot whose account is unknown. Removing the
+provider also removes its scoped snapshots.
+
 Both distinct profiles and multiple native processes for the same ChatGPT profile
 may run concurrently. Per-process use records only delay deletion cleanup until
 every native process has exited; unknown orphans never block another session.
@@ -48,10 +58,13 @@ existing ChatGPT identity; users add a new provider when a new login is required
 
 API key replacement stages a new vault generation, verifies a tools-free synthetic
 Responses request, and only then atomically changes the active generation. Failure
-or cancellation before commit preserves the old key. Running processes retain
-their original generation. Host readiness precedes catalog publication; failed
-publication is retryable. Deletion records local removal, rejects future launches,
-and reconciles credential cleanup without deleting history or killing sessions.
+or cancellation before commit preserves the old key and propagates the original
+authentication error, even if cleanup also fails. Inactive generation records stay
+discoverable for cleanup retries; cleanup must not activate a failed candidate.
+Running processes retain their original generation. Host readiness precedes
+catalog publication; failed publication is retryable. Deletion records local
+removal, rejects future launches, and reconciles credential cleanup without
+deleting history or killing sessions.
 
 The daemon advertises `codexAuthProfiles` v1. Persisted managed providers carry an
 invalid executable-path guard for older daemons; supported readers normalize it
@@ -61,5 +74,7 @@ only as part of the typed profile contract. Old peers must fail, not use native 
 
 Owners: [profile store](../apps/cli/src/agent/codex-profile-store.ts),
 [credential broker](../apps/cli/src/agent/codex-credential-broker.ts),
-[decision and validation limits](../.agents/notes/proposed/architecture/2026-09-26-codex-account-profiles.md).
+[decision and validation limits](../.agents/notes/proposed/architecture/2026-09-26-codex-account-profiles.md),
+[rate-limit isolation](../.agents/notes/implemented/bug-fix/2026-09-30-provider-rate-limit-isolation.md),
+[credential failure recovery and ablations](../.agents/notes/implemented/bug-fix/2026-10-07-codex-credential-failure-recovery.md).
 This draft does not assert completion of all lifecycle or platform acceptance tests.

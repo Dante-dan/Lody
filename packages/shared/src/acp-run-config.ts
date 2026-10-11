@@ -1,3 +1,9 @@
+import {
+  getBuiltinModelControlBinding,
+  getDeclaredModelControls,
+  getModelEffortChoices,
+  isBuiltinEffortConfigId,
+} from './acp-model-capabilities';
 /**
  * Semantic run-config selection (model / reasoning effort / fast mode / plan mode)
  * resolved against an agent's ACP capabilities.
@@ -40,6 +46,15 @@ export const ACP_PLAN_PERMISSION_MODE_ID = 'plan';
 export const isAcpFastModeConfigId = (configId: string): boolean =>
   (ACP_FAST_MODE_CONFIG_IDS as readonly string[]).includes(configId);
 
+/**
+ * Whether an option id carries a per-model control (effort or Fast), judged by
+ * id alone for values whose option the current model may not even have.
+ */
+export const isPerModelControlConfigId = (configId: string): boolean =>
+  isAcpFastModeConfigId(configId) ||
+  configId === ACP_REASONING_EFFORT_CONFIG_ID ||
+  isBuiltinEffortConfigId(configId);
+
 type ConfigOptionIdentity = Pick<AcpConfigOptionSummary, 'id' | 'category'>;
 
 export const isAcpThoughtLevelConfigOption = (option: ConfigOptionIdentity): boolean =>
@@ -64,6 +79,9 @@ export type AgentRunConfigSelection = {
 
 /** What the target agent supports, for callers that must pick a valid value. */
 export type AgentRunConfigCapabilities = {
+  modes: Array<{ id: string; name: string; description?: string }>;
+  /** Advertised selector metadata only; never expose current configuration values. */
+  configOptions: Array<Omit<AcpConfigOptionSummary, 'currentValue'>>;
   /**
    * `reasoningEffortValues` is per model when the agent publishes that
    * breakdown; otherwise it is absent and only the snapshot below applies.
@@ -102,8 +120,9 @@ export type AgentRunConfigResolution = {
 
 type RunConfigCapabilitySource = Pick<
   AcpCapabilityCacheEntry,
-  'modes' | 'models' | 'configOptions' | 'modelReasoningEfforts'
->;
+  'modes' | 'models' | 'configOptions' | 'modelReasoningEfforts' | 'declaredModelControls'
+> &
+  Partial<Pick<AcpCapabilityCacheEntry, 'cliType' | 'agentType'>>;
 
 /**
  * Recovers the per-model effort breakdown from a legacy `model[effort]` model
@@ -257,11 +276,52 @@ const listModels = (
 export const summarizeAgentRunConfigCapabilities = (
   capability: RunConfigCapabilitySource | undefined
 ): AgentRunConfigCapabilities => {
-  const perModelEfforts = capability?.modelReasoningEfforts;
   const measuredForModelId = findCurrentModelId(capability);
   return {
+    modes: Array.from(
+      new Map([
+        ...(capability?.modes ?? []).map(
+          (mode) =>
+            [
+              mode.id,
+              {
+                id: mode.id,
+                name: mode.name,
+                ...(mode.description ? { description: mode.description } : {}),
+              },
+            ] as const
+        ),
+        ...(capability?.configOptions ?? [])
+          .filter((option) => option.category === 'mode' && option.type === 'select')
+          .flatMap((option) =>
+            option.options.map(
+              (choice) =>
+                [
+                  choice.value,
+                  {
+                    id: choice.value,
+                    name: choice.name,
+                    ...(choice.description ? { description: choice.description } : {}),
+                  },
+                ] as const
+            )
+          ),
+      ]).values()
+    ),
+    configOptions: (capability?.configOptions ?? []).map((option) => ({
+      id: option.id,
+      name: option.name,
+      ...(option.description ? { description: option.description } : {}),
+      ...(option.category ? { category: option.category } : {}),
+      type: option.type,
+      options: option.options.map((choice) => ({
+        value: choice.value,
+        name: choice.name,
+        ...(choice.description ? { description: choice.description } : {}),
+      })),
+    })),
     models: listModels(capability).map((model) => {
-      const efforts = perModelEfforts?.[model.id];
+      const efforts = getModelEffortChoices(capability, model.id);
       return { ...model, ...(efforts ? { reasoningEffortValues: efforts } : {}) };
     }),
     reasoningEffortValues: (findReasoningEffortOption(capability)?.options ?? []).map(
@@ -314,13 +374,19 @@ export const resolveAgentRunConfigSelection = (
 
   if (selection.reasoningEffort !== undefined) {
     const option = findReasoningEffortOption(capability);
-    const targetModelEfforts = targetModelId
-      ? capability.modelReasoningEfforts?.[targetModelId]
-      : undefined;
+    const targetModelEfforts = getModelEffortChoices(capability, targetModelId);
     if (!option && !targetModelEfforts) {
       throw new Error('The selected agent does not offer a reasoning effort option.');
     }
-    const configId = option?.id ?? ACP_REASONING_EFFORT_CONFIG_ID;
+    if (targetModelEfforts?.length === 0) {
+      throw new Error(`Model ${targetModelId} does not offer a reasoning effort option.`);
+    }
+    // The probe may have run on a model without effort; a built-in adapter's
+    // own option id is known even then.
+    const configId =
+      option?.id ??
+      getBuiltinModelControlBinding(capability)?.effortConfigId ??
+      ACP_REASONING_EFFORT_CONFIG_ID;
     if (targetModelEfforts) {
       if (!targetModelEfforts.includes(selection.reasoningEffort)) {
         throw new Error(
@@ -339,13 +405,24 @@ export const resolveAgentRunConfigSelection = (
 
   if (selection.fastMode !== undefined) {
     const option = findFastModeOption(capability);
-    if (!option) {
+    const declaredFast = getDeclaredModelControls(capability, targetModelId)?.fastMode;
+    const builtinFastId = getBuiltinModelControlBinding(capability)?.fastConfigId;
+    if (declaredFast === false) {
+      // Off on a model without Fast is already the case; nothing to send.
+      if (selection.fastMode) throw new Error(`Model ${targetModelId} does not offer fast mode.`);
+    } else if (option) {
+      configOptionValues[option.id] = toggleValue(option, selection.fastMode);
+      if (declaredFast) validatedConfigIds.push(option.id);
+    } else if (declaredFast && builtinFastId) {
+      // The probed model lacked Fast, but the target model declares it.
+      configOptionValues[builtinFastId] = selection.fastMode;
+      validatedConfigIds.push(builtinFastId);
+    } else {
       throw new Error('The selected agent does not offer a fast mode option.');
     }
-    configOptionValues[option.id] = toggleValue(option, selection.fastMode);
-    if (switchesModel) {
+    if (switchesModel && declaredFast === undefined) {
       // Agents drop the fast toggle entirely for models that lack fast support,
-      // and no agent publishes which models those are.
+      // and this agent declared nothing about the target model.
       unverifiedSelections.push(`fastMode=${selection.fastMode}`);
     }
   }

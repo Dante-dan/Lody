@@ -55,7 +55,13 @@
   turn identity, plan, tools, or accounting. Ignore unregistered/terminal output,
   reject lineage cycles, and retain incomplete observation across snapshots. Declare
   nested transcript streaming fields in `schema.ts`; legacy rows stay unchanged.
+- New root/child tool content drops ACP images and image blobs and clears unused
+  non-image resource blob bytes through `acp/tool-call-history.ts`; replay shares
+  the rule. Keep resource/download identity, audio, readable output, complete diffs
+  and sparse semantics. Child raw input retains its displayed plan; scalar/array
+  raw output has one readable copy, never a duplicate in metadata. Permission
+  enrichment preserves stored content; malformed new values reach writer validation.
 
-- Durable submission preparation stays within HistoryWriter: prepare on a fork,
-  persist the exact operations and their baseline before publishing, then replay
-  those operations without another append. Missing dependencies are not acceptance.
+- Submissions append on the live doc as local commits; transports upload only
+  local events. Never author on a fork and import the export: it misses upload,
+  copies the whole doc and adds a permanent peer.

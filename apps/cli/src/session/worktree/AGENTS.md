@@ -2,15 +2,36 @@
 
 `CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only.
 
-Repo checkouts, worktrees, branch allocation, and setup scripts for sessions.
-[../AGENTS.md](../AGENTS.md) and [apps/cli/AGENTS.md](../../../AGENTS.md) apply. Background
-and file responsibilities: [../README.md](../README.md).
+Session checkouts and setup.
+[../AGENTS.md](../AGENTS.md) and [apps/cli/AGENTS.md](../../../AGENTS.md) apply. Map: [../README.md](../README.md).
+
+## Effect execution boundary
+
+- Native Git commands/helper probes compose `WorktreeGit` / `WorktreeGitLive`.
+  Layers supply official filesystem, host environment and the existing process
+  spawner. Preserve full Cause; Legacy projection uses squashFileLockFailure.
+  Pinned v4 mapError/catch can discard release defects beside a typed failure.
+- `worktreeGitLegacy` is the temporary command facade; keep Legacy
+  visible; delete it when the manager becomes native. Infrastructure,
+  FileLockCleanupFailed/LockReleaseFailed escape fallback/forced-removal catches.
+  `WorktreeObservations` uses owner-provided FileLocks: inspect/list acquire;
+  info borrows the mutation lease. Preserve missing/unborn/corrupt and mixed Cause.
+  `LocalWorktreePreparation.prepareLocked` borrows that lease; own scratch before
+  writing, publish complete metadata exclusively, retain bounded recovery on
+  failed release. `runWorktreeLegacy` executes both via fileLocksLegacy;
+  runObservationLegacy only composes. Never add a second coordinator.
+  Mutation/setup/GC remains unfinished.
+  Decision: [worktree Git](../../../../../.agents/notes/implemented/architecture/2026-10-10-effect-worktree-git-execution.md).
 
 ## Git credential broker
 
-- Host clone/fetch must receive the prepared session's managed Git PATH/config in
+- Local projects and their worktrees use native Git/GitHub auth, even with GitHub
+  remotes. Skip managed credential preparation and never enroll them on refresh.
+
+- Host clone/fetch must receive the prepared session's managed Git PATH/GIT_EXEC_PATH/config in
   `brokerAuth.transportEnv`, not just a helper: HTTP headers authenticate before
-  helpers. Pin the per-call context token; do not read a mutable session file.
+  helpers. Include the managed credential helper for checkout/LFS and scrub non-owner
+  token env. Pin the per-call owner context; never read a mutable session file.
 
 - INVARIANT: host-side git must receive its credential broker as an explicit argument
   (`WorktreeManager.ensureRepo({ brokerAuth })` or the per-call `createWorktree` argument),
@@ -36,11 +57,17 @@ and file responsibilities: [../README.md](../README.md).
 
 ## Worktrees, branches, and setup
 
+- First-task branch naming is agent guidance for ordinary new independent GitHub/local
+  worktree Sessions, including prepared-worktree adoption. The daemon verifies the actual branch
+  after setup against this Session's allocation (numeric collisions included); unknown or
+  descriptive refs receive no rename instruction. Exclude direct folders, child Tabs,
+  prior/resumed ACP Sessions, later turns, and Fork; never restore a host prompt-to-ref
+  generator. Contract: [workspace branches](../../../../../specs/workspace-branch-state.md).
 - Turn finalization NEVER commits or pushes on the session's behalf, in any project shape.
   A PR-linked session that ends with unpublished work is reported through
   `SessionMeta.workspaceDirty` AND `workspaceUnpushed`, which raise the Info Bar's
   `Commit & Push` action; the agent is asked to keep the branch current by the Create PR
-  prompt (`packages/shared/src/review-prompts.ts`), which the user can override in
+  prompt (`packages/shared/src/pr-prompts.ts`), which the user can override in
   conversation. Do not re-add an automatic post-turn commit/push.
 - Publish BOTH flags or the signal has a hole: `git status` goes clean the moment the agent
   commits, so a commit whose push failed reads as "all clear" and the Info Bar offers Merge
@@ -63,9 +90,8 @@ and file responsibilities: [../README.md](../README.md).
 - A fresh local/GitHub worktree always owns a newly allocated branch from its selected base
   ref; suffix collisions instead of attaching to an existing ref. Reattaching an existing
   branch is reserved for an explicit `restoreBranchName` from the same Session.
-- Title-derived branch renaming applies only to a new Session with a recorded one-time intent;
-  verify the original Git branch and HEAD and absence of remote publication or a PR before
-  renaming, then reconcile the real branch into Session metadata before restore uses it.
+- Title rename needs a new Session’s one-time intent, unchanged branch/HEAD, and no publication
+  or PR. Reconcile the actual branch into Session metadata before restore.
 - Worktree setup scripts are per worktree-directory lifetime: session runtime restore after
   idle GC must skip setup when the session's worktree directory already exists, but setup still
   runs when a missing worktree directory is materialized again.

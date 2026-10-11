@@ -1,3 +1,5 @@
+import { getAgentRoleEmoji } from '../src/agent-role';
+import { buildAgentMessageAuthor, snapshotAgentRole } from '../src/message-author';
 import { describe, expect, it, vi } from 'vitest';
 import { Loro, LoroList, LoroMap, LoroText } from 'loro-crdt';
 import { Mirror } from 'loro-mirror';
@@ -24,6 +26,325 @@ const open = (doc: Loro) =>
   createSessionMirror({ doc, initialState: { session: { id }, history: [] } });
 
 describe('single history writer', () => {
+  it.each(['other', 'execute', 'search', 'fetch', undefined] as const)(
+    'drops unused tool bytes for kind %s while preserving audio and download references',
+    (kind) => {
+      const doc = new Loro();
+      const writer = open(doc).historyWriter;
+      const attachment = {
+        type: 'image_group' as const,
+        images: [{ imageId: 'r2-image', mimeType: 'image/png' as const, sizeBytes: 1 }],
+      };
+      writer.append({ ...entry('first'), role: 'assistant', items: [attachment] });
+      const images = [
+        { type: 'content', content: { type: 'image', mimeType: 'image/png', data: 'DROP_IMAGE' } },
+        {
+          type: 'content',
+          content: {
+            type: 'resource',
+            resource: { uri: 'synthetic://image', mimeType: ' Image/SVG+XML ', blob: 'DROP_BLOB' },
+          },
+        },
+        {
+          type: 'content',
+          content: {
+            type: 'resource',
+            resource: { uri: 'data:image/png;base64,DROP_URI', blob: 'DROP_URI' },
+          },
+        },
+      ];
+      const retained = [
+        { type: 'content', content: { type: 'text', text: 'Tool result. '.repeat(6000) } },
+        { type: 'content', content: { type: 'audio', mimeType: 'audio/wav', data: 'AUDIO' } },
+        {
+          type: 'content',
+          content: {
+            type: 'resource',
+            resource: {
+              uri: 'https://example.invalid/download.pdf',
+              mimeType: 'application/pdf',
+              blob: '',
+            },
+          },
+        },
+        {
+          type: 'content',
+          content: {
+            type: 'resource',
+            resource: { uri: 'synthetic://text', text: 'Resource text' },
+          },
+        },
+        {
+          type: 'content',
+          content: {
+            type: 'resource_link',
+            uri: 'synthetic://image-reference',
+            name: 'Image link',
+          },
+        },
+        { type: 'content', content: { type: 'resource_link', uri: '', name: 'Binary label' } },
+      ];
+      const binary = 'QUJD'.repeat(128 * 1024);
+      const incoming = retained.map((block) => {
+        if (block.content.type === 'resource_link' && block.content.uri === '')
+          return {
+            ...block,
+            content: { ...block.content, uri: `data:application/octet-stream;base64,${binary}` },
+          };
+        if (block.content.type !== 'resource' || !('blob' in block.content.resource)) return block;
+        return {
+          ...block,
+          content: { ...block.content, resource: { ...block.content.resource, blob: binary } },
+        };
+      });
+      const emit = (update: Record<string, unknown>) =>
+        writer.updateEntry(
+          'first',
+          (turn) =>
+            applyNotificationOnHistory(
+              [turn],
+              [parseSessionNotification({ sessionId: 'root', update })],
+              undefined,
+              { targetAssistantEntryId: 'first' }
+            )[0]!
+        );
+      emit({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tool',
+        title: 'Screenshot tool',
+        kind,
+        status: 'in_progress',
+        content: [images[0], incoming[0], ...images.slice(1), ...incoming.slice(1)],
+      });
+      emit({ sessionUpdate: 'tool_call_update', toolCallId: 'tool', status: 'completed' });
+      const stored = writer.read('first')!;
+      expect(stored.items).toMatchObject([
+        attachment,
+        {
+          type: 'tool_call',
+          toolCallId: 'tool',
+          title: 'Screenshot tool',
+          status: 'completed',
+          content: retained,
+        },
+      ]);
+      expect(JSON.stringify(doc.toJSON())).not.toContain('DROP_');
+      expect(JSON.stringify(doc.toJSON())).not.toContain(binary);
+      const fork = open(new Loro()).historyWriter;
+      const snapshot = writer.capture();
+      fork.copyFrom(snapshot, snapshot.history);
+      expect(fork.read('first')).toEqual(stored);
+
+      // An image-only replacement still clears earlier tool output.
+      emit({ sessionUpdate: 'tool_call_update', toolCallId: 'tool', content: images });
+      const replaced = writer.read('first')!;
+      expect(replaced.items[0]).toMatchObject(attachment);
+      expect(replaced.items[1]).toMatchObject({ toolCallId: 'tool', status: 'completed' });
+      const tool = replaced.items[1] as Extract<MessageContent, { type: 'tool_call' }>;
+      expect(tool.content ?? []).toEqual([]);
+    }
+  );
+
+  it('drops child tool images while retaining read results, diffs and sparse updates', () => {
+    const doc = new Loro();
+    const writer = open(doc).historyWriter;
+    writer.append({ ...entry('first'), role: 'assistant', items: [] });
+    const emit = (payload: Record<string, unknown>) =>
+      writer.updateEntry(
+        'first',
+        (turn) =>
+          applyNotificationOnHistory(
+            [turn],
+            [
+              parseSessionNotification({
+                sessionId: 'root',
+                update: {
+                  sessionUpdate: 'subagent_event',
+                  event: { version: 1, sessionId: 'root', runId: 'run', ...payload },
+                },
+              }),
+            ],
+            undefined,
+            { targetAssistantEntryId: 'first' }
+          )[0]!
+      );
+    emit({
+      type: 'snapshot',
+      snapshot: {
+        state: 'running',
+        support: { stream: ['tool'], progress: false, cancel: false, outputRead: 'none' },
+      },
+    });
+    const retained = [
+      { type: 'content', content: { type: 'text', text: 'Read result' } },
+      {
+        type: 'diff',
+        path: 'synthetic.txt',
+        oldText: 'before',
+        newText: 'Readable diff. '.repeat(6000),
+      },
+      { type: 'content', content: { type: 'audio', mimeType: 'audio/wav', data: 'AUDIO' } },
+      {
+        type: 'content',
+        content: {
+          type: 'resource',
+          resource: {
+            uri: 'https://example.invalid/tool.zip',
+            mimeType: 'application/zip',
+            blob: '',
+          },
+        },
+      },
+    ];
+    const images = [
+      { type: 'content', content: { type: 'image', mimeType: 'image/png', data: 'DROP_CHILD' } },
+      {
+        type: 'content',
+        content: {
+          type: 'resource',
+          resource: { uri: 'synthetic://image', mimeType: 'image/png', blob: 'DROP_CHILD_BLOB' },
+        },
+      },
+    ];
+    emit({
+      type: 'output',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'child-tool',
+        title: 'Child read',
+        kind: 'read',
+        content: [
+          ...retained.map((block) =>
+            block.type === 'content' && block.content.type === 'resource'
+              ? {
+                  ...block,
+                  content: {
+                    ...block.content,
+                    resource: { ...block.content.resource, blob: 'DROP_CHILD_BINARY' },
+                  },
+                }
+              : block
+          ),
+          ...images,
+        ],
+        rawInput: { unusedBinary: 'DROP_CHILD_RAW_INPUT' },
+      },
+    });
+    emit({
+      type: 'output',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'child-tool', status: 'completed' },
+    });
+    const task = writer.read('first')!.items[0] as Extract<
+      MessageContent,
+      { type: 'subagent_task' }
+    >;
+    expect(task.run?.items).toMatchObject([
+      { toolCallId: 'child-tool', kind: 'read', status: 'completed', content: retained },
+    ]);
+    expect(JSON.stringify(doc.toJSON())).not.toContain('DROP_CHILD');
+    expect(task.run?.items[0]).not.toHaveProperty('rawInput');
+    emit({
+      type: 'output',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'child-tool', content: images },
+    });
+    const replaced = writer.read('first')!.items[0] as Extract<
+      MessageContent,
+      { type: 'subagent_task' }
+    >;
+    expect(replaced.run?.items).toMatchObject([
+      { toolCallId: 'child-tool', status: 'completed', content: [] },
+    ]);
+    const plan = 'Useful approval plan. '.repeat(6000);
+    emit({
+      type: 'output',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'plan',
+        title: 'Plan approval',
+        kind: 'switch_mode',
+        rawInput: { plan, unusedBinary: 'DROP_CHILD_PLAN_INPUT' },
+        rawOutput: { summary: 'Readable JSON. '.repeat(6000) },
+      },
+    });
+    const planned = writer.read('first')!.items[0] as Extract<
+      MessageContent,
+      { type: 'subagent_task' }
+    >;
+    expect(planned.run?.items.at(-1)).toMatchObject({
+      rawInput: { plan },
+      rawOutput: { summary: 'Readable JSON. '.repeat(6000) },
+    });
+    expect(JSON.stringify(doc.toJSON())).not.toContain('DROP_CHILD_PLAN_INPUT');
+  });
+
+  it('freezes the same default emoji displayed by the Role catalog', () => {
+    const role = snapshotAgentRole({ id: 'reviewer' as never, revision: 1, name: 'Reviewer' });
+    const author = buildAgentMessageAuthor({
+      sessionId: 'source',
+      turnId: 'turn',
+      cliType: 'builtin',
+      agentType: 'codex',
+      role,
+    });
+    expect(role.emoji).toBe(getAgentRoleEmoji({}));
+    expect(author.role?.emoji).toBe(getAgentRoleEmoji({}));
+    expect(author.agentType).toBe('codex');
+  });
+  it('retains frozen Agent authors through streaming, snapshots and invalid writes', () => {
+    const doc = new Loro();
+    const mirror = open(doc);
+    const author = buildAgentMessageAuthor({
+      sessionId: 'source',
+      turnId: 'source-turn',
+      agentConfigId: 'agent-a',
+      name: 'Agent A',
+      inputConfig: {
+        modelId: 'model-a',
+        configOptionValues: { api_key: 'never-store', reasoning_effort: 'high' },
+      },
+      role: { id: 'reviewer' as never, revision: 1, name: 'Reviewer', emoji: '🔎' },
+    });
+    mirror.historyWriter.append({
+      ...entry(),
+      userId: 'human',
+      author,
+      inputConfig: { modelId: 'model-b' },
+    });
+    mirror.historyWriter.updateEntry('turn', (turn) => {
+      turn.items = [{ type: 'text', text: 'updated' }];
+      return turn;
+    });
+    const stored = mirror.getState().history[0];
+    expect(stored).toMatchObject({
+      userId: 'human',
+      author: { name: 'Agent A', model: { id: 'model-a' }, role: { name: 'Reviewer' } },
+      inputConfig: { modelId: 'model-b' },
+    });
+    expect(JSON.stringify(stored)).not.toContain('never-store');
+    const restoredDoc = new Loro();
+    restoredDoc.import(doc.export({ mode: 'snapshot' }));
+    const restored = open(restoredDoc);
+    expect(restored.getState().history[0]?.author).toEqual(author);
+    expect(() =>
+      mirror.historyWriter.updateEntry('turn', (turn) => ({
+        ...turn,
+        author: { ...author, sessionId: '' },
+      }))
+    ).toThrow();
+    expect(mirror.getState().history[0]?.author).toEqual(author);
+    const map = doc.getList('history').get(0) as LoroMap;
+    expect((map.get('author') as LoroMap).get('name')).toBe('Agent A');
+    const copied = open(new Loro());
+    const snapshot = mirror.historyWriter.capture();
+    copied.historyWriter.copyFrom(snapshot, snapshot.history);
+    expect(copied.getState().history[0]?.author).toEqual(author);
+    mirror.historyWriter.updateEntry('turn', (turn) => ({
+      ...turn,
+      author: { v: 1, kind: 'human', userId: 'editor' },
+    }));
+    expect(mirror.getState().history[0]?.author).toEqual({ v: 1, kind: 'human', userId: 'editor' });
+  });
+
   it('retains child message identities and scalar tool output without altering root identity', () => {
     const writer = open(new Loro()).historyWriter;
     writer.append({ ...entry('first'), role: 'assistant', acpTurnId: 'parent', items: [] });
@@ -81,9 +402,9 @@ describe('single history writer', () => {
         type: 'tool_call',
         nativeTurnId: 'turn-b',
         content: [{ type: 'content', content: { type: 'text', text: 'file contents' } }],
-        _meta: { lody: { subagentRaw: { rawInput: ['file'], rawOutput: 'file contents' } } },
       },
     ]);
+    expect(task.run?.items.at(-1)).not.toHaveProperty('_meta.lody.subagentRaw');
   });
   it('persists isolated child transcripts on their original turn across parent completion and reopening', () => {
     const doc = new Loro();
@@ -1287,52 +1608,5 @@ describe('single history writer', () => {
     ).toBeInstanceOf(LoroMap);
     old.dispose();
     current.dispose();
-  });
-});
-
-
-describe('prepared history operation recovery', () => {
-  it('does not publish preparation and replays the same operation only once across replicas', () => {
-    const original = new Loro();
-    const writer = createHistoryWriter(original);
-    writer.append(entry('existing'));
-    const persistedBaseline = original.export({ mode: 'snapshot' });
-    const prepared = writer.prepareAppend(entry('fixed-id'));
-    expect(writer.readStored().map((turn) => turn.id)).toEqual(['existing']);
-    writer.applyPrepared(prepared);
-    writer.applyPrepared(prepared);
-    expect(writer.readStored().map((turn) => turn.id)).toEqual(['existing', 'fixed-id']);
-
-    const recovered = new Loro();
-    recovered.import(persistedBaseline);
-    const recoveredWriter = createHistoryWriter(recovered);
-    recoveredWriter.applyPrepared(prepared);
-    recoveredWriter.applyPrepared(prepared);
-    original.import(recovered.export({ mode: 'update' }));
-    recovered.import(original.export({ mode: 'update' }));
-    expect(recoveredWriter.readStored()).toEqual(writer.readStored());
-    expect(writer.readStored().map((turn) => turn.id)).toEqual(['existing', 'fixed-id']);
-  });
-
-  it('refuses a missing baseline without claiming local acceptance', () => {
-    const original = new Loro();
-    const writer = createHistoryWriter(original);
-    writer.append(entry('dependency'));
-    const prepared = writer.prepareAppend(entry('fixed-id'));
-    const recovered = new Loro();
-    const recoveredWriter = createHistoryWriter(recovered);
-    expect(() => recoveredWriter.applyPrepared(prepared)).toThrow(/dependencies/);
-    recovered.import(original.export({ mode: 'snapshot' }));
-    recoveredWriter.applyPrepared(prepared);
-    expect(recoveredWriter.readStored().map((turn) => turn.id)).toEqual(['dependency', 'fixed-id']);
-  });
-
-  it('preserves the source when validation fails', () => {
-    const original = new Loro();
-    const writer = createHistoryWriter(original);
-    writer.append(entry('existing'));
-    const before = original.toJSON();
-    expect(() => writer.prepareAppend({ ...entry('invalid'), items: [{ type: 'text', text: 123 }] } as unknown as SessionHistory)).toThrow();
-    expect(original.toJSON()).toEqual(before);
   });
 });

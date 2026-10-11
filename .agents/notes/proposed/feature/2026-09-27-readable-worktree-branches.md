@@ -44,5 +44,10 @@ reconciliation path; a slug helper by itself has no user-visible value.
   collision suffix, and an unusable title. A SessionManager test covers both
   speculative adoption eligibility and recovery after Git rename. Title callback
   ordering still needs integration coverage before this is ready for an upstream PR.
-- No upstream PR exists. The fork PR context-handoff requirement remains a
-  separate entry gate; this note does not claim user publication or approval.
+- [PR #1085](https://github.com/LodyAI/Lody/pull/1085) contains the reference
+  implementation. Its refresh retains the current Session registration failure
+  cleanup and WorktreeGit Legacy boundary. Remote publication checks still fail
+  closed; infrastructure and unresolved-release failures propagate through that
+  boundary rather than becoming an ordinary no-rename result. The manager remains
+  Promise orchestration; migrating the mutation owner is outside this refresh.
+  The draft design does not claim human approval or conversation publication.

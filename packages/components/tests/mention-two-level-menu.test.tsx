@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Mention, MentionContent, MentionInput, useMentionContext } from '../src/ui/mention';
+import { MentionMobilePanel } from '../src/ui/mention/mention-mobile-content';
 import type { Mention as MentionRange } from '../src/ui/mention/mention-root';
 import {
   matchedRuns,
@@ -13,12 +14,13 @@ import {
   useMentionCategoryActivation,
 } from '../src/components/mentions/mention-two-level-menu';
 import {
-  selectMentionMenuView,
+  getMentionViewCandidates,
   selectMentionMenuViewForTrigger,
   toSkillCandidate,
   type MentionCandidate,
   type MentionCandidateDetail,
   type MentionCategory,
+  type MentionMenuView,
 } from '../src/components/mentions/mention-registry';
 import { initI18n } from '../src/i18n';
 
@@ -91,18 +93,21 @@ function Harness({
   initialValue,
   categories,
   detail,
+  followHighlight = false,
 }: {
   initialValue: string;
   categories: MentionCategory[];
   detail?: MentionCandidateDetail | null;
+  followHighlight?: boolean;
 }) {
   const [value, setValue] = React.useState(initialValue);
   const [mentions, setMentions] = React.useState<MentionRange[]>([]);
   const [selected, setSelected] = React.useState<string[]>([]);
-  const view = selectMentionMenuView(categories, value.slice(1));
+  const view = selectMentionMenuViewForTrigger(categories, value[0] ?? '@', value.slice(1));
 
   return (
     <Mention
+      trigger={value[0] === '/' || value[0] === '、' ? value[0] : '@'}
       defaultOpen
       inputValue={value}
       onInputValueChange={setValue}
@@ -115,14 +120,32 @@ function Harness({
     >
       <Probe />
       <MentionInput value={value} onChange={() => {}} />
-      <MentionTwoLevelMenuBody
-        view={view}
-        onBack={() => {}}
-        showBack
-        onCategoryNavigate={(category) => category.activation?.activate()}
-        detail={detail}
-      />
+      {view ? <MenuBody view={view} detail={detail} followHighlight={followHighlight} /> : null}
     </Mention>
+  );
+}
+
+function MenuBody({
+  view,
+  detail,
+  followHighlight,
+}: {
+  view: MentionMenuView;
+  detail?: MentionCandidateDetail | null;
+  followHighlight: boolean;
+}) {
+  const { highlightedItem } = useMentionContext('MenuBody');
+  const candidates = getMentionViewCandidates(view);
+  const highlighted =
+    candidates.find((candidate) => candidate.value === highlightedItem?.value) ?? candidates[0];
+  return (
+    <MentionTwoLevelMenuBody
+      view={view}
+      onBack={() => {}}
+      showBack
+      onCategoryNavigate={(category) => category.activation?.activate()}
+      detail={followHighlight ? highlighted?.detail : detail}
+    />
   );
 }
 
@@ -361,6 +384,58 @@ describe('MentionTwoLevelMenuBody', () => {
     expect(titles.some((title) => title.startsWith('src/'))).toBe(false);
   });
 
+  it('renders a typed slash query as ranked rows with their sources', () => {
+    const shortcuts: MentionCategory = {
+      id: 'prompt_shortcut',
+      namespace: 'shortcut',
+      directTrigger: '/',
+      label: 'Prompt Shortcuts',
+      icon: 'prompt_shortcut',
+      status: 'ready',
+      getCandidates: () =>
+        ['create-intro-video', 'videoer'].map((name) => ({
+          value: `prompt-shortcut:${name}`,
+          label: name,
+          insertText: `/${name}`,
+          kind: 'prompt_shortcut' as const,
+          icon: 'prompt_shortcut' as const,
+          title: `/${name}`,
+        })),
+    };
+    const command: MentionCategory = {
+      id: 'command',
+      namespace: 'cmd',
+      directTrigger: '/',
+      label: 'Agent Commands',
+      icon: 'command',
+      status: 'ready',
+      getCandidates: () => [
+        {
+          value: 'acp-command:video',
+          label: 'video',
+          insertText: '/video',
+          kind: 'command',
+          icon: 'command',
+          title: '/video',
+        },
+      ],
+    };
+
+    render('/video', [shortcuts, command]);
+    expect(rowTitles()).toEqual([
+      '/videoAgent Commands',
+      '/videoerPrompt Shortcuts',
+      '/create-intro-videoPrompt Shortcuts',
+    ]);
+
+    const rows = container?.querySelectorAll<HTMLElement>('[data-slot="mention-item"]');
+    act(() => rows?.[1]?.click());
+    expect(latest.inputValue).toBe('/videoer ');
+    expect(latest.mentions).toEqual([
+      { value: 'prompt-shortcut:videoer', start: 0, end: 8, kind: 'prompt_shortcut' },
+    ]);
+  });
+
   it('renders a category message instead of rows when the source cannot answer', () => {
     const categories = makeCategories();
     const issue = categories.find((entry) => entry.id === 'issue');
@@ -395,6 +470,73 @@ describe('MentionTwoLevelMenuBody', () => {
     expect(pane?.textContent).toContain('Diagnose Code Collab diffs.');
     expect(pane?.closest('[data-slot="mention-item"]')).toBeNull();
   });
+
+  it.each(['click', 'Enter'] as const)(
+    'keeps a scrolled Role reachable as hover opens and closes its detail, then selects by %s',
+    (action) => {
+      const categories: MentionCategory[] = [
+        {
+          id: 'issue',
+          namespace: 'issue',
+          label: 'Issues',
+          icon: 'issue',
+          status: 'ready',
+          getCandidates: () =>
+            Array.from({ length: 4 }, (_, index) => issueCandidate(index + 1, `Review ${index}`)),
+        },
+        {
+          id: 'agent_role',
+          namespace: 'role',
+          label: 'Agent Roles',
+          icon: 'agent_role',
+          status: 'ready',
+          getCandidates: () => [
+            {
+              value: 'reviewer-role',
+              label: 'Reviewer',
+              title: 'Reviewer',
+              insertText: '@Reviewer',
+              kind: 'agent_role',
+              icon: 'agent_role',
+              detail: { title: 'Reviewer', description: 'Review the changes.' },
+            },
+          ],
+        },
+      ];
+      act(() =>
+        root?.render(<Harness initialValue="@review" categories={categories} followHighlight />)
+      );
+      const input = container?.querySelector('textarea');
+      const rows = container?.querySelectorAll<HTMLElement>('[data-slot="mention-item"]');
+      const issue = rows?.[3];
+      const role = rows?.[4];
+      if (!input || !issue || !role) throw new Error('Expected issue and Role candidates');
+      const scroller = role.parentElement;
+      if (!scroller) throw new Error('Expected candidate scroller');
+      scroller.scrollTop = 240;
+      act(() => input.setSelectionRange(7, 7));
+
+      for (const row of [role, issue, role]) {
+        act(() => {
+          row.dispatchEvent(new PointerEvent('pointermove', { bubbles: true }));
+        });
+        const currentRole = container?.querySelectorAll('[data-slot="mention-item"]')[4];
+        expect(currentRole?.parentElement?.scrollTop).toBe(240);
+        expect(currentRole).toBe(role);
+        expect(row.hasAttribute('data-highlighted')).toBe(true);
+        expect(Boolean(container?.querySelector('[data-mention-detail]'))).toBe(row === role);
+      }
+
+      act(() => {
+        if (action === 'click') role.click();
+        else input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      });
+      expect(latest.inputValue).toBe('@Reviewer ');
+      expect(latest.mentions).toEqual([
+        { value: 'reviewer-role', start: 0, end: 9, kind: 'agent_role' },
+      ]);
+    }
+  );
 
   it('states when a session was last active', () => {
     const categories = makeCategories();
@@ -672,7 +814,12 @@ describe('composer placement', () => {
           autoCloseOnEmpty={false}
         >
           <MentionInput value="@" onChange={() => {}} />
-          <MentionContent positionAnchor="composer" side={side} sideOffset={8}>
+          <MentionContent
+            positionAnchor="composer"
+            side={side}
+            sideOffset={8}
+            style={{ overflowY: 'auto' }}
+          >
             {Array.from({ length: rows }, (_, index) => (
               <div key={index}>row {index}</div>
             ))}
@@ -696,6 +843,9 @@ describe('composer placement', () => {
     show(true);
     // 600 above the frame, less the 16px window margin and the 8px gap.
     expect(cap()).toBe('576px');
+    expect(
+      document.querySelector<HTMLElement>('[data-slot="mention-content"]')?.style.overflowY
+    ).toBe('auto');
   });
 
   it('keeps its side through a level change and a moved composer', async () => {
@@ -709,6 +859,43 @@ describe('composer placement', () => {
     frameTop = 40;
     await act(() => window.dispatchEvent(new Event('resize')));
     expect(cap()).toBe('16px');
+  });
+
+  it('repositions changed rows before waiting for a resize observation', async () => {
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
+    Object.defineProperties(HTMLElement.prototype, {
+      offsetWidth: {
+        configurable: true,
+        get() {
+          return this.dataset.slot === 'mention-content' ? 300 : (width?.get?.call(this) ?? 0);
+        },
+      },
+      offsetHeight: {
+        configurable: true,
+        get() {
+          return this.dataset.slot === 'mention-content'
+            ? this.children.length * 28
+            : (height?.get?.call(this) ?? 0);
+        },
+      },
+    });
+    try {
+      frameTop = 600;
+      await act(async () => show(true, 2, 'top'));
+      const popup = document.querySelector<HTMLElement>('[data-slot="mention-content"]')!;
+      expect(popup.style.top).toBe('536px');
+
+      await act(async () => show(true, 6, 'top'));
+      expect(document.querySelector('[data-slot="mention-content"]')).toBe(popup);
+      expect(popup.style.top).toBe('424px');
+
+      await act(async () => show(true, 1, 'top'));
+      expect(popup.style.top).toBe('564px');
+    } finally {
+      if (width) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width);
+      if (height) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height);
+    }
   });
 
   it('opens below only when there is no room above, choosing again on each open', () => {
@@ -728,5 +915,65 @@ describe('composer placement', () => {
     show(true, 2, 'top');
     // Pinned above, capped to the 24px room there less the gap.
     expect(cap()).toBe('16px');
+  });
+});
+
+describe('mobile mention placement', () => {
+  let root: Root | undefined;
+  let container: HTMLDivElement | undefined;
+  let frameTop = 300;
+  let restoreRect: (() => void) | undefined;
+
+  beforeEach(() => {
+    frameTop = 300;
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
+      if (this.hasAttribute('data-mention-frame')) {
+        return DOMRect.fromRect({ x: 100, y: frameTop, width: 400, height: 120 });
+      }
+      if (this.tagName === 'TEXTAREA') {
+        return DOMRect.fromRect({ x: 100, y: frameTop + 40, width: 400, height: 80 });
+      }
+      return original.call(this);
+    };
+    restoreRect = () => {
+      HTMLElement.prototype.getBoundingClientRect = original;
+    };
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    if (root) act(() => root?.unmount());
+    root = undefined;
+    container?.remove();
+    container = undefined;
+    restoreRect?.();
+  });
+
+  it('docks above the whole frame and caps itself to visible room', async () => {
+    function MobileHarness() {
+      const inputRef = React.useRef<HTMLTextAreaElement>(null);
+      return (
+        <div data-mention-frame="">
+          <button type="button">Actions</button>
+          <textarea ref={inputRef} />
+          <MentionMobilePanel open anchorRef={inputRef}>
+            <div>Item</div>
+          </MentionMobilePanel>
+        </div>
+      );
+    }
+
+    await act(async () => root?.render(<MobileHarness />));
+    const panel = document.body.querySelector<HTMLElement>('[role="listbox"]');
+    expect(panel?.style.bottom).toBe('476px');
+    expect(panel?.style.maxHeight).toBe('220px');
+
+    frameTop = 80;
+    await act(async () => window.dispatchEvent(new Event('resize')));
+    expect(panel?.style.bottom).toBe('696px');
+    expect(panel?.style.maxHeight).toBe('16px');
   });
 });

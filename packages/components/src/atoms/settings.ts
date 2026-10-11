@@ -50,6 +50,17 @@ export const conversationFontSizeAtom = atom(
   }
 );
 
+/**
+ * Full-width conversation column (Notion-style): the session conversation's
+ * centered column drops its ~48rem cap and spans the pane, keeping only the
+ * shared side gutter. Read through `ConversationColumn` — never restyle one
+ * column by hand.
+ */
+export const conversationWideModeAtom = atomWithStorage<boolean>(
+  'lody-conversation-wide-mode',
+  false
+);
+
 export const INTERFACE_FONT_FAMILY_MAX_LENGTH = 100;
 
 export function normalizeInterfaceFontFamily(value: unknown): string {
@@ -121,6 +132,46 @@ export const fontLigaturesEnabledAtom = atom(
   (get) => normalizeFontLigaturesEnabled(get(fontLigaturesEnabledStorageAtom)),
   (_get, set, nextValue: boolean) => {
     set(fontLigaturesEnabledStorageAtom, nextValue);
+  }
+);
+
+export const DEFAULT_INLINE_MATH_ENABLED = false;
+
+export function normalizeInlineMathEnabled(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : DEFAULT_INLINE_MATH_ENABLED;
+}
+
+const inlineMathEnabledStorageAtom = atomWithStorage<unknown>(
+  'lody-inline-math-enabled',
+  DEFAULT_INLINE_MATH_ENABLED
+);
+
+export const inlineMathEnabledAtom = atom(
+  (get) => normalizeInlineMathEnabled(get(inlineMathEnabledStorageAtom)),
+  (_get, set, nextValue: boolean) => {
+    set(inlineMathEnabledStorageAtom, nextValue);
+  }
+);
+
+/**
+ * Optional syntax grammars stay out of the default rendering path. The
+ * preference is local because it changes only the languages this client loads.
+ */
+export const DEFAULT_EXTENDED_CODE_LANGUAGES_ENABLED = false;
+
+export function normalizeExtendedCodeLanguagesEnabled(value: unknown): boolean {
+  return typeof value === 'boolean' ? value : DEFAULT_EXTENDED_CODE_LANGUAGES_ENABLED;
+}
+
+const extendedCodeLanguagesEnabledStorageAtom = atomWithStorage<unknown>(
+  'lody-extended-code-languages-enabled',
+  DEFAULT_EXTENDED_CODE_LANGUAGES_ENABLED
+);
+
+export const extendedCodeLanguagesEnabledAtom = atom(
+  (get) => normalizeExtendedCodeLanguagesEnabled(get(extendedCodeLanguagesEnabledStorageAtom)),
+  (_get, set, nextValue: boolean) => {
+    set(extendedCodeLanguagesEnabledStorageAtom, nextValue);
   }
 );
 
@@ -230,19 +281,6 @@ export const inboxFeatureEnabledAtom = atom(
   (get) => get(developerModeEnabledAtom) && get(inboxBetaEnabledAtom)
 );
 
-// Developer-only opt-in. Turning Developer mode off retains the local choice.
-export const promptShortcutsBetaEnabledAtom = atomWithStorage<boolean>(
-  'lody-prompt-shortcuts-beta-enabled',
-  false,
-  undefined,
-  { getOnInit: true }
-);
-
-/** Shared gate for Shortcut settings, discovery and the workspace runtime. */
-export const promptShortcutsFeatureEnabledAtom = atom(
-  (get) => get(developerModeEnabledAtom) && get(promptShortcutsBetaEnabledAtom)
-);
-
 export const semanticShortcutsBetaEnabledAtom = atomWithStorage<boolean>(
   'lody-semantic-shortcuts-beta-enabled',
   false,
@@ -256,7 +294,7 @@ export const semanticShortcutsFeatureEnabledAtom = atom(
 
 /** localStorage keys for the experimental features gate. */
 export const EXPERIMENTAL_FEATURES_STORAGE_KEY = 'lody-experimental-features-enabled';
-export const REVIEW_AGENT_EXPERIMENT_STORAGE_KEY = 'lody-review-agent-enabled';
+export const ROOST_HISTORY_EXPERIMENT_STORAGE_KEY = 'lody-roost-history-enabled';
 
 /**
  * Master switch for user-facing experimental features.
@@ -273,23 +311,15 @@ export const experimentalFeaturesEnabledAtom = atomWithStorage<boolean>(
   { getOnInit: true }
 );
 
-/** Opt-in for the review agent, listed once experimental features are on. */
-export const reviewAgentExperimentEnabledAtom = atomWithStorage<boolean>(
-  REVIEW_AGENT_EXPERIMENT_STORAGE_KEY,
+/** Opt-in for Roost-backed history on newly created sessions. */
+export const roostHistoryExperimentEnabledAtom = atomWithStorage<boolean>(
+  ROOST_HISTORY_EXPERIMENT_STORAGE_KEY,
   false,
   undefined,
   { getOnInit: true }
 );
 
-/**
- * The single gate every review-agent surface reads.
- *
- * Note what this gate does NOT control: a run already authorized on a session
- * keeps going, because the authorization is durable session state that the
- * machine acts on, and this switch is per-device UI visibility. Turning the
- * experiment off hides the controls; it does not silently abandon a branch the
- * user was told would be merged.
- */
-export const reviewAgentFeatureEnabledAtom = atom(
-  (get) => get(experimentalFeaturesEnabledAtom) && get(reviewAgentExperimentEnabledAtom)
+/** The single gate for selecting Roost when a new session is accepted. */
+export const roostHistoryFeatureEnabledAtom = atom(
+  (get) => get(experimentalFeaturesEnabledAtom) && get(roostHistoryExperimentEnabledAtom)
 );

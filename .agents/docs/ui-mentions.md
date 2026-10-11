@@ -7,8 +7,9 @@ lives in its `README.md`.
 
 ## One mention, five stages
 
-1. **Trigger and menu.** `@` opens the two-level menu; `$` opens skills and `/` or `、`
-   opens commands/shortcuts. `#` remains hydration-only. `enableAtMentions` decides what `@` can reach, and it
+1. **Trigger and menu.** `@` opens the two-level menu; `$` or `￥` opens skills and `/` or `、`
+   opens commands/shortcuts. The [skill trigger Spec](../../specs/skill-mention-triggers.md)
+   defines canonical insertion and unselected-text behavior. `#` remains hydration-only. `enableAtMentions` decides what `@` can reach, and it
    gates both trigger registration and whether `<Mention>` mounts at all — a
    source missing from that list silently degrades the composer to a plain
    textarea and drops its type.
@@ -25,6 +26,47 @@ lives in its `README.md`.
    rebuilding them from text is only a fallback.
 5. **Before send.** One hook rewrites the ranges that need rewriting, and the
    resulting spans are frozen into the message.
+
+## Menu placement
+
+The main desktop chat composer follows the textarea's laid-out caret and
+prefers the space above it. Its height is capped to that upper space while a
+heading and option fit; otherwise it may open below. The dialog composer and
+inline editor follow the caret but prefer below and flip at viewport edges.
+Soft wraps, internal scrolling, and scaled editor containers move these
+popups with the insertion point. The virtual element retains the textarea as
+its observation target so layout shifts also update the menu. All stay within
+the input's usable width and scroll when their contents exceed visible room.
+An explicit `positionAnchor="composer"` caller instead anchors to the whole
+frame and locks its side for the lifetime of the open menu.
+
+Desktop content changes also request positioning in a layout effect. Entering
+`@role:` or filtering rows can change the popup height before resize observation
+arrives; updating with the content commit keeps an upward menu's bottom edge
+at its anchor. Resize observation still handles later layout changes. The
+[position synchronization decision](../notes/implemented/bug-fix/2026-10-08-mention-layout-position-sync.md)
+records the frame-level evidence.
+
+The mobile composer uses a separate docked strip. Its boundary is the whole
+`data-mention-frame` (input, controls, and attachments), so the strip cannot
+cover content above the textarea. Its height is limited by the actual room
+above that frame, including the top inset. Inline edit-and-resend opts out of
+the dock and keeps the floating caret menu. The
+[placement Spec](../../specs/composer-mention-menu-placement.md) owns these
+visible guarantees.
+
+Hovering a candidate may show or hide a desktop detail pane. The menu keeps
+the candidate list mounted across that change so its scroll position and
+registered rows survive; only the pane and layout styles change. The
+[scroll continuity decision](../notes/implemented/bug-fix/2026-10-08-mention-detail-scroll-continuity.md)
+records the reproduction and verification.
+
+Row selection saves the textarea selection, restores focus and that selection,
+then starts insertion/preparation. WebKit touch taps can blur the textarea and
+expose a temporary zero caret during refocus; starting an asynchronous Shortcut
+before that focus cycle lets the empty-query handler cancel it. Preparation keeps
+the menu open for loading and retry feedback. See the
+[touch focus note](../notes/implemented/bug-fix/2026-10-07-shortcut-touch-focus.md).
 
 ## Ranking
 
@@ -45,8 +87,16 @@ a separate synchronous path; this worker does not perform file discovery or I/O.
 
 Issues and PRs rank their own cached slices so one kind cannot starve the other.
 Files, sessions, roles, issues and PRs retain VS Code non-contiguous matching, with
-consecutive, separator, path, case, and camel-case bonuses. Skills and commands
-keep their own ranking. The [file search Spec](../../specs/composer-file-search.md)
+consecutive, separator, path, case, and camel-case bonuses. Skills keep their
+own ranking. A typed `/` or `、` query ranks Prompt Shortcuts and Agent Commands
+together after each source applies visibility and availability gates. Exact,
+prefix, word-prefix, substring, and subsequence matches precede description-only
+matches; available rows precede disabled exact shortcuts. A bare command trigger
+keeps the two source groups. The
+[command trigger Spec](../../specs/command-mention-triggers.md) owns that intent,
+and the [ranking evaluation](../../packages/components/benchmarks/slash-search/README.md)
+records synthetic quality and timing observations. The
+[file search Spec](../../specs/composer-file-search.md)
 owns responsiveness and freshness intent; the
 [benchmark note](../notes/implemented/bug-fix/2026-09-20-composer-file-search-worker.md)
 records measurements and remaining limits.
@@ -107,6 +157,13 @@ items separately re-slugged every visible session twice a tick. It reads the
 child-inclusive projection because mentioning is an addressing surface, and
 review/task child sessions are exactly what gets referenced.
 
+The Sessions menu filters that complete list by project before ranking the
+query. Its scope-empty message and "View all projects" action appear only when
+the selected current-project scope has no candidates. If candidates exist but
+the query matches none, the menu shows the localized "Nothing matches" message
+with the query. Scope controls remain available, switching scope retains the
+query and input focus, and clearing the query restores the selected scope's list.
+
 A drop must produce a real range: a token with no range is sent verbatim, so a
 text-only append would look right in the composer and reach the agent as a word.
 The overlay lives on the conversation column rather than inside each keep-alive
@@ -116,8 +173,8 @@ wrong surface.
 ## Agent Roles
 
 Role visibility and selection follow [the Role mention Spec](../../specs/agent-role-mentions.md).
-Plain chats can reach all authorized machines. The menu keeps readable Roles
-that are loading, unavailable, or outside a filesystem-bound work context, with
+Every composer, including a Local Project one, can reach all authorized
+machines. The menu keeps readable Roles that are loading or unavailable, with
 an explanation below the name. They follow available matches and cannot be
 selected. Hydration and before-send expansion independently reject those rows,
 so showing a stale Role never creates a new dispatch instruction.

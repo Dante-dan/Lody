@@ -8,14 +8,15 @@ Pipeline background: [ui-mentions.md](../../../../../.agents/docs/ui-mentions.md
 ## Triggers, menu, and candidates
 
 - `@` reaches every mention type through the two-level menu. Skills keep their
-  direct `$` menu, `/` and `、` open commands directly, and `#` opens no menu but
+  direct `$`/`￥` menu, `/` and `、` open commands directly, and `#` opens no menu but
   keeps its hydrator, so a pasted `#123` still expands before send.
 - `enableAtMentions` is the ONE list of what `@` reaches, gating both trigger
   registration and mounting `<Mention>`; every source with its own `enabled`
   rule (sessions: having any) belongs there too. Placeholder hints advertise `$`
   only under the conditions that enable Skill mentions.
-- Desktop menus render through `MentionContent`, capped at
-  `var(--mention-input-width)`; `@` pins `side="top"`.
+- Main desktop menus follow the caret and prefer above while a heading and row
+  fit; inline/dialog menus prefer below and flip to fit. All cap/scroll within
+  available room and `var(--mention-input-width)`. The mobile dock stays above the frame.
 - `insertText` must keep its type's prompt form (`@path`, `#123`, `$token`,
   `/cmd`): reaching a type through `@` must not change what the agent receives.
   Directory candidates carry BOTH `navigateText` (`@dir/`, descend) and
@@ -25,14 +26,12 @@ Pipeline background: [ui-mentions.md](../../../../../.agents/docs/ui-mentions.md
   UI-thread fallback. Aggregate results are capped; Roles list all readable entries.
 - Issues and PRs rank over their own slice of the shared cache, partitioned once
   by `useMentionCategories`.
-- File, Session, Agent Role, Issue, and PR candidates use the vendored VS Code
-  `scoreFuzzy` with non-contiguous matching, wrapped by any source-specific
-  ordering. Skills and commands keep their own ranking.
-- A candidate describes its side panel through the neutral
-  `MentionCandidateDetail` fields, which render verbatim — put i18n'd text
-  there, never a raw enum. The one exception is `detail.agentRole`, rendering
-  `sessions/agent-role-detail-pane.tsx`: desktop only. The list sets either
-  pane's height.
+- Files, Sessions, Roles, Issues, and PRs use vendored VS Code `scoreFuzzy`
+  with source ordering. Skills rank alone; typed slash queries merge Commands
+  and Prompt Shortcuts after source gates.
+- Side panels render neutral `MentionCandidateDetail` fields verbatim: use
+  i18n'd text, never raw enums. `detail.agentRole` instead renders
+  `sessions/agent-role-detail-pane.tsx` on desktop. The list sets pane height.
 - Lazy work is `MentionCategory.activation`; category navigation starts its
   destination synchronously through `MentionItem.onMentionNavigate`, while
   `selectMentionViewActivations` covers typed/pasted prefixes, direct triggers,
@@ -43,6 +42,8 @@ Pipeline background: [ui-mentions.md](../../../../../.agents/docs/ui-mentions.md
   on `ISSUE_PR_FRESH_FOR_MS`, and only explicit gestures pass `refresh({ force:
 true })`. The fetch timestamp rides on the cached entry (survives IndexedDB).
   An unasked source reports `loading`, never `ready` with zero rows.
+
+- File fetch accounting follows [its contract](../../../../../specs/mention-file-fetch.md).
 
 ## Hydration and drafts
 
@@ -65,7 +66,7 @@ true })`. The fetch timestamp rides on the cached entry (survives IndexedDB).
 
 - `useMentionPromptExpansion` owns before-send rewrites (`expand` /
   `getRewrites`). Composer copy reuses them via
-  `getExpandedClipboardTextForSelection` (session → `[@Title](session://…)`,
+  `getExpandedClipboardTextForSelection` (session → `[@Title](lody://session/…)`,
   not `@slug`). Rewritten: `REWRITTEN_SPAN_KINDS`; else verbatim.
 - The transcript chip comes from `MessageTextSpan.mark`, FROZEN at send time,
   never resolved from the catalog at render. A span field must be declared in
@@ -101,14 +102,12 @@ true })`. The fetch timestamp rides on the cached entry (survives IndexedDB).
   insertion, slug resolution, or child-session addressing.
 - A session mention commits as plain `@<title-slug>` (no `session:` marker); the
   range carries `sessionId`, and expansion rewrites to
-  `[@Title](session://<id>)`. A lone app-origin session URL paste becomes that
-  mention unless Cmd/Ctrl+Shift+V. No range → send verbatim; never resolve a
-  slug; hydration skips tokens the file source knows. Evidence:
-  [session:// URI](../../../../../.agents/notes/implemented/feature/2026-09-18-session-mention-uri-and-paste.md).
-- Slugs resolve through the live list first, then a `localStorage` slug → id
-  map. That store stays synchronous, its key is registered in
-  `lib/clear-local-cache.ts`, and the write is skipped when the serialized map
-  is unchanged.
+  `[@Title](lody://session/<id>?workspace=<id>)`. Paste converts same-workspace
+  resource links or app-origin URLs unless Cmd/Ctrl+Shift+V. No range → send
+  verbatim; never resolve a slug; hydration skips known file tokens.
+  Contract: [deep links](../../../../../specs/deep-links.md).
+- Slugs resolve through the live list, then a synchronous `localStorage` slug →
+  id map registered in `lib/clear-local-cache.ts`; skip unchanged writes.
 - A session dragged from the sidebar or a session tab onto a chat surface
   becomes a mention; the drop must be a REAL range, not `@<slug>` text: use
   `mentionActionsRef.insertSessionMention(sessionId)` (false for unknown, own,
@@ -129,8 +128,8 @@ true })`. The fetch timestamp rides on the cached entry (survives IndexedDB).
   candidate sets no detail `title`. The committed range shows that emoji through
   `applyAgentRoleEmojiChip`, boxed to the icon slot and clipped; its agent
   config and machine ride on `AgentRoleMentionItem`.
-- Role candidates pass visibility, executability, then work context: Local
-  Project pins to its machine; plain chat and GitHub may use authorized machines
-  unless bound to a `localWorktree`. List all readable Roles; disabled rows follow
+- Role candidates pass visibility, then executability. Every composer may
+  dispatch a Role to any authorized machine; there is no work-context pinning.
+  List all readable Roles; disabled rows follow
   available matches with a reason below the name. Only available Roles can be
   selected, hydrated from text, or expanded before send; never fall back.

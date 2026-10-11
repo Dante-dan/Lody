@@ -16,6 +16,7 @@ import {
   deriveLocationsFromRawInput,
   deriveLocationsFromToolCallContent,
   stripToolCallContentForHistory,
+  stripToolCallPayloadsForHistory,
 } from './tool-call-history';
 import {
   parseLodyTaskMeta,
@@ -373,6 +374,21 @@ const extractTerminalOutputContent = (
     !NON_TERMINAL_TOOL_KINDS.has(kind ?? '')
   ) {
     return buildTerminalOutputBlocks({ output: rawOutput });
+  }
+
+  // Pi: a shell result is `{ content: [{ type: 'text', text }], details }`. Other Pi
+  // tools share that shape, so only an execute call's result is terminal output.
+  if (kind === 'execute') {
+    const content = asRecordOrUndefined(rawOutput)?.content;
+    if (Array.isArray(content)) {
+      const output = content
+        .flatMap((block) => {
+          const record = asRecordOrUndefined(block);
+          return record?.type === 'text' && typeof record.text === 'string' ? [record.text] : [];
+        })
+        .join('');
+      if (output.length > 0) return buildTerminalOutputBlocks({ output });
+    }
   }
 
   return [];
@@ -744,11 +760,16 @@ const mergeStreamChunk = (current: string, incoming: string): string => {
 
 const mergeToolCallMessage = (
   prev: ToolCallMessage,
-  incoming: ToolCallMessage
+  incoming: ToolCallMessage,
+  replaceContent = false
 ): ToolCallMessage => {
   const nextKind = (incoming.kind ?? prev.kind) as ToolKind | null | undefined;
 
-  const mergedContent: StoredToolCallContent = prev.content ? [...prev.content] : [];
+  // ACP content is a replacement list. Locally derived terminal commands are
+  // independent rawInput projections and survive an output-only replacement.
+  const mergedContent: StoredToolCallContent = replaceContent
+    ? (prev.content ?? []).filter((block) => block.type === 'terminal_command')
+    : [...(prev.content ?? [])];
   const nextChunks = incoming.content ?? [];
 
   if (nextChunks.length > 0) {
@@ -925,7 +946,9 @@ const mergeToolCallMessage = (
     status: nextStatus,
     content: mergedContent.length
       ? compactToolCallContentForHistory(mergedContent, { kind: nextKind })
-      : prev.content,
+      : replaceContent
+        ? []
+        : prev.content,
     locations: incoming.locations !== undefined ? incoming.locations : prev.locations,
     // Scheduling tools split rawInput and the terminal `completed` across updates; keep
     // whichever update carried each (see SCHEDULING_TOOL_NAMES).
@@ -1070,7 +1093,8 @@ const parseAssistantTextTags = (text: string, turnId: string): MessageContent[] 
 };
 
 export const buildMessageContentFromNotification = (
-  message: AcpSessionNotification
+  message: AcpSessionNotification,
+  previousTool?: ToolCallMessage
 ): MessageContent[] => {
   const { update } = message;
   switch (update.sessionUpdate) {
@@ -1128,7 +1152,7 @@ export const buildMessageContentFromNotification = (
         return codexCollabTasks.map((task) => ({ type: 'subagent_task', ...task }));
       }
 
-      const kind = (update.kind ?? undefined) as ToolKind | null | undefined;
+      const kind = (update.kind ?? previousTool?.kind) as ToolKind | null | undefined;
 
       // `update.content` is untrusted and provider-dependent; some tools include whole file
       // contents or full old/new text. Strip those early so we never persist them.
@@ -1198,11 +1222,13 @@ export const buildMessageContentFromNotification = (
           if (fenced && candidateOutputs.has(normalizeTerminalOutputForComparison(fenced.body))) {
             return false;
           }
-          // Check plain text match (Kimi style: content text is identical to terminal output)
+          // Check plain text match (Kimi/Pi style: content text is identical to terminal
+          // output). Indented output such as `launchctl print` only matches untrimmed.
           const plainText = c.content.text.trim();
           if (
             plainText.length > 0 &&
-            candidateOutputs.has(normalizeTerminalOutputForComparison(plainText))
+            (candidateOutputs.has(normalizeTerminalOutputForComparison(plainText)) ||
+              candidateOutputs.has(normalizeTerminalOutputForComparison(c.content.text)))
           ) {
             return false;
           }
@@ -1212,10 +1238,7 @@ export const buildMessageContentFromNotification = (
 
       const derived: StoredToolCallContent = [...derivedCommand, ...derivedOutput];
       const content = compactToolCallContentForHistory([...baseContent, ...derived], { kind });
-      const explicitLocations =
-        Array.isArray(update.locations) && update.locations.length > 0
-          ? update.locations
-          : undefined;
+      const explicitLocations = Array.isArray(update.locations) ? update.locations : undefined;
       const locations =
         explicitLocations ??
         deriveLocationsFromToolCallContent(update.content) ??
@@ -1224,7 +1247,8 @@ export const buildMessageContentFromNotification = (
       // scheduled-tasks panel derives entirely from history, so it needs the schedule and
       // the created job id. Persist them (small, stable) plus the canonical tool name the
       // deriver switches on; `title` stays whatever the agent chose to show.
-      const toolName = resolveAcpToolName((update as ToolCallUpdateWithMeta)._meta);
+      const toolName =
+        resolveAcpToolName((update as ToolCallUpdateWithMeta)._meta) ?? previousTool?.toolName;
       const activityKind = getToolCallActivityKind((update as ToolCallUpdateWithMeta)._meta);
       const isSchedulingTool = toolName !== undefined && SCHEDULING_TOOL_NAMES.has(toolName);
       return [
@@ -1233,8 +1257,8 @@ export const buildMessageContentFromNotification = (
           toolCallId: update.toolCallId,
           title: update.title,
           toolName,
-          kind: update.kind || undefined,
-          status: update.status || 'pending',
+          kind: kind ?? undefined,
+          status: update.status ?? previousTool?.status ?? 'pending',
           content: content.length ? content : undefined,
           locations,
           // Generic ACP rawInput/rawOutput is excluded because it is unstructured by spec;
@@ -1400,9 +1424,23 @@ class NotificationOnHistoryApplier {
         continue;
       }
 
-      const contents = buildMessageContentFromNotification(notification);
+      const toolUpdate =
+        update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update'
+          ? update
+          : undefined;
+      const entryIndex = toolUpdate
+        ? this.resolveToolCallEntryIndex(toolUpdate.toolCallId)
+        : undefined;
+      const previousTool =
+        entryIndex === undefined
+          ? undefined
+          : this.readEntryItems(entryIndex).find(
+              (item): item is ToolCallMessage =>
+                item.type === 'tool_call' && item.toolCallId === toolUpdate?.toolCallId
+            );
+      const contents = buildMessageContentFromNotification(notification, previousTool);
       for (const message of contents) {
-        this.applyMessageContent(message);
+        this.applyMessageContent(message, toolUpdate?.content != null);
       }
     }
 
@@ -1554,8 +1592,9 @@ class NotificationOnHistoryApplier {
         );
         const previous = run.items[index];
         const tool = previous?.type === 'tool_call' ? previous : undefined;
-        // Keep child tool payloads intact. The parent's compact terminal projection
-        // intentionally discards diffs and read results, unsuitable for the detail view.
+        const input = asRecordOrUndefined(update.rawInput);
+        // Keep child diffs and read results for the detail view, but discard tool
+        // images just as the parent history does.
         const content: Extract<SubagentRunItem, { type: 'tool_call' }> = {
           ...tool,
           ...(identity.nativeTurnId !== undefined ? { nativeTurnId: identity.nativeTurnId } : {}),
@@ -1565,37 +1604,37 @@ class NotificationOnHistoryApplier {
           status: update.status ?? tool?.status ?? 'pending',
           title: update.title ?? tool?.title,
           kind: update.kind ?? tool?.kind,
-          content: update.content ?? tool?.content,
+          content:
+            update.content != null
+              ? stripToolCallPayloadsForHistory(update.content)
+              : tool?.content,
           locations: update.locations ?? tool?.locations,
-          rawInput: asRecordOrUndefined(update.rawInput) ?? tool?.rawInput,
+          // Plan approval is the UI's sole child raw-input consumer.
+          rawInput:
+            update.rawInput != null
+              ? typeof input?.plan === 'string'
+                ? { plan: input.plan }
+                : undefined
+              : tool?.rawInput,
           rawOutput: asRecordOrUndefined(update.rawOutput) ?? tool?.rawOutput,
           toolName: resolveAcpToolName(update._meta) ?? tool?.toolName,
           _meta: update._meta ?? tool?._meta,
         };
-        for (const [key, value] of [
-          ['rawInput', update.rawInput],
-          ['rawOutput', update.rawOutput],
-        ] as const) {
-          if (value == null || asRecordOrUndefined(value)) continue;
-          // MessageContent's historical raw fields accept records. Retain other
-          // JSON values in metadata, and make scalar output readable in the UI.
-          const meta = content._meta ?? {};
-          const lody = asRecordOrUndefined(meta.lody) ?? {};
-          const raw = asRecordOrUndefined(lody.subagentRaw) ?? {};
-          content._meta = { ...meta, lody: { ...lody, subagentRaw: { ...raw, [key]: value } } };
-          if (key === 'rawOutput') {
-            const text = typeof value === 'string' ? value : JSON.stringify(value);
-            const blocks = content.content ?? [];
-            if (
-              !blocks.some(
-                (block) =>
-                  block.type === 'content' &&
-                  block.content.type === 'text' &&
-                  block.content.text === text
-              )
-            ) {
-              content.content = [...blocks, { type: 'content', content: { type: 'text', text } }];
-            }
+        const value = update.rawOutput;
+        if (value != null && !asRecordOrUndefined(value)) {
+          // Keep the readable copy; the old _meta.lody.subagentRaw duplicate
+          // had no consumer. Preserve full text and arrays, without new limits.
+          const text = typeof value === 'string' ? value : JSON.stringify(value);
+          const blocks = content.content ?? [];
+          if (
+            !blocks.some(
+              (block) =>
+                block.type === 'content' &&
+                block.content.type === 'text' &&
+                block.content.text === text
+            )
+          ) {
+            content.content = [...blocks, { type: 'content', content: { type: 'text', text } }];
           }
         }
         if (index >= 0) run.items[index] = content;
@@ -1766,7 +1805,7 @@ class NotificationOnHistoryApplier {
     return this.history.length - 1;
   }
 
-  private applyMessageContent(message: MessageContent) {
+  private applyMessageContent(message: MessageContent, replaceContent = false) {
     switch (message.type) {
       case 'text': {
         const text = sanitizeLodyInternalInstructions(message.text);
@@ -1795,7 +1834,7 @@ class NotificationOnHistoryApplier {
       case 'tool_call': {
         const existingEntryIndex = this.resolveToolCallEntryIndex(message.toolCallId);
         if (existingEntryIndex !== undefined) {
-          this.upsertToolCall(existingEntryIndex, message);
+          this.upsertToolCall(existingEntryIndex, message, replaceContent);
           return;
         }
         const entryIndex = this.ensureActiveAssistantEntry();
@@ -1931,7 +1970,7 @@ class NotificationOnHistoryApplier {
     this.changed = true;
   }
 
-  private upsertToolCall(entryIndex: number, incoming: ToolCallMessage) {
+  private upsertToolCall(entryIndex: number, incoming: ToolCallMessage, replaceContent = false) {
     const entry = this.history[entryIndex];
     if (!entry) return;
 
@@ -1941,7 +1980,7 @@ class NotificationOnHistoryApplier {
     );
     if (toolIndex >= 0) {
       const prevTool = items[toolIndex] as ToolCallMessage;
-      items[toolIndex] = mergeToolCallMessage(prevTool, incoming);
+      items[toolIndex] = mergeToolCallMessage(prevTool, incoming, replaceContent);
       this.changed = true;
       return;
     }

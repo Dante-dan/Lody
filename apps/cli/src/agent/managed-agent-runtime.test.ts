@@ -10,11 +10,10 @@ import * as tar from 'tar';
 import { compressStream } from 'zstd-stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import claudePackageLock from '../../../../packages/acp-extension-claude/package-lock.json';
-import codexPackageLock from '../../../../packages/acp-extension-codex/package-lock.json';
 import claudeSdkManifest from '../../node_modules/@anthropic-ai/claude-agent-sdk/manifest.json';
 import claudeRuntimeManifestJson from './claude-runtime-manifest.json';
-import codexRuntimeManifestJson from './codex-runtime-manifest.json';
 import kimiRuntimeManifestJson from './kimi-runtime-manifest.json';
+import piRuntimeManifestJson from './pi-runtime-manifest.json';
 import grokRuntimeManifest from '../../../../packages/acp-extension-grok/runtime-manifest.json';
 
 import {
@@ -29,6 +28,7 @@ import {
   isNodeVersionAtLeast,
   getHostMachineProtocolCapabilities,
   mapManagedRuntimePlatform,
+  resetMuslLibcCacheForTests,
   ManagedAgentRuntimeManager,
   ManagedRuntimeIncompatibleHostError,
   ManagedRuntimeError,
@@ -50,6 +50,11 @@ describe('host runtime capabilities', () => {
     (node, platform, arch, expected) => {
       const capabilities = getHostMachineProtocolCapabilities(node, platform, arch);
       expect(capabilities.builtinPi).toBe(expected);
+      // Host compatibility alone does not prove the pinned artifact supports extensions.
+      const supportsExtensions =
+        'piExtensionsProtocolVersion' in piRuntimeManifestJson &&
+        piRuntimeManifestJson.piExtensionsProtocolVersion === 1;
+      expect(capabilities.piExtensions).toBe(supportsExtensions ? expected : undefined);
       expect(capabilities.providerSetup).toBe(1);
     }
   );
@@ -93,6 +98,7 @@ describe('ManagedAgentRuntimeManager', () => {
   });
 
   afterEach(async () => {
+    resetMuslLibcCacheForTests();
     await rm(rootDir, { recursive: true, force: true });
   });
 
@@ -384,17 +390,6 @@ describe('ManagedAgentRuntimeManager', () => {
     }
   });
 
-  it('matches the exact locked Codex dependency version', () => {
-    expect(CODEX_RUNTIME_VERSION).toBe(
-      codexPackageLock.packages['node_modules/@openai/codex']?.version
-    );
-    expect(CODEX_RUNTIME_VERSION).toBe(codexRuntimeManifestJson.version);
-    const manager = new ManagedAgentRuntimeManager({ rootDir });
-    expect(manager.getDefinition('codex').platforms).toMatchObject(
-      codexRuntimeManifestJson.artifacts
-    );
-  });
-
   it('matches the exact locked Claude SDK and its embedded Claude Code version', () => {
     expect(CLAUDE_AGENT_SDK_VERSION).toBe(
       claudePackageLock.packages['node_modules/@anthropic-ai/claude-agent-sdk']?.version
@@ -411,6 +406,103 @@ describe('ManagedAgentRuntimeManager', () => {
   it('matches the pinned Kimi runtime manifest and Node engine', () => {
     expect(KIMI_CODE_VERSION).toBe(kimiRuntimeManifestJson.version);
     expect(kimiRuntimeManifestJson.minNodeVersion).toBe(KIMI_CODE_MIN_NODE_VERSION);
+  });
+
+  it('classifies linux libc once and keeps claude-code musl archive selection', () => {
+    const getReport = vi.spyOn(process.report, 'getReport');
+    const linuxHost = process.platform === 'linux';
+    const report = (glibcVersionRuntime?: string) =>
+      ({
+        header: glibcVersionRuntime === undefined ? {} : { glibcVersionRuntime },
+      }) as ReturnType<typeof process.report.getReport>;
+    const readOnce = (value: ReturnType<typeof process.report.getReport>) => {
+      let read = false;
+      getReport.mockImplementation(() => {
+        if (read) throw new Error('process.report.getReport ran again');
+        read = true;
+        return value;
+      });
+    };
+    try {
+      getReport.mockImplementation(() => {
+        throw new Error('process.report.getReport ran for a preset classification');
+      });
+      resetMuslLibcCacheForTests(true);
+      expect(mapManagedRuntimePlatform('claude-code', 'linux', 'x64')).toBe('linux-x64-musl');
+      expect(mapManagedRuntimePlatform('claude-code', 'linux', 'arm64')).toBe('linux-arm64-musl');
+      expect(mapManagedRuntimePlatform('codex', 'linux', 'x64')).toBe('linux-x64');
+      expect(mapManagedRuntimePlatform('grok-build', 'linux', 'arm64')).toBe('linux-arm64');
+      expect(mapManagedRuntimePlatform('kimi-code', 'linux', 'x64')).toBe('node');
+      expect(mapManagedRuntimePlatform('claude-code', 'darwin', 'arm64')).toBe('darwin-arm64');
+      expect(mapManagedRuntimePlatform('claude-code', 'win32', 'x64')).toBe('win32-x64');
+
+      resetMuslLibcCacheForTests(false);
+      expect(mapManagedRuntimePlatform('claude-code', 'linux', 'x64')).toBe('linux-x64');
+      expect(mapManagedRuntimePlatform('claude-code', 'linux', 'arm64')).toBe('linux-arm64');
+      expect(mapManagedRuntimePlatform('claude-code', 'darwin', 'x64')).toBe('darwin-x64');
+      expect(mapManagedRuntimePlatform('claude-code', 'win32', 'arm64')).toBe('win32-arm64');
+
+      if (linuxHost) {
+        resetMuslLibcCacheForTests();
+        readOnce(report('2.39'));
+        expect(mapManagedRuntimePlatform('claude-code', 'linux', 'x64')).toBe('linux-x64');
+        expect(mapManagedRuntimePlatform('claude-code', 'linux', 'arm64')).toBe('linux-arm64');
+        expect(mapManagedRuntimePlatform('codex', 'linux', 'x64')).toBe('linux-x64');
+
+        resetMuslLibcCacheForTests();
+        readOnce(report());
+        expect(mapManagedRuntimePlatform('claude-code', 'linux', 'x64')).toBe('linux-x64-musl');
+        expect(mapManagedRuntimePlatform('claude-code', 'linux', 'arm64')).toBe('linux-arm64-musl');
+
+        resetMuslLibcCacheForTests();
+        let attempts = 0;
+        getReport.mockImplementation(() => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('report unavailable');
+          if (attempts === 2) return report('2.39');
+          throw new Error('process.report.getReport ran again');
+        });
+        expect(() => mapManagedRuntimePlatform('claude-code', 'linux', 'x64')).toThrow(
+          'report unavailable'
+        );
+        expect(mapManagedRuntimePlatform('claude-code', 'linux', 'x64')).toBe('linux-x64');
+        expect(mapManagedRuntimePlatform('claude-code', 'linux', 'arm64')).toBe('linux-arm64');
+
+        resetMuslLibcCacheForTests();
+        attempts = 0;
+        getReport.mockImplementation(() => {
+          attempts += 1;
+          if (attempts === 1) throw new Error('report unavailable');
+          if (attempts === 2) return report();
+          throw new Error('process.report.getReport ran again');
+        });
+        expect(() => mapManagedRuntimePlatform('claude-code', 'linux', 'x64')).toThrow(
+          'report unavailable'
+        );
+        expect(mapManagedRuntimePlatform('claude-code', 'linux', 'x64')).toBe('linux-x64-musl');
+        expect(mapManagedRuntimePlatform('claude-code', 'linux', 'arm64')).toBe('linux-arm64-musl');
+
+        getReport.mockRestore();
+        resetMuslLibcCacheForTests();
+        const reportApi = process.report as { getReport?: typeof process.report.getReport };
+        const savedGetReport = reportApi.getReport;
+        reportApi.getReport = undefined;
+        try {
+          expect(mapManagedRuntimePlatform('claude-code', 'linux', 'x64')).toBe('linux-x64-musl');
+          reportApi.getReport = () => {
+            throw new Error('process.report.getReport ran again');
+          };
+          expect(mapManagedRuntimePlatform('claude-code', 'linux', 'arm64')).toBe(
+            'linux-arm64-musl'
+          );
+        } finally {
+          reportApi.getReport = savedGetReport;
+        }
+      }
+    } finally {
+      getReport.mockRestore();
+      resetMuslLibcCacheForTests();
+    }
   });
 
   it('maps the Kimi node package to one platform-independent artifact', () => {

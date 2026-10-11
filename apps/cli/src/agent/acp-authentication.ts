@@ -1,6 +1,6 @@
+import { toShared } from '@/platform/process-options';
 import type { ChildProcess } from 'child_process';
 import os from 'os';
-import spawn from 'cross-spawn';
 import { randomUUID } from 'node:crypto';
 import * as acp from '@agentclientprotocol/sdk';
 import type { AuthMethod } from '@agentclientprotocol/sdk';
@@ -35,10 +35,13 @@ import {
   AcpAgentAuthorizationOutputParser,
   BuiltinAuthenticationOutputParser,
 } from './acp-authentication-output';
-import { shutdownLocalAcpAgent, spawnAcpProcess } from './acp-runner';
+import { shutdownLocalAcpAgent, spawnAcpProcess, terminateAcpProcessTree } from './acp-runner';
+import { startProcessLegacy } from '@lody/shared/node/process';
+
+import type { NodeProcessApi } from '@lody/shared/node/process';
 import type { ManagedRuntimeProgressEvent } from './managed-agent-runtime';
 import { createStdinWritableStream, createStdoutReadableStream } from '@/utils/stream';
-import { getLoginShellEnv } from './login-shell-env';
+import { getLoginShellEnvLegacy } from './login-shell-env';
 import { appendStderrTail, createAcpStartupMonitor } from './acp-startup-monitor';
 import { runNpxStartupWithRecovery } from './acp-npx-startup-policy';
 import { withLodyNpmCacheForNpx } from './npx-cache';
@@ -103,10 +106,13 @@ export type AcpAuthenticationResult =
 const DEFAULT_AUTHENTICATION_TIMEOUT_MS = 285_000;
 const DEFAULT_TERMINATION_GRACE_MS = 3_000;
 const DEFAULT_STATUS_PROBE_TIMEOUT_MS = 15_000;
+/** Bound on waiting for a SIGKILLed status probe tree to disappear. */
+const STATUS_PROBE_KILL_WAIT_MS = 2_000;
 
 const BUILTIN_AUTH_METHODS = {
   // Pi credentials are configured through the official Pi CLI on the host.
   pi: [],
+  devin: [],
   kimi: [
     {
       id: 'login',
@@ -176,8 +182,8 @@ const AcpAuthenticationInteractionInputSchema = z.discriminatedUnion('action', [
 type AcpAuthenticationManagerOptions = {
   authenticationTimeoutMs?: number;
   terminationGraceMs?: number;
-  spawnProcess?: typeof spawn;
-  resolveLoginShellEnv?: typeof getLoginShellEnv;
+  nodeProcess?: NodeProcessApi;
+  resolveLoginShellEnv?: typeof getLoginShellEnvLegacy;
   resolveAuthenticationProcessLaunch?: typeof resolveBuiltinAuthenticationProcessLaunch;
 };
 
@@ -197,8 +203,8 @@ type ProbeBuiltinAuthenticationOptions = {
   logger: Logger;
   signal?: AbortSignal;
   statusProbeTimeoutMs?: number;
-  spawnProcess?: typeof spawn;
-  resolveLoginShellEnv?: typeof getLoginShellEnv;
+  nodeProcess?: NodeProcessApi;
+  resolveLoginShellEnv?: typeof getLoginShellEnvLegacy;
 };
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
@@ -368,14 +374,14 @@ function formatAuthenticationExitError(
 ): string {
   const base = `${displayName} authentication exited with code ${exitCode ?? 'unknown'}`;
   if (agentType !== 'codex') return base;
-  return `${base}. Make sure device-code login is enabled in your ChatGPT security settings or workspace permissions, then try again.`;
+  return `${base}. Check the Codex login log on the execution machine for the cause, then try again.`;
 }
 
 async function buildAuthenticationProcessEnv(options: {
   launch: ResolvedACPProcessLaunch;
   agentType: string;
   env?: NodeJS.ProcessEnv;
-  resolveLoginShellEnv: typeof getLoginShellEnv;
+  resolveLoginShellEnv: typeof getLoginShellEnvLegacy;
 }): Promise<NodeJS.ProcessEnv> {
   const loginShellEnv = await options.resolveLoginShellEnv();
   const baseEnv: NodeJS.ProcessEnv = {
@@ -408,15 +414,7 @@ export async function probeBuiltinAuthentication(
   options: ProbeBuiltinAuthenticationOptions
 ): Promise<BuiltinAuthenticationProbeResult> {
   options.signal?.throwIfAborted();
-  if (options.cliType !== 'builtin' || !isManagedBuiltinAgentType(options.agentType)) {
-    return { status: 'unknown' };
-  }
-  if (
-    options.agentType === 'kimi' ||
-    options.agentType === 'grok' ||
-    options.agentType === 'pi' ||
-    options.agentType === 'codex'
-  ) {
+  if (options.cliType !== 'builtin' || options.agentType !== 'claude') {
     return { status: 'unknown' };
   }
   const launch = await resolveBuiltinAuthenticationProcessLaunch({
@@ -434,18 +432,33 @@ export async function probeBuiltinAuthentication(
     launch,
     agentType: options.agentType,
     env: options.env,
-    resolveLoginShellEnv: options.resolveLoginShellEnv ?? getLoginShellEnv,
+    resolveLoginShellEnv: options.resolveLoginShellEnv ?? getLoginShellEnvLegacy,
   });
   options.signal?.throwIfAborted();
   if (hasBuiltinEnvAuthentication(options.agentType, env)) {
     return { status: 'unknown' };
   }
-  const child = (options.spawnProcess ?? spawn)(launch.command, launch.args, {
-    cwd: os.homedir(),
-    env,
-    stdio: 'ignore',
-    windowsHide: true,
-  });
+  // Its own group, so a timeout or cancel ends whatever the status command
+  // started, not just the command itself.
+  const { child } = startProcessLegacy(
+    {
+      command: launch.command,
+      args: launch.args,
+      options: { cwd: os.homedir(), env, stdio: 'ignore' },
+      processGroup: true,
+    },
+    toShared({ nodeProcess: options.nodeProcess })
+  );
+  let termination: Promise<void> | undefined;
+  const terminateProbe = (): void => {
+    termination ??= terminateAcpProcessTree(child, {
+      logger: options.logger,
+      sessionLabel: `acp-auth:${options.agentType}:status`,
+      exitTimeoutMs: STATUS_PROBE_KILL_WAIT_MS,
+      force: true,
+      nodeProcess: options.nodeProcess,
+    });
+  };
   const timeoutMs = Math.max(1, options.statusProbeTimeoutMs ?? DEFAULT_STATUS_PROBE_TIMEOUT_MS);
   const exit = await new Promise<{
     aborted?: boolean;
@@ -468,11 +481,7 @@ export async function probeBuiltinAuthentication(
       resolve(result);
     };
     const handleAbort = (): void => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // The process may have exited between cancellation and the kill call.
-      }
+      terminateProbe();
       finish({ aborted: true, code: null });
     };
     options.signal?.addEventListener('abort', handleAbort, { once: true });
@@ -481,11 +490,7 @@ export async function probeBuiltinAuthentication(
       return;
     }
     timeoutHandle = setTimeout(() => {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // The process may have exited between the timeout and kill call.
-      }
+      terminateProbe();
       finish({ code: null, timedOut: true });
     }, timeoutMs);
     timeoutHandle.unref?.();
@@ -493,6 +498,12 @@ export async function probeBuiltinAuthentication(
     child.once('exit', (code) => finish({ code }));
   });
 
+  // The probe is over only once its process tree is gone.
+  await termination?.catch((error: unknown) => {
+    options.logger.warn(
+      `[acp-auth] ${getBuiltinDisplayName(options.agentType)} status probe could not be terminated: ${formatErrorMessage(error)}`
+    );
+  });
   if (exit.aborted) {
     throw new DOMException('ACP authentication probe was cancelled', 'AbortError');
   }
@@ -516,13 +527,11 @@ export async function probeBuiltinAuthentication(
 }
 
 export class AcpAuthenticationManager {
-  // Each builtin provider has one shared credential store, so concurrent login
-  // attempts are intentionally keyed by agent type.
   private readonly runningByAgentType = new Map<string, RunningAuthentication>();
   private readonly authenticationTimeoutMs: number;
   private readonly terminationGraceMs: number;
-  private readonly spawnProcess: typeof spawn;
-  private readonly resolveLoginShellEnv: typeof getLoginShellEnv;
+  private readonly nodeProcess: NodeProcessApi | undefined;
+  private readonly resolveLoginShellEnv: typeof getLoginShellEnvLegacy;
   private readonly resolveAuthenticationProcessLaunch: typeof resolveBuiltinAuthenticationProcessLaunch;
 
   constructor(
@@ -537,8 +546,8 @@ export class AcpAuthenticationManager {
       1,
       options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS
     );
-    this.spawnProcess = options.spawnProcess ?? spawn;
-    this.resolveLoginShellEnv = options.resolveLoginShellEnv ?? getLoginShellEnv;
+    this.nodeProcess = options.nodeProcess;
+    this.resolveLoginShellEnv = options.resolveLoginShellEnv ?? getLoginShellEnvLegacy;
     this.resolveAuthenticationProcessLaunch =
       options.resolveAuthenticationProcessLaunch ?? resolveBuiltinAuthenticationProcessLaunch;
   }
@@ -560,8 +569,11 @@ export class AcpAuthenticationManager {
       ) => Promise<Record<string, unknown>>;
     }) => Promise<void>;
   }): Promise<AcpAuthenticationResult> {
+    // Devin advertises its own browser method over ACP, not a native login command.
     const isBuiltinAuthentication =
-      options.cliType === 'builtin' && isManagedBuiltinAgentType(options.agentType);
+      options.cliType === 'builtin' &&
+      isManagedBuiltinAgentType(options.agentType) &&
+      options.agentType !== 'devin';
     const displayName = isBuiltinAuthentication
       ? getBuiltinDisplayName(options.agentType)
       : options.agentType;
@@ -687,24 +699,16 @@ export class AcpAuthenticationManager {
       if (preparationInterruption) return preparationInterruption;
 
       options.onProgress?.({ status: 'starting' });
-      const child = this.spawnProcess(
-        launch.command,
-        options.codexProfile
-          ? [
-              '-c',
-              'cli_auth_credentials_store="keyring"',
-              '-c',
-              'forced_login_method="chatgpt"',
-              ...launch.args,
-            ]
-          : launch.args,
+      const { child } = startProcessLegacy(
         {
-          cwd: os.homedir(),
-          env,
-          stdio: ['pipe', 'pipe', 'pipe'],
-          detached: process.platform !== 'win32',
-          windowsHide: true,
-        }
+          command: launch.command,
+          args: options.codexProfile
+            ? ['-c', 'forced_login_method="chatgpt"', ...launch.args]
+            : launch.args,
+          options: { cwd: os.homedir(), env, stdio: ['pipe', 'pipe', 'pipe'] },
+          processGroup: true,
+        },
+        toShared({ nodeProcess: this.nodeProcess })
       );
       running.child = child;
       releaseProfile?.recordNativePid(child.pid);
@@ -973,7 +977,7 @@ export class AcpAuthenticationManager {
               env,
               command: launch.command,
               args: [...args],
-              spawnImpl: this.spawnProcess,
+              spawnImpl: this.nodeProcess?.spawn,
             });
             running.child = child;
             running.terminating = false;
@@ -1182,6 +1186,7 @@ export class AcpAuthenticationManager {
                 logger: this.logger,
                 sessionLabel: `acp-auth:${options.agentType}:protocol`,
                 exitTimeoutMs: this.terminationGraceMs,
+                nodeProcess: this.nodeProcess,
               }).catch((error: unknown) => {
                 this.logger.debug(
                   `[acp-auth] Failed to terminate protocol authentication process: ${formatErrorMessage(error)}`
@@ -1216,6 +1221,7 @@ export class AcpAuthenticationManager {
       logger: this.logger,
       sessionLabel: `acp-auth:${agentType}:${reason}`,
       exitTimeoutMs: this.terminationGraceMs,
+      nodeProcess: this.nodeProcess,
     }).catch((error: unknown) => {
       this.logger.debug(
         `[acp-auth] Failed to terminate authentication process: ${formatErrorMessage(error)}`

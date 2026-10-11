@@ -1,3 +1,4 @@
+import { snapshotAgentRole } from '@lody/shared';
 import type { SessionAttachmentDraft } from '@/lib/session-attachment-draft';
 import {
   forwardRef,
@@ -276,14 +277,11 @@ export const DraftSessionChatInterface = memo(
       });
       const {
         availableCommands,
-        capabilityAuthority,
         configOptionSelectors,
-        defaultModeId,
-        defaultModelId,
         machineFlockRows,
         modeOptions,
         modelOptions,
-        modelReasoningEfforts,
+        selectorOptions,
         sessionMachine,
       } = useSessionAcpSelectorContext({
         machineId: parentSession.machineId,
@@ -294,26 +292,6 @@ export const DraftSessionChatInterface = memo(
         selectedModelId: sessionConfigCandidates.modelId,
         configOptionValues: sessionConfigCandidates.configOptionValues,
       });
-      const selectorOptions = useMemo(
-        () => ({
-          capabilityAuthority,
-          configOptionSelectors,
-          defaultModeId,
-          defaultModelId,
-          modeOptions,
-          modelOptions,
-          modelReasoningEfforts,
-        }),
-        [
-          capabilityAuthority,
-          configOptionSelectors,
-          defaultModeId,
-          defaultModelId,
-          modeOptions,
-          modelOptions,
-          modelReasoningEfforts,
-        ]
-      );
       const {
         selectedModeId,
         selectedModelId,
@@ -564,6 +542,8 @@ export const DraftSessionChatInterface = memo(
               mcpServerIds: mcpSelection.selectedIds,
               agentRoleId: activeAgentRole?.id ?? null,
               agentRoleRevision: activeAgentRole?.revision,
+              memory: activeAgentRole?.runConfig.memory,
+              agentRoleSnapshot: activeAgentRole ? snapshotAgentRole(activeAgentRole) : undefined,
             }),
           };
         },

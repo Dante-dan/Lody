@@ -5,7 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, Provider } from 'jotai';
 
-import { conversationFontSizeAtom } from '../src/atoms/settings';
+import { conversationFontSizeAtom, inlineMathEnabledAtom } from '../src/atoms/settings';
 import { MobileAppearanceSettings } from '../src/components/mobile/mobile-appearance-settings';
 import type { AppIconBridge } from '../src/components/mobile/mobile-app-icon-settings';
 import { AppearanceSettingsView } from '../src/components/settings/appearance-setting';
@@ -72,6 +72,9 @@ function AppearanceHarness({ isElectron }: { isElectron: boolean }) {
   const [interfaceFontFamily, setInterfaceFontFamily] = useState('Atkinson Hyperlegible');
   const [terminalFontFamily, setTerminalFontFamily] = useState('Maple Mono');
   const [conversationFontSize, setConversationFontSize] = useState(14);
+  const [conversationWideMode, setConversationWideMode] = useState(false);
+  const [inlineMathEnabled, setInlineMathEnabled] = useState(false);
+  const [extendedCodeLanguagesEnabled, setExtendedCodeLanguagesEnabled] = useState(false);
   const [fontSize, setFontSize] = useState(13);
   const [fontLigaturesEnabled, setFontLigaturesEnabled] = useState(true);
 
@@ -83,6 +86,12 @@ function AppearanceHarness({ isElectron }: { isElectron: boolean }) {
       onThemeCancel={vi.fn()}
       conversationFontSize={conversationFontSize}
       onConversationFontSizeChange={setConversationFontSize}
+      conversationWideMode={conversationWideMode}
+      onConversationWideModeChange={setConversationWideMode}
+      inlineMathEnabled={inlineMathEnabled}
+      onInlineMathEnabledChange={setInlineMathEnabled}
+      extendedCodeLanguagesEnabled={extendedCodeLanguagesEnabled}
+      onExtendedCodeLanguagesEnabledChange={setExtendedCodeLanguagesEnabled}
       isElectron={isElectron}
       interfaceFontFamily={interfaceFontFamily}
       onInterfaceFontFamilyChange={setInterfaceFontFamily}
@@ -162,6 +171,12 @@ describe('AppearanceSettingsView', () => {
           onThemeCancel={onThemeCancel}
           conversationFontSize={14}
           onConversationFontSizeChange={vi.fn()}
+          conversationWideMode={false}
+          onConversationWideModeChange={vi.fn()}
+          inlineMathEnabled={false}
+          onInlineMathEnabledChange={vi.fn()}
+          extendedCodeLanguagesEnabled={false}
+          onExtendedCodeLanguagesEnabledChange={vi.fn()}
           isElectron={false}
           interfaceFontFamily=""
           onInterfaceFontFamilyChange={vi.fn()}
@@ -204,6 +219,7 @@ describe('AppearanceSettingsView', () => {
     expect(container?.textContent).not.toContain('Terminal');
     expect(container?.textContent).toContain('Font ligatures');
     expect(container?.textContent).toContain('conversation, code, and tool output');
+    expect(container?.textContent).toContain('Extended code languages');
     const ligaturesSwitch = container?.querySelector<HTMLButtonElement>(
       'button[aria-label="Font ligatures"]'
     );
@@ -214,6 +230,30 @@ describe('AppearanceSettingsView', () => {
     expect(
       container?.querySelector('button[aria-label="Font ligatures"]')?.getAttribute('aria-checked')
     ).toBe('false');
+    const inlineMathSwitch = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Render inline math"]'
+    );
+    expect(inlineMathSwitch?.getAttribute('aria-checked')).toBe('false');
+    await act(async () => {
+      inlineMathSwitch?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(
+      container
+        ?.querySelector('button[aria-label="Render inline math"]')
+        ?.getAttribute('aria-checked')
+    ).toBe('true');
+    const extendedLanguagesSwitch = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Extended code languages"]'
+    );
+    expect(extendedLanguagesSwitch?.getAttribute('aria-checked')).toBe('false');
+    await act(async () => {
+      extendedLanguagesSwitch?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(
+      container
+        ?.querySelector('button[aria-label="Extended code languages"]')
+        ?.getAttribute('aria-checked')
+    ).toBe('true');
   });
 
   it('offers the five named font size tiers and commits the picked one', async () => {
@@ -293,6 +333,8 @@ describe('AppearanceSettingsView', () => {
     expect(container?.textContent).not.toContain('Terminal');
     expect(container?.textContent).toContain('Font ligatures');
     expect(container?.textContent).toContain('conversation, code, and tool output');
+    expect(container?.textContent).toContain('Render inline math');
+    expect(container?.textContent).toContain('Extended code languages');
     const ligaturesSwitch = container?.querySelector<HTMLButtonElement>(
       'button[aria-label="Font ligatures"]'
     );
@@ -303,6 +345,37 @@ describe('AppearanceSettingsView', () => {
     expect(
       container?.querySelector('button[aria-label="Font ligatures"]')?.getAttribute('aria-checked')
     ).toBe('false');
+  });
+
+  it('persists the mobile inline math preference across remounts', async () => {
+    const store = createStore();
+    store.set(inlineMathEnabledAtom, false);
+    const renderMobile = (settingsStore: ReturnType<typeof createStore>) => (
+      <Provider store={settingsStore}>
+        <MobileAppearanceSettings />
+      </Provider>
+    );
+
+    await act(async () => root?.render(renderMobile(store)));
+
+    const inlineMathSwitch = container?.querySelector<HTMLButtonElement>(
+      'button[aria-label="Render inline math"]'
+    );
+    expect(inlineMathSwitch?.getAttribute('aria-checked')).toBe('false');
+    await act(async () => {
+      inlineMathSwitch?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    });
+    expect(store.get(inlineMathEnabledAtom)).toBe(true);
+    expect(JSON.parse(localStorage.getItem('lody-inline-math-enabled')!)).toBe(true);
+
+    await act(async () => root?.render(null));
+    await act(async () => root?.render(renderMobile(createStore())));
+    expect(
+      container
+        ?.querySelector<HTMLButtonElement>('button[aria-label="Render inline math"]')
+        ?.getAttribute('aria-checked')
+    ).toBe('true');
+    localStorage.removeItem('lody-inline-math-enabled');
   });
 
   it('places native app icon selection below font size in narrow and wide appearance layouts', async () => {

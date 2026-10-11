@@ -1,3 +1,4 @@
+import { toShared } from '@/platform/process-options';
 import { createHash, randomUUID } from 'node:crypto';
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -10,7 +11,8 @@ import {
 } from '@lody/shared';
 import { getLodyDataDir } from '@lody/shared/node/installation-profile';
 import { SystemCodexCredentialVault, type CodexCredentialVault } from './codex-credential-vault';
-import { execFile } from 'node:child_process';
+import { runCommandTextLegacy } from '@lody/shared/node/process';
+
 import { resolveBuiltinAuthenticationProcessLaunch } from './setting';
 import {
   registerCodexProfileProcess,
@@ -26,6 +28,7 @@ const ProfileRecordSchema = z
     configId: z.string().min(1),
     profile: CodexAuthProfileSchema,
     state: z.enum(['pending', 'ready', 'removed']),
+    authStore: z.enum(['codex-default', 'keyring']).optional(),
     activeGeneration: z.uuid().optional(),
     generations: z.array(z.uuid()),
     credentialsRemoved: z.boolean().optional(),
@@ -34,7 +37,19 @@ const ProfileRecordSchema = z
 
 type ProfileRecord = z.infer<typeof ProfileRecordSchema>;
 export type CodexProfileOwner = { workspaceId: string; machineId: string; configId: string };
-export type ResolvedCodexProfile = CodexProfileOwner & { profile: CodexAuthProfile; home: string };
+export type ResolvedCodexProfile = CodexProfileOwner & {
+  profile: CodexAuthProfile;
+  home: string;
+  authStore: 'codex-default' | 'keyring';
+};
+
+function resolveAuthStore(record: ProfileRecord): ResolvedCodexProfile['authStore'] {
+  // Ready records written before file-backed login existed have native keyring credentials.
+  if (record.authStore) return record.authStore;
+  return record.profile.mode === 'chatgpt' && record.state !== 'pending'
+    ? 'keyring'
+    : 'codex-default';
+}
 
 const identity = (owner: CodexProfileOwner) =>
   createHash('sha256')
@@ -153,7 +168,14 @@ export class CodexProfileStore {
       if (!record) {
         if (!allowPending)
           throw new Error('This Codex account has not been authenticated on this machine');
-        record = { version: 1, ...owner, profile, state: 'pending', generations: [] };
+        record = {
+          version: 1,
+          ...owner,
+          profile,
+          state: 'pending',
+          authStore: 'codex-default',
+          generations: [],
+        };
         await this.write(directory, record);
       }
       this.assertBinding(record, owner, profile);
@@ -165,7 +187,7 @@ export class CodexProfileStore {
       });
       if ((await lstat(home)).isSymbolicLink() || (await realpath(home)) !== home)
         throw new Error('Invalid Codex account home');
-      return { ...owner, profile, home };
+      return { ...owner, profile, home, authStore: resolveAuthStore(record) };
     });
   }
 
@@ -209,8 +231,11 @@ export class CodexProfileStore {
         await this.write(directory, { ...candidate, activeGeneration: generation, state: 'ready' });
         return result;
       } catch (error) {
-        await this.vault.delete(credentialId);
-        await this.write(directory, record);
+        try {
+          await this.vault.delete(credentialId);
+        } catch {
+          // The inactive generation remains durable cleanup work; preserve the authentication failure.
+        }
         throw error;
       }
     });
@@ -237,7 +262,7 @@ export class CodexProfileStore {
       const record = await this.read(directory);
       if (!record) throw new Error('Codex account is unavailable');
       this.assertBinding(record, resolved, resolved.profile);
-      await this.write(directory, { ...record, state: 'ready' });
+      await this.write(directory, { ...record, state: 'ready', authStore: resolved.authStore });
     });
   }
 
@@ -248,7 +273,7 @@ export class CodexProfileStore {
       if (!record) return true;
       if (identity(record) !== identity(resolved)) throw new Error('Codex account owner mismatch');
       if (record.credentialsRemoved) return true;
-      await this.write(directory, { ...record, state: 'removed' });
+      await this.write(directory, { ...record, state: 'removed', authStore: resolved.authStore });
       if (record.profile.mode === 'chatgpt') {
         if (!(await reconcileCodexProfileProcesses(resolved))) return false;
         const lease = await registerCodexProfileProcess(resolved, {
@@ -267,6 +292,7 @@ export class CodexProfileStore {
       await this.write(directory, {
         ...record,
         state: 'removed',
+        authStore: resolved.authStore,
         generations: [],
         activeGeneration: undefined,
         credentialsRemoved: true,
@@ -307,7 +333,11 @@ export class CodexProfileStore {
       const directory = await this.directory(entry.name);
       const record = await this.read(directory);
       if (record?.workspaceId === workspaceId)
-        profiles.push({ ...record, home: path.join(directory, 'home') });
+        profiles.push({
+          ...record,
+          home: path.join(directory, 'home'),
+          authStore: resolveAuthStore(record),
+        });
     }
     return profiles;
   }
@@ -328,18 +358,26 @@ async function logoutNativeProfile(
     if (/^(CODEX_|OPENAI_|LODY_CODEX_|DYLD_|NODE_OPTIONS$|LD_PRELOAD$|LD_LIBRARY_PATH$)/i.test(key))
       delete env[key];
   env.CODEX_HOME = profile.home;
-  await new Promise<void>((resolve, reject) => {
-    const child = execFile(
-      launch.command,
-      ['-c', 'cli_auth_credentials_store="keyring"', 'logout'],
-      { env, timeout: 20_000, windowsHide: true },
-      (error) => {
-        if (error) reject(new Error('Codex account cleanup could not complete'));
-        else resolve();
-      }
+  try {
+    await runCommandTextLegacy(
+      {
+        command: launch.command,
+        args: [
+          ...(profile.authStore === 'keyring'
+            ? ['-c', 'cli_auth_credentials_store="keyring"']
+            : []),
+          'logout',
+        ],
+        env,
+        timeout: 20_000,
+        check: 'exit-0',
+        onSpawned: (child) => lease.recordNativePid(child.pid),
+      },
+      toShared()
     );
-    lease.recordNativePid(child.pid);
-  });
+  } catch {
+    throw new Error('Codex account cleanup could not complete');
+  }
 }
 
 let defaultStore: CodexProfileStore | undefined;

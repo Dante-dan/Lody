@@ -1,3 +1,4 @@
+import { text as uiText } from '@lody/ui/tokens/scales.stylex';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as stylex from '@stylexjs/stylex';
@@ -27,7 +28,7 @@ import {
 import { toast } from '@/lib/toast';
 import { Spinner } from '@lody/ui/spinner';
 import {
-  getLocalProjectHistoryProviderKey,
+  getLocalProjectHistoryCatalogKey,
   type LocalProjectHistoryCatalogItem,
   type LocalProjectHistoryCatalogResult,
   type LocalProjectHistoryProvider,
@@ -122,6 +123,7 @@ export type ProjectSettingsRow = {
 };
 
 export type ProjectHistoryImportState = {
+  providerLabel?: string;
   provider: LocalProjectHistoryProvider;
   providerKey: LocalProjectHistoryProviderKey;
   canSync: boolean;
@@ -266,7 +268,7 @@ const styles = stylex.create({
   pageSubtitle: {
     margin: 0,
     marginTop: '2px',
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     lineHeight: 1.375,
     color: colors.secondaryLabel,
   },
@@ -277,7 +279,7 @@ const styles = stylex.create({
     gap: space[2],
     paddingInline: space[3],
     paddingBlock: '40px',
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     color: colors.secondaryLabel,
   },
 
@@ -332,13 +334,13 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     fontFamily: MONO,
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     lineHeight: type.leading,
     color: colors.secondaryLabel,
   },
   lineMeta: {
     flexShrink: 0,
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     color: colors.tertiaryLabel,
     fontVariantNumeric: 'tabular-nums',
     whiteSpace: 'nowrap',
@@ -377,7 +379,7 @@ const styles = stylex.create({
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     margin: 0,
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     fontWeight: 400,
     lineHeight: type.leading,
     color: colors.label,
@@ -398,7 +400,7 @@ const styles = stylex.create({
     paddingInline: space[2],
     paddingTop: space[1],
     paddingBottom: '2px',
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     fontWeight: 400,
     color: colors.secondaryLabel,
   },
@@ -410,7 +412,12 @@ const styles = stylex.create({
     paddingInline: space[2],
     paddingBlock: space[4],
   },
-  note: { margin: 0, fontSize: type.caption, lineHeight: 1.375, color: colors.secondaryLabel },
+  note: {
+    margin: 0,
+    fontSize: uiText.footnoteSize,
+    lineHeight: 1.375,
+    color: colors.secondaryLabel,
+  },
 
   /* What a list row holds beyond `surface.listRow*`: a caption under the name. */
   rowText: {
@@ -425,7 +432,7 @@ const styles = stylex.create({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     lineHeight: type.leading,
     color: colors.secondaryLabel,
   },
@@ -497,7 +504,7 @@ const styles = stylex.create({
 
   /* Menu rows that say what they add under their name. */
   menuText: { display: 'flex', flexDirection: 'column', minWidth: 0, paddingBlock: space[1] },
-  menuHint: { fontSize: type.caption, color: colors.secondaryLabel },
+  menuHint: { fontSize: uiText.footnoteSize, color: colors.secondaryLabel },
   buttonIcon: { width: '14px', height: '14px', flexShrink: 0 },
 
   /* The project editor: a scroll body of stacked settings sections. */
@@ -539,13 +546,13 @@ const styles = stylex.create({
     whiteSpace: 'nowrap',
     margin: 0,
     fontFamily: MONO,
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     color: colors.secondaryLabel,
   },
   detailNote: {
     margin: 0,
     marginTop: space[1],
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     lineHeight: 1.375,
     color: colors.secondaryLabel,
   },
@@ -560,7 +567,7 @@ const styles = stylex.create({
     display: 'flex',
     alignItems: 'center',
     gap: space[1.5],
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     fontWeight: 400,
     color: colors.label,
   },
@@ -568,7 +575,7 @@ const styles = stylex.create({
   editorDescription: {
     margin: 0,
     marginTop: space[1],
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     lineHeight: 1.375,
     color: colors.secondaryLabel,
   },
@@ -597,7 +604,7 @@ const styles = stylex.create({
     alignItems: 'center',
     gap: space[2],
     paddingBlock: space[6],
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     color: colors.secondaryLabel,
   },
   stack: { display: 'flex', flexDirection: 'column', gap: space[2] },
@@ -607,7 +614,7 @@ const styles = stylex.create({
     display: 'flex',
     alignItems: 'flex-start',
     gap: space[1.5],
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     lineHeight: 1.375,
     color: colors.secondaryLabel,
   },
@@ -617,14 +624,14 @@ const styles = stylex.create({
     alignItems: 'center',
     justifyContent: 'flex-end',
     gap: space[1],
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     color: colors.secondaryLabel,
   },
   error: {
     display: 'flex',
     alignItems: 'flex-start',
     gap: space[2],
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     lineHeight: 1.375,
     color: colors.destructive,
   },
@@ -645,7 +652,7 @@ const styles = stylex.create({
     backgroundColor: { default: 'transparent', ':hover': colors.hoverFill },
     color: { default: colors.secondaryLabel, ':hover': colors.label },
     fontFamily: 'inherit',
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     fontWeight: 400,
     textAlign: 'start',
     cursor: 'pointer',
@@ -670,7 +677,7 @@ const styles = stylex.create({
     flexDirection: 'column',
     flexGrow: 1,
     minHeight: 0,
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
   },
   panelBar: {
     display: 'flex',
@@ -772,7 +779,7 @@ const styles = stylex.create({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     color: colors.secondaryLabel,
   },
   conflict: { display: 'flex', flexShrink: 0, alignItems: 'center', gap: space[1] },
@@ -810,7 +817,7 @@ function getHistoryCatalogFromProject(
   project: LocalProjectMeta,
   provider: LocalProjectHistoryProvider
 ) {
-  return project.history?.[getLocalProjectHistoryProviderKey(provider)];
+  return project.history?.[getLocalProjectHistoryCatalogKey(provider)];
 }
 
 function sortHistoryCatalogItems(
@@ -871,7 +878,7 @@ export function formatHistoryUpdatedAt(
 }
 
 export function historyStateKey(projectKey: string, provider: LocalProjectHistoryProvider): string {
-  return `${getLocalProjectHistoryProviderKey(provider)}:${projectKey}`;
+  return `${getLocalProjectHistoryCatalogKey(provider)}:${projectKey}`;
 }
 
 export function ProjectSettingsComponent({
@@ -1506,10 +1513,7 @@ function ProjectAddMenu({
       </Menu.Trigger>
       <Menu.Content align="end">
         {onAddLocalProject ? (
-          <Menu.Item
-            icon={<FolderPlus {...stylex.props(styles.glyph)} />}
-            onClick={() => onAddLocalProject()}
-          >
+          <Menu.Item icon={FolderPlus} onClick={() => onAddLocalProject()}>
             <span {...stylex.props(styles.menuText)}>
               <span>{t('chat.contextSwitch.addProject', 'Add a folder')}</span>
               <span {...stylex.props(styles.menuHint)}>
@@ -1522,10 +1526,7 @@ function ProjectAddMenu({
           </Menu.Item>
         ) : null}
         {onAddGitHubProject ? (
-          <Menu.Item
-            icon={<Github {...stylex.props(styles.glyph)} />}
-            onClick={() => onAddGitHubProject()}
-          >
+          <Menu.Item icon={Github} onClick={() => onAddGitHubProject()}>
             <span {...stylex.props(styles.menuText)}>
               <span>{t('chat.contextSwitch.addGitHubRepo', 'Add a GitHub repository')}</span>
               <span {...stylex.props(styles.menuHint)}>
@@ -1980,7 +1981,7 @@ function ConversationsPage({
     );
   }
 
-  const providerLabel = getHistoryProviderLabel(state.provider);
+  const providerLabel = state.providerLabel ?? getHistoryProviderLabel(state.provider);
   const selected = new Set(state.selectedSessionIds);
   const canManage = state.canSync && !state.isImporting;
   const shownSelectable = canManage
@@ -2048,7 +2049,7 @@ function ConversationsPage({
                       agentType={entry.provider.agentType}
                       className={stylex.props(win.agentGlyph).className}
                     />
-                    {getHistoryProviderLabel(entry.provider)}
+                    {entry.providerLabel ?? getHistoryProviderLabel(entry.provider)}
                   </Tabs.Tab>
                 ))}
               </Tabs.List>
@@ -2322,7 +2323,7 @@ const win = stylex.create({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
-    fontSize: type.title,
+    fontSize: uiText.titleSize,
     fontWeight: type.titleWeight,
     lineHeight: type.leading,
     letterSpacing: '-0.01em',
@@ -2432,7 +2433,7 @@ const win = stylex.create({
     display: 'inline-flex',
     alignItems: 'center',
     gap: space[2],
-    fontSize: type.caption,
+    fontSize: uiText.footnoteSize,
     color: colors.secondaryLabel,
     cursor: 'pointer',
   },
@@ -2454,7 +2455,7 @@ const win = stylex.create({
     lineHeight: type.leading,
     color: colors.label,
   },
-  sessionTime: { fontSize: type.caption, color: colors.tertiaryLabel },
+  sessionTime: { fontSize: uiText.footnoteSize, color: colors.tertiaryLabel },
   conflict: { display: 'inline-flex', alignItems: 'center', gap: space[1], flexShrink: 0 },
   empty: {
     display: 'flex',
@@ -2855,7 +2856,7 @@ export function ProjectHistoryImportPanel({
   const { t, i18n } = useTranslation();
   const localeObj: Locale = i18n.language?.startsWith('zh') ? zhCN : enUS;
   const intlLocale = toIntlLocale(i18n.resolvedLanguage ?? i18n.language);
-  const providerLabel = getHistoryProviderLabel(state.provider);
+  const providerLabel = state.providerLabel ?? getHistoryProviderLabel(state.provider);
   const catalogSessions = state.catalog?.sessions ?? [];
   const hasSyncedCatalog = state.catalog !== null;
   const hasCatalogSessions = catalogSessions.length > 0;

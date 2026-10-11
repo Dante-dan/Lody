@@ -7,16 +7,15 @@
  * "Worked for …" group to check that expansion still lands rows under the
  * same rail.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react';
-import type { SessionHistory, SessionId, WorkspaceId } from '@lody/shared';
+import type { SessionHistory, SessionId } from '@lody/shared';
 import { LoroDoc } from 'loro-crdt';
 import { MessageRowView, SessionChatStreamView } from '@/components/ai-gui/view';
 import type { SessionChatStreamViewProps } from '@/components/ai-gui/view';
 import type { SessionChatStreamHandle } from '@/components/ai-gui/view';
 import { useConversationStreamItems } from '@/hooks/use-conversation-stream-items';
 import {
-  createProjectedConversationView,
   createConversationSession,
   createConversationDerivation,
   type ConversationView,
@@ -132,6 +131,7 @@ function openWindowedView(entries: SessionHistory[], id: SessionId = sessionId):
     doc.free();
   };
   const writer = session.historyWriter;
+  if (!writer) throw new Error('The Loro story requires a history writer');
   for (const entry of entries) writer.append(entry);
   return view;
 }
@@ -413,49 +413,6 @@ export const SwitchBetweenLongConversations: Story = {
   render: () => <SwitchFlickerStory rounds={ROUNDS} />,
 };
 
-/** Reconcile a display projection without changing the underlying conversation. */
-function ProjectionRefreshStory() {
-  const [base, setBase] = useState<ConversationView | null>(null);
-  const [revision, setRevision] = useState(0);
-  useEffect(() => {
-    const view = openWindowedView(buildHistory(ROUNDS));
-    setBase(view);
-    return () => view.dispose();
-  }, []);
-  const view = useMemo(() => {
-    if (!base || revision === 0) return base;
-    const entry = base.turn(base.turnCount - 1);
-    if (!entry) return base;
-    // An accepted entry can already be authoritative while its projection is
-    // still retained. Rewrapping must not hide otherwise identical content.
-    return createProjectedConversationView(base, [
-      {
-        workspaceId: 'projection-refresh-story' as WorkspaceId,
-        sessionId,
-        entry,
-      },
-    ]);
-  }, [base, revision]);
-  return (
-    <div className="flex h-screen flex-col bg-background">
-      <button
-        type="button"
-        data-testid="refresh-projection"
-        disabled={!base}
-        className="shrink-0 rounded border px-3 py-1 text-sm"
-        onClick={() => setRevision((value) => value + 1)}
-      >
-        Refresh projection {revision}
-      </button>
-      <div className="min-h-0 flex-1" data-testid="conversation-slot">
-        {base && <OpenedStream view={view} />}
-      </div>
-    </div>
-  );
-}
-
-export const RefreshAcceptedHistory: Story = { render: () => <ProjectionRefreshStory /> };
-
 const JUMP_SESSION_ID = 'session-worked-group-expand-jump' as SessionId;
 
 /**
@@ -568,6 +525,7 @@ function NativeTextSelectionStory() {
       maxHydrated: 8,
       tailKeep: 2,
     });
+    if (!next.historyWriter) throw new Error('The Loro story requires a history writer');
     for (const entry of selectionHistory) next.historyWriter.append(entry);
     setSession(next);
     return () => {
@@ -596,8 +554,10 @@ function NativeTextSelectionStory() {
           data-finished={
             session?.history.turn(session.history.indexOf('selection-0'))?.finished ?? false
           }
-          onClick={() =>
-            session?.historyWriter.replace('selection-0', {
+          onClick={() => {
+            const writer = session?.historyWriter;
+            if (!writer) return;
+            writer.replace('selection-0', {
               ...selectionHistory[0]!,
               finished: true,
               items: [
@@ -611,8 +571,8 @@ function NativeTextSelectionStory() {
                 },
                 { type: 'text', text: 'UNSELECTED-FINAL-ANSWER' },
               ],
-            } as SessionHistory)
-          }
+            } as SessionHistory);
+          }}
         >
           Finish first turn
         </button>

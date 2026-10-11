@@ -9,16 +9,47 @@ that carry an invariant — the directory itself is the list of hooks.
 `use-session-actions.ts` binds admission, analytics, and Jotai observations to
 `lib/session-submission.ts`. The latter owns the ordinary Promise entry points
 for creation, initial history, continuation, dispatch, and guide. It has no React
-lifetime or second writer. The workspace journal durably accepts the full input before releasing the
-composer, prepares attachments on Send, and serializes same-session submission.
+lifetime or second writer. `lib/session-send-admission.ts` is the one admission for
+every user message. A ready send is written at once as local commits (creation
+meta, turn or queue row, activation); Repo persistence runs independently. The dispatch/steer RPC in
+`lib/session-send-delivery.ts` is a best-effort fast path, because the CLI starts
+pending turns from synchronized history. A send whose attachments are still
+preparing, or one queued behind such a send in the same conversation, is held
+only in the runtime's in-memory `pendingSends` and written when ready. Nothing
+persists it: closing the page mid-upload loses it, and the page asks first.
+Archive and delete cancel held sends of their targets and join in-flight writes.
 `use-session-preparation` holds an owned warmup lease; attachment takeover cancels
 and joins it. See the [attachment draft Spec](../../../../specs/session-files.md).
 
-| Area                   | Entry point                                                                                | Responsibility                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
-| Session lifecycle      | [`use-session-actions.ts`](use-session-actions.ts)                                         | Bind operation targets and writes to one workspace runtime. |
-| Workspace catalogs     | [`use-agent-role-schema-reconciliation.ts`](use-agent-role-schema-reconciliation.ts)       | Reconcile owned Roles after matching runtime probes.        |
-| Conversation rendering | [`use-conversation-stream-items.ts`](use-conversation-stream-items.ts), [`use-session-doc.ts`](use-session-doc.ts) | Coordinate the hydration window and history publication. |
+| Area                   | Entry point                                                                                                        | Responsibility                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| Session lifecycle      | [`use-session-actions.ts`](use-session-actions.ts)                                                                 | Bind operation targets and writes to one workspace runtime.                                |
+| Composer configuration | [`use-session-pending-config.ts`](use-session-pending-config.ts)                                                   | Bridge frozen held-send configuration to history/queue without consuming next-draft edits. |
+| Workspace catalogs     | [`use-agent-role-schema-reconciliation.ts`](use-agent-role-schema-reconciliation.ts)                               | Reconcile owned Roles after matching runtime probes.                                       |
+| Conversation rendering | [`use-conversation-stream-items.ts`](use-conversation-stream-items.ts), [`use-session-doc.ts`](use-session-doc.ts) | Coordinate the hydration window and history publication.                                   |
+
+## Session ACP catalogs
+
+`use-session-acp-selector-context.ts` owns the Provider subscription for persisted
+and draft composers. It resolves the exact bound id through the shared Provider
+atom and passes its current runtime overrides to both models and slash commands.
+Missing or mismatched Providers expose no catalog; extension changes invalidate
+old capabilities until a matching probe arrives. A matching extension catalog
+must not be read as though no extensions were selected.
+
+## Cloud query recovery
+
+`use-recoverable-convex-query.ts` owns the authenticated query adapter. Each client,
+session and semantic query shares one watch and three retries after 1, 2 and 4 seconds.
+All consumers release the failed watch before a new one starts, which waits for a
+server update rather than reading the SDK's cached error. Opaque server failures
+return loading during bounded recovery; application errors and exhausted failures throw to the nearest
+boundary. Auth expiry continues through the central supervisor and retains only a
+matching committed snapshot. Brief success and temporary auth skips do not replenish
+attempts; 30 seconds of continuously observed success resets the budget. Skipped or
+unmounted queries stop retries, and session/query identity fences callbacks and results.
+Public queries, mutations/actions and local-only clients keep their existing behavior.
+See the [decision](../../../../.agents/notes/implemented/bug-fix/2026-10-10-cloud-query-server-recovery.md).
 
 ## Session lifecycle
 
@@ -68,12 +99,17 @@ class. Why and how: the
 log (`window.__lodyScrollEngineLog.dump()`).
 
 `use-conversation-stream-items.ts` keys readiness and the visible hydration range by
-`factSource ?? view`. Accepted-history projection wrappers may change while the
-underlying conversation stays the same; resetting on wrapper identity would discard
-an off-tail reading window. A new underlying source, even with the same session id,
-must pass initial loading again. Before the first viewport report, the window is the
+the view itself, so turns landing in the same conversation never reset an off-tail
+reading window. A new view, even with the same session id, must pass initial
+loading again. Before the first viewport report, the window is the
 retained tail plus the turn of the engine's restored reading anchor, so a restored
 position opens on real rows instead of placeholders.
+
+Paged histories acquire a directory lease through the saved turn ID before
+reporting initial readiness. Search and complete index/fact consumers acquire the
+whole directory through the same cancellable page loader. They do not depend on
+the user scrolling back manually; bodies still follow their existing leases and
+are released after a fact chunk, preview, or search completes.
 
 The rendered body set belongs to the reading window, the retained 40-turn tail,
 and native text selection. Other consumers may hydrate the same cache for facts,

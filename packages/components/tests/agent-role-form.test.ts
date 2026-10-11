@@ -11,6 +11,7 @@ import {
 import type { AcpSelectorOptions } from '../src/components/shared/acp-selector-options';
 import {
   applyAgentRoleRunConfigDefaults,
+  carryAgentRoleOptionsToModel,
   buildAgentRoleFormValue,
   buildAgentRoleRunConfigSummary,
   buildAgentRoleFromForm,
@@ -46,6 +47,35 @@ const formValue = (overrides: Partial<AgentRoleFormValue> = {}): AgentRoleFormVa
 });
 
 const createId = () => 'new-role' as AgentRoleId;
+
+describe('role description authoring', () => {
+  it('preserves legacy no-op saves and round-trips edits and clearing', () => {
+    const existing = role();
+    const options = { existing, ownerUserId: 'user-1', now: 20, createId };
+    const value = buildAgentRoleFormValue(existing);
+    expect(value.description).toBe('');
+    expect(buildAgentRoleFromForm(value, options)).toBe(existing);
+    const edited = buildAgentRoleFromForm({ ...value, description: 'Review changes' }, options);
+    expect(edited.description).toBe('Review changes');
+    expect(edited.revision).toBe(2);
+    expect(buildAgentRoleFormValue(edited).description).toBe('Review changes');
+    const cleared = buildAgentRoleFromForm(
+      { ...buildAgentRoleFormValue(edited), description: '' },
+      { ...options, existing: edited }
+    );
+    expect(cleared.description).toBe('');
+    expect(cleared.revision).toBe(3);
+  });
+
+  it('caps newly saved descriptions at 140 Unicode code points', () => {
+    const saved = buildAgentRoleFromForm(formValue({ description: '😀'.repeat(141) }), {
+      ownerUserId: 'user-1',
+      now: 20,
+      createId,
+    });
+    expect(saved.description).toBe('😀'.repeat(140));
+  });
+});
 
 describe('automatic role schema reconciliation', () => {
   const capability: AcpCapabilityCacheEntry = {
@@ -386,6 +416,30 @@ describe('run config defaults', () => {
       })
     );
     expect(seeded.configOptionValues).toEqual({});
+  });
+});
+
+describe('run config model switch', () => {
+  it('keeps the values the new model still accepts and drops the rest', () => {
+    const effort = (values: string[]) => ({
+      type: 'select' as const,
+      configId: 'effort',
+      label: 'Effort',
+      currentValue: values[0],
+      options: values.map((value) => ({ value, label: value })),
+    });
+    const fast = { type: 'boolean' as const, configId: 'fast', label: 'Fast', options: [] };
+    const outgoing = [effort(['high', 'xhigh']), fast];
+    const incoming = [effort(['high'])];
+    const values = { effort: 'high', permission_mode: 'acceptEdits', fast: true };
+
+    expect(carryAgentRoleOptionsToModel(values, outgoing, incoming)).toEqual({
+      effort: 'high',
+      permission_mode: 'acceptEdits',
+    });
+    expect(
+      carryAgentRoleOptionsToModel({ ...values, effort: 'xhigh' }, outgoing, incoming)
+    ).not.toHaveProperty('effort');
   });
 });
 

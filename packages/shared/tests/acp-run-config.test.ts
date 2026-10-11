@@ -261,6 +261,13 @@ describe('agent run config selection', () => {
 
   it('summarizes what a caller may choose per agent', () => {
     expect(summarizeAgentRunConfigCapabilities(codexCapability())).toEqual({
+      modes: [
+        { id: 'agent', name: 'Agent' },
+        { id: 'read-only', name: 'Read-only' },
+      ],
+      configOptions: codexCapability().configOptions?.map(
+        ({ currentValue: _current, ...option }) => option
+      ),
       models: [
         { id: 'gpt-5.6-sol', name: 'GPT-5.6-Sol' },
         { id: 'gpt-5.4-mini', name: 'GPT-5.4-Mini' },
@@ -272,6 +279,8 @@ describe('agent run config selection', () => {
     });
     expect(summarizeAgentRunConfigCapabilities(claudeCapability()).planMode).toBe(true);
     expect(summarizeAgentRunConfigCapabilities(undefined)).toEqual({
+      modes: [],
+      configOptions: [],
       models: [],
       reasoningEffortValues: [],
       fastMode: false,
@@ -380,11 +389,129 @@ describe('agent run config selection', () => {
       fetchedAt: 1,
     };
     expect(summarizeAgentRunConfigCapabilities(legacy)).toEqual({
+      modes: legacy.modes,
+      configOptions: [],
       models: [{ id: 'k2', name: 'Kimi K2' }],
       reasoningEffortValues: [],
       fastMode: false,
       planMode: true,
     });
     expect(resolveAgentRunConfigSelection({ planMode: true }, legacy)).toEqual({ modeId: 'plan' });
+  });
+
+  it('discovers all advertised option ids without categories or current values', () => {
+    const summary = summarizeAgentRunConfigCapabilities({
+      modes: [{ id: 'default', name: 'Agent' }],
+      models: [],
+      configOptions: [
+        {
+          id: 'permission_mode',
+          name: 'Permission',
+          type: 'select',
+          currentValue: 'ask',
+          options: [
+            { value: 'ask', name: 'Ask' },
+            { value: 'always-approve', name: 'Always approve' },
+          ],
+        },
+        { id: 'custom_toggle', name: 'Custom', type: 'boolean', currentValue: true, options: [] },
+        {
+          id: 'interaction',
+          name: 'Interaction',
+          category: 'mode',
+          type: 'select',
+          currentValue: 'default',
+          options: [{ value: 'plan', name: 'Plan' }],
+        },
+      ],
+    });
+    expect(summary.modes).toEqual([
+      { id: 'default', name: 'Agent' },
+      { id: 'plan', name: 'Plan' },
+    ]);
+    expect(summary.configOptions).toEqual([
+      {
+        id: 'permission_mode',
+        name: 'Permission',
+        type: 'select',
+        options: [
+          { value: 'ask', name: 'Ask' },
+          { value: 'always-approve', name: 'Always approve' },
+        ],
+      },
+      { id: 'custom_toggle', name: 'Custom', type: 'boolean', options: [] },
+      {
+        id: 'interaction',
+        name: 'Interaction',
+        category: 'mode',
+        type: 'select',
+        options: [{ value: 'plan', name: 'Plan' }],
+      },
+    ]);
+  });
+});
+
+describe('MCP run config against declared per-model controls', () => {
+  // A Claude probe that ran on model-a: no effort option, no Fast option.
+  const probedClaudeCapability = (): AcpCapabilityCacheEntry => ({
+    cliType: 'builtin',
+    agentType: 'claude',
+    modes: [],
+    models: [
+      { modelId: 'model-a', name: 'A' },
+      { modelId: 'model-b', name: 'B' },
+    ],
+    configOptions: [
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'model-a',
+        options: [
+          { value: 'model-a', name: 'A' },
+          { value: 'model-b', name: 'B' },
+        ],
+      },
+    ],
+    declaredModelControls: {
+      'model-a': { fastMode: false },
+      'model-b': { effortValues: ['low', 'high'], fastMode: true },
+    },
+    fetchedAt: 1,
+  });
+
+  it("maps effort and Fast onto the adapter's own ids for the target model", () => {
+    const resolution = resolveAgentRunConfigSelection(
+      { modelId: 'model-b', reasoningEffort: 'default', fastMode: true },
+      probedClaudeCapability()
+    );
+    expect(resolution.configOptionValues).toEqual({ effort: 'default', fast: true });
+    expect(resolution.validatedConfigIds).toEqual(expect.arrayContaining(['effort', 'fast']));
+    expect(summarizeAgentRunConfigCapabilities(probedClaudeCapability()).models).toEqual([
+      { id: 'model-a', name: 'A', reasoningEffortValues: [] },
+      { id: 'model-b', name: 'B', reasoningEffortValues: ['default', 'low', 'high'] },
+    ]);
+  });
+
+  it('rejects what the target model declares it does not have', () => {
+    expect(() =>
+      resolveAgentRunConfigSelection(
+        { modelId: 'model-a', reasoningEffort: 'low' },
+        probedClaudeCapability()
+      )
+    ).toThrow(/does not offer a reasoning effort/);
+    expect(() =>
+      resolveAgentRunConfigSelection(
+        { modelId: 'model-a', fastMode: true },
+        probedClaudeCapability()
+      )
+    ).toThrow(/does not offer fast mode/);
+    expect(
+      resolveAgentRunConfigSelection(
+        { modelId: 'model-a', fastMode: false },
+        probedClaudeCapability()
+      ).configOptionValues
+    ).toBeUndefined();
   });
 });

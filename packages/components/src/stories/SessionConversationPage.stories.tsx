@@ -56,7 +56,12 @@ import {
 } from '@lody/shared';
 import { MessageQueueDisplay } from '@/components/sessions/message-queue';
 
-import { currentWorkspaceIdAtom, currentWorkspaceSlugAtom, userAtom } from '@/atoms';
+import {
+  conversationWideModeAtom,
+  currentWorkspaceIdAtom,
+  currentWorkspaceSlugAtom,
+  userAtom,
+} from '@/atoms';
 import {
   agentConfigMetaCacheAtom,
   machineMetaCacheAtom,
@@ -78,6 +83,7 @@ import {
 import { SessionHeaderMenu } from '@/components/sessions/session-chat-interface';
 import { SessionAccessControl } from '@/components/session-sharing';
 import { SessionInfoBar } from '@/components/sessions/session-info-bar';
+import type { SessionMachineInfo } from '@/components/sessions/session-machine-info';
 import {
   SessionConversationPage,
   SessionConversationPageBody,
@@ -1163,19 +1169,37 @@ function StoryInfoBar({
   session,
   queued,
   reading = false,
+  machine,
+  machineOnly = false,
+  mobile = false,
 }: {
   session: SessionMeta;
+  machine?: SessionMachineInfo | null;
+  machineOnly?: boolean;
+  mobile?: boolean;
   /** Queued turns stacked on the bar, or on the composer when the bar is empty. */
   queued?: 'with-info-bar' | 'without-info-bar';
   /** The reading review: a merged PR with passing CI and the line totals. */
   reading?: boolean;
 }) {
+  if (machineOnly)
+    return (
+      <SessionInfoBar
+        status={null}
+        machine={machine}
+        compactMachineInfo={mobile}
+        protectFromEdgeBackZone={mobile}
+      />
+    );
   if (reading) {
     return (
       <SessionInfoBar
         status={null}
+        machine={machine}
+        compactMachineInfo={mobile}
+        protectFromEdgeBackZone={mobile}
         projectName={session.repoFullName}
-        branch={session.branchName}
+        branch={mobile ? null : session.branchName}
         pr={{ url: 'https://github.com/LodyAI/Lody/pull/3656', status: 'merged' }}
         onOpenPr={action}
         prCiRuns={[
@@ -1207,7 +1231,14 @@ function StoryInfoBar({
   return (
     <SessionInfoBar
       queue={queue}
-      status={null}
+      machine={machine}
+      compactMachineInfo={mobile}
+      protectFromEdgeBackZone={mobile}
+      status={
+        machine?.onlineStatus === 'offline'
+          ? { kind: 'machine-offline', machineName: machine.name }
+          : null
+      }
       goal={{
         type: 'goal',
         threadId: 'story-goal',
@@ -1226,10 +1257,11 @@ function StoryInfoBar({
         },
       ]}
       projectName={session.repoFullName}
-      branch={session.branchName}
+      branch={mobile ? null : session.branchName}
       pr={storyPullRequest}
       onOpenPr={action}
       diffStat={{ add: 128, del: 42 }}
+      onOpenAllChanges={action}
     />
   );
 }
@@ -1301,6 +1333,9 @@ export function SessionConversationStoryHarness({
   shareImage = false,
   showCollaborators = false,
   queued,
+  wide = false,
+  machineInfo,
+  machineOnly = false,
 }: {
   state: PageState;
   frame: DeviceFrame;
@@ -1314,6 +1349,10 @@ export function SessionConversationStoryHarness({
   shareImage?: boolean;
   showCollaborators?: boolean;
   queued?: 'with-info-bar' | 'without-info-bar';
+  machineInfo?: SessionMachineInfo;
+  machineOnly?: boolean;
+  /** Mirrors the Settings > Appearance "Full width" switch. */
+  wide?: boolean;
 }) {
   const { t } = useTranslation();
   const [streamChunkCount, setStreamChunkCount] = useState(0);
@@ -1336,6 +1375,11 @@ export function SessionConversationStoryHarness({
   const [preview, setPreview] = useState<ConversationMessage[] | null>(null);
   const [sentMessages, setSentMessages] = useState<SessionHistoryParsed[]>([]);
   const store = useMemo(() => createStoryStore(session, state), [session, state]);
+  /* Wide mode is a persisted atom; seed it per story instead of leaking the
+     previous story's localStorage pick into this one. */
+  useEffect(() => {
+    store.set(conversationWideModeAtom, wide);
+  }, [store, wide]);
   useEffect(() => {
     setStreamChunkCount(0);
     if (state !== 'working') {
@@ -1417,7 +1461,7 @@ export function SessionConversationStoryHarness({
       id: 'machine',
       icon: <Monitor className="h-3.5 w-3.5" />,
       label: 'Machine',
-      value: machineMeta.name,
+      value: machineInfo?.name ?? machineMeta.name,
     },
     {
       id: 'base',
@@ -1517,7 +1561,7 @@ export function SessionConversationStoryHarness({
       session={session}
       localProjectMeta={machineMeta.localProjects?.[STORY_LOCAL_PROJECT_ID]}
       workspacePath="/Users/developer/Code/lody"
-      machineName={machineMeta.name}
+      machineName={machineInfo?.name ?? machineMeta.name}
       onCopyConversationHistory={action}
       onCopyUrl={action}
       sharing={storySharing}
@@ -1665,6 +1709,17 @@ export function SessionConversationStoryHarness({
                                 session={session}
                                 queued={queued}
                                 reading={state === 'reading'}
+                                machineOnly={machineOnly}
+                                mobile={frame === 'mobile'}
+                                machine={
+                                  machineInfo ?? {
+                                    machineId: STORY_MACHINE_ID,
+                                    name: machineMeta.name,
+                                    isOwn: true,
+                                    isCurrent: frame === 'desktop' ? true : undefined,
+                                    onlineStatus: 'online',
+                                  }
+                                }
                               />
                               <StoryComposer
                                 session={session}
@@ -1854,6 +1909,59 @@ export const DesktopIdle: Story = {
   decorators: [withDesktopViewport],
 };
 
+export const DesktopMachineOnly: Story = {
+  globals: { theme: 'dark' },
+  decorators: [withDesktopViewport],
+  args: {
+    machineOnly: true,
+    machineInfo: {
+      machineId: STORY_MACHINE_ID,
+      name: 'MacBook-Pro.local',
+      ownerName: 'Maya Chen',
+      isOwn: false,
+      isCurrent: false,
+      onlineStatus: 'online',
+    },
+  },
+};
+
+export const DesktopMachineDetails: Story = {
+  globals: { theme: 'dark', locale: 'en' },
+  decorators: [withDesktopViewport],
+  args: {
+    machineInfo: {
+      machineId: STORY_MACHINE_ID,
+      name: 'MacBook-Pro.local',
+      ownerName: 'Maya Chen',
+      isOwn: false,
+      isCurrent: false,
+      onlineStatus: 'online',
+    },
+  },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(
+      await within(canvasElement).findByRole('button', {
+        name: 'Machine details: MacBook-Pro.local',
+      })
+    );
+  },
+};
+
+export const DesktopMachineOffline: Story = {
+  globals: { theme: 'dark' },
+  decorators: [withDesktopViewport],
+  args: {
+    machineInfo: {
+      machineId: STORY_MACHINE_ID,
+      name: 'Build-Server',
+      ownerName: 'Maya Chen',
+      isOwn: false,
+      isCurrent: false,
+      onlineStatus: 'offline',
+    },
+  },
+};
+
 /**
  * Reading review: every conversation reading surface in one finished turn —
  * prose at the default size, GitHub reference labels, wide and narrow tables
@@ -1869,6 +1977,21 @@ export const DesktopReadingReview: Story = {
 export const DesktopReadingReviewLight: Story = {
   args: { state: 'reading', sessionTitle: '对话页阅读样式审查', branchName: 'fix/reading-comfort' },
   globals: { theme: 'light' },
+  decorators: [withDesktopViewport],
+};
+
+/**
+ * Full-width mode (Settings > Appearance): the conversation column drops its
+ * ~48rem cap and spans the pane, keeping only the shared side gutter.
+ */
+export const DesktopReadingReviewWide: Story = {
+  args: {
+    state: 'reading',
+    sessionTitle: '对话页阅读样式审查',
+    branchName: 'fix/reading-comfort',
+    wide: true,
+  },
+  globals: { theme: 'dark' },
   decorators: [withDesktopViewport],
 };
 
@@ -1971,6 +2094,25 @@ export const DesktopCapacityRetryChinese: Story = {
 
 export const MobileIdle: Story = {
   args: { frame: 'mobile' },
+  globals: { theme: 'dark' },
+  decorators: [withMobileViewport],
+};
+
+export const MobileMachineOnly: Story = {
+  args: { ...DesktopMachineOnly.args, frame: 'mobile' },
+  globals: { theme: 'dark' },
+  decorators: [withMobileViewport],
+};
+
+export const MobileMachineDetails: Story = {
+  args: { ...DesktopMachineDetails.args, frame: 'mobile' },
+  globals: { theme: 'dark', locale: 'en' },
+  decorators: [withMobileViewport],
+  play: DesktopMachineDetails.play,
+};
+
+export const MobileMachineOffline: Story = {
+  args: { ...DesktopMachineOffline.args, frame: 'mobile', state: 'working' },
   globals: { theme: 'dark' },
   decorators: [withMobileViewport],
 };

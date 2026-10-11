@@ -1,4 +1,6 @@
 import * as React from 'react';
+import { useAtomValue } from 'jotai';
+import { currentWorkspaceIdAtom } from '@/atoms';
 import {
   applyTextRewrites,
   MESSAGE_TEXT_SPAN_KINDS,
@@ -17,7 +19,6 @@ import {
   type SessionMentionItem,
 } from '@/components/mentions/mention-session-source';
 import {
-  buildAgentRoleMentionContext,
   buildAgentRoleMentionRewrites,
   useAgentRoleMentionItems,
   type AgentRoleMentionItem,
@@ -35,7 +36,7 @@ import type { Mention as MentionRange } from '@/ui/mention/index';
  * - the spans saying which region of that text each mention became, so the
  *   transcript can paint the user's own wording back over it
  *
- * Session mentions expand to `[@Title](session://<id>)`; Lody MCP documents
+ * Session mentions expand to `[@Title](lody://session/<id>)`; Lody MCP documents
  * resolving that URI via `lody_session_history`.
  *
  * Every contributor describes its edits against the *original composer text*
@@ -132,7 +133,9 @@ export function buildMentionPromptRewrites({
   skillRewrites,
   sessionItems,
   agentRoleItems,
+  workspaceId,
 }: MentionPromptExpansionArgs & {
+  workspaceId?: string;
   skillRewrites: (text: string) => TextRewrite[];
   sessionItems: readonly Pick<SessionMentionItem, 'sessionId' | 'title'>[];
   agentRoleItems: readonly AgentRoleMentionItem[];
@@ -140,7 +143,7 @@ export function buildMentionPromptRewrites({
   return [
     ...buildPastedTextRewrites(pastedTextDrafts),
     ...skillRewrites(text),
-    ...buildSessionMentionRewrites(text, mentions, { items: sessionItems }),
+    ...buildSessionMentionRewrites(text, mentions, { items: sessionItems, workspaceId }),
     ...buildAgentRoleMentionRewrites(text, mentions, agentRoleItems),
     ...buildVerbatimMentionRewrites(text, mentions),
   ];
@@ -162,14 +165,11 @@ export function useMentionPromptExpansion({
 }: MentionPromptExpansionInput & {
   currentSessionId?: string | null;
 }): MentionPromptExpansion {
+  const workspaceId = useAtomValue(currentWorkspaceIdAtom) ?? undefined;
   const skillRewrites = useSkillMentionRewrites(source, skillAgent, promptValue);
-  const agentRoleContext = React.useMemo(
-    () => buildAgentRoleMentionContext({ mentionSource: source }),
-    [source]
-  );
   // Same owner as the composer menu, by module: both read the shared catalog
   // room, so the list the user picked from is the list this authorizes against.
-  const agentRoleItems = useAgentRoleMentionItems(agentRoleContext);
+  const agentRoleItems = useAgentRoleMentionItems();
   const sessionItems = useSessionMentionItems(currentSessionId);
 
   const getRewrites = React.useCallback(
@@ -181,8 +181,9 @@ export function useMentionPromptExpansion({
         skillRewrites,
         sessionItems,
         agentRoleItems,
+        workspaceId,
       }),
-    [agentRoleItems, sessionItems, skillRewrites]
+    [agentRoleItems, sessionItems, skillRewrites, workspaceId]
   );
 
   const expand = React.useCallback(

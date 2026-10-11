@@ -3,19 +3,17 @@
 `CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only. File index:
 [README.md](README.md). Scoped rules: [acp](acp/AGENTS.md),
 [code-collab](code-collab/AGENTS.md), [file-preview](file-preview/AGENTS.md),
-[loro](loro/AGENTS.md), [pr-poller](pr-poller/AGENTS.md),
-[review-automation](review-automation/AGENTS.md).
+[loro](loro/AGENTS.md), [pr-poller](pr-poller/AGENTS.md).
 
 **Before touching message dispatch/sync here, read context/message-flow.md**, the
 end-to-end map. The WS/DO control-plane path is DEPRECATED; do not add to it.
 
 ## Composition and transports
 
-- GitHub command auth lives in `github-credential-runtime.ts`: explicit personal
-  preference first, owner-only local credentials next, repo-scoped App last.
-  `github-git-transport.ts` also intercepts HTTPS headers and SSH remotes. Never
-  inject a startup-repo token globally, persist managed tokens through helpers,
-  or replay an uncertain write. Each helper captures one session context token.
+- GitHub auth: conversation-owner personal → matching-owner machine → repo App,
+  once per source. Failures advance without a policy RPC; local context grants
+  machine eligibility. Never persist managed tokens or replay uncertain writes.
+  Checkout/LFS share the pinned helper context. Contract: [identity fallback](../../../../specs/github-identity-fallback.md).
 
 - `cloud-cli-port.ts` is the sole official-build composition root for cloud clients and
   endpoint-derived adapters. Daemon runtime modules must not construct cloud SDK
@@ -28,8 +26,8 @@ end-to-end map. The WS/DO control-plane path is DEPRECATED; do not add to it.
   declarations and private workspace packages are forbidden. Prime the token provider
   before reading `getGatewayBaseUrl()`, and never let runtime transports or Machine RPC
   require `LODY_LORO_STREAMS_BASE_URL` as a parallel hidden composition path.
-- PR association uses the HTTP action proxy at `authSiteUrl`, not the public Convex
-  RPC endpoint at `authBaseUrl`; the association function is internal-only.
+- `cloud-pr-association.ts`: use `authSiteUrl`, not `authBaseUrl` (internal proxy).
+  Six failures/workspace/repo, no eviction; reset on client recreation. Log once.
 - Local session control preserves every intermediate response: new clients negotiate
   NDJSON, legacy clients keep the buffered JSON envelope. `MachineRuntime` may collect
   responses for completion, but must also forward each to the streaming observer as it
@@ -71,14 +69,12 @@ never pushed to renderers as local room health.
   anything looks like pressure; re-check with a short delay before failing a turn; keep
   eviction bounded per call. The threshold is a safety MARGIN, never "what a turn
   needs". [Per-OS signals](../../../../.agents/docs/cli-lib-memory-pressure.md).
-- **Session file attachments** (spec: `specs/session-files.md`): read the
-  [lifecycle rules](../../../../.agents/docs/cli-lib-session-files.md) before changing
-  upload, dispatch materialization, or backfill. Dispatch sends ACP `resource_link`
-  blocks with `file://` URIs; never degrade this to text-only paths. Backfill commits
-  are gated by an authorization generation plus an AbortController owned by
-  `MessageHandler`, so `disableRemoteBackfill` (offline/revoke) aborts the in-flight
-  upload and supersedes started tasks (S5/D10). Accept agent `resource_link file://...`
-  output only inside the session workspace.
+- **Session attachments**: before changing preparation, transfer, materialization,
+  or backfill, read the [lifecycle rules](../../../../.agents/docs/cli-lib-session-files.md).
+  CLI/MCP input preparation must finish before history/dispatch; recovery uses frozen
+  references, never source paths. [Input contract](../../../../specs/cli-session-attachments.md).
+  Keep ACP `resource_link` file URIs, workspace-contained agent output, and
+  MessageHandler-owned authorization-generation/AbortController backfill fencing.
 - [acp/AGENTS.md](acp/AGENTS.md) specifies ACP buffering/flush in `message-handler.ts`,
   turn-evidence persistence, shutdown ordering, the non-expiring late-ACP target in
   `session-transient-store.ts`, and the `awaitTurnHistoryGate` requirement for
@@ -87,7 +83,7 @@ never pushed to renderers as local room health.
 
 ## Projects, providers, tasks
 
-- Builtin Codex local-project history import is read-only: require
+- Builtin Codex/DeepSeek local-project history import is read-only: require
   `_meta.lody.sessionHistory` v1 and call the Core-defined history method; never fall
   back to `loadSession`, which resumes the thread. Publish an imported Session only
   after history and its cursor are durable; legacy `metadata_only` shells stay
@@ -96,12 +92,12 @@ never pushed to renderers as local room health.
   Bind the baseline to the doc cursor, not metadata; compare existing content exactly,
   never sanitize it to hide edits. Write history and capture its baseline without an
   async gap, before publishing meta. Legacy history without a baseline is not migrated.
-- History import lists and imports through the machine's only same-type Provider
-  (`agentConfigId`), binding new imports and earlier unbound ones it lists; with none
-  or several they stay unbound. Never replace a binding. Refresh loads an existing
-  import through its own binding, else the default launch, exactly as continuation does.
-  Every import write also records the load-reported selection as the runtime config of
-  the last imported user turn through `applyAcpRuntimeConfigPatch`.
+- History import validates the selected Provider machine/id/type; never fall back
+  from a missing selection. Legacy requests use the sole same-type Provider. Catalogs
+  are Provider-scoped; replay/import keys stay stable. Bind an earlier unbound import only when the selected Provider
+  lists its source; never replace a binding or merge another account's native ID.
+  Refresh loads through the import's own binding. Every import write records the
+  load-reported selection on the last imported user turn via `applyAcpRuntimeConfigPatch`.
 - Removing a local project archives every unarchived Session for that machine/project
   before deleting the project row, found through the existence and metadata indexes
   rather than by opening every Session document; a failed archive keeps the delete

@@ -1,7 +1,9 @@
 # Session worktree lifecycle
 
 Status: draft
-Translation: pending
+Translation: current
+
+[中文](session-worktree-lifecycle.zh.md)
 
 A user archives a Session that ran in its own worktree. Lody must eventually remove
 that worktree directory from the machine that owns it, keep the branch so the Session
@@ -17,6 +19,69 @@ synced workspace metadata, it sees both Sessions are archived and removes their
 worktree directories. Their branches remain. A week later Alice restores one Session;
 its worktree is recreated from the preserved branch. She deletes the other; nothing
 further happens on disk.
+
+## Preparation handoff
+
+A user can send while a draft preparation is being cancelled, replaced, or failing.
+Before formal execution or another preparation reuses that Session's workspace,
+the daemon must finish releasing the old preparation, including resources whose
+creation returns after cancellation. Removing a preparation from the available
+pool does not mean its cleanup has completed. A late cleanup must never remove
+the workspace adopted or recreated for execution. The wait is scoped to the
+Session; unrelated Sessions need not wait for it.
+
+This handoff concerns unadopted speculative resources. It does not change the
+archive and restore retention contract below.
+
+## Git execution failure
+
+A worktree Git operation owns its command until completion or awaited cleanup.
+Startup, timeout, output/stream and unresolved release failures must remain
+observable; they are not missing branches, default identity or successful
+best-effort fetch. Force removal must not remove uncommitted files merely because
+Git cannot start or its cleanup is unresolved. Completed Git exits remain distinct
+from these infrastructure failures; their operation-specific classification belongs
+to the manager. This revision does not provide Git rollback or a crash transaction.
+
+Git invocations keep their ten-minute ceiling and bounded output. Credential-helper
+probing has a five-second ceiling. Failure of this diagnostic can be recorded while
+the original Git operation still fails, but an unreleased diagnostic process must
+remain owned and reported. Cancellation/deadline completion waits for the existing
+bounded tree cleanup; failure retains recovery ownership rather than claiming release.
+The native command boundary does not yet give Promise session/setup/GC callers
+end-to-end structured cancellation.
+
+## Worktree observations
+
+Inspection distinguishes a missing directory, a healthy clean/dirty worktree, and
+a completed Git failure. Startup, timeout, filesystem and unresolved cleanup failures
+remain errors. Listing must not report an incomplete successful result by hiding an
+existing corrupt repository or unreadable root. Null HEAD represents a genuinely
+unborn named branch, not arbitrary Git failure; detached commits still report their
+commit. Listing keeps its directory-only policy and excludes symbolic-link entries
+and unsafe Session names.
+
+Inspection and listing share the mutation owner's repo lock. A cancelled queued
+query cannot later acquire it. A running query keeps its lease until command cleanup
+completes, including failure and interruption, so the successor cannot overlap that
+cleanup. Internal information reads under a mutation's existing lock must not acquire
+it again; same-context recursive lock acquisition still fails immediately. A bounded cleanup failure retains external process recovery ownership; file lease
+release is not proof that the process has gone. These observations do not provide an atomic snapshot across commands or Git rollback.
+
+## Local source preparation
+
+Preparation of a local-project worktree validates its source before publishing new
+metadata. Existing source metadata and user files remain untouched. A failed or
+cancelled preparatory write must not publish partial metadata; an exclusive complete
+publication preserves metadata installed by another writer. This guarantee does not
+provide power-loss durability or rollback of persistent directories or Git changes.
+
+The mutation caller owns the repo lease. The preparation owns only its temporary
+metadata directory and awaits its release. Release waiting has a five-second ceiling;
+a failure or timeout retains the uniquely owned path and bounded retry capability,
+and prevents a successful preparation result even if publication already completed.
+A filesystem operation submitted to the kernel can outlive local waiting; failed
+release must not be described as confirmed deletion.
 
 ## Responsibilities
 
@@ -34,9 +99,13 @@ It reconciles the directory tree it created against Session state:
   "never heard of" are distinguishable.
 - The daemon acts only after it has complete workspace metadata. Before that point it
   cannot tell a not-yet-synced Session from an archived one and must not guess.
-- Removal preserves work. Uncommitted, non-ignored changes are committed to the
+- Removal backs up the state remaining after the configured cleanup script.
+  Uncommitted, non-ignored changes are committed to the
   Session branch first. The branch is never deleted by archive, restore, or delete.
-  Ignored files (build output, local environment files) are discarded with the directory.
+  Ignored files (build output, local environment files) can be discarded with the directory.
+  This is a local commit, not a remote push or a full-directory backup. Files deleted or
+  modified by the cleanup script before the commit are outside the backup guarantee.
+  A failed backup commit prevents directory removal and is retried.
   A worktree whose repository cannot be resolved through git (the project directory
   is gone, or the repository is broken) is preserved and retried: there is nowhere to
   commit the backup, and the directory may hold the only copy of the work. A project
@@ -65,6 +134,26 @@ This is separate from disk reconciliation and does not wait for it.
 
 Machines that are no longer part of the workspace are out of scope: nothing can act on
 their disk, and no other machine may try.
+
+## Public retention contract
+
+Manual archive and PR auto-archive use the same cleanup contract. Public documentation
+and auto-archive settings must distinguish retained conversation history and local branches
+from a managed working directory that can be removed before permanent Session deletion.
+They must identify the ignored-file and cleanup-script boundaries and tell users to save
+needed files outside the worktree before archive or enabling auto-archive.
+
+Restore recreates a missing worktree from the preserved branch when execution resumes;
+setup runs again for that new directory. It does not recover discarded ignored files or
+files removed by cleanup scripts. Recovery requires the owning repository and branch to
+remain available; a removed local project must be registered again. Deleting a Session
+deletes its conversation, but does not delete its local Git branch or backup commits.
+
+PR auto-archive settings are under Settings → Preferences. They are device-local and
+apply to Sessions owned by the current user when that device observes a PR status
+transition into an enabled terminal state. An already terminal PR observed at app startup
+does not retroactively archive its Session. The resulting archived state can trigger
+worktree cleanup on the owning machine, including when archive was initiated elsewhere.
 
 ## What this replaces
 

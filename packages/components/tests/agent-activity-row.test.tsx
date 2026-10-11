@@ -108,6 +108,8 @@ describe('live agent status', () => {
       Object.defineProperties(viewport, {
         clientHeight: { configurable: true, value: 400 },
         scrollHeight: { configurable: true, value: 1000 },
+        // The synthetic wheel must start somewhere it can actually scroll up.
+        scrollTop: { configurable: true, writable: true, value: 600 },
       });
       await act(async () => {
         viewport!.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -20 }));
@@ -144,7 +146,7 @@ describe('live agent status', () => {
     expect(shimmering()).toEqual([]);
   });
 
-  it('shows the working state on the scroll-to-latest button while output streams', async () => {
+  it('keeps the scroll-to-latest button actionable while output streams', async () => {
     await render(
       liveTurn([{ type: 'text', text: 'Still writing.' }]),
       { label: 'Working' },
@@ -153,6 +155,9 @@ describe('live agent status', () => {
     const button = container.querySelector<HTMLButtonElement>('[data-scroll-to-latest]');
     expect(button).not.toBeNull();
     expect(button!.querySelector('.animate-spin')).not.toBeNull();
+    expect(button!.querySelector('.lucide-arrow-down')).not.toBeNull();
+    await act(async () => button!.click());
+    expect(container.querySelector('[data-scroll-to-latest]')).toBeNull();
   });
 
   it('keeps the scroll-to-latest arrow while waiting for permission', async () => {
@@ -344,6 +349,7 @@ describe('live agent status', () => {
   it('opens a step onto one sheet: the command once, then its output', async () => {
     const script =
       "cd /tmp/extract && python3 -c \"\nimport re\nprint(*re.findall(r'a*', 'aa'))\n\"";
+    const linkedEcho = script.replace('/tmp/extract', '[/tmp/extract](file:///tmp/extract)');
     await render(
       liveTurn([
         {
@@ -354,7 +360,7 @@ describe('live agent status', () => {
           status: 'completed',
           content: [
             // The agent restates the command as text beside the structured one.
-            { type: 'content', content: { type: 'text', text: script } },
+            { type: 'content', content: { type: 'text', text: linkedEcho } },
             { type: 'terminal_command', command: script },
             { type: 'terminal_output', output: 'aa', stream: 'combined' },
           ],
@@ -406,6 +412,7 @@ describe('live agent status', () => {
     // The echo is gone: the script appears once, as code, never as Markdown.
     expect(container.textContent!.split('import re')).toHaveLength(2);
     expect(python.querySelector('.markdown-renderer')).toBeNull();
+    expect(python.querySelectorAll('pre')[1]?.textContent).toBe('aa');
     expect(python.textContent).toContain('$');
     // Codex's shell wrapper is not part of what the reader ran.
     expect(codex.textContent).toContain('pnpm typecheck');
@@ -413,6 +420,52 @@ describe('live agent status', () => {
     expect(codex.textContent).toContain('Exit 2');
     // A result has no prompt and no header restating the row's title.
     expect(taskStop.textContent).toBe('{"task_id":"b7q2"}');
+  });
+
+  it('shows a shell step text result verbatim instead of reflowing it as Markdown', async () => {
+    // Pi sessions recorded before its results became terminal output stored
+    // them as plain text content.
+    const output = '==== one ====\nline 1\n==== two ====\nline 2';
+    await render(
+      liveTurn([
+        {
+          type: 'tool_call',
+          toolCallId: 'pi-bash-1',
+          title: 'bash',
+          kind: 'execute',
+          status: 'completed',
+          content: [
+            { type: 'content', content: { type: 'text', text: output } },
+            { type: 'terminal_command', command: 'echo one; echo two' },
+          ],
+        },
+        {
+          type: 'tool_call',
+          toolCallId: 'pi-bash-2',
+          title: 'pwd',
+          kind: 'execute',
+          status: 'completed',
+          content: [{ type: 'terminal_command', command: 'pwd' }],
+        },
+      ]),
+      { label: 'Working' }
+    );
+
+    const button = (text: string) =>
+      [...container.querySelectorAll('button')].find((candidate) =>
+        candidate.textContent?.includes(text)
+      )!;
+    await act(async () => button('Ran 2 commands').click());
+    if (button('Ran bash').getAttribute('aria-expanded') !== 'true') {
+      await act(async () => button('Ran bash').click());
+    }
+
+    const sheet = [...container.querySelectorAll('[data-tool-detail-sheet]')].find((candidate) =>
+      candidate.textContent?.includes('echo one; echo two')
+    );
+    expect(sheet).toBeDefined();
+    expect(sheet!.querySelector('.markdown-renderer')).toBeNull();
+    expect([...sheet!.querySelectorAll('pre')].map((pre) => pre.textContent)).toContain(output);
   });
 
   it('shows the turn token usage in compact units with exact values on hover', async () => {

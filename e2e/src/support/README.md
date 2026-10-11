@@ -16,7 +16,7 @@
 | `pages/work-session-page.ts`                         | Worktree Session, terminal, deletion, and cleanup contract                 |
 | `pages/agent-role-page.ts`                           | Agent Role settings, accepted invocation evidence, and cleanup             |
 | `pages/agent-provider-lifecycle-page.ts`             | Invalid draft, rollback, two-Provider dispatch, revisit, and deletion      |
-| `pages/context-copy-page.ts`                         | User/assistant prefixes, user-driven stream transitions, and isolation     |
+| `pages/context-copy-page.ts`                         | Visible copy anchors, Markdown prefixes, streaming, and isolation     |
 | `pages/mcp-catalog-editing-page.ts`                  | MCP catalog editing, state toggles, reopen checks, and deletion            |
 | `pages/mcp-catalog-page.ts`                          | MCP settings, Turn selection, ACP startup, and cleanup                     |
 | `pages/project-lifecycle-page.ts`                    | Local project picker, sidebar, catalog, and removal lifecycle              |
@@ -48,7 +48,7 @@
 | `fixtures/session-read-state-fixture.ts`             | Two UI-created Session identities and deterministic ACP command            |
 | `fixtures/session-queue-fixture.ts`                  | File-signaled queue ACP event and release evidence                         |
 | `fixtures/session-queue-scripted-acp.mjs`            | Deterministic held and completed queue turns                               |
-| `fixtures/session-fork-fixture.ts`                   | Synthetic Git repository and shared fork-process evidence                  |
+| `fixtures/session-fork-fixture.ts`                   | Synthetic Git repository and retained per-scenario fork ACP events         |
 | `fixtures/session-fork-acp.mjs`                      | Fork-capable deterministic ACP provider                                    |
 | `fixtures/session-goal-fixture.ts`                   | Two-Session goal capability, controls, prompt metadata, and snapshots      |
 | `fixtures/session-goal-scripted-acp.mjs`             | Deterministic goal state machine and Session-isolated ACP evidence         |

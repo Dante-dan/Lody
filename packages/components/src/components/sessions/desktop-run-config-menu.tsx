@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from 'react';
+import { useMemo, useState, type ComponentProps, type ReactNode } from 'react';
 import * as stylex from '@stylexjs/stylex';
 import { useAtomValue } from 'jotai';
 import { Bot, Check, ListChecks, LockKeyhole, Monitor, Plus, ShieldAlert, Zap } from 'lucide-react';
@@ -42,6 +42,7 @@ import {
   shouldShowDeepSeekDelegationWarning,
 } from '@/components/shared/deepseek-delegation-warning';
 import { orderAcpConfigOptionSelectors } from '@/lib/acp-selector-order';
+import { shouldOfferOptionSearch } from '@/lib/fuzzy-option-filter';
 import { openExternalUrl } from '@/lib/native-browser';
 import { resolvePermissionModeFace } from '@/lib/permission-mode-face';
 import {
@@ -90,6 +91,12 @@ const styles = stylex.create({
   machineName: { maxWidth: '8rem' },
   roleName: { maxWidth: '11rem' },
   agentName: { maxWidth: '9rem' },
+  modelList: {
+    display: 'flex',
+    flexDirection: 'column',
+    minHeight: 0,
+    maxHeight: 'min(20rem, var(--available-height, 20rem))',
+  },
   /** The permission trigger is always the compact face: its icon alone. */
   iconOnly: {
     flexShrink: 0,
@@ -98,10 +105,6 @@ const styles = stylex.create({
     paddingInline: 0,
     justifyContent: 'center',
   },
-  /* The icon-only trigger's glyph leads the shared column instead of sitting
-     centred: one start step lands its box at the trigger edge + one item pad,
-     the same 16px box a labeled trigger's leading glyph holds. */
-  iconOnlyGlyphLead: { marginInlineStart: space[1] },
   /** The model keeps its tail when it truncates: `provider/model` loses the prefix. */
   modelName: { maxWidth: '10rem', direction: 'rtl' },
   /** The "create a Role" mark at the end of the empty Role row. */
@@ -294,7 +297,7 @@ export function DesktopMachineMenu({
             key={option.value}
             disabled={option.disabled}
             onClick={() => onChange(option.value)}
-            icon={<Monitor {...stylex.props(surface.glyph16)} aria-hidden="true" />}
+            icon={Monitor}
             endContent={
               option.value === value ? (
                 <Check {...stylex.props(surface.glyph14)} aria-hidden="true" />
@@ -328,10 +331,7 @@ export function DesktopMachineMenu({
         {onAddMachine ? (
           <>
             {options.length > 0 ? <Menu.Separator /> : null}
-            <Menu.Item
-              onClick={onAddMachine}
-              icon={<Plus {...stylex.props(surface.glyph16)} aria-hidden="true" />}
-            >
+            <Menu.Item onClick={onAddMachine} icon={Plus}>
               {t('machinePairing.addMachine', 'Add machine')}
             </Menu.Item>
           </>
@@ -387,11 +387,10 @@ export type DesktopRunConfigMenuProps = {
   recentRunConfigs?: ReadonlyArray<RecentRunConfigItem>;
   onRecentRunConfigSelect?: (id: string) => void;
   /**
-   * Agent Roles for the machine this chat starts on, as the row above Agent.
-   *
-   * Omit to leave the row out entirely: a surface where the agent cannot change
-   * (an in-session composer, a settings preview) has nothing a Role could
-   * apply, and offering one there would promise a switch that cannot happen.
+   * Agent Roles, shown above Agent. The caller scopes them to what this
+   * surface can apply: full configuration on new chats, run configuration
+   * only in existing sessions. Omit for non-Role surfaces such as schedules
+   * and review-policy settings.
    */
   agentRoles?: {
     items: ReadonlyArray<ComposerAgentRoleItem>;
@@ -430,6 +429,13 @@ export function DesktopRunConfigMenu({
   agentRoles,
 }: DesktopRunConfigMenuProps) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  if (disabledReason && open) setOpen(false);
+  // Each submenu remains anchored to its own trigger, including during filtering.
+  const submenuPlacement = {
+    align: 'start',
+    collisionAvoidance: { side: 'flip', align: 'shift', fallbackAxisSide: 'none' },
+  } satisfies Pick<ComponentProps<typeof Menu.Content>, 'align' | 'collisionAvoidance'>;
   const executorConfigs = useAtomValue(getAllAgentConfigAtom);
   const onlineMachines = useOnlineMachines(allowedMachineIds);
   const selectableAgentConfigs = availableAgentConfigs ?? executorConfigs;
@@ -680,7 +686,7 @@ export function DesktopRunConfigMenu({
   );
 
   const menu = (
-    <Menu.Root>
+    <Menu.Root open={open} onOpenChange={setOpen}>
       {disabledReason ? (
         <Tooltip.Root>
           {/* A native disabled button cannot reliably trigger hover/focus events.
@@ -712,9 +718,6 @@ export function DesktopRunConfigMenu({
         </Menu.Trigger>
       )}
       <Menu.Content align="start" className="min-w-60">
-        {/* `menuList` reaches the rows back through the popup's inset, so the
-            surface keeps its edge on the trigger while the rows' leading
-            column lands on the trigger's own — one item pad off that edge. */}
         <div {...stylex.props(surface.menuList)}>
           {onRecentRunConfigSelect ? (
             <RecentRunConfigMenuGroup
@@ -770,7 +773,10 @@ export function DesktopRunConfigMenu({
                     ) : null
                   }
                 />
-                <Menu.Content className="max-w-[min(29.5rem,var(--radix-popper-available-width,29.5rem))] overflow-x-hidden">
+                <Menu.Content
+                  {...submenuPlacement}
+                  className="max-w-[min(29.5rem,var(--radix-popper-available-width,29.5rem))] overflow-x-hidden"
+                >
                   <ComposerAgentRolePanel
                     items={agentRoles.items}
                     machine={agentRoles.machine}
@@ -803,7 +809,7 @@ export function DesktopRunConfigMenu({
             ) : (
               <Menu.Submenu>
                 <ValueSubTrigger label={agentLabel} value={selectedAgentConfig?.name ?? null} />
-                <Menu.Content className={COMPACT_OPTION_SUBMENU_CLASS}>
+                <Menu.Content {...submenuPlacement} className={COMPACT_OPTION_SUBMENU_CLASS}>
                   {agentOptions.map(({ config }) => (
                     <OptionItem
                       key={`${config.id}:${config.machineId}`}
@@ -847,7 +853,7 @@ export function DesktopRunConfigMenu({
             return (
               <Menu.Submenu key={selector.configId}>
                 <ValueSubTrigger label={selector.label} value={selectedLabel} disabled={locked} />
-                <Menu.Content className={COMPACT_OPTION_SUBMENU_CLASS}>
+                <Menu.Content {...submenuPlacement} className={COMPACT_OPTION_SUBMENU_CLASS}>
                   {selector.options.map((option) => (
                     <OptionItem
                       key={option.value}
@@ -871,35 +877,34 @@ export function DesktopRunConfigMenu({
             <Menu.Submenu>
               <ValueSubTrigger label={modelRowLabel} value={modelLabel} />
               <Menu.Content
+                {...submenuPlacement}
+                // Lift the 28px search field + 4px gap above the trigger so the
+                // option area, not the input, starts beside the Model row.
+                alignOffset={shouldOfferOptionSearch(modelPickerOptions.length) ? -32 : 0}
                 // The popup is already a column: holding its own overflow keeps the
                 // search row put while only the options under it scroll.
                 className={cn(COMPACT_OPTION_SUBMENU_CLASS, 'overflow-y-hidden')}
-                // Cap the list so a long model list scrolls inside a compact menu
-                // instead of running the full viewport height. Inline (not a max-h-*
-                // class) so it reliably wins over the base content's max-h, and clamps
-                // to the available height so it never overflows off-screen.
-                style={{
-                  maxHeight: 'min(20rem, var(--available-height, 20rem))',
-                }}
               >
-                {/* A provider can publish dozens of models; past
-                  `OPTION_SEARCH_MIN_OPTIONS` this list gains a fuzzy search row. */}
-                <MenuOptionSearchList
-                  options={modelPickerOptions}
-                  onSelect={(opt) => handleModelSelect(opt.value)}
-                  searchAnalyticsPicker="model"
-                  searchPlaceholder={modelSearchPlaceholder}
-                  emptyText={modelSearchEmptyLabel}
-                  renderOption={(opt, select) => (
-                    <OptionItem
-                      key={opt.value}
-                      label={opt.label}
-                      selected={opt.value === modelValue}
-                      disabled={opt.disabled}
-                      onSelect={select}
-                    />
-                  )}
-                />
+                {/* Menu.Content's style prop sizes the positioner, so cap
+                    the list inside the popup to keep its measured height accurate. */}
+                <div {...stylex.props(styles.modelList)}>
+                  <MenuOptionSearchList
+                    options={modelPickerOptions}
+                    onSelect={(opt) => handleModelSelect(opt.value)}
+                    searchAnalyticsPicker="model"
+                    searchPlaceholder={modelSearchPlaceholder}
+                    emptyText={modelSearchEmptyLabel}
+                    renderOption={(opt, select) => (
+                      <OptionItem
+                        key={opt.value}
+                        label={opt.label}
+                        selected={opt.value === modelValue}
+                        disabled={opt.disabled}
+                        onSelect={select}
+                      />
+                    )}
+                  />
+                </div>
               </Menu.Content>
             </Menu.Submenu>
           ) : null}
@@ -927,7 +932,7 @@ export function DesktopRunConfigMenu({
           {interactionSelector ? (
             <Menu.Submenu>
               <ValueSubTrigger label={interactionSelector.label} value={interactionLabel} />
-              <Menu.Content className={COMPACT_OPTION_SUBMENU_CLASS}>
+              <Menu.Content {...submenuPlacement} className={COMPACT_OPTION_SUBMENU_CLASS}>
                 {interactionSelector.options.map((opt) => (
                   <OptionItem
                     key={opt.value}
@@ -949,7 +954,7 @@ export function DesktopRunConfigMenu({
           {thinkingSelector ? (
             <Menu.Submenu>
               <ValueSubTrigger label={reasoningLabel} value={thinkingLabel} />
-              <Menu.Content className={COMPACT_OPTION_SUBMENU_CLASS}>
+              <Menu.Content {...submenuPlacement} className={COMPACT_OPTION_SUBMENU_CLASS}>
                 {thinkingSelector.options.map((opt) => (
                   <OptionItem
                     key={opt.value}
@@ -1088,6 +1093,7 @@ function permissionModeIcon(modeId: string | null): ReactNode {
 }
 
 export type DesktopPermissionModeButtonProps = {
+  disabled?: boolean;
   modeOptions: ReadonlyArray<AcpSessionSelectOption>;
   selectedModeId: string | null;
   onModeChange?: (value: string) => void;
@@ -1103,8 +1109,11 @@ export function DesktopPermissionModeButton({
   configOptionSelectors = [],
   configOptionValues,
   onConfigOptionChange,
+  disabled = false,
 }: DesktopPermissionModeButtonProps) {
   const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  if (disabled && open) setOpen(false);
   const { options, value, label, source } = useMemo(
     () =>
       resolvePermissionModeFace({
@@ -1128,22 +1137,18 @@ export function DesktopPermissionModeButton({
   };
 
   return (
-    <Menu.Root>
+    <Menu.Root open={open} onOpenChange={setOpen}>
       {/* Icon only: every mode has an icon (warning modes the amber shield),
           and a label such as "Bypass permissions" took most of the control
           row. The mode's name is the tooltip and the accessible name. */}
       <Menu.Trigger
+        disabled={disabled}
         aria-label={label ? `${permissionLabel}: ${label}` : permissionLabel}
         title={label ? `${permissionLabel}: ${label}` : permissionLabel}
         className={iconOnlyTriggerClassName}
         render={<button type="button" />}
       >
-        {/* The icon-only square still leads the shared column: the start
-            margin puts its 16px glyph box where a labeled trigger's leading
-            glyph sits — the same box the rows' icons land on below. */}
-        <span {...stylex.props(surface.glyph, styles.iconOnlyGlyphLead)}>
-          {permissionModeIcon(value ?? null)}
-        </span>
+        <span {...stylex.props(surface.glyph)}>{permissionModeIcon(value ?? null)}</span>
       </Menu.Trigger>
       <Menu.Content align="start" className="w-max min-w-44 max-w-64">
         <div {...stylex.props(surface.menuList)}>

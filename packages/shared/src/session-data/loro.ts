@@ -136,7 +136,7 @@ export function createLoroSessionData(options: LoroSessionDataOptions) {
     if (config.kind() !== 'Map') return undefined;
     const configMap = config as LoroMap;
     const value = { ...configMap.getShallowValue() } as Record<string, unknown>;
-    for (const key of ['mcpServerIds', 'configOptionValues'] as const) {
+    for (const key of ['memory', 'mcpServerIds', 'configOptionValues'] as const) {
       if (value[key] === undefined) continue;
       const field = configMap.get(key);
       value[key] = isContainer(field) ? (field as LoroList).toJSON() : field;
@@ -440,12 +440,6 @@ export function createLoroSessionData(options: LoroSessionDataOptions) {
         writer.updateEntry(target, (entry) => apply([entry])[0] ?? entry);
       else writer.update(apply);
       return { matched };
-    },
-    async prepareAppendTurn(turn) {
-      return writer.prepareAppend(turn as unknown as SessionHistory);
-    },
-    async applyPreparedTurn(update) {
-      writer.applyPrepared(update);
     },
     async appendTurn(turn) {
       writer.append(turn as unknown as SessionHistory);

@@ -226,11 +226,11 @@ const UNAVAILABLE_AGENT_ROLES: MentionCandidate[] = [
   ),
   toAgentRoleCandidate(
     {
-      slug: 'Remote-Reviewer',
-      role: agentRole({ id: 'remote-role' as AgentRoleId, name: 'Remote Reviewer' }),
-      availability: { kind: 'unavailable', reason: 'outside_work_context' },
+      slug: 'Unreachable-Reviewer',
+      role: agentRole({ id: 'unreachable-role' as AgentRoleId, name: 'Unreachable Reviewer' }),
+      availability: { kind: 'unavailable', reason: 'machine_unknown' },
     },
-    'Unavailable: this workspace requires a role on the same machine'
+    'Unavailable: its machine is not available to you'
   ),
 ];
 
@@ -304,10 +304,10 @@ const harness = stylex.create({
     display: 'flex',
     flexDirection: 'column',
     justifyContent: 'flex-end',
-    height: '500px',
-    width: '900px',
+    minHeight: 'max(500px, 100dvh)',
+    width: 'min(900px, 100%)',
     paddingBlock: '24px',
-    paddingInline: '120px',
+    paddingInline: 'clamp(16px, 13.33vw, 120px)',
     boxSizing: 'border-box',
   },
   floatingPageTop: { justifyContent: 'flex-start' },
@@ -428,13 +428,49 @@ const FLOATING_CATEGORIES: MentionCategory[] = CATEGORIES.map((entry) =>
 );
 
 /**
- * The real floating menu in a composer-shaped frame: type `@`, `$` or `/` in
- * the textarea. The menu opens against the frame marked `data-mention-frame` —
- * above its chip row, left edges lined up — and keeps that side through a level
- * change and typing. At the top of the page there is no room above, so it opens
- * below the composer instead.
+ * Type `@`, `$` or `/` in a framed editor. The frame variant exercises an
+ * explicit fixed anchor; caret variants cover main and inline-editor placement.
  */
-function FloatingHarness({ atTop = false }: { atTop?: boolean }) {
+function FloatingHarness({
+  atTop = false,
+  mainComposer = false,
+  menuSide,
+  preparedShortcut = false,
+  categories = FLOATING_CATEGORIES,
+}: {
+  atTop?: boolean;
+  mainComposer?: boolean;
+  menuSide?: 'top' | 'bottom';
+  preparedShortcut?: boolean;
+  categories?: MentionCategory[];
+}) {
+  const [loading, setLoading] = React.useState(false);
+  const shortcutCategories: MentionCategory[] = [
+    category(
+      'prompt_shortcut',
+      'shortcut',
+      'Prompt Shortcuts',
+      'prompt_shortcut',
+      [
+        {
+          value: 'prompt-shortcut:review',
+          label: 'review',
+          title: '/review',
+          insertText: '/review',
+          kind: 'prompt_shortcut',
+          icon: 'prompt_shortcut',
+          disabled: loading,
+          onPrepare: async () => {
+            setLoading(true);
+            await Promise.resolve();
+            setLoading(false);
+            return { text: 'Review this change', mentions: [] };
+          },
+        },
+      ],
+      { directTrigger: '/' }
+    ),
+  ];
   const [value, setValue] = React.useState('');
   const [mentions, setMentions] = React.useState<MentionRange[]>([]);
   const [selected, setSelected] = React.useState<string[]>([]);
@@ -451,6 +487,7 @@ function FloatingHarness({ atTop = false }: { atTop?: boolean }) {
         </div>
         <Mention
           triggers={['@', '$', '/']}
+          autoCloseOnEmpty={false}
           inputValue={value}
           onInputValueChange={setValue}
           mentions={mentions}
@@ -466,7 +503,12 @@ function FloatingHarness({ atTop = false }: { atTop?: boolean }) {
             aria-label="composer"
             rows={3}
           />
-          <MentionTwoLevelMenu categories={FLOATING_CATEGORIES} surface="unknown" />
+          <MentionTwoLevelMenu
+            categories={preparedShortcut ? shortcutCategories : categories}
+            surface="unknown"
+            anchor={mainComposer ? 'composer' : 'caret'}
+            menuSide={menuSide ?? (mainComposer ? 'top' : 'bottom')}
+          />
         </Mention>
       </div>
     </div>
@@ -620,14 +662,98 @@ export const AgentRoleAvailabilityNarrow: Story = {
   args: { ...AgentRoleAvailability.args, narrow: true },
 };
 
-/** The real popup over a composer at the page's foot: type `@`, `$` or `/`. */
+/** The inline editor's caret menu at the page's foot. */
 export const FloatingInComposer: Story = {
   args: { search: '' },
   render: () => <FloatingHarness />,
 };
 
-/** The same composer at the top of the page: no room above, so it opens below. */
+/** The explicit frame-anchor alternative keeps its menu above the whole frame. */
+export const MainComposerAboveFrame: Story = {
+  args: { search: '' },
+  render: () => <FloatingHarness mainComposer />,
+};
+
+/** The main composer's top caret menu with a full Role catalog and varied prompts. */
+export const MainComposerRoleCatalogAtCaret: Story = {
+  args: { search: '' },
+  render: () => (
+    <FloatingHarness
+      menuSide="top"
+      categories={[
+        category('agent_role', 'role', 'Agent Roles', 'agent_role', [
+          ...AGENT_ROLES,
+          ...Array.from({ length: 18 }, (_, index) =>
+            toAgentRoleCandidate({
+              availability: { kind: 'available' },
+              slug: `Reviewer-${index + 1}`,
+              role: agentRole({
+                id: `catalog-role-${index}` as AgentRoleId,
+                name: `Reviewer ${index + 1}`,
+                promptPrefix: index % 2 ? 'Review this change.\n'.repeat(40) : undefined,
+              }),
+              machine: ROLE_MACHINE,
+              agentConfig: ROLE_AGENT_CONFIG,
+            })
+          ),
+          ...UNAVAILABLE_AGENT_ROLES.slice(2),
+        ]),
+      ]}
+    />
+  ),
+};
+
+/** Search `@review`, scroll to Roles, and hover between file and Role rows. */
+export const MainComposerAggregateRoles: Story = {
+  args: { search: '' },
+  render: () => (
+    <FloatingHarness
+      mainComposer
+      categories={[
+        category(
+          'file',
+          'file',
+          'Files',
+          'file',
+          Array.from({ length: 4 }, (_, index) =>
+            toFileCandidate({
+              kind: 'file',
+              path: `src/review-${index}.ts`,
+              token: `src/review-${index}.ts`,
+            })
+          )
+        ),
+        ...(['issue', 'pr'] as const).map((type) =>
+          category(
+            type,
+            type,
+            type === 'issue' ? 'Issues' : 'Pull Requests',
+            type,
+            Array.from({ length: 4 }, (_, index) =>
+              toIssuePrCandidate({
+                number: index + (type === 'issue' ? 1 : 101),
+                title: `Review ${type} ${index}`,
+                type,
+                token: `#${index + (type === 'issue' ? 1 : 101)}`,
+                label: String(index),
+                searchableNumber: String(index),
+              })
+            )
+          )
+        ),
+        category('agent_role', 'role', 'Agent Roles', 'agent_role', AGENT_ROLES),
+      ]}
+    />
+  ),
+};
+
+/** The caret editor at the top of the page: the popup stays with the caret. */
 export const FloatingComposerAtTop: Story = {
   args: { search: '' },
   render: () => <FloatingHarness atTop />,
+};
+
+export const PreparedShortcut: Story = {
+  args: { search: '' },
+  render: () => <FloatingHarness mainComposer preparedShortcut />,
 };

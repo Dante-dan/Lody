@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AgentConfigMeta } from '@lody/shared';
 import { CodexProfileStore } from './codex-profile-store';
+import { codexProfileConfig } from './codex-profile-runtime';
 import type { CodexCredentialVault } from './codex-credential-vault';
 import {
   registerCodexProfileProcess,
@@ -54,6 +55,73 @@ async function fixture() {
 }
 
 describe('Codex profile ownership and generation publication', () => {
+  it('uses isolated Codex default storage for new and unfinished ChatGPT profiles', async () => {
+    const { root, store, config } = await fixture();
+    const chatgpt = {
+      ...config,
+      id: randomUUID() as AgentConfigMeta['id'],
+      codexAuth: { mode: 'chatgpt' as const, profileId: randomUUID() },
+    };
+    const pending = await store.resolve('workspace-fixture', chatgpt, true);
+    if (!pending) throw new Error('Missing ChatGPT profile');
+    expect(pending.authStore).toBe('codex-default');
+    expect(codexProfileConfig(pending)).not.toHaveProperty('cli_auth_credentials_store');
+
+    const recordPath = path.join(root, pending.profile.profileId, 'profile.json');
+    const record = JSON.parse(await readFile(recordPath, 'utf8'));
+    delete record.authStore;
+    await writeFile(recordPath, JSON.stringify(record));
+    const upgradedPending = await store.resolve('workspace-fixture', chatgpt, true);
+    expect(upgradedPending?.authStore).toBe('codex-default');
+    if (!upgradedPending) throw new Error('Missing upgraded ChatGPT profile');
+    await store.markChatgptReady(upgradedPending);
+    expect((await store.resolve('workspace-fixture', chatgpt))?.authStore).toBe('codex-default');
+  });
+
+  it('keeps old ready ChatGPT profiles on their existing keyring through removal', async () => {
+    const { root, vault, config } = await fixture();
+    const chatgpt = {
+      ...config,
+      id: randomUUID() as AgentConfigMeta['id'],
+      codexAuth: { mode: 'chatgpt' as const, profileId: randomUUID() },
+    };
+    let cleanupAttempts = 0;
+    const store = new CodexProfileStore(root, vault, async (profile) => {
+      expect(profile.authStore).toBe('keyring');
+      cleanupAttempts += 1;
+      if (cleanupAttempts === 1) throw new Error('Credential store temporarily unavailable');
+    });
+    const pending = await store.resolve('workspace-fixture', chatgpt, true);
+    if (!pending) throw new Error('Missing ChatGPT profile');
+    const recordPath = path.join(root, pending.profile.profileId, 'profile.json');
+    const record = JSON.parse(await readFile(recordPath, 'utf8'));
+    delete record.authStore;
+    await writeFile(recordPath, JSON.stringify({ ...record, state: 'ready' }));
+
+    const legacy = await store.resolve('workspace-fixture', chatgpt);
+    if (!legacy) throw new Error('Missing legacy ChatGPT profile');
+    expect(legacy.authStore).toBe('keyring');
+    expect(codexProfileConfig(legacy)).toHaveProperty('cli_auth_credentials_store', 'keyring');
+    expect(
+      (await store.list('workspace-fixture')).find(
+        (profile) => profile.profile.profileId === legacy.profile.profileId
+      )?.authStore
+    ).toBe('keyring');
+    await expect(store.remove(legacy)).rejects.toThrow('temporarily unavailable');
+    const removed = (await store.list('workspace-fixture')).find(
+      (profile) => profile.profile.profileId === legacy.profile.profileId
+    );
+    expect(removed?.authStore).toBe('keyring');
+    if (!removed) throw new Error('Missing removed ChatGPT profile');
+    await store.remove(removed);
+    expect(cleanupAttempts).toBe(2);
+    expect(JSON.parse(await readFile(recordPath, 'utf8'))).toMatchObject({
+      state: 'removed',
+      authStore: 'keyring',
+      credentialsRemoved: true,
+    });
+  });
+
   it('rejects a new profile identity for an already bound provider, including concurrent binds', async () => {
     const { store, config } = await fixture();
     await expect(
@@ -212,6 +280,100 @@ describe('Codex profile ownership and generation publication', () => {
     ).rejects.toThrow();
     expect(await store.apiKey(resolved)).toBe('synthetic-first');
     expect([...secrets.values()]).toEqual(['synthetic-first']);
+  });
+
+  it.each([
+    { stage: 'save', ready: false },
+    { stage: 'save', ready: true },
+    { stage: 'verification', ready: false },
+    { stage: 'verification', ready: true },
+    { stage: 'cancellation', ready: false },
+    { stage: 'cancellation', ready: true },
+  ])(
+    'preserves $stage failure and retries cleanup after restart (ready=$ready)',
+    async ({ stage, ready }) => {
+      const { root, vault, resolved, config, secrets } = await fixture();
+      const originalError = new Error(`Synthetic ${stage} failure`);
+      const cleanupError = new Error('Synthetic credential deletion failure');
+      let failSave = false;
+      let failCleanup = false;
+      const failingVault: CodexCredentialVault = {
+        ...vault,
+        set: async (id, value) => {
+          await vault.set(id, value);
+          // A failed write may have stored the credential before returning an error.
+          if (failSave) throw originalError;
+        },
+        delete: async (id) => {
+          if (failCleanup) throw cleanupError;
+          await vault.delete(id);
+        },
+      };
+      const store = new CodexProfileStore(root, failingVault);
+      if (ready) await store.withApiKeyCandidate(resolved, 'synthetic-old', async () => {});
+      const recordPath = path.join(root, resolved.profile.profileId, 'profile.json');
+      const before = JSON.parse(await readFile(recordPath, 'utf8'));
+      const controller = new AbortController();
+      failSave = stage === 'save';
+      failCleanup = true;
+
+      await expect(
+        store.withApiKeyCandidate(
+          resolved,
+          'synthetic-candidate',
+          async () => {
+            if (stage === 'cancellation') controller.abort(originalError);
+            else throw originalError;
+          },
+          controller.signal
+        )
+      ).rejects.toBe(originalError);
+
+      const retained = JSON.parse(await readFile(recordPath, 'utf8'));
+      expect(retained.state).toBe(before.state);
+      expect(retained.activeGeneration).toBe(before.activeGeneration);
+      expect(retained.generations).toHaveLength(before.generations.length + 1);
+      expect([...secrets.values()]).toEqual(
+        ready ? ['synthetic-old', 'synthetic-candidate'] : ['synthetic-candidate']
+      );
+
+      const restarted = new CodexProfileStore(root, failingVault);
+      expect(await restarted.resolve('workspace-fixture', config, true)).toEqual(resolved);
+      expect(await restarted.isReady(resolved)).toBe(ready);
+      if (ready) expect(await restarted.apiKey(resolved)).toBe('synthetic-old');
+      else await expect(restarted.apiKey(resolved)).rejects.toThrow('Authenticate');
+      await expect(restarted.reconcileGenerations(resolved)).rejects.toBe(cleanupError);
+      expect(JSON.parse(await readFile(recordPath, 'utf8'))).toEqual(retained);
+
+      failCleanup = false;
+      failSave = false;
+      await restarted.reconcileGenerations(resolved);
+      expect(JSON.parse(await readFile(recordPath, 'utf8'))).toEqual(before);
+      expect([...secrets.values()]).toEqual(ready ? ['synthetic-old'] : []);
+      await restarted.withApiKeyCandidate(resolved, 'synthetic-retry', async () => {});
+      expect(await restarted.apiKey(resolved)).toBe('synthetic-retry');
+    }
+  );
+
+  it('reconciles an already deleted candidate after restart without changing the active key', async () => {
+    const { root, store, resolved, vault, secrets } = await fixture();
+    await store.withApiKeyCandidate(resolved, 'synthetic-old', async () => {});
+    const recordPath = path.join(root, resolved.profile.profileId, 'profile.json');
+    const before = JSON.parse(await readFile(recordPath, 'utf8'));
+    const originalError = new Error('Synthetic verification failure');
+    await expect(
+      store.withApiKeyCandidate(resolved, 'synthetic-candidate', async () => {
+        throw originalError;
+      })
+    ).rejects.toBe(originalError);
+    expect([...secrets.values()]).toEqual(['synthetic-old']);
+    const retained = JSON.parse(await readFile(recordPath, 'utf8'));
+    expect(retained.activeGeneration).toBe(before.activeGeneration);
+    expect(retained.generations).toHaveLength(before.generations.length + 1);
+    const restarted = new CodexProfileStore(root, vault);
+    await restarted.reconcileGenerations(resolved);
+    expect(JSON.parse(await readFile(recordPath, 'utf8'))).toEqual(before);
+    expect(await restarted.apiKey(resolved)).toBe('synthetic-old');
   });
 
   it('rejects endpoint, owner, and runtime rewrites without retrieving the saved key', async () => {

@@ -136,7 +136,17 @@ describe('following', () => {
     sim.settle();
     expect(sim.controller.mode).toBe('follow');
     expectHealthy(sim);
-    sim.render([...turns, ...turnRows(1, () => 140, () => 88, 'sent'), activity, trailing(0)]);
+    sim.render([
+      ...turns,
+      ...turnRows(
+        1,
+        () => 140,
+        () => 88,
+        'sent'
+      ),
+      activity,
+      trailing(0),
+    ]);
     sim.settle();
     expect(sim.controller.mode).toBe('follow');
     expectHealthy(sim);
@@ -237,9 +247,17 @@ describe('reading', () => {
   // Ten 100px turns, the placeholder of turn t10 (60px, keyed by its turn id,
   // like the product's), then ten more turns.
   const aroundPlaceholder = (): SimRow[] => [
-    ...turnRows(10, () => 100, () => 100),
+    ...turnRows(
+      10,
+      () => 100,
+      () => 100
+    ),
     { key: 't10', turnId: 't10', turnIndex: 10, placeholder: true, height: 60, estimate: 60 },
-    ...turnRows(10, () => 100, () => 100).map((row, i) => ({
+    ...turnRows(
+      10,
+      () => 100,
+      () => 100
+    ).map((row, i) => ({
       ...row,
       key: `t${i + 11}`,
       turnId: `t${i + 11}`,
@@ -317,7 +335,14 @@ describe('reading', () => {
     // estimates, so rows are measured (and compensated) as they come into view.
     const rows: SimRow[] = Array.from({ length: 120 }, (_, i) =>
       i % 3 === 1
-        ? { key: `t${i}`, turnId: `t${i}`, turnIndex: i, placeholder: true, height: 88, estimate: 88 }
+        ? {
+            key: `t${i}`,
+            turnId: `t${i}`,
+            turnIndex: i,
+            placeholder: true,
+            height: 88,
+            estimate: 88,
+          }
         : {
             key: `t${i}`,
             turnId: `t${i}`,
@@ -333,9 +358,7 @@ describe('reading', () => {
     const step = 173;
     for (let i = 0; i < 60 && sim.readScrollTop() > step; i++) {
       const y = sim.readScrollTop();
-      const [key, top] = [...sim.mounted].findLast(
-        ([, rowTop]) => rowTop <= y - sim.contentTop
-      )!;
+      const [key, top] = [...sim.mounted].findLast(([, rowTop]) => rowTop <= y - sim.contentTop)!;
       const before = sim.contentTop + top - y;
       sim.nativeScroll(y - step);
       sim.settle();
@@ -355,9 +378,64 @@ describe('reading', () => {
     sim.nativeScroll(1000);
     sim.settle();
     expect(sim.controller.mode).toBe('read');
+    sim.controller.onReaderInput(false);
     sim.nativeScroll(sim.maxTop());
     sim.settle();
     expect(sim.controller.mode).toBe('follow');
+  });
+
+  // Rows streamed in while the reader was above were never mounted, so the
+  // bottom a fast fling runs into is estimated and too short. The compositor
+  // stops the fling at that stale bottom while the engine has already grown
+  // the range behind it, so the scroll lands short of the new bottom.
+  const flingIntoStaleBottom = () => {
+    const sim = new ScrollSim(
+      turnRows(40, () => 100),
+      V
+    );
+    sim.render();
+    sim.settle();
+    sim.task(() => sim.controller.release('wheel-up'));
+    sim.nativeScroll(sim.maxTop() - 2000);
+    sim.settle();
+    const streamed = turnRows(
+      6,
+      () => 300,
+      () => 60,
+      'late'
+    ).map((row, i) => ({ ...row, turnIndex: 40 + i }));
+    sim.render([...sim.rows, ...streamed]);
+    sim.settle();
+    const wall = sim.maxTop();
+    sim.controller.setTouchActive(true);
+    sim.controller.setTouchActive(false);
+    // The fling's first steps mount and measure the streamed rows...
+    sim.nativeScroll(wall - 700);
+    sim.settle();
+    expect(sim.maxTop()).toBeGreaterThan(wall + 1000);
+    return { sim, wall };
+  };
+
+  it('follows again when a fast downward fling stops at the bottom it was scrolling toward', () => {
+    const { sim, wall } = flingIntoStaleBottom();
+    // ...and the fling dies against the range the compositor last saw.
+    sim.nativeScroll(wall);
+    sim.settle();
+    sim.task(() => sim.controller.onScrollEnd());
+    sim.settle();
+    expect(sim.controller.mode).toBe('follow');
+    expect(sim.readScrollTop()).toBe(sim.maxTop());
+    expectHealthy(sim);
+  });
+
+  it('keeps reading when a downward scroll comes to rest anywhere else', () => {
+    const { sim, wall } = flingIntoStaleBottom();
+    sim.nativeScroll(wall - 300);
+    sim.settle();
+    sim.task(() => sim.controller.onScrollEnd());
+    sim.settle();
+    expect(sim.controller.mode).toBe('read');
+    expect(sim.readScrollTop()).toBe(wall - 300);
   });
 });
 
@@ -429,7 +507,7 @@ describe('commands', () => {
     expectHealthy(sim);
   });
 
-  it('holds a sent message at the top with reply room, then follows once the reply fills it', () => {
+  it('holds a sent message below 100px of context with reply room, then follows once the reply fills it', () => {
     let rows = turnRows(30, () => 100);
     const sim = new ScrollSim(rows, V);
     sim.render();
@@ -448,8 +526,9 @@ describe('commands', () => {
     sim.task(() => sim.controller.anchorToRow(rows.length - 1));
     sim.settle();
     expect(sim.controller.mode).toBe('sent');
-    expect(sim.screenTop('sent0')).toBe(sim.contentTop);
-    expect(sim.replyRoom).toBeGreaterThan(0);
+    expect(sim.screenTop('sent0')).toBe(sim.contentTop + 100);
+    expect(sim.replyRoom).toBe(V - sim.contentTop - sim.paddingBottom - 100 - 80);
+    expect(sim.screenTop('t29') + 100).toBe(sim.contentTop + 100);
 
     const reply: SimRow = {
       key: 'reply',
@@ -464,13 +543,59 @@ describe('commands', () => {
       sim.render(rows);
       sim.settle();
       if (sim.controller.mode === 'sent') {
-        expect(sim.screenTop('sent0')).toBe(sim.contentTop);
+        expect(sim.screenTop('sent0')).toBe(sim.contentTop + 100);
       }
     }
     expect(sim.controller.mode).toBe('follow');
     expect(sim.replyRoom).toBe(0);
     expectHealthy(sim);
   });
+
+  it.each([true, false])(
+    'clamps send context to the start (reduced motion: %s)',
+    (reducedMotion) => {
+      for (const previousHeight of [0, 60]) {
+        const rows =
+          previousHeight === 0
+            ? turnRows(1, () => 80)
+            : turnRows(2, (i) => (i === 0 ? previousHeight : 80));
+        const sim = new ScrollSim(rows, V);
+        sim.reducedMotion = reducedMotion;
+        sim.render();
+        sim.settle();
+        sim.task(() => sim.controller.anchorToRow(rows.length - 1));
+        sim.settle();
+        expect(sim.readScrollTop()).toBe(0);
+        expect(sim.screenTop(rows[rows.length - 1]!.key)).toBe(sim.contentTop + previousHeight);
+        expect(sim.replyRoom).toBe(V - sim.contentTop - sim.paddingBottom - previousHeight - 80);
+        expectHealthy(sim);
+      }
+    }
+  );
+
+  it.each([500, 900])(
+    'shows the end of a %spx sent message that cannot fit below context',
+    (height) => {
+      const rows = [
+        ...turnRows(30, () => 100),
+        ...turnRows(
+          1,
+          () => height,
+          () => height,
+          'sent'
+        ),
+      ];
+      const sim = new ScrollSim(rows, V);
+      sim.render();
+      sim.settle();
+      sim.task(() => sim.controller.anchorToRow(rows.length - 1));
+      sim.settle();
+      expect(sim.controller.mode).toBe('follow');
+      expect(sim.replyRoom).toBe(0);
+      expect(sim.screenTop('sent0') + height).toBe(V - sim.paddingBottom);
+      expectHealthy(sim);
+    }
+  );
 
   it('glides a send across frames and lands on the same position', () => {
     let rows = turnRows(30, () => 100);
@@ -493,12 +618,345 @@ describe('commands', () => {
     sim.settle();
     expect(sim.controller.mode).toBe('sent');
     // The last glide frame lands within a pixel.
-    expect(sim.screenTop('sent0')).toBeCloseTo(sim.contentTop, 0);
+    expect(sim.screenTop('sent0')).toBeCloseTo(sim.contentTop + 100, 0);
+    expectHealthy(sim);
+  });
+});
+
+describe('onScroll must not re-enter a cycle (React #185)', () => {
+  it('a consumer that re-commits from onScroll settles instead of looping', () => {
+    const rows = turnRows(40, () => 100);
+    const sim = new ScrollSim(rows, V);
+    let reports = 0;
+    sim.controller.setCallbacks({
+      onScroll: () => {
+        reports += 1;
+        if (reports > 50) throw new Error('onScroll nested-update loop');
+        sim.render();
+      },
+    });
+    sim.render();
+    sim.settle();
+    expectHealthy(sim);
+    expect(reports).toBeGreaterThan(0);
+    expect(reports).toBeLessThanOrEqual(COMMIT_BOUND);
+  });
+});
+
+describe('hidden viewport', () => {
+  // An inactive tab stays mounted under `display: none` and keeps committing
+  // as its conversation streams. Reporting its offset 0 to the view once fed a
+  // synchronous render loop (React #185).
+  function observe(sim: ScrollSim) {
+    const seen = { scrolls: [] as number[], transactions: 0 };
+    sim.controller.setCallbacks({
+      onScroll: (offset) => seen.scrolls.push(offset),
+      onDiagnostic: () => {
+        seen.transactions += 1;
+      },
+    });
+    return seen;
+  }
+
+  it('reports nothing while hidden and shows again at the reading position, whatever changed above it', () => {
+    let rows = turnRows(
+      60,
+      () => 100,
+      () => 100
+    );
+    const sim = new ScrollSim(rows, V);
+    sim.render();
+    sim.settle();
+    sim.task(() => sim.controller.jumpToIndex(30));
+    sim.settle();
+    const seen = observe(sim);
+    const writes = sim.writes.length;
+
+    sim.setHidden(true);
+    rows = expand(rows, 't5', 14, 100);
+    sim.render(rows);
+    sim.settle();
+    rows = [...rows, ...turnRows(3, () => 200, undefined, 'n')];
+    sim.render(rows);
+    sim.settle();
+    expect(seen).toEqual({ scrolls: [], transactions: 0 });
+    expect(sim.writes.length).toBe(writes);
+    expect(sim.controller.mode).toBe('read');
+
+    sim.setHidden(false);
+    sim.settle();
+    expectHealthy(sim);
+    expect(sim.screenTop('t30')).toBe(0);
+    expect(seen.scrolls.at(-1)).toBe(sim.readScrollTop());
+  });
+
+  it('shows a following conversation at the real bottom of what streamed while it was hidden', () => {
+    let rows = turnRows(40, () => 120);
+    const sim = new ScrollSim(rows, V);
+    sim.render();
+    sim.settle();
+    const seen = observe(sim);
+
+    sim.setHidden(true);
+    for (let step = 0; step < 5; step++) {
+      rows = [
+        ...rows.map((row, i) =>
+          i === rows.length - 1 ? { ...row, height: row.height + 300 } : row
+        ),
+        ...turnRows(
+          1,
+          () => 90,
+          () => 60,
+          `n${step}-`
+        ),
+      ];
+      sim.render(rows);
+      sim.settle();
+    }
+    expect(seen.scrolls).toEqual([]);
+
+    sim.setHidden(false);
+    sim.settle();
+    expect(sim.controller.mode).toBe('follow');
     expectHealthy(sim);
   });
 });
 
 describe('momentum diagnostics', () => {
+  it('keeps the reading anchor when a viewport clamp ends an active downward sequence', () => {
+    const sim = new ScrollSim(
+      turnRows(
+        40,
+        () => 100,
+        () => 100
+      ),
+      V
+    );
+    sim.render();
+    sim.settle();
+    sim.task(() => sim.controller.jumpToIndex(30));
+    sim.settle();
+    sim.controller.setTouchActive(true);
+    sim.controller.setTouchActive(false);
+    const reading = sim.maxTop() - 80;
+    sim.nativeScroll(reading);
+    sim.settle();
+    // Browser scroll steps sample the clamp before its resize delivery.
+    sim.viewport = V + 120;
+    sim.frame();
+    sim.task(() => sim.controller.onViewportResized());
+    sim.task(() => sim.controller.onScrollEnd());
+    sim.resizeViewport(V);
+    sim.settle();
+    expect(sim.controller.mode).toBe('read');
+    expect(sim.readScrollTop()).toBe(reading);
+    expectHealthy(sim);
+  });
+
+  it('waits for the native fling to finish before closing a near-bottom gap', () => {
+    const sim = new ScrollSim(
+      turnRows(
+        40,
+        () => 100,
+        () => 100
+      ),
+      V
+    );
+    sim.render();
+    sim.settle();
+    sim.controller.release('touch-up');
+    sim.nativeScroll(sim.maxTop() - 100);
+    sim.settle();
+    sim.controller.setTouchActive(true);
+    sim.controller.setTouchActive(false);
+    sim.writes = [];
+    sim.nativeScroll(sim.maxTop() - 3);
+    sim.settle();
+    // Output and parent commits at this position must not interrupt the fling.
+    sim.render();
+    sim.settle();
+    expect(sim.controller.mode).toBe('read');
+    expect(sim.readScrollTop()).toBe(sim.maxTop() - 3);
+    expect(sim.writes).toEqual([]);
+    sim.task(() => sim.controller.onScrollEnd());
+    sim.settle();
+    expect(sim.controller.mode).toBe('follow');
+    expect(sim.readScrollTop()).toBe(sim.maxTop());
+    expectHealthy(sim);
+  });
+
+  it('ignores elastic overshoot and rebound without losing native input', () => {
+    const sim = new ScrollSim(
+      turnRows(
+        40,
+        () => 100,
+        () => 100
+      ),
+      V
+    );
+    sim.render();
+    sim.settle();
+    sim.controller.release('touch-up');
+    sim.nativeScroll(sim.maxTop() - 100);
+    sim.settle();
+    sim.controller.setTouchActive(true);
+    sim.controller.setTouchActive(false);
+    sim.nativeScroll(sim.maxTop());
+    sim.settle();
+    expect(sim.controller.mode).toBe('follow');
+    sim.writes = [];
+    for (const sample of [24, 18, 12, 6, 0]) {
+      sim.elasticOffset = sample;
+      sim.task(() => sim.controller.onScrollEvent());
+      sim.render();
+      sim.settle();
+      expect(sim.controller.mode).toBe('follow');
+      expect(sim.controller.scrollOffset).toBe(sim.maxTop());
+    }
+    expect(sim.writes).toEqual([]);
+    // Input survives the automatic edge transition until scrollend.
+    sim.nativeScroll(sim.maxTop() - 60);
+    sim.settle();
+    expect(sim.controller.mode).toBe('read');
+    expect(sim.readScrollTop()).toBe(sim.maxTop() - 60);
+    expectHealthy(sim);
+  });
+
+  it.each([0, 40])(
+    'compensates %ipx row growth above an elastic read anchor without drifting it',
+    (growth) => {
+      const sim = new ScrollSim(
+        turnRows(
+          40,
+          () => 100,
+          () => 100
+        ),
+        V
+      );
+      sim.render();
+      sim.settle();
+      sim.controller.release('reader-up');
+      const before = sim.readScrollTop();
+      const anchor = sim.controller.savedIntent();
+      const rowTop = sim.screenTop('t35');
+      sim.elasticOffset = 24;
+      // Growth above the reading anchor needs compensation. Additional
+      // growth below it leaves room for an incorrect +24px write to escape clamp.
+      sim.rows[33]!.height += growth;
+      sim.rows[39]!.height += 100;
+      sim.task(() =>
+        sim.controller.onRowsResized([
+          { key: 't33', height: 100 + growth },
+          { key: 't39', height: 200 },
+        ])
+      );
+      sim.settle();
+      expect(sim.readScrollTop()).toBe(before + growth);
+      expect(sim.screenTop('t35')).toBe(rowTop);
+      expect(sim.controller.savedIntent()).toEqual(anchor);
+      expectHealthy(sim);
+    }
+  );
+
+  it('preserves the top reading anchor when content inset changes during negative overscroll', () => {
+    const sim = new ScrollSim(
+      turnRows(
+        40,
+        () => 100,
+        () => 100
+      ),
+      V
+    );
+    sim.render();
+    sim.settle();
+    sim.controller.release('reader-up');
+    sim.nativeScroll(0);
+    sim.settle();
+    const anchor = sim.controller.savedIntent();
+    const rowTop = sim.screenTop('t0');
+    sim.elasticOffset = -24;
+    sim.contentTop += 40;
+    sim.task(() => sim.controller.onViewportResized());
+    sim.settle();
+    expect(sim.readScrollTop()).toBe(40);
+    expect(sim.screenTop('t0')).toBe(rowTop);
+    expect(sim.controller.savedIntent()).toEqual(anchor);
+    expectHealthy(sim);
+  });
+
+  it.each(['unknown', 'clamp'])('never follows after a %s layout movement', (movement) => {
+    const sim = new ScrollSim(
+      turnRows(
+        40,
+        () => 100,
+        () => 100
+      ),
+      V
+    );
+    sim.render();
+    sim.settle();
+    sim.task(() => sim.controller.jumpToIndex(30));
+    sim.settle();
+    if (movement === 'clamp') {
+      sim.resizeViewport(V + 500);
+    } else {
+      sim.nativeScroll(sim.maxTop() - 3);
+    }
+    sim.settle();
+    sim.task(() => sim.controller.onScrollEnd());
+    sim.settle();
+    const before = sim.readScrollTop();
+    sim.resizeViewport(V - 40);
+    sim.settle();
+    expect(sim.controller.mode).toBe('read');
+    if (movement === 'unknown') expect(sim.readScrollTop()).toBe(before);
+    else expect(sim.screenTop('t30')).toBe(0);
+    expectHealthy(sim);
+  });
+
+  it.each(['scroll', 'resize'])(
+    'keeps an upward fling whose first %s arrives after touchend',
+    (delivery) => {
+      const rows = turnRows(
+        40,
+        () => 100,
+        () => 100
+      );
+      const sim = new ScrollSim(rows, V);
+      sim.render();
+      sim.settle();
+      const bottom = sim.readScrollTop();
+      sim.controller.setTouchActive(true);
+      sim.controller.setTouchActive(false);
+      sim.nativeScroll(bottom - 60);
+      if (delivery === 'resize') {
+        sim.rows[39]!.height += 40;
+        sim.task(() => sim.controller.onRowsResized([{ key: 't39', height: 140 }]));
+      }
+      sim.settle();
+      expect(sim.controller.mode).toBe('read');
+      expect(sim.readScrollTop()).toBe(bottom - 60);
+
+      for (let step = 1; step <= 4; step++) {
+        sim.nativeScroll(bottom - 60 - step * 12);
+        sim.settle();
+        expect(sim.readScrollTop()).toBe(bottom - 60 - step * 12);
+        expectHealthy(sim);
+      }
+      const reading = sim.readScrollTop();
+      sim.rows[39]!.height += 50;
+      sim.settle();
+      expect(sim.readScrollTop()).toBe(reading);
+      sim.task(() => sim.controller.onScrollEnd());
+      sim.task(() => sim.controller.scrollToBottom());
+      sim.settle();
+      sim.nativeScroll(sim.maxTop() - 60);
+      sim.settle();
+      expect(sim.controller.mode).toBe('follow');
+      expect(sim.readScrollTop()).toBe(sim.maxTop());
+    }
+  );
+
   it('counts compensations during a touch fling and which of them ended it', () => {
     let rows = turnRows(
       80,
@@ -590,6 +1048,9 @@ describe('randomized sequences', () => {
             : undefined;
         const anchorHeight = rows.find((row) => row.key === anchorKey)?.height;
         const anchorBefore = anchorKey ? sim.screenTop(anchorKey) : null;
+        // A clamped reading position has not resolved its anchor yet; it
+        // moves toward it once reachable, so I5 applies only to resolved ones.
+        const resolvedBefore = sim.readScrollTop() > 1 && sim.readScrollTop() < sim.maxTop() - 1;
         let geometryOnly = false;
         switch (action) {
           case 0: // rows above/below grow or shrink
@@ -638,6 +1099,12 @@ describe('randomized sequences', () => {
           case 7:
             sim.task(() => sim.controller.scrollToBottom());
             break;
+          case 8: // the reader scrolls down and the sequence comes to rest
+            sim.controller.onReaderInput(false);
+            sim.nativeScroll(sim.readScrollTop() + random() * sim.maxTop());
+            sim.settle();
+            sim.task(() => sim.controller.onScrollEnd());
+            break;
           default:
             break;
         }
@@ -651,6 +1118,7 @@ describe('randomized sequences', () => {
           sim.controller.mode === 'read' &&
           anchorKey &&
           anchorBefore !== null &&
+          resolvedBefore &&
           rows.some((row) => row.key === anchorKey)
         ) {
           const after = sim.screenTop(anchorKey);
