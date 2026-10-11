@@ -873,7 +873,7 @@ describe('SessionManager worktree setup', () => {
     const docs = new Map([[sessionId, doc]]);
     const workspaceDocument = createWorkspaceDocument(docs);
     const upsert = workspaceDocument.repo.upsertDocMeta as ReturnType<typeof vi.fn>;
-    upsert.mockImplementation(async (_roomId: unknown, patch: Partial<SessionMeta>) => {
+    upsert.mockImplementation((_roomId: unknown, patch: Partial<SessionMeta>) => {
       meta = { ...meta, ...patch };
     });
     const manager = new SessionManager(
