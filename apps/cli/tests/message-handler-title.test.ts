@@ -1,4 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { MessageHandler } from '../src/lib/message-handler';
 import type { Logger } from '../src/utils/logger';
 import type { SessionId, SessionTitleSource } from '@lody/shared';
@@ -18,6 +21,7 @@ vi.mock('@/agent/title-generator', async () => {
 import { generateTitleIsolated } from '@/agent/title-generator';
 
 const mockedGenerateTitleIsolated = vi.mocked(generateTitleIsolated);
+const handlers: MessageHandler[] = [];
 
 const createSilentLogger = (): Logger => ({
   info: () => {},
@@ -101,12 +105,25 @@ const createHandler = async (
     }
   );
 
+  handlers.push(handler);
   return { handler, sessionDoc, workspaceDocument, sessionManager };
 };
 
 describe('MessageHandler title generation', () => {
+  let dataDir: string;
   beforeEach(() => {
+    dataDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lody-title-handler-')));
+    vi.stubEnv('LODY_DATA_DIR', dataDir);
     mockedGenerateTitleIsolated.mockClear();
+  });
+
+  afterEach(async () => {
+    try {
+      for (const handler of handlers.splice(0)) await handler.cleanup();
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   it('skips isolated generation when title already meaningful', async () => {
