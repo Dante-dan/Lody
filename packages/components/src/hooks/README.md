@@ -37,6 +37,17 @@ Missing or mismatched Providers expose no catalog; extension changes invalidate
 old capabilities until a matching probe arrives. A matching extension catalog
 must not be read as though no extensions were selected.
 
+## Codex project history import
+
+`use-local-projects-admin.ts` keeps the default-off native Codex import preference
+renderer-local, keyed by user/workspace/machine/project/Provider. Only an explicit
+local unmanaged Codex Provider is eligible. The displayed conversation panel asks
+for a catalog on opening or returning to visibility; manual Sync uses the same
+path. Newly available IDs enter the existing bounded importer. Existing imports
+and conflicts are retained, and opt-out or owner disposal stops future batches.
+There is no global-home fallback or background watcher. See the
+[decision and Desktop validation limit](../../../../.agents/notes/proposed/feature/2026-10-12-codex-project-auto-import.md).
+
 ## Cloud query recovery
 
 `use-recoverable-convex-query.ts` owns the authenticated query adapter. Each client,

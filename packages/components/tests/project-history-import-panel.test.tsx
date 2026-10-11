@@ -127,6 +127,40 @@ describe('ProjectHistoryImportPanel empty states', () => {
     expect(buttonLabels()).toEqual(['Sync again']);
   });
 
+  it('requires opt-in and stops a pending automatic read after opt-out', async () => {
+    let enabled = false;
+    let pendingRead: (() => void) | undefined;
+    let imported = false;
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    const makeAutomaticState = (): ProjectHistoryImportState => ({
+      ...makeState(null),
+      autoImport: {
+        scope: 'user:workspace:project:provider',
+        enabled,
+        setEnabled: (value) => {
+          enabled = value;
+          void renderState(makeAutomaticState());
+        },
+        sync: async (shouldContinue) => {
+          await new Promise<void>((resolve) => {
+            pendingRead = resolve;
+          });
+          imported = shouldContinue();
+        },
+      },
+    });
+    await renderState(makeAutomaticState());
+    expect(pendingRead).toBeUndefined();
+    const toggle = () => container.querySelector<HTMLElement>('[role="switch"]')!;
+    await act(async () => toggle().click());
+    expect(toggle().getAttribute('aria-checked')).toBe('true');
+    expect(pendingRead).toBeDefined();
+    await act(async () => toggle().click());
+    await act(async () => pendingRead?.());
+    expect(toggle().getAttribute('aria-checked')).toBe('false');
+    expect(imported).toBe(false);
+  });
+
   it('shows the sync and import actions once conversations are available', async () => {
     await renderState(
       makeState({

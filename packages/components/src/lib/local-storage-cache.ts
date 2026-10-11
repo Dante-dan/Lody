@@ -60,6 +60,12 @@ export function createLocalStorageCache<T>(key: string, schema: z.ZodType<T>) {
   return { readAll, get, set, update, remove };
 }
 
+// Renderer-local consent, scoped by user/workspace/machine/project/Provider id.
+export const codexHistoryAutoImportCache = createLocalStorageCache(
+  'lody:codex-history-auto-import:v1',
+  z.boolean()
+);
+
 // Mode/Model/ConfigOption defaults schema for new sessions, keyed by agent.
 const configOptionValueSchema = z.union([z.string(), z.boolean()]);
 

@@ -3606,6 +3606,8 @@
   "workspace.projects.historyInitialSyncHint": "Find this project's conversations in {{provider}}, then choose which ones to import.",
   "workspace.projects.historyInitialSyncTitle": "Sync {{provider}} conversations",
   "workspace.projects.historyLastSynced": "Last synced {{relative}}",
+  "workspace.projects.autoImportCodex": "Automatically import new Codex chats",
+  "workspace.projects.autoImportCodexHint": "For this project and Provider when this conversation list opens or becomes visible. Existing conversations and conflicts are kept.",
   "workspace.projects.historyNotSyncedYet": "Not synced yet",
   "workspace.projects.historyPanelSummary": "{{provider}} conversations",
   "workspace.projects.historySyncEmptyHint": "No agents detected on this machine yet. Conversation sync becomes available once an ACP agent has run here.",

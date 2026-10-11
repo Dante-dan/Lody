@@ -123,6 +123,12 @@ export type ProjectSettingsRow = {
 };
 
 export type ProjectHistoryImportState = {
+  autoImport?: {
+    scope: string;
+    enabled: boolean;
+    setEnabled: (enabled: boolean) => void;
+    sync: (shouldContinue: () => boolean) => Promise<void>;
+  };
   providerLabel?: string;
   provider: LocalProjectHistoryProvider;
   providerKey: LocalProjectHistoryProviderKey;
@@ -2034,6 +2040,7 @@ function ConversationsPage({
 
   return (
     <div {...stylex.props(win.conversations)}>
+      <AutomaticCodexImport state={state} />
       <div {...stylex.props(win.sourceRow)}>
         {states.length > 1 ? (
           <div {...stylex.props(win.hug)}>
@@ -2302,6 +2309,46 @@ function ConversationsPage({
         </AlertDialog.Content>
       </AlertDialog.Root>
     </div>
+  );
+}
+
+function AutomaticCodexImport({ state }: { state: ProjectHistoryImportState | null }) {
+  const { t } = useTranslation();
+  const autoImport = state?.autoImport;
+  const latest = useRef(state);
+  latest.current = state;
+  useEffect(() => {
+    if (!autoImport?.enabled || !state?.canSync) return undefined;
+    let active = true;
+    const sync = () => {
+      if (document.visibilityState !== 'visible') return;
+      const current = latest.current;
+      if (current?.isSyncing || current?.isImporting) return;
+      void current?.autoImport?.sync(() => active);
+    };
+    sync();
+    document.addEventListener('visibilitychange', sync);
+    return () => {
+      active = false;
+      document.removeEventListener('visibilitychange', sync);
+    };
+  }, [autoImport?.scope, autoImport?.enabled, state?.canSync]);
+  if (!autoImport) return null;
+  return (
+    <CompactRow
+      label={t('workspace.projects.autoImportCodex', 'Automatically import new Codex chats')}
+      helper={t(
+        'workspace.projects.autoImportCodexHint',
+        'For this project and Provider when this conversation list opens or becomes visible. Existing conversations and conflicts are kept.'
+      )}
+    >
+      <Switch
+        checked={autoImport.enabled}
+        disabled={!state?.canSync}
+        aria-label={t('workspace.projects.autoImportCodex', 'Automatically import new Codex chats')}
+        onCheckedChange={autoImport.setEnabled}
+      />
+    </CompactRow>
   );
 }
 
@@ -2926,6 +2973,7 @@ export function ProjectHistoryImportPanel({
 
   return (
     <>
+      <AutomaticCodexImport state={state} />
       <div {...stylex.props(styles.panel)}>
         {hasCatalogSessions ? (
           <div {...stylex.props(styles.panelBar)}>

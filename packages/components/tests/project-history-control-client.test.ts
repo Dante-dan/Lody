@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { importProjectHistoryForLocalProject } from '../src/lib/project-history-control-client';
+import {
+  autoImportAvailableProjectHistory,
+  canAutoImportCodexProjectHistory,
+  importProjectHistoryForLocalProject,
+} from '../src/lib/project-history-control-client';
 import type { WorkspaceRuntime } from '../src/atoms/runtime';
 import type {
+  AgentConfigId,
   LocalProjectControlRequest,
   LocalProjectControlResponse,
   LocalProjectHistoryCatalogResult,
@@ -11,6 +16,132 @@ import type {
   MachineId,
   WorkspaceId,
 } from '@lody/shared';
+
+describe('Codex automatic history admission', () => {
+  const config = {
+    id: 'native-codex' as AgentConfigId,
+    machineId: 'local' as MachineId,
+    cliType: 'builtin' as const,
+    agentType: 'codex',
+  };
+  const args = {
+    config,
+    provider: { cliType: 'builtin' as const, agentType: 'codex', agentConfigId: config.id },
+    machineId: config.machineId,
+    localMachineId: config.machineId,
+    isElectron: true,
+  };
+
+  it('admits only the explicitly selected local native Codex Provider', () => {
+    expect(canAutoImportCodexProjectHistory(args)).toBe(true);
+    expect(canAutoImportCodexProjectHistory({ ...args, isElectron: false })).toBe(false);
+    expect(canAutoImportCodexProjectHistory({ ...args, localMachineId: null })).toBe(false);
+    expect(canAutoImportCodexProjectHistory({ ...args, config: undefined })).toBe(false);
+    expect(
+      canAutoImportCodexProjectHistory({
+        ...args,
+        provider: { ...args.provider, agentConfigId: undefined },
+      })
+    ).toBe(false);
+    expect(
+      canAutoImportCodexProjectHistory({ ...args, config: { ...config, agentType: 'claude' } })
+    ).toBe(false);
+    expect(
+      canAutoImportCodexProjectHistory({
+        ...args,
+        config: {
+          ...config,
+          codexAuth: { mode: 'chatgpt', profileId: '00000000-0000-0000-0000-000000000001' },
+        },
+      })
+    ).toBe(false);
+  });
+
+  it('imports available chats while preserving imported and conflicting sessions', async () => {
+    const catalog: LocalProjectHistoryCatalogResult = {
+      listed: 4,
+      lastListedAt: 1,
+      sessions: [
+        { acpSessionId: 'new', title: 'New', status: 'available' },
+        { acpSessionId: 'legacy', title: 'Legacy' },
+        { acpSessionId: 'existing', title: 'Existing', status: 'imported' },
+        { acpSessionId: 'conflict', title: 'Conflict', status: 'sync_conflict' },
+      ],
+    };
+    const { runtime } = makeRuntime((request) =>
+      makeImportResult(
+        { imported: request.acpSessionIds.length },
+        {
+          ...catalog,
+          sessions: catalog.sessions.map((session) =>
+            request.acpSessionIds.includes(session.acpSessionId)
+              ? { ...session, status: 'imported' }
+              : session
+          ),
+        }
+      )
+    );
+    const result = await autoImportAvailableProjectHistory({ ...baseArgs, runtime }, catalog);
+    expect(result?.summary.imported).toBe(2);
+    expect(
+      result?.catalog.sessions.map((session) => [session.acpSessionId, session.status])
+    ).toEqual([
+      ['new', 'imported'],
+      ['legacy', 'imported'],
+      ['existing', 'imported'],
+      ['conflict', 'sync_conflict'],
+    ]);
+  });
+
+  it('keeps completed batches and stops admitting work after consent is revoked', async () => {
+    let enabled = true;
+    const catalog: LocalProjectHistoryCatalogResult = {
+      listed: 7,
+      lastListedAt: 1,
+      sessions: Array.from({ length: 7 }, (_, id) => ({
+        acpSessionId: String(id),
+        title: String(id),
+        status: 'available',
+      })),
+    };
+    const { runtime } = makeRuntime((request) =>
+      makeImportResult(
+        { imported: request.acpSessionIds.length },
+        {
+          ...catalog,
+          sessions: catalog.sessions.map((session) =>
+            request.acpSessionIds.includes(session.acpSessionId)
+              ? { ...session, status: 'imported' }
+              : session
+          ),
+        }
+      )
+    );
+    const result = await autoImportAvailableProjectHistory(
+      {
+        ...baseArgs,
+        runtime,
+        shouldContinue: () => enabled,
+        onBatchComplete: () => {
+          enabled = false;
+        },
+      },
+      catalog
+    );
+    expect(result?.summary.imported).toBe(5);
+    expect(
+      result?.catalog.sessions
+        .filter((session) => session.status === 'available')
+        .map((session) => session.acpSessionId)
+    ).toEqual(['5', '6']);
+    expect(
+      await autoImportAvailableProjectHistory(
+        { ...baseArgs, runtime, shouldContinue: () => false },
+        catalog
+      )
+    ).toBeNull();
+  });
+});
 
 function makeCatalog(listed: number): LocalProjectHistoryCatalogResult {
   return { listed, lastListedAt: listed, sessions: [] };

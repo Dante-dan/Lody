@@ -3606,6 +3606,8 @@
   "workspace.projects.historyInitialSyncHint": "查找这个项目在 {{provider}} 中的历史对话，然后选择要导入的内容。",
   "workspace.projects.historyInitialSyncTitle": "同步 {{provider}} 对话",
   "workspace.projects.historyLastSynced": "上次同步于 {{relative}}",
+  "workspace.projects.autoImportCodex": "自动导入新的 Codex 对话",
+  "workspace.projects.autoImportCodexHint": "仅为此项目和提供方，在对话列表打开或重新可见时导入；保留已有对话和冲突。",
   "workspace.projects.historyNotSyncedYet": "尚未同步",
   "workspace.projects.historyPanelSummary": "{{provider}} 对话",
   "workspace.projects.historySyncEmptyHint": "该机器上暂未检测到 agent。当有 ACP agent 在此运行过后即可同步对话。",

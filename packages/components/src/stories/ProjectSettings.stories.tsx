@@ -9,12 +9,14 @@ import {
 } from '@lody/shared';
 import {
   ProjectSettingsView,
+  ProjectHistoryImportPanel,
   type AddableProjectMachine,
   type ProjectSettingsSection,
   type ProjectSettingsRow,
   type GithubProjectSettingsSection,
 } from '@/components/settings/project-settings';
 import { SettingsStoryProviders } from './settings-story-shell';
+import { Tooltip } from '@lody/ui/tooltip';
 
 const machineLocal = 'machine-local' as MachineId;
 const machineRemote = 'machine-remote' as MachineId;
@@ -457,6 +459,48 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {};
+
+export const CodexAutomaticImport: Story = {
+  render: function AutomaticImportStory() {
+    const [enabled, setEnabled] = useState(false);
+    const [imported, setImported] = useState(false);
+    const row = makeRow(
+      'machine-local:project-codex',
+      machineLocal,
+      'MacBook Pro',
+      'Codex project',
+      '/repo/codex-project',
+      false
+    );
+    const state = {
+      ...row.historyImports[0]!,
+      catalog: {
+        listed: 1,
+        lastListedAt: 1,
+        sessions: [
+          {
+            acpSessionId: 'synthetic-desktop-chat',
+            title: 'Desktop chat (synthetic)',
+            status: imported ? ('imported' as const) : ('available' as const),
+          },
+        ],
+      },
+      autoImport: {
+        scope: 'synthetic-local-project-provider',
+        enabled,
+        setEnabled,
+        sync: async (shouldContinue: () => boolean) => {
+          if (shouldContinue()) setImported(true);
+        },
+      },
+    };
+    return (
+      <Tooltip.Provider>
+        <ProjectHistoryImportPanel row={row} state={state} />
+      </Tooltip.Provider>
+    );
+  },
+};
 
 export const SingleMachine: Story = {
   args: {

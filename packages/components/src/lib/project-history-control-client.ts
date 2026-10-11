@@ -1,4 +1,5 @@
 import type {
+  AgentConfigMeta,
   LocalProjectControlResponse,
   LocalProjectHistoryCatalogResult,
   LocalProjectHistoryConflictResolveResult,
@@ -25,6 +26,27 @@ const HISTORY_CONTROL_TIMEOUT_MS = 120_000;
 // instead of the whole import. 5 keeps the per-batch wall clock comfortably
 // under the timeout even with cold ACP startups.
 const HISTORY_IMPORT_BATCH_SIZE = 5;
+
+export function canAutoImportCodexProjectHistory(args: {
+  provider: LocalProjectHistoryProvider;
+  config?: Pick<AgentConfigMeta, 'id' | 'machineId' | 'cliType' | 'agentType' | 'codexAuth'>;
+  machineId: MachineId;
+  localMachineId: MachineId | null | undefined;
+  isElectron: boolean;
+}): boolean {
+  return Boolean(
+    args.isElectron &&
+    args.localMachineId === args.machineId &&
+    args.config &&
+    args.provider.agentConfigId === args.config.id &&
+    args.config.machineId === args.machineId &&
+    args.provider.cliType === 'builtin' &&
+    args.provider.agentType === 'codex' &&
+    args.config.cliType === 'builtin' &&
+    args.config.agentType === 'codex' &&
+    !args.config.codexAuth
+  );
+}
 
 function chunk<T>(items: T[], size: number): T[][] {
   const batches: T[][] = [];
@@ -195,6 +217,8 @@ type ImportProjectHistoryArgs = {
     cumulative: LocalProjectHistoryImportResult,
     progress: { completed: number; total: number }
   ) => void;
+  /** Stop admitting further batches after opt-out or owner disposal. */
+  shouldContinue?: () => boolean;
 };
 
 async function executeImportBatch(
@@ -247,17 +271,30 @@ export async function importProjectHistoryForLocalProject(
   let cumulative: LocalProjectHistoryImportResult | null = null;
   let completed = 0;
   for (const batch of batches) {
+    if (args.shouldContinue && !args.shouldContinue()) break;
     const batchResult = await executeImportBatch(args, batch);
     cumulative = mergeImportResults(cumulative, batchResult);
     completed += batch.length;
     args.onBatchComplete?.(cumulative, { completed, total: uniqueIds.length });
   }
 
-  // `cumulative` is always set: `batches` is never empty (we inject `[[]]`).
+  // A caller may revoke automatic import before the first batch is admitted.
   if (!cumulative) {
-    throw new Error('History import produced no result.');
+    throw new DOMException('History import was cancelled before admission.', 'AbortError');
   }
   return cumulative;
+}
+
+/** Import only newly available chats; existing histories and conflicts keep their owners. */
+export async function autoImportAvailableProjectHistory(
+  args: Omit<ImportProjectHistoryArgs, 'acpSessionIds'>,
+  catalog: LocalProjectHistoryCatalogResult
+): Promise<LocalProjectHistoryImportResult | null> {
+  const ids = catalog.sessions
+    .filter((session) => session.status === 'available' || session.status === undefined)
+    .map((session) => session.acpSessionId);
+  if (!ids.length || (args.shouldContinue && !args.shouldContinue())) return null;
+  return importProjectHistoryForLocalProject({ ...args, acpSessionIds: ids });
 }
 
 export async function resolveProjectHistoryConflictForLocalProject(args: {

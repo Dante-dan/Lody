@@ -36,13 +36,19 @@ import { useVisibleLocalProjects } from '@/hooks/use-visible-local-projects';
 import { getLocalProjectVisibilityKey } from '@/lib/visible-local-project-index';
 import { useConvexErrorMessage } from '@/hooks/use-convex-error-message';
 import {
+  autoImportAvailableProjectHistory,
+  canAutoImportCodexProjectHistory,
   canUseProjectHistoryProjectControl,
   importProjectHistoryForLocalProject,
   resolveProjectHistoryConflictForLocalProject,
   syncProjectHistoryForLocalProject,
 } from '@/lib/project-history-control-client';
 import { reconcileLocalProjectHistoryCatalog } from '@/lib/local-project-history-catalog';
-import { worktreeCleanupConfigCache, worktreeSetupConfigCache } from '@/lib/local-storage-cache';
+import {
+  codexHistoryAutoImportCache,
+  worktreeCleanupConfigCache,
+  worktreeSetupConfigCache,
+} from '@/lib/local-storage-cache';
 import { projectSharingReducer } from '@/lib/project-sharing-state';
 import { useAppCapability } from '@/lib/app-platform';
 import { useOnlineMachineIds } from '@/hooks/use-machine-online-status';
@@ -64,7 +70,11 @@ import {
    render every row or filter to a single project. */
 export type LocalProjectsAdminHandlers = {
   onSharedWithTeamChange: (row: ProjectSettingsRow, sharedWithTeam: boolean) => Promise<void>;
-  onSyncHistory: (row: ProjectSettingsRow, provider: LocalProjectHistoryProvider) => Promise<void>;
+  onSyncHistory: (
+    row: ProjectSettingsRow,
+    provider: LocalProjectHistoryProvider,
+    shouldContinueAutomaticImport?: () => boolean
+  ) => Promise<void>;
   onImportHistory: (
     row: ProjectSettingsRow,
     provider: LocalProjectHistoryProvider
@@ -237,6 +247,34 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
     Record<string, LocalProjectHistorySyncSummary>
   >({});
   const [errorByKey, setErrorByKey] = useState<Record<string, string>>({});
+  const [autoImportByKey, setAutoImportByKey] = useState(codexHistoryAutoImportCache.readAll);
+  const autoImportRef = useRef(autoImportByKey);
+  autoImportRef.current = autoImportByKey;
+  const historySyncRef = useRef<LocalProjectsAdminHandlers['onSyncHistory'] | null>(null);
+  const historyRunsRef = useRef(new Set<string>());
+  const historyOwnerAliveRef = useRef(false);
+  const historyGenerationRef = useRef(0);
+  const historyContextRef = useRef({
+    currentUserId,
+    workspaceId,
+    agentConfigs,
+    projects,
+    localMachineId,
+  });
+  historyContextRef.current = {
+    currentUserId,
+    workspaceId,
+    agentConfigs,
+    projects,
+    localMachineId,
+  };
+  useEffect(() => {
+    historyOwnerAliveRef.current = true;
+    return () => {
+      historyOwnerAliveRef.current = false;
+      historyGenerationRef.current += 1;
+    };
+  }, []);
   const {
     byKey: worktreeSetupByKey,
     setByKey: setWorktreeSetupByKey,
@@ -435,6 +473,21 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
       const historyImports: ProjectHistoryImportState[] = historyProviders.map((provider) => {
         const key = historyStateKey(entry.key, provider);
         const providerKey = getLocalProjectHistoryCatalogKey(provider);
+        const config = agentConfigs.find((item) => item.id === provider.agentConfigId);
+        const autoImportKey = JSON.stringify([
+          currentUserId,
+          workspaceId,
+          entry.machineId,
+          entry.project.id,
+          provider.agentConfigId,
+        ]);
+        const canAutoImport = canAutoImportCodexProjectHistory({
+          provider,
+          config,
+          machineId: entry.machineId,
+          localMachineId,
+          isElectron: typeof window !== 'undefined' && Boolean(window.__LODY_ELECTRON__),
+        });
         const rawCatalog = catalogByKey[key] ?? catalogFromProject(entry.project, provider);
         const resolvingSessionIds = Object.entries(resolvingByKey[key] ?? {})
           .filter(([, resolving]) => resolving)
@@ -464,7 +517,7 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
         return {
           provider,
           providerKey,
-          providerLabel: agentConfigs.find((config) => config.id === provider.agentConfigId)?.name,
+          providerLabel: config?.name,
           canSync:
             canUseHistoryProjectControl &&
             canUseProjectHistoryProjectControl({
@@ -480,6 +533,21 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
           selectedSessionIds: selectedSessionIdsByKey[key] ?? [],
           resolvingSessionIds,
           errorMessage: errorByKey[key] ?? null,
+          autoImport: canAutoImport
+            ? {
+                scope: autoImportKey,
+                enabled: autoImportByKey[autoImportKey] === true,
+                setEnabled: (enabled: boolean) => {
+                  // Fence any pending catalog read before React commits the toggle.
+                  autoImportRef.current = { ...autoImportRef.current, [autoImportKey]: enabled };
+                  codexHistoryAutoImportCache.set(autoImportKey, enabled);
+                  setAutoImportByKey(autoImportRef.current);
+                },
+                sync: async (shouldContinue: () => boolean) => {
+                  await historySyncRef.current?.(row, provider, shouldContinue);
+                },
+              }
+            : undefined,
         };
       });
       const row: ProjectSettingsRow = {
@@ -560,6 +628,7 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
     worktreeCleanupLoadingByKey,
     worktreeCleanupSavingByKey,
     workspaceId,
+    autoImportByKey,
   ]);
 
   const onSharedWithTeamChange = useCallback(
@@ -602,12 +671,19 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
   );
 
   const onSyncHistory = useCallback(
-    async (row: ProjectSettingsRow, provider: LocalProjectHistoryProvider) => {
+    async (
+      row: ProjectSettingsRow,
+      provider: LocalProjectHistoryProvider,
+      shouldContinueAutomaticImport?: () => boolean
+    ) => {
       const key = historyStateKey(row.key, provider);
       if (!workspaceId || !currentUserId) {
         setErrorByKey((current) => ({ ...current, [key]: 'Workspace is not ready.' }));
         return;
       }
+      if (historyRunsRef.current.has(key)) return;
+      historyRunsRef.current.add(key);
+      const generation = historyGenerationRef.current;
       setSyncingByKey((current) => ({ ...current, [key]: true }));
       setResolvedConflictByKey((current) => {
         const { [key]: _, ...rest } = current;
@@ -627,12 +703,74 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
           localProjectId: row.project.id,
           requestedByUserId: currentUserId,
         });
+        const ownsResult = () =>
+          Boolean(
+            historyOwnerAliveRef.current &&
+            generation === historyGenerationRef.current &&
+            historyContextRef.current.currentUserId === currentUserId &&
+            historyContextRef.current.workspaceId === workspaceId &&
+            historyContextRef.current.projects.has(row.key)
+          );
+        if (!ownsResult()) return;
         setCatalogByKey((current) => ({ ...current, [key]: result }));
         setSelectedSessionIdsByKey((current) => ({ ...current, [key]: [] }));
+        const autoImportKey = JSON.stringify([
+          currentUserId,
+          workspaceId,
+          row.machineId,
+          row.project.id,
+          provider.agentConfigId,
+        ]);
+        const shouldContinue = () => {
+          const context = historyContextRef.current;
+          const config = context.agentConfigs.find((item) => item.id === provider.agentConfigId);
+          return Boolean(
+            historyOwnerAliveRef.current &&
+            generation === historyGenerationRef.current &&
+            context.currentUserId === currentUserId &&
+            context.workspaceId === workspaceId &&
+            context.projects.has(row.key) &&
+            autoImportRef.current[autoImportKey] === true &&
+            (!shouldContinueAutomaticImport || shouldContinueAutomaticImport()) &&
+            canAutoImportCodexProjectHistory({
+              provider,
+              config,
+              machineId: row.machineId,
+              localMachineId: context.localMachineId,
+              isElectron: typeof window !== 'undefined' && Boolean(window.__LODY_ELECTRON__),
+            })
+          );
+        };
+        if (shouldContinue()) {
+          setImportingByKey((current) => ({ ...current, [key]: true }));
+          await autoImportAvailableProjectHistory(
+            {
+              provider,
+              runtime,
+              localMachineId,
+              machineId: row.machineId,
+              workspaceId,
+              localProjectId: row.project.id,
+              requestedByUserId: currentUserId,
+              shouldContinue,
+              onBatchComplete: (cumulative) => {
+                if (!ownsResult()) return;
+                setCatalogByKey((current) => ({ ...current, [key]: cumulative.catalog }));
+                setSyncSummariesByKey((current) => ({ ...current, [key]: cumulative.summary }));
+              },
+            },
+            result
+          );
+        }
       } catch (error) {
         console.error('[project-settings] history sync failed', error);
         setErrorByKey((current) => ({ ...current, [key]: toErrorMessage(error) }));
       } finally {
+        historyRunsRef.current.delete(key);
+        setImportingByKey((current) => {
+          const { [key]: _, ...rest } = current;
+          return rest;
+        });
         setSyncingByKey((current) => {
           const { [key]: _, ...rest } = current;
           return rest;
@@ -641,6 +779,7 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
     },
     [currentUserId, localMachineId, runtime, workspaceId]
   );
+  historySyncRef.current = onSyncHistory;
 
   const onHistorySelectionChange = useCallback(
     (row: ProjectSettingsRow, provider: LocalProjectHistoryProvider, selectedIds: string[]) => {
@@ -662,6 +801,8 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
       const providerKey = getLocalProjectHistoryCatalogKey(provider);
       const state = row.historyImports.find((item) => item.providerKey === providerKey);
       if (!state || state.selectedSessionIds.length === 0) return;
+      if (historyRunsRef.current.has(key)) return;
+      historyRunsRef.current.add(key);
       setImportingByKey((current) => ({ ...current, [key]: true }));
       setResolvedConflictByKey((current) => {
         const { [key]: _, ...rest } = current;
@@ -696,6 +837,7 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
         console.error('[project-settings] history import failed', error);
         setErrorByKey((current) => ({ ...current, [key]: toErrorMessage(error) }));
       } finally {
+        historyRunsRef.current.delete(key);
         setImportingByKey((current) => {
           const { [key]: _, ...rest } = current;
           return rest;
@@ -723,6 +865,8 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
         }));
         return;
       }
+      if (historyRunsRef.current.has(key)) return;
+      historyRunsRef.current.add(key);
       setResolvingByKey((current) => ({
         ...current,
         [key]: {
@@ -759,6 +903,7 @@ export function useLocalProjectsAdmin(): LocalProjectsAdminData {
         console.error('[project-settings] history conflict resolve failed', error);
         setErrorByKey((current) => ({ ...current, [key]: toErrorMessage(error) }));
       } finally {
+        historyRunsRef.current.delete(key);
         setResolvingByKey((current) => {
           const providerState = { ...(current[key] ?? {}) };
           delete providerState[session.acpSessionId];
