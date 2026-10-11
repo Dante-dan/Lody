@@ -42,6 +42,10 @@ when their Settings tab renders, with a local Suspense boundary. The new Memory
 route also uses the shared lazy boundary; the Role editor loads its memory picker
 on demand so opening Chat does not import the Memory Settings body. The upstream
 responsive desktop navigation is preserved when integrating these boundaries.
+The emitted production graph also exposed the Settings barrel’s static About
+re-export: About’s component code remained in the initial entry even after its
+route became lazy. The barrel now re-exports the same canonical lazy About
+component, removing that remaining eager body path.
 Shared non-Settings editors and helpers retain their existing consumers; this does
 not claim that every Settings dependency is absent from the startup graph.
 

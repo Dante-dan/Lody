@@ -12,7 +12,7 @@ export { AccountSettingsPure } from './account-setting-pure';
 export type { AccountSettingsPureProps, AccountMember } from './account-setting-pure';
 export { BillingSettingsComponent } from './billing-setting';
 export { StatsSettingsComponent } from './stats-setting';
-export { AboutSettingsComponent } from './about-setting';
+export { AboutSettingsComponent } from './lazy-settings-components';
 export { KeyboardShortcutsSetting } from './keyboard-shortcuts-setting';
 export { SettingsHeader } from './settings-header';
 export { SettingsCategoryList, SettingsCategoryGrid } from './settings-category-list';
