@@ -2,9 +2,8 @@
 
 `CLAUDE.md` is a symlink to this file. Edit `AGENTS.md` only.
 
-Rules only; rationale: [README.md](README.md). Worktrees and git
-credentials: [worktree/AGENTS.md](worktree/AGENTS.md). Architecture: context/message-flow.md.
-Contract: specs/session-orchestration.md.
+Module map and contracts: [README.md](README.md).
+Worktree rules: [worktree/AGENTS.md](worktree/AGENTS.md).
 
 ## Authorization and identity
 
@@ -17,11 +16,11 @@ Contract: specs/session-orchestration.md.
   substitute.
 - Derive the human identity from the active dispatch/execution runtime and fail closed when none
   exists; retries and recovery never reread mutable history.
-- Machine and Provider credentials stay execution-host scoped; attribution, authorization,
-  GitHub, and Git identity use the frozen identity, never the Session owner.
+- Machine/Provider credentials stay host-scoped. Attribution, authorization and commits
+  use the frozen Turn identity; GitHub network auth uses the trusted conversation owner.
 - Git: owner uses local config, no profile query; others never read it.
   `CloudPort` profiles: 60s deadline, retry failures, reject placeholders.
-  Identity never restarts ACP/sandbox, even in prep.
+  Commit attribution never restarts ACP; owner changes retire the runtime.
 
 ## Dispatch
 
@@ -64,8 +63,8 @@ Contract: specs/session-orchestration.md.
   `finished`/`endedAt`/`permissionWaitMs` there only; never write `finished=false` from teardown.
 - Keep JSON-RPC/transport matching in `acp-error-classification.ts`: disposed/stale `-32603` is
   `agent_disconnected`, Harness compression mismatch is `acp_session_storage_incompatible`.
-- Continue-session recovery may restore the ACP session and retry the same prompt once, only
-  while that turn has no ACP output.
+- User turns may restore stale ACP and retry once before output. Delivery never retries after
+  provider submission.
 - A turn with no ACP updates takes `recordSilentTurnFailure`, not `setDispatchHandled`.
   Read `turnProducedVisibleOutput` before `finalizeTurn` clears it; still finalize, advance
   the pointer, and fail open.
@@ -74,6 +73,9 @@ Contract: specs/session-orchestration.md.
 
 ## Lifecycle
 
+- Roost: [contract](README.md#roost-history-paging): app keys, no keyring/silent rotation.
+  Keep outcomes; causes local, RPC stage/code/ID.
+
 - `Session.createAgent` gates each ACP spawn; failed spawns reject JSON-RPC. Terminals spawn
   protocol argv (`sh -c` only for unsplit commands). Managed Codex reused-refresh startup
   retries once after process cleanup, delay, and live Provider recheck; other auth errors do not.
@@ -81,16 +83,16 @@ Contract: specs/session-orchestration.md.
   the machine publishes `['dotlodyPath']` for frontends to derive them.
 - INVARIANT: any `sandbox.spawn` whose OUTPUT is the result must pass `captureOutput: true` (ACP
   stdio deliberately does not), and the capture buffer stays capped at 4 MiB.
-- Shutdown is two-phase: `cleanUp({ keepWorkspaceDocumentOpen: true })`, then plain `cleanUp()`
-  after MessageHandler's final flush. Never tear the document down first.
+- Shutdown: `cleanUp({ keepWorkspaceDocumentOpen: true })`, MessageHandler's final flush,
+  then `cleanUp()`; never close the doc first.
 
 ## Sagas
 
-- Preparation peek/claim never delay cold fallback; peek never transfers ownership. Publish the
-  resource BEFORE `start()`. It may create the marked final worktree and complete `newSession`, but cannot
-  create a session doc, run setup, append history, or publish events before adoption.
-- Dispatch and claim rescan the current row and reject changed compatibility under canonical
-  `buildSessionLaunchConfig` semantics; a published incompatible resource cleans up first.
+- Peek/claim are synchronous; publish before `start()`. Peek never transfers ownership.
+  Cold/replacement starts await same-session cleanup; failures block, including late creation.
+  Before adoption: marked worktree and `newSession` only; no doc, setup, history or events.
+- Credentials are runtime leases: adopt retains, dispose releases that generation; local has none.
+- Dispatch/claim rescan `buildSessionLaunchConfig`; await incompatible cleanup.
 - Nested child Sessions are rejected: ownership resolves one parent hop only.
 - Fork and continuation share `resolveSessionAcpTargetId`; source runtime config copies only at its matching user-turn fence.
 - Fork commits at `persistPendingChanges()`, never cloud sync. Persist its placeholder

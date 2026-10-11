@@ -68,3 +68,5 @@ export const ShareManagementSetting = lazyRouteComponent(
   () => import('./share-management-setting'),
   'ShareManagementSetting'
 );
+
+export const MemorySetting = lazyRouteComponent(() => import('./memory-setting'), 'MemorySetting');

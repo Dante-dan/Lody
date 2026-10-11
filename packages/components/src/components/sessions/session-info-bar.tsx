@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { LockKeyhole, MonitorPlay } from 'lucide-react';
+import * as stylex from '@stylexjs/stylex';
+import { space } from '@lody/ui/tokens/scales.stylex';
+import { LockKeyhole, MonitorPlay, Smartphone } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type {
   PendingScheduledTask,
@@ -30,11 +32,16 @@ import {
   SessionSyncingIndicator,
   type SessionSyncIndicatorVariant,
 } from './session-syncing-indicator';
+import { SessionMachineInfo } from './session-machine-info';
 
 export type InfoBarItemKey = 'status' | 'goal' | 'schedule' | 'scheduleSource' | 'context';
 
 export type SessionInfoBarProps = {
   status: SessionStatusStripState | null;
+  /** Persistent execution target, outside the cluster/stage selection. */
+  machine?: SessionMachineInfo | null;
+  /** Mobile keeps the target as an icon; its full name remains in the card. */
+  compactMachineInfo?: boolean;
   /** The schedule that started this session; the chip is the way back to it. */
   scheduleSource?: { title: string; onOpen: () => void } | null;
   /**
@@ -74,6 +81,7 @@ export type SessionInfoBarProps = {
   /** Open the session Browser panel. Renders a
    *  plain action chip in the cluster zone (no stage form). */
   onOpenBrowser?: () => void;
+  onOpenIosSimulator?: () => void;
   /** Mobile team workspace: persistent effective privacy status. */
   privateAccessStatus?: { label: string; description: string; onAction?: () => void };
   diffStat?: { add: number; del: number } | null;
@@ -126,8 +134,27 @@ export type SessionInfoBarProps = {
    (the bar pill or the composer), so its square bottom meets a straight edge. */
 const QUEUE_SHEET_INSET_CLASS = 'mx-3';
 
+const styles = stylex.create({
+  machineOnly: {
+    display: 'flex',
+    alignItems: 'center',
+    minWidth: 0,
+    height: space[8],
+    paddingInline: space[1.5],
+    containerType: 'inline-size',
+  },
+  compactPrivateLabel: {
+    display: {
+      default: 'inline',
+      '@container (max-width: 420px)': 'none',
+    },
+  },
+});
+
 export function SessionInfoBar({
   status,
+  machine,
+  compactMachineInfo = false,
   goal,
   goalCommands,
   goalPendingCommand,
@@ -147,6 +174,7 @@ export function SessionInfoBar({
   onOpenAllChanges,
   relations,
   onOpenBrowser,
+  onOpenIosSimulator,
   privateAccessStatus,
   diffStat,
   syncing = false,
@@ -226,14 +254,23 @@ export function SessionInfoBar({
   }, [statusSignature, goalSignature, scheduleSignature, contextSignature]);
 
   // With no staged items the bar hides unless it still owns a standalone
-  // action or ambient syncing state. A reported preview is often the only
+  // action, execution target or ambient syncing state. A reported preview is often the only
   // context a chat-only Session has, so dropping the Browser action here would
   // leave no visible path from the report to the preview.
   // The bar owns the gap above the composer (the session composer skips its own
   // spacer): 8px under the pill, none under a queue sheet (it sits on the
   // composer), and the plain 4px when there is nothing to show.
   const ambientSync = syncStatus !== undefined ? syncStatus : syncing ? 'syncing' : null;
-  if (!defaultKey && !relations && !onOpenBrowser && !ambientSync && !privateAccessStatus) {
+  const hasMachine = !!machine?.name.trim();
+  const hasSurfaceContent = !!(
+    defaultKey ||
+    relations ||
+    onOpenBrowser ||
+    onOpenIosSimulator ||
+    ambientSync ||
+    privateAccessStatus
+  );
+  if (!hasSurfaceContent && !hasMachine) {
     return queue ? (
       <div className="w-full shrink-0 bg-background">
         <ConversationColumn>
@@ -309,7 +346,19 @@ export function SessionInfoBar({
   const clusterKeys = (['status', 'goal', 'schedule', 'scheduleSource', 'context'] as const).filter(
     (key) => present[key] && key !== stagedKey
   );
-  const clusterNonEmpty = clusterKeys.length > 0 || !!relations || !!onOpenBrowser;
+  const clusterNonEmpty =
+    hasMachine || clusterKeys.length > 0 || !!relations || !!onOpenBrowser || !!onOpenIosSimulator;
+
+  const surfaceProps = hasSurfaceContent
+    ? {
+        className: cn(
+          '@container flex h-8 w-full min-w-0 select-none items-center gap-1.5 rounded-lg border-[0.5px] border-foreground/[0.10] bg-[hsl(var(--composer))] px-2.5 text-xs dark:border-input-border/45 dark:bg-input/70',
+          INFO_BAR_ELEVATION_CLASS,
+          // Keep the queue sheet's top seam free of upward shadow bleed.
+          queue && '[clip-path:inset(0_-6px_-6px_-6px)]'
+        ),
+      }
+    : stylex.props(styles.machineOnly);
 
   return (
     // Light: same fill and lift as the session composer. Dark: recessed input.
@@ -327,16 +376,14 @@ export function SessionInfoBar({
           input box share edges. */}
       <ConversationColumn>
         {queue ? <div className={QUEUE_SHEET_INSET_CLASS}>{queue}</div> : null}
-        <div
-          data-info-bar-surface=""
-          className={cn(
-            '@container flex h-8 w-full min-w-0 select-none items-center gap-1.5 rounded-lg border-[0.5px] border-foreground/[0.10] bg-[hsl(var(--composer))] px-2.5 text-xs dark:border-input-border/45 dark:bg-input/70',
-            INFO_BAR_ELEVATION_CLASS,
-            // With the queue sheet seated on top, clip the shadow's upward bleed
-            // (its 1px spread) at the top edge only; sides and bottom keep it.
-            queue && '[clip-path:inset(0_-6px_-6px_-6px)]'
-          )}
-        >
+        <div data-info-bar-surface="" {...surfaceProps}>
+          {hasMachine && machine ? (
+            <SessionMachineInfo
+              key={machine.machineId}
+              machine={machine}
+              compact={compactMachineInfo}
+            />
+          ) : null}
           {privateAccessStatus ? (
             <button
               type="button"
@@ -346,11 +393,22 @@ export function SessionInfoBar({
               onClick={privateAccessStatus.onAction}
             >
               <LockKeyhole className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              <span className="truncate font-medium">{privateAccessStatus.label}</span>
+              <span
+                className={cn(
+                  'truncate font-medium',
+                  compactMachineInfo && stylex.props(styles.compactPrivateLabel).className
+                )}
+              >
+                {privateAccessStatus.label}
+              </span>
             </button>
           ) : null}
           {privateAccessStatus &&
-          (clusterKeys.length > 0 || relations || onOpenBrowser || stagedKey) ? (
+          (clusterKeys.length > 0 ||
+            relations ||
+            onOpenBrowser ||
+            onOpenIosSimulator ||
+            stagedKey) ? (
             <span aria-hidden="true" className="h-3.5 w-px shrink-0 bg-muted-foreground/25" />
           ) : null}
           {clusterKeys.map((key) => renderItem(key, 'cluster'))}
@@ -362,6 +420,14 @@ export function SessionInfoBar({
               label={t('sessions.browser.openPreview', 'Open preview')}
               textClassName="text-emerald-600 dark:text-emerald-400"
               onAction={onOpenBrowser}
+            />
+          ) : null}
+          {onOpenIosSimulator ? (
+            <ActionChip
+              icon={Smartphone}
+              label={t('sessions.detailTabs.iosSimulator', 'iOS Simulator')}
+              textClassName="text-emerald-600 dark:text-emerald-400"
+              onAction={onOpenIosSimulator}
             />
           ) : null}
           {/* The divider is what marks the staged item as active (the stage

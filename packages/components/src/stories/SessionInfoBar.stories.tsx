@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react';
 import { useState } from 'react';
-import { fn } from 'storybook/test';
+import { fn, userEvent, within } from 'storybook/test';
+import { useTranslation } from 'react-i18next';
 import {
   getServerNow,
   SESSION_GOAL_COMMANDS,
@@ -9,8 +10,13 @@ import {
   type SessionGoalCommand,
   type SessionGoalMessage,
   type SessionPullRequestMeta,
+  type SessionMeta,
+  type SessionPullRequestCiState,
 } from '@lody/shared';
-import { SessionInfoBar } from '@/components/sessions/session-info-bar';
+import { getSessionGitHubState } from '@/lib/session-github-state';
+import { resolveSessionInfoBarGitHubActionIds } from '@/components/sessions/session-info-action-state';
+import { SessionInfoBar, type SessionInfoBarProps } from '@/components/sessions/session-info-bar';
+import type { SessionMachineInfo } from '@/components/sessions/session-machine-info';
 import type { ContextChipAction, PrCiRun } from '@/components/sessions/session-info-chips';
 import type { SessionStatusStripState } from '@/components/sessions/session-status-strip';
 
@@ -96,10 +102,14 @@ const CI_RUNNING: PrCiRun[] = [
 
 function StoryHarness({
   status = null,
+  machine,
+  compactMachineInfo = false,
+  privateAccessStatus,
   goal = null,
   goalPending = null,
   scheduledTasks,
   prCiRuns,
+  prCiState,
   projectName = 'loro-dev/lody',
   branch = 'feat/presence-machine-online-session-status',
   workspaceLocation = null,
@@ -113,10 +123,14 @@ function StoryHarness({
   syncing = false,
 }: {
   status?: SessionStatusStripState | null;
+  machine?: SessionMachineInfo;
+  compactMachineInfo?: boolean;
+  privateAccessStatus?: SessionInfoBarProps['privateAccessStatus'];
   goal?: SessionGoalMessage | null;
   goalPending?: SessionGoalCommand | null;
   scheduledTasks?: PendingScheduledTask[];
   prCiRuns?: PrCiRun[];
+  prCiState?: SessionPullRequestCiState | null;
   projectName?: string | null;
   branch?: string | null;
   workspaceLocation?: {
@@ -162,6 +176,9 @@ function StoryHarness({
       <div className="h-72" />
       <SessionInfoBar
         status={status}
+        machine={machine}
+        compactMachineInfo={compactMachineInfo}
+        privateAccessStatus={privateAccessStatus}
         goal={currentGoal}
         goalCommands={SESSION_GOAL_COMMANDS}
         goalPendingCommand={goalPending}
@@ -169,6 +186,7 @@ function StoryHarness({
         onGoalDismiss={() => setCurrentGoal(null)}
         scheduledTasks={scheduledTasks}
         prCiRuns={prCiRuns}
+        prCiState={prCiState}
         onOpenPrCiRun={fn()}
         initialStage={initialStage}
         projectName={projectName}
@@ -203,6 +221,99 @@ type Story = StoryObj<typeof meta>;
 
 export const ContextOnly: Story = { args: {} };
 
+const LOCAL_MACHINE: SessionMachineInfo = {
+  machineId: 'story-machine' as SessionMachineInfo['machineId'],
+  name: 'MacBook-Pro.local',
+  isOwn: true,
+  isCurrent: true,
+  onlineStatus: 'online',
+};
+
+export const MachineOnly: Story = {
+  args: {
+    machine: LOCAL_MACHINE,
+    projectName: null,
+    branch: null,
+    pr: null,
+    diffStat: null,
+  },
+};
+
+export const MachineWithContext: Story = { args: { machine: LOCAL_MACHINE } };
+
+export const MachineDetails: Story = {
+  args: { machine: { ...LOCAL_MACHINE, isOwn: false, ownerName: 'Maya Chen' } },
+  globals: { locale: 'en' },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(
+      await within(canvasElement).findByRole('button', {
+        name: 'Machine details: MacBook-Pro.local',
+      })
+    );
+  },
+};
+
+export const MachineWithContextNarrow: Story = {
+  args: {
+    machine: { ...LOCAL_MACHINE, name: 'Maya-Engineering-MacBook-Pro.local' },
+    width: 420,
+    projectName: 'LodyAI/Lody',
+    branch: 'feat/machine-info',
+  },
+};
+
+export const MachineUnknownStatus: Story = {
+  ...MachineOnly,
+  args: {
+    ...MachineOnly.args,
+    machine: { ...LOCAL_MACHINE, isOwn: false, onlineStatus: 'unknown' },
+  },
+};
+
+export const MobileMachineWithActions: Story = {
+  args: {
+    machine: LOCAL_MACHINE,
+    compactMachineInfo: true,
+    width: 375,
+    projectName: 'LodyAI/Lody',
+    branch: null,
+    pr: null,
+    goal: makeGoal(),
+    scheduledTasks: [makeWakeup(12 * 60_000)],
+    actionLabels: ['Create PR', 'Commit & Push'],
+  },
+};
+
+export const MobilePrivateMachineWithAction: Story = {
+  args: {
+    machine: LOCAL_MACHINE,
+    compactMachineInfo: true,
+    width: 375,
+    projectName: 'LodyAI/Lody',
+    branch: null,
+    pr: null,
+    privateAccessStatus: {
+      label: 'Private · Only you',
+      description: 'Only you can access this private session',
+      onAction: fn(),
+    },
+    actionLabels: ['Create PR'],
+  },
+};
+
+export const MobileMachineLongName: Story = {
+  args: {
+    ...MachineWithContextNarrow.args,
+    compactMachineInfo: true,
+    width: 375,
+    branch: null,
+  },
+};
+
+export const MobileMachineUnknownStatus: Story = {
+  args: { ...MachineUnknownStatus.args, compactMachineInfo: true, width: 375 },
+};
+
 export const ContextWithMachineOffline: Story = {
   args: { status: { kind: 'machine-offline', machineName: 'zx MacBook-Pro.local' } },
 };
@@ -212,6 +323,51 @@ export const ContextWithMachineRemoved: Story = {
 };
 
 export const NoPr: Story = { args: { pr: null } };
+
+function ObservationHarness({ ownerMeta }: { ownerMeta: SessionMeta }) {
+  const { t } = useTranslation();
+  const state = getSessionGitHubState(ownerMeta);
+  const labels: Record<string, string> = {
+    'create-pr': t('sessions.createPr', 'Create PR'),
+    'create-draft-pr': t('sessions.createDraftPr', 'Create Draft PR'),
+    'commit-and-push': t('sessions.commitAndPush', 'Commit & Push'),
+  };
+  const actionIds = resolveSessionInfoBarGitHubActionIds({
+    ...state,
+    canMutatePr: false,
+    isAgentBusy: false,
+    prStatus: state.latestPr?.status,
+    prCiState: state.latestPrState?.s,
+    prMergeState: state.latestPrState?.m,
+  });
+  return (
+    <StoryHarness
+      projectName={state.repoFullName}
+      branch={ownerMeta.branchName}
+      pr={state.latestPr}
+      prCiState={state.latestPrState?.s}
+      diffStat={ownerMeta.diffStats?.allChange}
+      actionLabels={actionIds.map((id) => labels[id] ?? id)}
+    />
+  );
+}
+
+export const DiscoveredPrAssociationRejected: StoryObj<typeof ObservationHarness> = {
+  render: (args) => <ObservationHarness {...args} />,
+  args: {
+    ownerMeta: {
+      userId: 'synthetic-user',
+      project: { kind: 'local', localProjectId: 'local-1', githubRepoFullName: 'owner/repo' },
+      branchName: 'feat/x',
+      workspaceDirty: true,
+      diffStats: { allChange: { add: 12, del: 3 } },
+      pullRequests: [{ url: 'https://github.com/owner/repo/pull/55', status: 'draft' }],
+      pullRequestState: {
+        'https://github.com/owner/repo/pull/55': { t: 1720000000, s: 'f', m: 'c' },
+      },
+    } as unknown as SessionMeta,
+  },
+};
 
 const worktreeLocation = {
   kind: 'worktree' as const,

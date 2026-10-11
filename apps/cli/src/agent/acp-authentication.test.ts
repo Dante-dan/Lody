@@ -10,6 +10,8 @@ import { ACP_AUTHORIZATION_URL_MAX_LENGTH, type AgentConfigMeta } from '@lody/sh
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { NodeProcessApi } from '@lody/shared/node/process';
+
 import type { Logger } from '@/utils/logger';
 import { createStdinWritableStream, createStdoutReadableStream } from '@/utils/stream';
 import { AcpAuthenticationManager, probeBuiltinAuthentication } from './acp-authentication';
@@ -28,10 +30,16 @@ const createSilentLogger = (): Logger => ({
   close: async () => {},
 });
 
+// A started child always has a pid; the fake process API below routes the
+// process layer's signals to these fakes, never to the real OS.
+const fakeChildren = new Map<number, ChildProcess>();
+let nextFakePid = 70_000;
+
 function createFakeChild(options: { ignoreSigterm?: boolean } = {}) {
   const child = new EventEmitter() as ChildProcess;
   child.exitCode = null;
-  child.pid = undefined;
+  child.pid = nextFakePid++;
+  fakeChildren.set(child.pid, child);
   child.stdout = null;
   child.stderr = null;
   child.kill = vi.fn((signal?: NodeJS.Signals) => {
@@ -41,6 +49,23 @@ function createFakeChild(options: { ignoreSigterm?: boolean } = {}) {
     return true;
   });
   return child;
+}
+
+function fakeNodeProcess(spawn: (...args: never[]) => unknown): NodeProcessApi {
+  return {
+    platform: 'linux',
+    spawn: spawn as NodeProcessApi['spawn'],
+    spawnSync: () => {
+      throw new Error('authentication never runs a synchronous spawn');
+    },
+    kill: (target, signal) => {
+      const child = fakeChildren.get(Math.abs(target));
+      if (!child || child.exitCode !== null) {
+        throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' });
+      }
+      if (signal !== 0) child.kill(signal);
+    },
+  };
 }
 
 function createDeferred<T>() {
@@ -89,7 +114,7 @@ describe('AcpAuthenticationManager', () => {
         }
       );
       const manager = new AcpAuthenticationManager(createSilentLogger(), {
-        spawnProcess: spawnProcess as never,
+        nodeProcess: fakeNodeProcess(spawnProcess),
         resolveLoginShellEnv: async () => ({}),
         resolveAuthenticationProcessLaunch: (async () => ({
           command: '/test/codex',
@@ -130,7 +155,7 @@ describe('AcpAuthenticationManager', () => {
       return successfulChild;
     });
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: spawnProcess as never,
+      nodeProcess: fakeNodeProcess(spawnProcess),
       resolveLoginShellEnv: vi.fn(() => loginShellEnv.promise),
     });
     const input = {
@@ -185,7 +210,7 @@ describe('AcpAuthenticationManager', () => {
         return successfulChild;
       });
       const manager = new AcpAuthenticationManager(createSilentLogger(), {
-        spawnProcess: spawnProcess as never,
+        nodeProcess: fakeNodeProcess(spawnProcess),
         resolveLoginShellEnv: async () => ({}),
       });
 
@@ -229,7 +254,7 @@ describe('AcpAuthenticationManager', () => {
       if (event.status === 'authorization') authorizationReceived.resolve();
     });
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: vi.fn(() => child) as never,
+      nodeProcess: fakeNodeProcess(vi.fn(() => child)),
       resolveLoginShellEnv: async () => ({}),
     });
     const authentication = manager.authenticate({
@@ -270,13 +295,15 @@ describe('AcpAuthenticationManager', () => {
   it('directs unsuccessful Codex login to its diagnostics without guessing the cause', async () => {
     const failedChild = createFakeChild();
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: vi.fn(() => {
-        queueMicrotask(() => {
-          failedChild.exitCode = 1;
-          failedChild.emit('exit', 1, null);
-        });
-        return failedChild;
-      }) as never,
+      nodeProcess: fakeNodeProcess(
+        vi.fn(() => {
+          queueMicrotask(() => {
+            failedChild.exitCode = 1;
+            failedChild.emit('exit', 1, null);
+          });
+          return failedChild;
+        })
+      ),
       resolveLoginShellEnv: async () => ({}),
     });
 
@@ -316,7 +343,7 @@ describe('AcpAuthenticationManager', () => {
       return successfulChild;
     });
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: spawnProcess as never,
+      nodeProcess: fakeNodeProcess(spawnProcess),
       resolveLoginShellEnv,
     });
     const input = {
@@ -373,7 +400,7 @@ describe('AcpAuthenticationManager', () => {
       };
     const progress = vi.fn();
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: spawnProcess as never,
+      nodeProcess: fakeNodeProcess(spawnProcess),
       resolveLoginShellEnv: async () => ({}),
       resolveAuthenticationProcessLaunch,
     });
@@ -419,7 +446,7 @@ describe('AcpAuthenticationManager', () => {
     const spawnProcess = vi.fn();
     const progress = vi.fn();
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: spawnProcess as never,
+      nodeProcess: fakeNodeProcess(spawnProcess),
       resolveLoginShellEnv: async () => ({}),
       resolveAuthenticationProcessLaunch,
     });
@@ -461,7 +488,7 @@ describe('AcpAuthenticationManager', () => {
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
       authenticationTimeoutMs: 10,
       terminationGraceMs: 2,
-      spawnProcess: spawnProcess as never,
+      nodeProcess: fakeNodeProcess(spawnProcess),
       resolveLoginShellEnv: async () => ({}),
     });
     const input = {
@@ -487,102 +514,106 @@ describe('AcpAuthenticationManager', () => {
     });
   });
 
-  it('bridges request-scoped ACP form elicitation for a custom provider', async () => {
-    const child = createFakeChild();
-    const stdin = new PassThrough();
-    const stdout = new PassThrough();
-    child.stdin = stdin;
-    child.stdout = stdout;
-    child.stderr = new PassThrough();
-    const elicitationReply = createDeferred<acp.CreateElicitationResponse>();
-    const agent = acp
-      .agent({ name: 'test-auth-agent' })
-      .onRequest(acp.methods.agent.initialize, async ({ params }) => ({
-        protocolVersion: params.protocolVersion,
-        authMethods: [{ id: 'oauth', name: 'OAuth' }],
-      }))
-      .onRequest(acp.methods.agent.authenticate, async ({ client, requestId }) => {
-        const reply = await client.request(acp.methods.client.elicitation.create, {
-          mode: 'form',
-          requestId,
-          message: 'Complete provider sign-in',
-          requestedSchema: {
-            type: 'object',
-            properties: {
-              token: {
-                type: 'string',
-                title: 'Token',
-                default: 'must-not-cross-machine-rpc',
-                _meta: { secret: true },
+  it.each(['custom', 'devin'] as const)(
+    'bridges request-scoped ACP form elicitation for %s',
+    async (provider) => {
+      const child = createFakeChild();
+      const stdin = new PassThrough();
+      const stdout = new PassThrough();
+      child.stdin = stdin;
+      child.stdout = stdout;
+      child.stderr = new PassThrough();
+      const elicitationReply = createDeferred<acp.CreateElicitationResponse>();
+      const agent = acp
+        .agent({ name: 'test-auth-agent' })
+        .onRequest(acp.methods.agent.initialize, async ({ params }) => ({
+          protocolVersion: params.protocolVersion,
+          authMethods: [{ id: 'oauth', name: 'OAuth' }],
+        }))
+        .onRequest(acp.methods.agent.authenticate, async ({ client, requestId }) => {
+          const reply = await client.request(acp.methods.client.elicitation.create, {
+            mode: 'form',
+            requestId,
+            message: 'Complete provider sign-in',
+            requestedSchema: {
+              type: 'object',
+              properties: {
+                token: {
+                  type: 'string',
+                  title: 'Token',
+                  default: 'must-not-cross-machine-rpc',
+                  _meta: { secret: true },
+                },
+                account: {
+                  type: 'string',
+                  title: 'Account',
+                  enum: ['work', 'personal'],
+                  default: 'work',
+                },
               },
-              account: {
-                type: 'string',
-                title: 'Account',
-                enum: ['work', 'personal'],
-                default: 'work',
-              },
+              required: ['token', 'account'],
             },
-            required: ['token', 'account'],
-          },
+          });
+          elicitationReply.resolve(reply);
+          return {};
         });
-        elicitationReply.resolve(reply);
-        return {};
+      agent.connect(
+        acp.ndJsonStream(createStdinWritableStream(stdout), createStdoutReadableStream(stdin))
+      );
+
+      const formReceived = createDeferred<{ interactionId: string }>();
+      const manager = new AcpAuthenticationManager(createSilentLogger(), {
+        nodeProcess: fakeNodeProcess(vi.fn(() => child)),
+        resolveLoginShellEnv: async () => ({}),
       });
-    agent.connect(
-      acp.ndJsonStream(createStdinWritableStream(stdout), createStdoutReadableStream(stdin))
-    );
+      const authentication = manager.authenticate({
+        requestId: 'auth-custom',
+        cliType: provider === 'devin' ? 'builtin' : 'custom',
+        agentType: provider === 'devin' ? 'devin' : 'custom-test',
+        runtimeOverrides: provider === 'devin' ? { devinPath: '/test/devin' } : undefined,
+        customAcp: { command: '/test/custom-acp', args: [] },
+        onProgress: (event) => {
+          if (event.status === 'input-required') {
+            expect(event.form.fields).toEqual([
+              { id: 'token', type: 'secret', label: 'Token', required: true },
+              {
+                id: 'account',
+                type: 'select',
+                label: 'Account',
+                required: true,
+                options: [
+                  { value: 'work', label: 'work' },
+                  { value: 'personal', label: 'personal' },
+                ],
+                defaultValue: 'work',
+              },
+            ]);
+            formReceived.resolve({ interactionId: event.interactionId });
+          }
+        },
+      });
 
-    const formReceived = createDeferred<{ interactionId: string }>();
-    const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: vi.fn(() => child) as never,
-      resolveLoginShellEnv: async () => ({}),
-    });
-    const authentication = manager.authenticate({
-      requestId: 'auth-custom',
-      cliType: 'custom',
-      agentType: 'custom-test',
-      customAcp: { command: '/test/custom-acp', args: [] },
-      onProgress: (event) => {
-        if (event.status === 'input-required') {
-          expect(event.form.fields).toEqual([
-            { id: 'token', type: 'secret', label: 'Token', required: true },
-            {
-              id: 'account',
-              type: 'select',
-              label: 'Account',
-              required: true,
-              options: [
-                { value: 'work', label: 'work' },
-                { value: 'personal', label: 'personal' },
-              ],
-              defaultValue: 'work',
-            },
-          ]);
-          formReceived.resolve({ interactionId: event.interactionId });
-        }
-      },
-    });
-
-    const { interactionId } = await formReceived.promise;
-    expect(
-      manager.submitAuthenticationInput(
-        'auth-custom',
-        interactionId,
-        JSON.stringify({
-          action: 'accept',
-          content: { token: 'secret-value', account: 'work' },
-        })
-      )
-    ).toEqual({ success: true, disposition: 'input-accepted' });
-    await expect(elicitationReply.promise).resolves.toEqual({
-      action: 'accept',
-      content: { token: 'secret-value', account: 'work' },
-    });
-    await expect(authentication).resolves.toEqual({
-      success: true,
-      disposition: 'authenticated',
-    });
-  });
+      const { interactionId } = await formReceived.promise;
+      expect(
+        manager.submitAuthenticationInput(
+          'auth-custom',
+          interactionId,
+          JSON.stringify({
+            action: 'accept',
+            content: { token: 'secret-value', account: 'work' },
+          })
+        )
+      ).toEqual({ success: true, disposition: 'input-accepted' });
+      await expect(elicitationReply.promise).resolves.toEqual({
+        action: 'accept',
+        content: { token: 'secret-value', account: 'work' },
+      });
+      await expect(authentication).resolves.toEqual({
+        success: true,
+        disposition: 'authenticated',
+      });
+    }
+  );
 
   it('selects between advertised agent-driven authentication methods', async () => {
     const child = createFakeChild();
@@ -610,7 +641,7 @@ describe('AcpAuthenticationManager', () => {
     );
     const methodsReceived = createDeferred<{ interactionId: string }>();
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: vi.fn(() => child) as never,
+      nodeProcess: fakeNodeProcess(vi.fn(() => child)),
       resolveLoginShellEnv: async () => ({}),
     });
     const authentication = manager.authenticate({
@@ -671,7 +702,7 @@ describe('AcpAuthenticationManager', () => {
     );
     const inputReceived = createDeferred<void>();
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: vi.fn(() => child) as never,
+      nodeProcess: fakeNodeProcess(vi.fn(() => child)),
       resolveLoginShellEnv: async () => ({}),
     });
     const authentication = manager.authenticate({
@@ -733,7 +764,7 @@ describe('AcpAuthenticationManager', () => {
       }
     });
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: vi.fn(() => child) as never,
+      nodeProcess: fakeNodeProcess(vi.fn(() => child)),
       resolveLoginShellEnv: async () => ({}),
     });
     const authentication = manager.authenticate({
@@ -797,7 +828,7 @@ describe('AcpAuthenticationManager', () => {
     );
     const progress = vi.fn();
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: vi.fn(() => child) as never,
+      nodeProcess: fakeNodeProcess(vi.fn(() => child)),
       resolveLoginShellEnv: async () => ({}),
     });
 
@@ -846,7 +877,7 @@ describe('AcpAuthenticationManager', () => {
     );
     const progress = vi.fn();
     const manager = new AcpAuthenticationManager(createSilentLogger(), {
-      spawnProcess: vi.fn(() => child) as never,
+      nodeProcess: fakeNodeProcess(vi.fn(() => child)),
       resolveLoginShellEnv: async () => ({}),
     });
 
@@ -891,7 +922,7 @@ describe('AcpAuthenticationManager', () => {
         acp.ndJsonStream(createStdinWritableStream(stdout), createStdoutReadableStream(stdin))
       );
       const manager = new AcpAuthenticationManager(createSilentLogger(), {
-        spawnProcess: vi.fn(() => child) as never,
+        nodeProcess: fakeNodeProcess(vi.fn(() => child)),
         resolveLoginShellEnv: async () => ({}),
       });
 
@@ -980,7 +1011,7 @@ describe('AcpAuthenticationManager', () => {
       );
       const progress = vi.fn();
       const manager = new AcpAuthenticationManager(createSilentLogger(), {
-        spawnProcess: vi.fn(() => child) as never,
+        nodeProcess: fakeNodeProcess(vi.fn(() => child)),
         resolveLoginShellEnv: async () => ({}),
       });
 
@@ -1021,19 +1052,22 @@ describe('probeBuiltinAuthentication', () => {
     }
   });
 
-  it('does not spawn a status process for Pi', async () => {
-    const spawnProcess = vi.fn();
-    await expect(
-      probeBuiltinAuthentication({
-        cliType: 'builtin',
-        agentType: 'pi',
-        logger: createSilentLogger(),
-        spawnProcess: spawnProcess as never,
-        resolveLoginShellEnv: async () => ({}),
-      })
-    ).resolves.toEqual({ status: 'unknown' });
-    expect(spawnProcess).not.toHaveBeenCalled();
-  });
+  it.each(['pi', 'devin', 'kimi', 'grok'] as const)(
+    'does not spawn a status process for %s',
+    async (agentType) => {
+      const spawnProcess = vi.fn();
+      await expect(
+        probeBuiltinAuthentication({
+          cliType: 'builtin',
+          agentType,
+          logger: createSilentLogger(),
+          nodeProcess: fakeNodeProcess(spawnProcess),
+          resolveLoginShellEnv: async () => ({}),
+        })
+      ).resolves.toEqual({ status: 'unknown' });
+      expect(spawnProcess).not.toHaveBeenCalled();
+    }
+  );
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -1056,7 +1090,7 @@ describe('probeBuiltinAuthentication', () => {
         agentType: 'claude',
         runtimeOverrides: { claudeCodeExecutable: '/test/claude' },
         logger: createSilentLogger(),
-        spawnProcess: spawnProcess as never,
+        nodeProcess: fakeNodeProcess(spawnProcess),
         resolveLoginShellEnv: async () => ({}),
       })
     ).resolves.toEqual({ status: 'authenticated' });
@@ -1077,7 +1111,7 @@ describe('probeBuiltinAuthentication', () => {
         runtimeOverrides: { codexPath: '/test/codex' },
         env: { CODEX_API_KEY: '', OPENAI_API_KEY: '' },
         logger: createSilentLogger(),
-        spawnProcess: spawnProcess as never,
+        nodeProcess: fakeNodeProcess(spawnProcess),
         resolveLoginShellEnv: async () => ({}),
       })
     ).resolves.toEqual({ status: 'unknown' });
@@ -1100,7 +1134,7 @@ describe('probeBuiltinAuthentication', () => {
         agentType: 'claude',
         runtimeOverrides: { claudeCodeExecutable: '/test/claude' },
         logger: createSilentLogger(),
-        spawnProcess: spawnProcess as never,
+        nodeProcess: fakeNodeProcess(spawnProcess),
         resolveLoginShellEnv: async () => ({}),
       })
     ).resolves.toMatchObject({
@@ -1123,7 +1157,7 @@ describe('probeBuiltinAuthentication', () => {
           runtimeOverrides: { codexPath: '/test/codex' },
           env: { [key]: 'test-key' },
           logger: createSilentLogger(),
-          spawnProcess: spawnProcess as never,
+          nodeProcess: fakeNodeProcess(spawnProcess),
           resolveLoginShellEnv: async () => ({}),
         })
       ).resolves.toEqual({ status: 'unknown' });
@@ -1147,7 +1181,7 @@ describe('probeBuiltinAuthentication', () => {
         runtimeOverrides: { claudeCodeExecutable: '/test/claude' },
         env: { [key]: 'configured' },
         logger: createSilentLogger(),
-        spawnProcess: spawnProcess as never,
+        nodeProcess: fakeNodeProcess(spawnProcess),
         resolveLoginShellEnv: async () => ({}),
       })
     ).resolves.toEqual({ status: 'unknown' });
@@ -1163,7 +1197,7 @@ describe('probeBuiltinAuthentication', () => {
         agentType: 'codex',
         runtimeOverrides: { codexPath: '/test/codex' },
         logger: createSilentLogger(),
-        spawnProcess: spawnProcess as never,
+        nodeProcess: fakeNodeProcess(spawnProcess),
         resolveLoginShellEnv: async () => ({ OPENAI_API_KEY: 'shell-key' }),
       })
     ).resolves.toEqual({ status: 'unknown' });
@@ -1179,7 +1213,7 @@ describe('probeBuiltinAuthentication', () => {
         agentType: 'kimi',
         runtimeOverrides: { kimiPath: '/test/kimi' },
         logger: createSilentLogger(),
-        spawnProcess: spawnProcess as never,
+        nodeProcess: fakeNodeProcess(spawnProcess),
       })
     ).resolves.toEqual({ status: 'unknown' });
     expect(spawnProcess).not.toHaveBeenCalled();

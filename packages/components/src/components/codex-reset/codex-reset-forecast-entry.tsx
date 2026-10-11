@@ -1,17 +1,14 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { TimerReset } from 'lucide-react';
 import * as stylex from '@stylexjs/stylex';
 import { colors } from '@lody/ui/tokens/colors.stylex';
 import { corner, duration, ease, focus, radius, space, text } from '@lody/ui/tokens/scales.stylex';
-import { Button } from '@lody/ui/button';
 
 import { useCodexResetForecast } from '@/hooks/use-codex-reset-forecast';
 import { formatCodexResetExpiry } from '@/lib/codex-reset-forecast';
 import { CodexResetForecastDialog } from './codex-reset-forecast-dialog';
 
 const styles = stylex.create({
-  chipIcon: { flexShrink: 0, width: '14px', height: '14px' },
   /** The row joins the meters above as the next line of their list. */
   usage: {
     marginTop: '10px',
@@ -83,63 +80,9 @@ const styles = stylex.create({
  * this component may fetch anything at all.
  *
  * NOTHING here loads on mount. The forecast is fetched from the interaction
- * that reveals it — opening the dialog from the provider row, or opening the
+ * that reveals it — opening the dialog directly from a provider row, or opening the
  * usage popover in the composer — so a workspace nobody asks never requests it.
  */
-
-export type CodexResetForecastChipProps = {
-  enabled: boolean;
-};
-
-/**
- * Provider-list entry: always present for a first-party Codex provider, sitting
- * just before the rate-limit meters. Its label carries the probability only once
- * something has loaded it; the dialog owns the empty / loading / error stories.
- */
-export function CodexResetForecastChip({ enabled }: CodexResetForecastChipProps) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const forecast = useCodexResetForecast(enabled);
-
-  if (!enabled) return null;
-
-  const label =
-    forecast.watch?.chancePercent != null
-      ? t('codexReset.entryWithChance', 'Reset forecast {{percent}}%', {
-          percent: forecast.watch.chancePercent,
-        })
-      : t('codexReset.entry', 'Reset forecast');
-
-  return (
-    <>
-      <Button
-        type="button"
-        variant="ghost"
-        size="mini"
-        aria-haspopup="dialog"
-        onClick={(event) => {
-          event.stopPropagation();
-          // The click IS the load: settings renders one row per provider, and
-          // none of them should reach the network just by being listed.
-          forecast.revalidate();
-          setOpen(true);
-        }}
-      >
-        <TimerReset {...stylex.props(styles.chipIcon)} aria-hidden="true" />
-        {label}
-      </Button>
-      <CodexResetForecastDialog
-        open={open}
-        onOpenChange={setOpen}
-        state={forecast.state}
-        watch={forecast.watch}
-        isExpired={forecast.isExpired}
-        nowMs={forecast.nowMs}
-        onRetry={forecast.refresh}
-      />
-    </>
-  );
-}
 
 export type CodexResetForecastUsageRowProps = {
   enabled: boolean;
@@ -149,7 +92,7 @@ export type CodexResetForecastUsageRowProps = {
 /**
  * Usage-popover row, shaped like the rate-limit meters it sits under: label and
  * probability on one baseline, the locally formatted forecast expiry underneath. It renders
- * nothing unless a forecast is in force.
+ * nothing unless a forecast is in force or a reset is scheduled.
  *
  * This component is mounted by the popover's CONTENT, which Radix only renders
  * while the popover is open — so mounting it is exactly the "user opened the
@@ -163,13 +106,15 @@ export function CodexResetForecastUsageRow({ enabled, onOpen }: CodexResetForeca
   const { t, i18n } = useTranslation();
   const forecast = useCodexResetForecast(enabled);
   const watch = forecast.watch;
+  const scheduled = forecast.state.data?.scheduledReset;
   const { revalidate } = forecast;
 
   useEffect(() => {
     revalidate();
   }, [revalidate]);
 
-  if (!enabled || !watch) return null;
+  if (!enabled || (!watch && !scheduled)) return null;
+  const timeMs = scheduled ? scheduled.scheduledForMs : watch!.expiresAtMs;
 
   return (
     <div {...stylex.props(styles.usage)}>
@@ -185,9 +130,11 @@ export function CodexResetForecastUsageRow({ enabled, onOpen }: CodexResetForeca
           {/* No icon: the meters above carry none, and an inline SVG would take
               over this row's baseline and misalign the value beside it. */}
           <span {...stylex.props(styles.usageLabel)}>
-            {t('codexReset.entry', 'Reset forecast')}
+            {scheduled
+              ? t('codexReset.scheduled', 'Reset scheduled')
+              : t('codexReset.entry', 'Reset forecast')}
           </span>
-          {watch.chancePercent === null ? null : (
+          {scheduled || watch?.chancePercent == null ? null : (
             // "65%" alone would read as "65% used" beside the meters above.
             <span {...stylex.props(styles.usageChance)}>
               {t('codexReset.rowChance', '{{percent}}% chance', {
@@ -198,11 +145,15 @@ export function CodexResetForecastUsageRow({ enabled, onOpen }: CodexResetForeca
         </span>
         {/* The API instant is formatted semantically in the browser/OS time zone. */}
         <span {...stylex.props(styles.usageExpiry)}>
-          {formatCodexResetExpiry(
-            watch.expiresAtMs,
-            forecast.nowMs,
-            i18n.resolvedLanguage ?? i18n.language
-          )}
+          {timeMs === null
+            ? t('codexReset.scheduleUnknown', 'Time not yet specified')
+            : scheduled && timeMs <= forecast.nowMs
+              ? t('codexReset.awaitingExecution', 'Awaiting confirmation of execution')
+              : formatCodexResetExpiry(
+                  timeMs,
+                  forecast.nowMs,
+                  i18n.resolvedLanguage ?? i18n.language
+                )}
         </span>
       </button>
     </div>

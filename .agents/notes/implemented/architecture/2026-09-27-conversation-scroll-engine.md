@@ -177,7 +177,9 @@ Invariants are checked at the commit boundary, against the committed DOM.
   the anchor resolves and is reachable, readable otherwise, and never hidden.
 - **I8 No inferred intent.** Geometry never releases or re-arms follow. The only
   geometry-driven mode change is the defined hand-off from `sent` to `follow` when the
-  reply fills the reserved room.
+  reply fills the reserved room. Reader movement re-arms follow when it reaches the
+  end: a downward scroll within 4px of the current bottom, or a downward scroll
+  sequence that comes to rest (`scrollend`) at a bottom the range had while it ran.
 
 ## Proposal
 
@@ -819,6 +821,28 @@ collected after release, through the diagnostics below.
   - **StrictMode.** The unmount cleanup disposed the controller for good, but StrictMode's
     development remount runs the cleanup and then the setup again on a live component.
     The setup now calls `resume()`, and a StrictMode adapter test covers it.
+- **Fast flings stopped short of the end while a reply streamed (found after release,
+  2026-09-29).** Rows that stream in while the reader is above are never mounted, so
+  the range below is estimated and usually too short. A fast downward fling mounts and
+  measures them on the way, and the engine grows the range, but the compositor clamps
+  the fling against the range of the last frame it received. When the main thread is
+  behind, as during streaming, the fling dies at that stale bottom. The next scroll
+  event then sees a bottom that has already moved, so the 4px re-arm rule never
+  matched. The reader was left reading, up to a screen short of the end, while the
+  output kept growing below. The engine now records every bottom the range had during a
+  scroll sequence. When a downward sequence comes to rest at one of them, it re-arms
+  follow and moves to the real end.
+  - A model test reproduces the stale bottom; it fails on the old rule. A second test
+    keeps a downward scroll that rests anywhere else in reading mode. The seeded
+    sequences gained a "scroll down and come to rest" step. That step exposed an
+    over-strict I5 check: a clamped reading position moves toward its anchor once it
+    becomes reachable (see `read` handling above), so I5 now applies only to positions
+    that were resolved before the change.
+  - In the real desktop, driven by compositor fling gestures during a streaming
+    reply, 3 of 16 fast flings on the old build stopped at a stale bottom and stayed in
+    reading mode; all 32 on the fixed build ended at the end, following. The race
+    depends on how far the main thread falls behind (one old-build run of 8 hit it
+    zero times), so the model test is the deterministic guard.
 - **Tests that relied on the old path.**
   - The hydration e2e's cold-tail tests asserted that the viewport stays hidden until
     rows are measured. They now assert the tail, or the saved reading row, is in place
@@ -968,3 +992,52 @@ reproduces "Maximum update depth exceeded" without the pause and passes with it.
 - Reviews on 2026-09-27: Codex (GPT-6 Astra), session
   `0bc8379d-78b4-4a13-bee7-4ec862c9bf52`, five rounds; Claude session `dfd4a856`, three
   rounds.
+
+## Touch input and delayed scroll delivery (2026-10-07)
+
+A model reproduction found that an upward offset first observed after `touchend` was
+classified as unknown: follow wrote the bottom back on every native step. The adapter
+also waited for an offset before releasing follow, allowing a streaming commit to
+overwrite a pending touch scroll. This violates the existing reading contract and is
+separate from the accepted WebKit compensation cost above.
+
+The adapter now releases on single-touch upward conversation input, checking the
+final touch position as well as move events. Nested scrollers, taps, horizontal input,
+pinches and cancellation do not arm conversation momentum. The controller recognizes
+post-touch momentum during scroll and resize sampling; a new touch, cancellation,
+`scrollend`, or entering follow supersedes the previous evidence. No timer, delayed
+compensation or extra scroll writer was introduced.
+
+The existing model and adapter suites reproduce four failures on the old code and
+pass with the fix. They cover continuous momentum, new output while reading, returning
+to follow and non-scroll touches; the model retains its 40 seeded sequences. The two
+suites and keyed-layout suites pass 102 tests; scoped strict type and lint checks pass.
+Full-package checks are blocked by missing dependencies and outdated borrowed workspace
+packages. Validation uses synthetic events and simulated layout, not an iOS compositor.
+Real-device verification remains open; layout compensation can still interrupt an iOS fling.
+
+Follow-up validation on 2026-10-09 compared base `72b118b58` with code commit
+`343c78f41` in Chromium and desktop WebKit. An isolated synthetic fixture bundled
+the real React adapter and controller, with 40 keyed 80px rows, a 400px viewport,
+real DOM measurement and ResizeObserver. At the 2800px bottom, inject one-finger
+start/move/end (y=120 to 160), then set the DOM scrollTop by -80px and
+-60px, awaiting six animation frames after each step. Grow the final row by 20px;
+repeat with an additional 20px growth before the first offset. Both old builds
+write each offset back to the bottom (2800px, or 2820px after growth); both fixed
+builds retain 2720px, then 2660px, and remain at 2660px after output growth, with
+no programmatic scroll writes. All eight engine/version/scenario cases satisfy
+these assertions. One fixed WebKit case emits the browser's "ResizeObserver loop
+completed with undelivered notifications" warning; its position assertions pass,
+and no other page errors occur. This probe uses injected event data and DOM offset
+steps; it does not generate native touchscreen movement or compositor momentum.
+
+At documentation head `a2429a57e`, GitHub CI's static checks, all test shards and
+Conversation browser tests pass. The original recording has no touch/scroll event
+trace and no matched before/after capture on its phone. An available iOS simulator
+was booted, but no native touch experiment was completed: the Simulator UI is
+absent on this host and the current Lody panel could not be controlled. The original
+recording's complete symptom therefore remains unverified; the measured result
+establishes the delayed-input/follow overwrite fix, not a claim that every iOS
+scrolling vibration is gone.
+
+PR: [#1342](https://github.com/LodyAI/Lody/pull/1342).

@@ -1,5 +1,5 @@
+import { toShared } from '@/platform/process-options';
 import { createHash, randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
 import {
   chmod,
   lstat,
@@ -55,6 +55,9 @@ import {
 } from '@lody/shared';
 import { formatErrorMessage } from '@/utils/format-error';
 import { getLogger } from '@/utils/logger';
+import { runCommandOk } from '@lody/shared/node/process';
+import { makeProcessRunnerLegacy, runCommandTextLegacy } from '@lody/shared/node/process';
+
 import { mapWithConcurrency } from '@/lib/bounded-concurrency';
 import { CodeCollabFileIndexChangedPublishError } from './code-collab-flock-publish';
 import type { CodeCollabV2DiffStore } from './code-collab-v2-diff-store';
@@ -64,7 +67,11 @@ import {
   computeFullFileIndexStateInWorker,
   scanDirectoryEntriesInWorker,
 } from './file-index-scan-pool';
-import { computeAllChanges, scanGitDirectoryEntries } from './file-index-scan-core';
+import {
+  computeAllChanges,
+  resolveAllChangesDiffBase,
+  scanGitDirectoryEntries,
+} from './file-index-scan-core';
 import { closeDirectoryQuietly } from './directory-handle';
 import { CODE_COLLAB_IGNORED_DIRECTORY_NAMES } from './workspace-watch-path-policy';
 import type {
@@ -72,7 +79,6 @@ import type {
   WorkspaceWatchSubscription,
 } from './workspace-watch-coordinator';
 
-const execFileAsync = promisify(execFile);
 // gzip/gunzip on libuv's threadpool instead of the sync variants: a large file's
 // (de)compression must not block the single Node event loop, which would stall every
 // other concurrent Machine RPC handler (open-file/refresh/diff) and the request loop.
@@ -185,6 +191,7 @@ type DiffStoreAllChangesSnapshotPair = {
 type AllChangesComputation = {
   readonly allChanges: CodeCollabV2AllChangesState;
   readonly source: 'git' | 'diff-store';
+  readonly gitBase?: string;
   readonly diffStoreSnapshots?: ReadonlyMap<string, DiffStoreAllChangesSnapshotPair>;
   readonly diffStoreDeferredPaths?: ReadonlySet<string>;
 };
@@ -886,7 +893,7 @@ export class CodeCollabV2Service {
     void this.ensureWorkspaceWatch(root).catch(() => undefined);
 
     const limits = this.deps.allChangesDiffLimits ?? CODE_COLLAB_V2_ALL_CHANGES_DIFF_LIMITS;
-    const { allChanges, source, diffStoreSnapshots, diffStoreDeferredPaths } =
+    const { allChanges, source, gitBase, diffStoreSnapshots, diffStoreDeferredPaths } =
       await this.computeAllChangesForResolvedWorkspaceWithSource(root, {
         includeDiffStoreSnapshots: true,
         preferredDiffStoreSnapshotPath: request.focusPath,
@@ -895,11 +902,7 @@ export class CodeCollabV2Service {
           DEFAULT_DIFF_STORE_SNAPSHOT_CACHE_MAX_RAW_BYTES,
         diffStoreSnapshotPerFileMaxRawBytes: limits.perFileMaxRawBytes,
       });
-    const base =
-      source === 'git'
-        ? ((await resolveAllChangesDiffBase(root.workspaceRoot, root.allChangesBaseBranch)) ??
-          'HEAD')
-        : 'diff-store';
+    const base = source === 'git' ? (gitBase ?? 'HEAD') : 'diff-store';
 
     const maxRawTextBytes = this.deps.maxRawTextBytes ?? CODE_COLLAB_V2_TEXT_LIMITS.maxRawTextBytes;
     const focusPath = request.focusPath;
@@ -940,7 +943,7 @@ export class CodeCollabV2Service {
             { status: 'ready', snapshot: cachedSnapshots.newSnapshot },
           ] as const)
         : await Promise.all([
-            this.resolveCurrentDiffBaseSnapshot(fileResolved),
+            this.resolveCurrentDiffBaseSnapshot(fileResolved, base),
             readCurrentDiffSnapshot(fileResolved, maxRawTextBytes),
           ]);
       if (oldSnapshot.status === 'unavailable' || newSnapshot.status === 'unavailable') {
@@ -1484,11 +1487,16 @@ export class CodeCollabV2Service {
     } = {}
   ): Promise<AllChangesComputation> {
     if (await isInsideGitWorktree(resolved.workspaceRoot)) {
+      const gitBase =
+        (await resolveAllChangesDiffBase(resolved.workspaceRoot, resolved.allChangesBaseBranch)) ??
+        'HEAD';
       return {
         allChanges: await computeAllChanges(resolved.workspaceRoot, {
           preferredBaseBranch: resolved.allChangesBaseBranch,
+          diffBase: gitBase,
         }),
         source: 'git',
+        gitBase,
       };
     }
     const result = await this.computeAllChangesFromDiffStore(resolved, options);
@@ -1761,16 +1769,16 @@ export class CodeCollabV2Service {
   }
 
   private async resolveCurrentDiffBaseSnapshot(
-    resolved: ResolvedPath
+    resolved: ResolvedPath,
+    pinnedGitBase?: string
   ): Promise<
     | { readonly status: 'ready'; readonly snapshot: InternalDiffSnapshot }
     | { readonly status: 'unavailable' }
   > {
     if (await isInsideGitWorktree(resolved.workspaceRoot)) {
-      const base = await resolveAllChangesDiffBase(
-        resolved.workspaceRoot,
-        resolved.allChangesBaseBranch
-      );
+      const base =
+        pinnedGitBase ??
+        (await resolveAllChangesDiffBase(resolved.workspaceRoot, resolved.allChangesBaseBranch));
       if (base) {
         const gitSnapshot = await readGitBaseDiffSnapshot(
           resolved.workspaceRoot,
@@ -2914,49 +2922,6 @@ async function readGitBaseDiffSnapshot(
   }
 }
 
-async function resolveAllChangesDiffBase(
-  workspaceRoot: string,
-  preferredBaseBranch?: string
-): Promise<string | null> {
-  const inside = await runGit(workspaceRoot, ['rev-parse', '--is-inside-work-tree']);
-  if (!inside.ok || inside.stdout.trim() !== 'true') {
-    return null;
-  }
-
-  const baseRef = await resolveAllChangesBaseRef(workspaceRoot, preferredBaseBranch);
-  if (baseRef) {
-    const mergeBase = await runGit(workspaceRoot, ['merge-base', baseRef, 'HEAD']);
-    const trimmed = mergeBase.ok ? mergeBase.stdout.trim() : '';
-    if (trimmed) {
-      return trimmed;
-    }
-  }
-
-  const head = await runGit(workspaceRoot, ['rev-parse', '--verify', 'HEAD^{commit}']);
-  return head.ok && head.stdout.trim() ? 'HEAD' : null;
-}
-
-async function resolveAllChangesBaseRef(
-  workspaceRoot: string,
-  preferredBaseBranch?: string
-): Promise<string | null> {
-  const candidates = [
-    ...(preferredBaseBranch ? [`origin/${preferredBaseBranch}`, preferredBaseBranch] : []),
-    'origin/main',
-    'main',
-    'origin/master',
-    'master',
-    'origin/HEAD',
-  ];
-  for (const candidate of candidates) {
-    const exists = await runGit(workspaceRoot, ['rev-parse', '--verify', `${candidate}^{commit}`]);
-    if (exists.ok) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
 async function diffSnapshotLineStats(
   oldSnapshot: InternalDiffSnapshot,
   newSnapshot: InternalDiffSnapshot
@@ -3021,14 +2986,22 @@ async function runGit(
   args: readonly string[]
 ): Promise<{ ok: true; stdout: string } | { ok: false }> {
   try {
-    const { stdout } = await execFileAsync('git', ['-C', cwd, ...args], {
-      maxBuffer: 64 * 1024 * 1024,
-    });
+    const { stdout } = await runCommandTextLegacy(
+      {
+        command: 'git',
+        args: ['-C', cwd, ...args],
+        maxOutputBytes: 64 * 1024 * 1024,
+        check: 'exit-0',
+      },
+      toShared()
+    );
     return { ok: true, stdout };
   } catch {
     return { ok: false };
   }
 }
+
+const runPlatformCommand = makeProcessRunnerLegacy(toShared({}));
 
 async function runGitBuffer(
   cwd: string,
@@ -3036,10 +3009,9 @@ async function runGitBuffer(
   maxBuffer: number
 ): Promise<{ ok: true; stdout: Buffer } | { ok: false }> {
   try {
-    const { stdout } = (await execFileAsync('git', ['-C', cwd, ...args], {
-      encoding: 'buffer',
-      maxBuffer,
-    })) as { stdout: Buffer };
+    const { stdout } = await runPlatformCommand(
+      runCommandOk({ command: 'git', args: ['-C', cwd, ...args], maxOutputBytes: maxBuffer })
+    );
     return { ok: true, stdout };
   } catch {
     return { ok: false };

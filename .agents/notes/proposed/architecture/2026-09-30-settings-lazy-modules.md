@@ -33,6 +33,18 @@ Settings content loads on its first visit; subsequent visits reuse the loaded mo
 Other product consumers may independently import shared settings functionality, so
 this does not promise that every dependency of a Settings body disappears from startup.
 
+## Initial graph audit
+
+A current-main audit corrected a remaining eager path: Chat Landing imported the
+mobile project Settings surfaces, which imported the desktop Projects body through
+shared helpers and editors. Both mobile project Settings surfaces now load only
+when their Settings tab renders, with a local Suspense boundary. The new Memory
+route also uses the shared lazy boundary; the Role editor loads its memory picker
+on demand so opening Chat does not import the Memory Settings body. The upstream
+responsive desktop navigation is preserved when integrating these boundaries.
+Shared non-Settings editors and helpers retain their existing consumers; this does
+not claim that every Settings dependency is absent from the startup graph.
+
 ## Verification and limits
 
 Existing route/navigation suites verify native redirects and browser Settings content

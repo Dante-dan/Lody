@@ -6,22 +6,32 @@ reasoning behind those rules.
 
 ## Ownership
 
-| Area                   | Owner                                                                                                                                                                                    | Responsibility                                                                  |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Composer shell         | [`chat-composer.tsx`](chat-composer.tsx)                                                                                                                                                 | Prompt, attachment chips, status, selector slots, and actions.                  |
-| New-chat orchestration | [`chat-landing.tsx`](chat-landing.tsx)                                                                                                                                                   | Selector and draft state, mobile sheets, submission, and `ChatComposer` inputs. |
-| Landing layout         | [`chat-landing-view.tsx`](chat-landing-view.tsx)                                                                                                                                         | Render-only layout around `ChatComposer`.                                       |
-| Derived selection      | [`chat-landing-derived.ts`](chat-landing-derived.ts)                                                                                                                                     | Pure landing selection state.                                                   |
-| Selector controls      | [`chat-landing-selectors.tsx`](chat-landing-selectors.tsx), [`unified-project-selector.tsx`](unified-project-selector.tsx)                                                               | Project and branch wrappers over shared selectors.                              |
-| Attachment menu        | [`attachment-add-menu.tsx`](attachment-add-menu.tsx)                                                                                                                                     | The single "+" menu and per-turn MCP selection.                                 |
-| Reference chips        | `comment-reference-*`, `visual-annotation-reference-*`                                                                                                                                   | State and rendering for outgoing references.                                    |
-| Host chrome            | [`context-switch.tsx`](context-switch.tsx), [`machine-pairing-dialog.tsx`](machine-pairing-dialog.tsx), [`web-chat-landing-screen.tsx`](web-chat-landing-screen.tsx)                     | Context controls and host-specific entry points.                                |
-| Submission             | [`submission/`](submission/AGENTS.md)                                                                                                                                                    | Composer submission lifecycle and local rules.                                  |
-| Draft persistence      | [`../../atoms/local-storage-cache.ts`](../../atoms/local-storage-cache.ts), [`../../atoms/chat-landing-draft.ts`](../../atoms/chat-landing-draft.ts)                                     | Durable text and in-memory attachment state, scoped by workspace.               |
-| Attachment uploads     | [`../../hooks/use-chat-landing-image-draft.ts`](../../hooks/use-chat-landing-image-draft.ts), [`../../hooks/use-chat-landing-file-draft.ts`](../../hooks/use-chat-landing-file-draft.ts) | Image and file upload state, including Electron's local transport.              |
-| Held sends             | [`session-pending-messages.tsx`](session-pending-messages.tsx), [`session-pending-sends-host.tsx`](session-pending-sends-host.tsx) | In-memory sends awaiting attachments: pending rows, sidebar status, leave prompt. |
+| Area                   | Owner                                                                                                                                                                                    | Responsibility                                                                                   |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Composer shell         | [`chat-composer.tsx`](chat-composer.tsx)                                                                                                                                                 | Prompt, attachment chips, status, selector slots, and actions.                                   |
+| New-chat orchestration | [`chat-landing.tsx`](chat-landing.tsx)                                                                                                                                                   | Selector and draft state, mobile sheets, submission, and `ChatComposer` inputs.                  |
+| Landing layout         | [`chat-landing-view.tsx`](chat-landing-view.tsx)                                                                                                                                         | Render-only layout around `ChatComposer`.                                                        |
+| Derived selection      | [`chat-landing-derived.ts`](chat-landing-derived.ts)                                                                                                                                     | Pure landing selection state.                                                                    |
+| Selector controls      | [`chat-landing-selectors.tsx`](chat-landing-selectors.tsx), [`unified-project-selector.tsx`](unified-project-selector.tsx)                                                               | Project and branch wrappers over shared selectors.                                               |
+| Attachment menu        | [`attachment-add-menu.tsx`](attachment-add-menu.tsx)                                                                                                                                     | The single "+" menu and per-turn MCP selection.                                                  |
+| Reference chips        | `comment-reference-*`, `visual-annotation-reference-*`                                                                                                                                   | State and rendering for outgoing references.                                                     |
+| Host chrome            | [`context-switch.tsx`](context-switch.tsx), [`machine-pairing-dialog.tsx`](machine-pairing-dialog.tsx), [`web-chat-landing-screen.tsx`](web-chat-landing-screen.tsx)                     | Context controls and host-specific entry points.                                                 |
+| Submission             | [`submission/`](submission/AGENTS.md)                                                                                                                                                    | Composer submission lifecycle and local rules.                                                   |
+| Draft persistence      | [`../../atoms/local-storage-cache.ts`](../../atoms/local-storage-cache.ts), [`../../atoms/chat-landing-draft.ts`](../../atoms/chat-landing-draft.ts)                                     | Durable text and in-memory attachment state, scoped by workspace.                                |
+| Attachment uploads     | [`../../hooks/use-chat-landing-image-draft.ts`](../../hooks/use-chat-landing-image-draft.ts), [`../../hooks/use-chat-landing-file-draft.ts`](../../hooks/use-chat-landing-file-draft.ts) | Image and file upload state, including Electron's local transport.                               |
+| Held sends             | [`session-pending-messages.tsx`](session-pending-messages.tsx), [`session-pending-sends-host.tsx`](session-pending-sends-host.tsx)                                                       | In-memory sends awaiting attachments; pending cards reuse delivered layouts and cached previews. |
+
+Attachment preparation and history publication share the final card layout;
+see [attachment rendering](../ai-gui/session-files-rendering.md#upload-to-history-continuity).
 
 ## Why the rules read the way they do
+
+- **Composer measurement outside layout.** `chat-composer.tsx` uses
+  `textarea-measurement.ts` to measure a hidden fixed textarea with resolved text
+  and box metrics. The live textarea receives its final height once. Resetting
+  the live height to `auto` temporarily expands the sibling conversation viewport
+  and can clamp its reading offset even if the final height does not change.
+  Empty drafts still skip measurement and use the minimum height.
 
 - **MCP as a second menu level.** The workspace MCP catalog is multi-select and
   unbounded, so it cannot sit in the footer selector row. Desktop has hover and
@@ -58,3 +68,7 @@ reasoning behind those rules.
   nothing.
 - Draft ACP preparation has a longer contract that remains in the private
   architecture context.
+
+Chat Landing no longer emits the legacy onboarding project-source, project-selection,
+or agent-selection events. Onboarding owns its route-scoped flow, step and operation
+telemetry; see [event semantics](../../../../../specs/onboarding-analytics.md).

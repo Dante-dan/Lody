@@ -33,10 +33,12 @@
   (`ScheduleDetailToolbar`) is close plus compact icon actions; run history is
   the panel's last section, under the editor (no second drawer). Top-of-pane headers join the Electron drag strip
   (`useWindowDragRegionClass`) with buttons `WINDOW_DRAG_EXEMPT_CLASS`, or the
-  strip swallows their clicks. Saving and closing return to the full list.
+  strip swallows their clicks. Saving and closing return to the full list. Hidden
+  desktop nav: PanelLeft expand at 96px on macOS Electron (Chat Landing/Archive).
 - The editor reuses the composer's parts: one box holds name, a hairline, the
   prompt and, along its bottom, the composer's own Agent controls
   (`ScheduleAgentControls` = `DesktopRunConfigMenu` + `DesktopPermissionModeButton`).
+  Preserve ACP value types through save; never stringify option values.
   Under the box are the chat landing's context pills — `DesktopMachineMenu`, the
   project chip, the worktree checkbox. Destination and trigger share one card;
   timed/manual is a row (`Tabs`) in it. The name is larger and semibold and
@@ -58,10 +60,9 @@
   removes the popup. The prompt has no resize handle: it grows with its text
   from 4 to 6 lines (`[field-sizing:content]` + `lh` bounds), then scrolls.
   Field marks float (`absolute`) so they never narrow the text.
-- No time zone control. Wall-clock rules and one-off times are read on the owning
-  machine's clock (`MachineMeta.timeZone`, device zone for older CLIs) via
-  `withScheduleRecurrenceTimeZone` / `zonedLocalInputToInstant`. The preview names
-  the machine.
+- No time zone control. Input, preview and kind changes use `MachineMeta.timeZone`
+  (device zone for older CLIs). Once retains its instant across machine changes;
+  calendar rules retain wall time. [Time contract](../../../../../specs/schedule-time.md).
 - Frequency is a short menu, never cron: every day / weekday / week (days) / month
   (dates) / few hours / few minutes / once, plus Manual. A stored rule the menu
   cannot name is `unsupported`: read-only summary plus Replace, re-emitted
