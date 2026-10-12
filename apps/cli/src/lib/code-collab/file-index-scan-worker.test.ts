@@ -4,7 +4,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+import * as processFacade from '@lody/shared/node/process';
+
+import { scanGitDirectoryEntries } from './file-index-scan-core';
 
 import fileIndexScanWorker from './file-index-scan-worker';
 
@@ -47,6 +51,34 @@ async function withPlainWorkspace<T>(fn: (workspaceRoot: string) => Promise<T>):
 }
 
 describe('fileIndexScanWorker', () => {
+  it('joins the deleted-file Git child before falling back after listing fails', async () => {
+    const sibling = Promise.withResolvers<processFacade.CommandText>();
+    const firstFailure = Promise.withResolvers<never>();
+    const command = vi.spyOn(processFacade, 'runCommandTextLegacy');
+    command.mockImplementationOnce(() => firstFailure.promise);
+    command.mockImplementationOnce(() => sibling.promise);
+    try {
+      let finished = false;
+      const scan = scanGitDirectoryEntries({
+        directoryAbsolutePath: '/synthetic-workspace',
+        directoryWorkspacePath: '.',
+        entryBudget: 1000,
+        recursive: true,
+      }).then((result) => {
+        finished = true;
+        return result;
+      });
+      firstFailure.reject(new Error('listing failed'));
+      // A turn of the event loop drains the rejection/fallback Promise chain.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+      sibling.resolve({ code: 0, signal: null, stdout: '', stderr: '' });
+      expect(await scan).toBeNull();
+    } finally {
+      sibling.resolve({ code: 0, signal: null, stdout: '', stderr: '' });
+      command.mockRestore();
+    }
+  });
   it('rebuilds against the tracking base for a qualified local owner ref', async () => {
     await withGitWorkspace(async (workspaceRoot) => {
       await git(workspaceRoot, ['checkout', '-b', 'feature']);

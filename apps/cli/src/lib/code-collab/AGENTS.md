@@ -48,6 +48,8 @@ File-by-file responsibilities: [README.md](README.md).
   binary, or invalid UTF-8 it returns a `digest_mismatch` conflict (with the disk
   digest via streaming when the file is too large to read) instead of an error, so
   the guest's unsaved edits survive. See `readDiskStateForSave`.
+- Git directory scans join both listing children before returning filesystem fallback;
+  a failed primary listing must not abandon a still-running deleted-file query.
 - In Git worktrees, scanning prefers `git ls-files` only for recursive scans and
   synthesizes lazy parent directories; non-recursive directory refresh stays on FS
   scanning because Git does not record empty directories. Fallback FS scanning is

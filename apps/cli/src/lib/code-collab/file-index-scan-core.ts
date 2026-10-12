@@ -56,7 +56,8 @@ async function runGitLsFiles(
   cwd: string
 ): Promise<{ readonly ok: true; readonly paths: readonly string[] } | { readonly ok: false }> {
   try {
-    const [{ stdout }, deleted] = await Promise.all([
+    // Join both children before fallback can park or terminate the scan worker.
+    const [listed, deletedResult] = await Promise.allSettled([
       runCommandTextLegacy({
         command: 'git',
         args: [
@@ -76,6 +77,11 @@ async function runGitLsFiles(
       }),
       runGit(cwd, ['ls-files', '--deleted', '-z', '--', '.']),
     ]);
+    if (listed.status === 'rejected' || deletedResult.status === 'rejected') {
+      return { ok: false };
+    }
+    const { stdout } = listed.value;
+    const deleted = deletedResult.value;
     const deletedPaths = deleted.ok
       ? new Set(deleted.stdout.split('\0').map(normalizeGitPath).filter(isValidRelativeGitPath))
       : new Set<string>();
