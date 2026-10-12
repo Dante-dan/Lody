@@ -21,7 +21,9 @@ import { getIpcServices } from '@/lib/electron-ipc-client';
 import { getDownloadPageUrl, getNightlyDownloadPageUrl, getWebsiteUrl } from '@/lib/lody-urls';
 import { developerModeEnabledAtom } from '@/atoms/settings';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { MobileAppUpdaterSettings } from '@/components/mobile/mobile-app-updater-settings';
 import { MobileAboutSettings } from '@/components/mobile/mobile-about-settings';
+import { readAppUpdaterPort } from '@/lib/native-app-info';
 import { collectClientBuildInfo } from '@/lib/client-build-info';
 
 const buildInfo = collectClientBuildInfo();
@@ -336,6 +338,7 @@ function DevbarSettingsControls() {
 export function AboutSettingsComponent() {
   const { t, i18n } = useTranslation();
   const updaterState = useElectronUpdaterState();
+  const hostUpdater = readAppUpdaterPort();
   const [isInstalling, setIsInstalling] = useState(false);
   const [developerModeEnabled, setDeveloperModeEnabled] = useAtom(developerModeEnabledAtom);
   const [developerModeRevealed, setDeveloperModeRevealed] = useState(false);
@@ -394,74 +397,85 @@ export function AboutSettingsComponent() {
       : []),
   ];
 
+  const versionDetails = (
+    <span {...stylex.props(styles.facts)}>
+      {buildFacts.map((fact, index) => (
+        <Fragment key={index}>
+          {index > 0 ? <span aria-hidden="true">·</span> : null}
+          {fact}
+        </Fragment>
+      ))}
+    </span>
+  );
+
   return (
     <div className={settingContainerClass}>
       {/* What is running is one fact: the version, and the build it came
         from as its detail; the update check acts on exactly that. */}
       <CompactSection>
         <DefaultLinkHandlerSetting />
-        <CompactRow
-          label={
-            displayVersion
-              ? t('settings.about.versionLine', 'Lody {{version}}', { version: displayVersion })
-              : 'Lody'
-          }
-          helper={
-            <span {...stylex.props(styles.facts)}>
-              {buildFacts.map((fact, index) => (
-                <Fragment key={index}>
-                  {index > 0 ? <span aria-hidden="true">·</span> : null}
-                  {fact}
-                </Fragment>
-              ))}
-            </span>
-          }
-        >
-          {updaterState && phase !== 'disabled' ? (
-            <>
-              {showStatus && (
-                <UpdateStatusText phase={phase} percent={updaterState.percent} t={t} />
-              )}
-              {isDownloaded && updaterState.error && (
-                <span
-                  {...stylex.props(styles.status, styles.statusError)}
-                  title={updaterState.error}
-                >
-                  <AlertCircle {...stylex.props(styles.statusIcon)} />
-                  {t('settings.about.updateError')}
-                </span>
-              )}
-              {isDownloaded ? (
-                <Button
-                  size="small"
-                  onClick={() => {
-                    void handleQuitAndInstall();
-                  }}
-                  disabled={isInstalling}
-                >
-                  {isInstalling ? (
-                    <Spinner size="small" />
-                  ) : (
-                    <Download {...stylex.props(styles.icon)} />
-                  )}
-                  {t('settings.about.updateAndRestart')}
-                </Button>
-              ) : (
-                <Button
-                  variant="secondary"
-                  size="small"
-                  onClick={() => {
-                    void handleCheckForUpdates();
-                  }}
-                  disabled={isChecking || phase === 'downloading'}
-                >
-                  {isChecking && <Spinner size="small" />}
-                  {t('settings.about.checkForUpdates')}
-                </Button>
-              )}
-            </>
-          ) : null}
-        </CompactRow>
+        {hostUpdater ? (
+          <MobileAppUpdaterSettings
+            port={hostUpdater}
+            installedVersion={displayVersion}
+            layout="desktop"
+            buildDetails={versionDetails}
+          />
+        ) : (
+          <CompactRow
+            label={
+              displayVersion
+                ? t('settings.about.versionLine', 'Lody {{version}}', { version: displayVersion })
+                : 'Lody'
+            }
+            helper={versionDetails}
+          >
+            {updaterState && phase !== 'disabled' ? (
+              <>
+                {showStatus && (
+                  <UpdateStatusText phase={phase} percent={updaterState.percent} t={t} />
+                )}
+                {isDownloaded && updaterState.error && (
+                  <span
+                    {...stylex.props(styles.status, styles.statusError)}
+                    title={updaterState.error}
+                  >
+                    <AlertCircle {...stylex.props(styles.statusIcon)} />
+                    {t('settings.about.updateError')}
+                  </span>
+                )}
+                {isDownloaded ? (
+                  <Button
+                    size="small"
+                    onClick={() => {
+                      void handleQuitAndInstall();
+                    }}
+                    disabled={isInstalling}
+                  >
+                    {isInstalling ? (
+                      <Spinner size="small" />
+                    ) : (
+                      <Download {...stylex.props(styles.icon)} />
+                    )}
+                    {t('settings.about.updateAndRestart')}
+                  </Button>
+                ) : (
+                  <Button
+                    variant="secondary"
+                    size="small"
+                    onClick={() => {
+                      void handleCheckForUpdates();
+                    }}
+                    disabled={isChecking || phase === 'downloading'}
+                  >
+                    {isChecking && <Spinner size="small" />}
+                    {t('settings.about.checkForUpdates')}
+                  </Button>
+                )}
+              </>
+            ) : null}
+          </CompactRow>
+        )}
       </CompactSection>
 
       {/* Each row is its own link: the name, and a quiet mark for where it

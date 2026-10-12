@@ -4892,5 +4892,12 @@
   "sessions.messageAuthor.source": "Open source conversation",
   "sessions.messageAuthor.on": "On",
   "sessions.messageAuthor.off": "Off",
-  "settings.memory.rolePromptHint": "Memory providers may inject role definitions into the prompt. Check for duplication or conflicts with your Lody configuration."
+  "settings.memory.rolePromptHint": "Memory providers may inject role definitions into the prompt. Check for duplication or conflicts with your Lody configuration.",
+  "settings.about.hostUpdater.checking": "Checking for updates…",
+  "settings.about.hostUpdater.available": "Update available: {{version}}",
+  "settings.about.hostUpdater.downloading": "Downloading…",
+  "settings.about.hostUpdater.downloaded": "Update downloaded",
+  "settings.about.hostUpdater.download": "Download update",
+  "settings.about.hostUpdater.install": "Install update",
+  "settings.about.hostUpdater.open": "Open update page"
 }

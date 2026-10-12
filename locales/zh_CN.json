@@ -4892,5 +4892,12 @@
   "sessions.messageAuthor.source": "打开来源会话",
   "sessions.messageAuthor.on": "开启",
   "sessions.messageAuthor.off": "关闭",
-  "settings.memory.rolePromptHint": "记忆 Provider 可能向提示词注入角色定义，请留意是否与 Lody 中的配置重复或冲突。"
+  "settings.memory.rolePromptHint": "记忆 Provider 可能向提示词注入角色定义，请留意是否与 Lody 中的配置重复或冲突。",
+  "settings.about.hostUpdater.checking": "正在检查更新…",
+  "settings.about.hostUpdater.available": "可用更新：{{version}}",
+  "settings.about.hostUpdater.downloading": "正在下载…",
+  "settings.about.hostUpdater.downloaded": "更新已下载",
+  "settings.about.hostUpdater.download": "下载更新",
+  "settings.about.hostUpdater.install": "安装更新",
+  "settings.about.hostUpdater.open": "打开更新页面"
 }

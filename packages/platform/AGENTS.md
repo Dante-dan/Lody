@@ -36,3 +36,10 @@ telemetry, or managed-runtime downloads, as routed by the root instructions.
   keys. Preserve uncertain failure reasons and writes; no plaintext-file fallback.
 - Native fixtures use random UUIDs and isolated test keychains only. Verify exact
   cleanup; never change user keychains or global settings. See [validation](README.md).
+
+## App update capability
+
+`AppUpdaterPort` is optional and host-owned. Shared UI subscribes to status and
+invokes explicit check/action commands only; no automatic checks or polling. Hosts
+own trusted release lookup, download and installation. Snapshots contain display
+versions, progress and action kinds, never credentials, URLs or native file paths.

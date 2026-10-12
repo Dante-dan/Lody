@@ -1,3 +1,4 @@
+import type { AppUpdaterPort } from '@lody/platform';
 import type { LoroRepo } from 'loro-repo';
 import type { LoroDoc } from 'loro-crdt';
 import type { CodeCollabDebugGlobal } from './lib/code-collab-global-debug';
@@ -40,6 +41,7 @@ declare global {
     __LODY_LIVE_ACTIVITY__?: LodyLiveActivityBridge;
     __LODY_APP_STORE_REVIEW__?: LodyAppStoreReviewBridge;
     __LODY_APP_ICON__?: AppIconBridge;
+    __LODY_APP_UPDATER__?: AppUpdaterPort;
     __LODY_STARTUP_THEME__?: LodyStartupThemeBridge;
     __LODY_APP_INFO__?: {
       version?: string;

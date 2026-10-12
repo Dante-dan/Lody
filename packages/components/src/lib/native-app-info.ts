@@ -1,3 +1,5 @@
+import type { AppUpdaterPort } from '@lody/platform';
+
 export const LODY_APP_INFO_UPDATED_EVENT = 'lody:app-info-updated';
 
 export type LodyNativeAppInfo = NonNullable<Window['__LODY_APP_INFO__']>;
@@ -21,4 +23,10 @@ export function updateNativeAppInfo(info: LodyNativeAppInfo): LodyNativeAppInfo 
   window.__LODY_APP_INFO__ = next;
   window.dispatchEvent(new CustomEvent(LODY_APP_INFO_UPDATED_EVENT, { detail: next }));
   return next;
+}
+
+/** Host capability; a version string alone never implies update support. */
+export function readAppUpdaterPort(): AppUpdaterPort | undefined {
+  if (typeof window === 'undefined') return undefined;
+  return (window as Window & { __LODY_APP_UPDATER__?: AppUpdaterPort }).__LODY_APP_UPDATER__;
 }

@@ -7,13 +7,18 @@ import { useAtom } from 'jotai';
 import { Button } from '@lody/ui/button';
 import { Switch } from '@lody/ui/switch';
 import { developerModeEnabledAtom, inboxBetaEnabledAtom } from '@/atoms/settings';
+import { MobileAppUpdaterSettings } from './mobile-app-updater-settings';
 import { useElectronUpdaterState } from '@/hooks/use-electron-updater-state';
 import { OpenSourceAttributionsDialog } from '@/components/settings/open-source-attributions-dialog';
 import { JoinCommunityButton } from '@/components/settings/join-community-dialog';
 import { openExternalUrl } from '@/lib/native-browser';
 import { getIpcServices } from '@/lib/electron-ipc-client';
 import { getDownloadPageUrl, getWebsiteUrl } from '@/lib/lody-urls';
-import { LODY_APP_INFO_UPDATED_EVENT, readNativeAppInfo } from '@/lib/native-app-info';
+import {
+  LODY_APP_INFO_UPDATED_EVENT,
+  readNativeAppInfo,
+  readAppUpdaterPort,
+} from '@/lib/native-app-info';
 import {
   MobileSettingsRow,
   MobileSettingsRowGroup,
@@ -109,6 +114,7 @@ export function MobileAboutSettings() {
   const [inboxBetaEnabled, setInboxBetaEnabled] = useAtom(inboxBetaEnabledAtom);
   const [revealTaps, setRevealTaps] = useState(0);
   const updaterState = useElectronUpdaterState();
+  const hostUpdater = readAppUpdaterPort();
   const [isInstalling, setIsInstalling] = useState(false);
   const [nativeAppVersion, setNativeAppVersion] = useState<string | null>(() =>
     readNativeAppVersion()
@@ -163,7 +169,9 @@ export function MobileAboutSettings() {
     <>
       <MobileSettingsSection title={t('settings.about.title')}>
         <MobileSettingsRowGroup>
-          {aboutVersion ? (
+          {hostUpdater ? (
+            <MobileAppUpdaterSettings port={hostUpdater} installedVersion={aboutVersion} />
+          ) : aboutVersion ? (
             <MobileSettingsRow label={t('settings.about.version')}>
               <span className="font-mono text-[0.85rem] text-muted-foreground">{aboutVersion}</span>
             </MobileSettingsRow>
@@ -214,7 +222,7 @@ export function MobileAboutSettings() {
         </MobileSettingsRowGroup>
       </MobileSettingsSection>
 
-      {updaterState && phase !== 'disabled' ? (
+      {!hostUpdater && updaterState && phase !== 'disabled' ? (
         <MobileSettingsSection title={t('settings.about.updatesTitle', 'Updates')}>
           <MobileSettingsRow
             label={t('settings.about.checkForUpdates')}

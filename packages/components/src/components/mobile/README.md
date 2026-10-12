@@ -89,3 +89,14 @@ directory index. Stories: `src/stories/Mobile*.stories.tsx`.
 `mobile-about-settings.tsx` exposes Inbox and Prompt Shortcuts opt-ins under
 Developer mode. Both use the shared feature gates; disabling Developer mode
 retains the saved opt-ins while making the features unavailable.
+
+## Host updates in About
+
+`mobile-app-updater-settings.tsx` serves both narrow and wide About version rows and presents the optional `AppUpdaterPort` from
+`@lody/platform`, installed as `window.__LODY_APP_UPDATER__` before mounting About.
+Its state is a stable `ReadonlyStore` snapshot; the host publishes checking, current,
+available-version, progress, downloaded and retryable-error states and owns the
+check and next action. Mounting only subscribes; it never checks or polls. Without
+the port, the existing Electron updater is unchanged and other hosts show no updater.
+Hosts own release lookup, trusted downloads and native installation or opening an
+official update page; shared UI receives no URLs, credentials or native paths.
