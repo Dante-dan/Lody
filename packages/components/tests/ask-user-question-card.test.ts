@@ -530,6 +530,7 @@ describe('AskUserQuestionCard Markdown questions', () => {
         questions: [
           {
             id: 'plan',
+            header: 'Plan review',
             question:
               'Review the plan\n\n## Steps\n\n- Keep **compatibility**\n- Update `renderer`',
             multiSelect: false,

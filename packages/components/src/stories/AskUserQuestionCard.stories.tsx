@@ -124,6 +124,7 @@ export const PlanReview: Story = {
       questions: [
         {
           id: 'plan',
+          header: 'Plan review',
           question:
             'Review the implementation plan\n\n## Steps\n\n- Preserve **compatibility**\n- Update `renderer`\n\n```ts\nconst approved = true;\n```',
           multiSelect: false,
