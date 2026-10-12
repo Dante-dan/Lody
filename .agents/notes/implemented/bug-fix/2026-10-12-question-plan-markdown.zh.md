@@ -17,4 +17,4 @@ Translation: current
 
 ## 验证
 
-所属问题卡全部 17 个测试通过，覆盖语义标题、强调、行内代码、列表、显式批准提交和已回答回放。这是仓库合成 fixture，不是作者桌面复现。文档检查、改动范围格式化和 Oxlint 通过。根 `pnpm check` 在无关的 `@lody/e2ee-core` 类型检查停止：该 package 缺少依赖链接（`effect`、`@noble/*`、`@ipld/dag-cbor`），后续根检查未运行。未执行真实 Harness/model 桌面操作。
+所属问题卡全部 17 个测试通过，覆盖语义标题、强调、行内代码、列表、显式批准提交和已回答回放。这是仓库合成 fixture，不是作者桌面复现。文档检查、改动范围格式化和 Oxlint 通过。根 `pnpm check` 在无关的 `@lody/e2ee-core` 类型检查停止：该 package 缺少依赖链接（`effect`、`@noble/*`、`@ipld/dag-cbor`），后续根检查未运行。根 `pnpm format` 通过。components 类型检查还报告 shared `loro-sync-errors` 中既有的 `RepoTransportError` 声明不匹配；新增 story fixture 起初缺少必需 header，已经补齐。未执行真实 Harness/model 桌面操作。
