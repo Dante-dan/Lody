@@ -32,6 +32,7 @@ import { Tooltip } from '@/ui/armed-overlays';
 import { colors, shadow, sheen } from '@lody/ui/tokens/colors.stylex';
 import { corner, duration, ease, focus, radius, space, text } from '@lody/ui/tokens/scales.stylex';
 import { withClassName } from '@/lib/stylex';
+import { MarkdownRenderer } from '@/components/ai-gui/markdown-renderer';
 
 const REDUCED_MOTION = '@media (prefers-reduced-motion: reduce)';
 const RING = `0 0 0 ${focus.ringWidth} ${colors.accent}`;
@@ -731,7 +732,9 @@ export function AskUserQuestionCard({ meta, mode, className }: AskUserQuestionCa
       onPointerUp={finishSwipe}
     >
       <div {...stylex.props(styles.header)}>
-        <span {...stylex.props(styles.question)}>{question.question}</span>
+        <div {...stylex.props(styles.question)}>
+          <MarkdownRenderer text={question.question} compact />
+        </div>
         <div {...stylex.props(styles.headerMeta)}>
           {total > 1 ? (
             <span {...stylex.props(styles.count)}>

@@ -513,3 +513,65 @@ describe('AskUserQuestionCard answer notes', () => {
     expect(container.querySelector('input')).toBeNull();
   });
 });
+
+describe('AskUserQuestionCard Markdown questions', () => {
+  it.each(['interactive', 'readonly'] as const)(
+    'renders the complete question and plan detail in %s mode',
+    async (kind) => {
+      await initI18n('en');
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const root = createRoot(container);
+      const onSubmit = vi.fn();
+      const questionMeta: AskUserQuestionPermissionMeta = {
+        source: 'lody',
+        version: 1,
+        allowCustomAnswer: false,
+        questions: [
+          {
+            id: 'plan',
+            question:
+              'Review the plan\n\n## Steps\n\n- Keep **compatibility**\n- Update `renderer`',
+            multiSelect: false,
+            options: [{ label: 'Approve' }, { label: 'Revise' }],
+          },
+        ],
+      };
+      try {
+        flushSync(() =>
+          root.render(
+            createElement(AskUserQuestionCard, {
+              meta: questionMeta,
+              mode:
+                kind === 'readonly'
+                  ? { kind, answers: { plan: 'Approve' } }
+                  : {
+                      kind,
+                      isReady: true,
+                      isPendingSubmit: false,
+                      isPendingCancel: false,
+                      disabled: false,
+                      onSubmit,
+                      onCancel: vi.fn(),
+                    },
+            })
+          )
+        );
+        expect(container.querySelector('h2')?.textContent).toBe('Steps');
+        expect(container.querySelector('strong')?.textContent).toBe('compatibility');
+        expect(container.querySelector('code')?.textContent).toBe('renderer');
+        expect(container.querySelectorAll('li')).toHaveLength(2);
+        if (kind === 'interactive') {
+          flushSync(() => getButton(container, 'Approve').click());
+          flushSync(() => getButton(container, 'Submit').click());
+          expect(onSubmit.mock.calls[0]?.[0]).toEqual({ plan: 'Approve' });
+        } else {
+          expect(getButton(container, 'Approve').getAttribute('aria-pressed')).toBe('true');
+        }
+      } finally {
+        flushSync(() => root.unmount());
+        container.remove();
+      }
+    }
+  );
+});

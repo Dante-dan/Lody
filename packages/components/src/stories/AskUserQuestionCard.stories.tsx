@@ -113,3 +113,23 @@ export const LegacyCustomAnswer: Story = {
     },
   },
 };
+
+export const PlanReview: Story = {
+  render: (args) => <Interactive meta={args.meta} />,
+  args: {
+    meta: {
+      source: 'lody',
+      version: 1,
+      allowCustomAnswer: true,
+      questions: [
+        {
+          id: 'plan',
+          question:
+            'Review the implementation plan\n\n## Steps\n\n- Preserve **compatibility**\n- Update `renderer`\n\n```ts\nconst approved = true;\n```',
+          multiSelect: false,
+          options: [{ label: 'Approve' }, { label: 'Revise' }],
+        },
+      ],
+    },
+  },
+};
