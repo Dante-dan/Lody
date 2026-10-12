@@ -131,9 +131,20 @@ CLI, and has no update publishing target or notarization identity.
 # For Windows
 $ pnpm build:win
 
+# For Windows ARM64 (native installer)
+$ pnpm build:win:arm64
+
 # For macOS
 $ pnpm build:mac
 
 # For Linux
 $ pnpm build:linux
 ```
+
+The Windows ARM64 command explicitly selects the NSIS installer and ARM64
+architecture through the same packaging wrapper and native-dependency hooks as
+other builds. It does not publish an installer or change the existing Windows
+build default. On a Windows ARM64 build host, the after-pack hook runs the
+embedded CLI/native-module probes; cross-host packaging skips those runtime probes
+and cannot establish device compatibility. A release still needs a native-host
+package/probe run and Snapdragon device testing before claiming support.

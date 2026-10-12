@@ -28,6 +28,7 @@
     "verify:sparkle-update": "node scripts/verify-sparkle-update.mjs",
     "build:unpack": "pnpm run build && node scripts/package-electron.mjs --dir",
     "build:win": "pnpm run build && node scripts/package-electron.mjs --win",
+    "build:win:arm64": "pnpm run build && node scripts/package-electron.mjs --win nsis --arm64",
     "build:mac": "pnpm run build && node scripts/package-electron.mjs --mac",
     "build:linux": "pnpm run build && node scripts/package-electron.mjs --linux",
     "format:check": "oxfmt --check"
