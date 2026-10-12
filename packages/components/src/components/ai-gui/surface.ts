@@ -106,6 +106,8 @@ export const conversationSurface = stylex.create({
       '@container (min-width: 720px)': '70%',
     },
   },
+  // The width-capped content must share the stack's trailing edge in edit mode.
+  userContent: { marginInlineStart: 'auto' },
   mobileUserStack: { maxWidth: 'min(100%, 28rem)' },
   metadata: {
     display: 'flex',

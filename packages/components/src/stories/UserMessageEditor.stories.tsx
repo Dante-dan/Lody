@@ -180,11 +180,12 @@ export const ShortMessage: Story = {
   render: () => <EditorHarness initialValue={SHORT_TEXT} />,
 };
 
-function FromMessageEditHarness() {
+function FromMessageEditHarness({ fullWidth = false }: { fullWidth?: boolean }) {
   const store = useMemo(() => createStoryStore(), []);
   return (
     <PlatformContext.Provider value={storyPlatform}>
       <Provider store={store}>
+        <div style={{ width: fullWidth ? '100%' : undefined, containerType: 'inline-size' }}>
         <MessageRowView
           sessionId={STORY_SESSION_ID}
           message={
@@ -200,6 +201,7 @@ function FromMessageEditHarness() {
           onEdit={async () => true}
           editMentionContext={storyEditMentionContext}
         />
+        </div>
       </Provider>
     </PlatformContext.Provider>
   );
@@ -207,6 +209,11 @@ function FromMessageEditHarness() {
 
 export const FromMessageEdit: Story = {
   render: () => <FromMessageEditHarness />,
+};
+
+export const FullWidthFromMessageEdit: Story = {
+  parameters: { layout: 'fullscreen' },
+  render: () => <FromMessageEditHarness fullWidth />,
 };
 
 /**

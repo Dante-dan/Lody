@@ -190,6 +190,28 @@ test('editing a sent message focuses its input with the caret at the end', async
   await expect(input).toHaveValue('Clarify this instruction with more detail');
 });
 
+for (const width of [1800, 600]) {
+  test(`sent-message editor stays on the user right edge at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/iframe.html?id=ai-gui-usermessageeditor--full-width-from-message-edit&viewMode=story');
+    const metadata = page.getByTestId('user-message-metadata');
+    await page.getByRole('button', { name: 'Edit message', exact: true }).click();
+    const input = page.getByRole('textbox', { name: 'Edit message', exact: true });
+    await expect(input).toBeFocused();
+    await expect.poll(async () => {
+      const column = await metadata.boundingBox();
+      const card = await input.evaluate((el) => {
+        const rect = el.closest('div.rounded-2xl')?.getBoundingClientRect();
+        return rect ? { right: rect.right, left: rect.left } : null;
+      });
+      return column && card ? Math.abs(card.right - (column.x + column.width)) : Infinity;
+    }).toBeLessThan(1);
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await expect(input).toBeHidden();
+    await expect(page.getByText('Clarify this instruction', { exact: true })).toBeVisible();
+  });
+}
+
 test('editing a queued message places the caret at the end without moving it while typing', async ({
   page,
 }) => {
