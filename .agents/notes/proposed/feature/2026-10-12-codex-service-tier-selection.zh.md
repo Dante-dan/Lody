@@ -1,7 +1,7 @@
 # Codex 服务档位选择
 
 Status: proposed
-Translation: current
+Translation: stale
 
 [English](2026-10-12-codex-service-tier-selection.md)
 
@@ -41,3 +41,27 @@ Codex 适配器负责发现和传递。仅在原生模型目录提供档位 id �
 - [固定适配器源码](https://github.com/LodyAI/acp-extension-codex/tree/b67f2eaab63247159c8cbdbd4075334f69729daf/src)：`FastModeConfig.ts`、`CodexAcpServer.ts`、`app-server/v2/{Model,TurnStartParams}.ts`。
 - 宿主：`apps/cli/src/commands/session.ts`、`apps/cli/src/mcp/lody-mcp-server.ts`。
 - [现有 draft 所有权](../../../../specs/session-run-config-drafts.md)。
+
+
+## 作者补充目录证据后的参考实现
+
+作者在 [新增评论](https://github.com/LodyAI/Lody/issues/1501#issuecomment-6120987283)
+给出了 codex-cli 0.162.1 的 `gpt-6-astra` 目录，其中包含独立的 `priority` 和
+`ultrafast`。此前“缺少目录证据”的等待已失效；服务端实际执行和账户资格仍未验证。
+参考代码增加原生目录驱动的 `service-tier` ACP 选项，保留 new/load/fork 元数据中的
+原始字符串并传入 `turn/start.serviceTier`。`inherit` 为 null，`default` 明确恢复标准档。
+无效选择和换模型后不再提供的档位会在发送前拒绝；旧 Fast 控件继续兼容，修改它会替换
+显式档位。CLI/MCP 可使用既有 `configOptionValues`，不要同时提供相冲突的 Fast 输入。
+显式选择会先调用实验性的 `thread/settings/update`，确认后才修改本地状态，再传给
+`turn/start`；原生拒绝时保留旧选择。安装版本 0.159.2 和作者版本 0.162.1 的实验 schema
+均允许此字段，稳定 schema 不包含该方法。`inherit` 保留原生设置不变。打包 UI 与原生
+账户实际执行仍未验证；这只是参考代码，不代表全部需求已上线或解决。英文正文已更新，
+因此本译本仍标记 stale。
+
+
+参考验证：五个现有 adapter suite 共 55 项行为测试通过，涵盖精确档位传递、原生设置
+写入、拒绝时旧选择保留、换模型拒绝、load/fork 恢复。adapter typecheck 在未修改的
+`ModelConfigOption.ts` 停止，因为已安装 Core 声明缺少 `LodySessionConfig` 导出。
+根目录 `pnpm check` 完成 adapter build，随后在无依赖的 `e2ee-core` typecheck 失败，
+后续根检查未运行。文档和 diff whitespace 检查通过。没有原生推理、打包 UI、计费或
+服务端实际档位验证。
